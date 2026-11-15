@@ -3,6 +3,7 @@
 #include "lagrange/viewer/builder/Urdf.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -174,6 +175,57 @@ SaveAsTarget saveAsTarget(const std::filesystem::path& chosen) {
         std::error_code ec;
         out.confirm = std::filesystem::exists(std::filesystem::symlink_status(out.path, ec));
     }
+    return out;
+}
+
+bool isWorldFile(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return extension == ".usda" || extension == ".usd" || extension == ".usdc" ||
+           extension == ".sdf" || extension == ".world" || extension == ".urdf";
+}
+
+std::vector<SampleWorld> sampleWorlds(const std::filesystem::path& worlds) {
+    std::vector<SampleWorld> out;
+    std::error_code error;
+    if (!std::filesystem::is_directory(worlds, error)) {
+        return out;
+    }
+    for (const auto& folder : std::filesystem::directory_iterator(worlds, error)) {
+        if (!folder.is_directory(error)) {
+            continue;
+        }
+        const std::string name = folder.path().filename().string();
+        std::filesystem::path chosen;
+        for (const char* extension : {".usda", ".usd", ".sdf", ".urdf"}) {
+            const std::filesystem::path named = folder.path() / (name + extension);
+            if (std::filesystem::is_regular_file(named, error)) {
+                chosen = named;
+                break;
+            }
+        }
+        if (chosen.empty()) {
+            std::vector<std::filesystem::path> files;
+            for (const auto& file : std::filesystem::directory_iterator(folder.path(), error)) {
+                if (file.is_regular_file(error) && isWorldFile(file.path())) {
+                    files.push_back(file.path());
+                }
+            }
+            std::ranges::sort(files);
+            if (files.size() == 1) {
+                chosen = files.front();
+            } else {
+                const auto usda = std::ranges::find_if(
+                    files, [](const std::filesystem::path& f) { return f.extension() == ".usda"; });
+                chosen = usda != files.end() ? *usda : std::filesystem::path{};
+            }
+        }
+        if (!chosen.empty()) {
+            out.push_back({name, chosen});
+        }
+    }
+    std::ranges::sort(out, {}, &SampleWorld::name);
     return out;
 }
 

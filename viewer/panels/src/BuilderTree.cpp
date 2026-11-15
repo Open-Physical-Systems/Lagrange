@@ -19,6 +19,7 @@
 #include <set>
 #include <string>
 #include <unistd.h>
+#include <utility>
 
 #include <imgui.h>
 
@@ -79,12 +80,18 @@ public:
         addMenu(session);
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
 
+        if (std::exchange(session.renameRequested, false) && editable(session)) {
+            startRename(session);
+        }
         const float footer = px(26.0F);
         ImGui::BeginChild("##tree", ImVec2(0.0F, -footer));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         rows(session);
         ImGui::PopStyleVar();
         ImGui::EndChild();
+        if (!renaming_.empty() && !renameShown_) {
+            renaming_.clear();  // its row is gone (undone, deleted): nothing to rename
+        }
 
         // Footer (design: a 26 px bar with a rule on top).
         const ImVec2 at = ImGui::GetCursorScreenPos();
@@ -117,20 +124,157 @@ private:
             if (ImGui::MenuItem("Sphere", nullptr, false, !target.empty())) {
                 addLinkOn(session, target, builder::Shape::Kind::Sphere);
             }
-            ImGui::MenuItem("Mesh…", nullptr, false, false);
-            ImGui::SetItemTooltip("Mesh links come with RFC 0016 phase 2");
+            if (ImGui::MenuItem("Mesh…", nullptr, false, !target.empty())) {
+                // The Add panel's Mesh… (file dialog or path), on the same target.
+                session.meshPopupRequested = true;
+                ImGui::SetWindowFocus(builder_windows::kAdd);
+            }
+            ImGui::SetItemTooltip("A mesh link (STL, OBJ, DAE, glTF): Add → Mesh…");
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Sensor…", nullptr, false, !target.empty())) {
             // The catalog, with the selected link as the target (SPEC "Robot (tree)").
             ImGui::SetWindowFocus(builder_windows::kCatalog);
         }
-        ImGui::MenuItem("Joint between…", nullptr, false, false);
-        ImGui::SetItemTooltip("Drag a link's row onto another link to move it there");
+        // Joint between… (SPEC "Robot (tree)": re-parenting): the target link and its subtree
+        // move under the link picked, its joint kept, as a drag onto that row does.
+        const Document& document = session.document();
+        const bool movable =
+            !target.empty() && std::ranges::any_of(document.joints, [&](const builder::Joint& j) {
+                return j.child == target;
+            });
+        if (ImGui::BeginMenu("Joint between…", movable)) {
+            widgets::Caption("%s under", target.c_str());
+            const std::vector<std::string> below = builder::subtreeOf(document, target);
+            const auto parent = std::ranges::find(document.joints, target, &builder::Joint::child);
+            for (const builder::Link& link : document.links) {
+                if (link.name == target || std::ranges::find(below, link.name) != below.end()) {
+                    continue;  // never under itself
+                }
+                const bool current = parent != document.joints.end() && parent->parent == link.name;
+                if (ImGui::MenuItem(link.name.c_str(), nullptr, current, !current)) {
+                    moveUnder(session, target, link.name);
+                    break;
+                }
+            }
+            ImGui::EndMenu();
+        }
+        if (!movable) {
+            ImGui::SetItemTooltip("Select a link that hangs from another to move it");
+        }
         ImGui::EndPopup();
     }
 
+    /// F2 (SPEC "Robot (tree)"): the selection's row becomes its name field. Its row is made
+    /// visible first: the filter cleared, the links above it unfolded.
+    void startRename(const BuilderSession& session) {
+        const auto& selection = session.selection;
+        const Document& document = session.document();
+        std::string link;  // the row that shows it
+        switch (selection.kind) {
+            case Kind::Robot:
+                renameKind_ = builder::ItemKind::Robot;
+                renaming_ = document.robot;
+                break;
+            case Kind::Link:
+                renameKind_ = builder::ItemKind::Link;
+                renaming_ = link = selection.name;
+                break;
+            case Kind::Joint: {
+                renameKind_ = builder::ItemKind::Joint;
+                renaming_ = selection.name;
+                const builder::Joint* joint = builder::findJoint(document, selection.name);
+                link = joint != nullptr ? joint->child : std::string{};
+                break;
+            }
+            case Kind::Sensor: {
+                renameKind_ = builder::ItemKind::Sensor;
+                renaming_ = selection.name;
+                const builder::Sensor* sensor = builder::findSensor(document, selection.name);
+                link = sensor != nullptr ? sensor->link : std::string{};
+                break;
+            }
+            case Kind::None:
+                renaming_.clear();
+                return;
+        }
+        renameText_ = renaming_;
+        renameFocus_ = true;
+        renameWaited_ = 0;
+        filter_[0] = '\0';
+        robotFolded_ = false;
+        if (selection.kind != Kind::Link) {
+            folded_.erase(link);  // a sensor's or joint's row is under (or is) that link
+        }
+        // Unfold every link above it.
+        for (int guard = 0; !link.empty() && guard < 10000; ++guard) {
+            const auto joint = std::ranges::find(document.joints, link, &builder::Joint::child);
+            if (joint == document.joints.end()) {
+                break;
+            }
+            link = joint->parent;
+            folded_.erase(link);
+        }
+    }
+
+    /// The row being renamed: its name as a field at the row's indent, focused when it starts;
+    /// Enter, Tab or a click elsewhere renames (one undo step), Esc leaves it as it was.
+    void renameRow(BuilderSession& session, int depth) {
+        renameShown_ = true;
+        const float indent = px(4.0F) + px(14.0F) * static_cast<float>(depth) + px(18.0F);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+        if (renameFocus_) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        std::string typed = renameText_;
+        const char* what = renameKind_ == builder::ItemKind::Joint    ? "joint"
+                           : renameKind_ == builder::ItemKind::Sensor ? "sensor"
+                           : renameKind_ == builder::ItemKind::Robot  ? "robot"
+                                                                      : "link";
+        const bool committed = widgets::CommitField("##rename", &typed, what, true,
+                                                    ImGui::GetContentRegionAvail().x, false);
+        ImGui::SetItemTooltip("Rename: Enter, Esc to leave it; references follow the new name");
+        const bool active = ImGui::IsItemActive();
+        if (renameFocus_) {
+            renameFocus_ = !active;  // until the field has taken the keyboard
+            if (renameFocus_ && ++renameWaited_ > 3) {
+                renaming_.clear();  // it never took it (a popup has the keyboard)
+            }
+            return;
+        }
+        if (committed) {
+            const std::string from = renaming_;
+            const std::string error = renameItem(session, renameKind_, from, typed);
+            if (!error.empty()) {
+                session.problems.builder.insert(
+                    session.problems.builder.begin(),
+                    builder::Problem{builder::Level::Warning, from, "not renamed: " + error});
+            }
+        }
+        if (!active) {
+            renaming_.clear();
+        }
+    }
+
+    [[nodiscard]] bool isRenamed(const builder::TreeItem& item) const {
+        if (renaming_.empty()) {
+            return false;
+        }
+        switch (renameKind_) {
+            case builder::ItemKind::Robot:
+                return item.kind == builder::TreeItem::Kind::Robot;
+            case builder::ItemKind::Link:
+                return item.kind == builder::TreeItem::Kind::Link && item.name == renaming_;
+            case builder::ItemKind::Joint:
+                return item.kind == builder::TreeItem::Kind::Link && item.joint == renaming_;
+            case builder::ItemKind::Sensor:
+                return item.kind == builder::TreeItem::Kind::Sensor && item.name == renaming_;
+        }
+        return false;
+    }
+
     void rows(BuilderSession& session) {
+        renameShown_ = false;
         const Document& document = session.document();
         const std::vector<builder::TreeItem> items = builder::treeItems(document);
         const std::string_view filter(filter_.data());
@@ -154,6 +298,14 @@ private:
                                     : folded_.contains(item.name);
             if (folded && filter.empty()) {
                 hiddenBelow = item.depth;
+            }
+            if (isRenamed(item)) {
+                ImGui::PushID(static_cast<int>(item.kind));
+                ImGui::PushID(item.name.c_str());
+                renameRow(session, std::min(item.depth, 12));
+                ImGui::PopID();
+                ImGui::PopID();
+                continue;
             }
             row(session, item, folded, linkBadge, sensorBadge);
         }
@@ -269,6 +421,23 @@ private:
         }
     }
 
+    /// Moves `link` (and its subtree) under `parent`, keeping its place: one step, or a
+    /// warning in Problems saying why not.
+    static void moveUnder(BuilderSession& session, const std::string& link,
+                          const std::string& parent) {
+        Document next = session.document();
+        const builder::Tree tree = builder::buildTree(next);
+        const std::string error = builder::reparent(
+            next, link, parent, builder::linkFrames(next, tree, builder::Preview{}));
+        if (error.empty()) {
+            commit(session, std::move(next), "Move " + link + " to " + parent);
+        } else {
+            session.problems.builder.insert(
+                session.problems.builder.begin(),
+                builder::Problem{builder::Level::Warning, link, "not moved: " + error});
+        }
+    }
+
     /// Links and sensors drag onto links (re-parent, move a sensor); tiles and catalog rows
     /// drop onto links too (SPEC "Add", "Sensor catalog").
     void dragAndDrop(BuilderSession& session, const builder::TreeItem& item) {
@@ -286,18 +455,7 @@ private:
             return;
         }
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kDragLink)) {
-            const std::string link(static_cast<const char*>(payload->Data));
-            Document next = session.document();
-            const builder::Tree tree = builder::buildTree(next);
-            const std::string error = builder::reparent(
-                next, link, item.name, builder::linkFrames(next, tree, builder::Preview{}));
-            if (error.empty()) {
-                commit(session, std::move(next), "Move " + link + " to " + item.name);
-            } else {
-                session.problems.builder.insert(
-                    session.problems.builder.begin(),
-                    builder::Problem{builder::Level::Warning, link, "not moved: " + error});
-            }
+            moveUnder(session, static_cast<const char*>(payload->Data), item.name);
         }
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kDragSensor)) {
             const std::string sensor(static_cast<const char*>(payload->Data));
@@ -362,6 +520,13 @@ private:
     std::array<char, 96> filter_{};
     std::set<std::string, std::less<>> folded_;
     bool robotFolded_{false};
+    // F2: the item whose row is its name field (empty: none), and that field's state.
+    std::string renaming_;
+    builder::ItemKind renameKind_{builder::ItemKind::Link};
+    std::string renameText_;
+    bool renameFocus_{false};
+    bool renameShown_{false};
+    int renameWaited_{0};  ///< frames the field has waited for the keyboard
 };
 
 class FilesPanel final : public Panel {

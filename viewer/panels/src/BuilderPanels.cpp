@@ -108,6 +108,23 @@ std::string errorsAbout(const BuilderSession& session, std::string_view item) {
     return text;
 }
 
+std::string renameItem(BuilderSession& session, builder::ItemKind kind, const std::string& from,
+                       const std::string& to) {
+    if (from == to) {
+        return {};
+    }
+    Document next = session.document();
+    std::string error = builder::rename(next, kind, from, to);
+    if (!error.empty()) {
+        return error;
+    }
+    commit(session, std::move(next), "Rename " + from + " to " + to);
+    if (kind != builder::ItemKind::Robot && session.selection.name == from) {
+        session.selection.name = to;
+    }
+    return {};
+}
+
 bool selectByName(BuilderSession& session, std::string_view item) {
     const Document& document = session.document();
     if (item.empty()) {

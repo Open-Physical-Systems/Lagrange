@@ -1328,6 +1328,78 @@ bool removeEntry(Document& document, std::size_t index) {
     return true;
 }
 
+std::string renameEntry(Document& document, std::size_t index, std::string_view to) {
+    auto& entries = document.overlay.entries;
+    if (index >= entries.size() || !entries[index].sensor.empty()) {
+        return "there is no such part";
+    }
+    OverlayEntry& entry = entries[index];
+    const std::string oldPrim = entryPrim(entry);
+    const std::string oldName = entryName(entry);
+    const std::string name(to);
+    if (name == oldName) {
+        return {};
+    }
+    if (entry.create.empty() && entry.createChild.empty()) {
+        return "it is " + entry.prim + " itself: rename " + entry.prim + " instead";
+    }
+    if (!validName(name)) {
+        return "a name is letters, digits and _, and does not start with a digit";
+    }
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i != index && entryName(entries[i]) == name) {
+            return "a part is already named " + name;
+        }
+    }
+    if (findLink(document, name) != nullptr || findJoint(document, name) != nullptr ||
+        findSensor(document, name) != nullptr) {
+        return "a link, joint or sensor is already named " + name;
+    }
+    if (!entry.create.empty()) {
+        const std::size_t slash = entry.create.rfind('/');
+        entry.create =
+            (slash == std::string::npos ? std::string{} : entry.create.substr(0, slash + 1)) + name;
+    } else {
+        entry.createChild = name;
+    }
+    const std::string newPrim = entryPrim(entry);
+    // Relationships name a prim by its path (power/dc_48v), the absolute path the stage gives
+    // it (/rover/power/dc_48v), or its name alone (busNamed() takes all three).
+    for (OverlayEntry& other : entries) {
+        for (OverlaySchema& schema : other.schemas) {
+            for (OverlayAttribute& attribute : schema.attributes) {
+                const OverlayField* field = overlayField(schema.name, attribute.name);
+                const bool relationship = field != nullptr && field->type == Type::Rel;
+                for (std::string& value : attribute.values) {
+                    if (value == oldPrim) {
+                        value = newPrim;
+                    } else if (value.size() > oldPrim.size() + 1 && value.ends_with(oldPrim) &&
+                               value[value.size() - oldPrim.size() - 1] == '/') {
+                        value = value.substr(0, value.size() - oldPrim.size()) + newPrim;
+                    } else if (relationship && value == oldName) {
+                        value = name;
+                    }
+                }
+            }
+        }
+    }
+    return {};
+}
+
+bool sameBusAtBothEnds(const Document& document, const OverlayEntry& entry) {
+    const auto ends = [&](std::string_view schema, std::string_view input,
+                          std::string_view output) {
+        const OverlaySchema* part = findSchema(entry, schema);
+        if (part == nullptr) {
+            return false;
+        }
+        const int a = busNamed(document, attributeText(*part, input));
+        return a >= 0 && a == busNamed(document, attributeText(*part, output));
+    };
+    return ends(kConverterSchema, "elec:conv:input", "elec:conv:output") ||
+           ends(kBranchSchema, "elec:branch:input", "elec:branch:output");
+}
+
 void renameInOverlay(Document& document, std::string_view from, std::string_view to) {
     for (OverlayEntry& entry : document.overlay.entries) {
         if (entry.prim == from) {

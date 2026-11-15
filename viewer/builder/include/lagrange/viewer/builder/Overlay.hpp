@@ -223,6 +223,17 @@ std::string addBranch(Document& document, std::string_view name, std::string_vie
 /// Removes entry `index` and every relationship to its prim (a bus's motors and batteries keep
 /// their entries, without the relationship: validation then asks for one).
 bool removeEntry(Document& document, std::size_t index);
+/// Renames entry `index` (a bus, battery, motor, load, converter or branch: its `create` path's
+/// last part, or its `create_child`) to `to`, and every reference to it: relationships naming its
+/// old prim (also as an absolute path ending in it) or its old name, in any entry. Returns an
+/// error message, or "" when done (`to` the same name too). Refused for a name that is not
+/// validName() or is used by another entry, a link, a joint or a sensor (the run names signals
+/// by it: bus/<name>/voltage), and for an entry that names an existing prim (`prim:` alone: a
+/// link's or joint's schemas, renamed with that item).
+[[nodiscard]] std::string renameEntry(Document& document, std::size_t index, std::string_view to);
+/// True when a converter's input and output, or a branch's two ends, are the same bus of the
+/// overlay (checkOverlay's error; the forms outline both dropdowns with it).
+[[nodiscard]] bool sameBusAtBothEnds(const Document& document, const OverlayEntry& entry);
 /// The overlay's references after an item was renamed or removed (Edits.cpp calls these):
 /// entries naming `from` as their prim or in a relationship follow `to`; removed ones go.
 void renameInOverlay(Document& document, std::string_view from, std::string_view to);

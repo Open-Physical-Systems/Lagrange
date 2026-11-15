@@ -716,6 +716,110 @@ TEST(Overlay, EditsFollowRenamesAndRemovals) {
     EXPECT_EQ(writeOverlay(document).find(gnss), std::string::npos);
 }
 
+// Renaming a power part: its prim follows, and every relationship to it, whatever form the
+// relationship names it by; the run's signals take the new name.
+TEST(Overlay, RenamingAPowerPartRenamesItsReferences) {
+    Document document = poweredRover();
+    (void)addBus(document, "dc_12v", nullptr);
+    (void)addConverter(document, "dcdc", busNamed(document, "dc_48v"),
+                       busNamed(document, "dc_12v"));
+    (void)addLoad(document, "computer", busNamed(document, "dc_12v"), &loadPresets()[0]);
+    // A relationship written as the bus's name alone, and one as its absolute stage path.
+    const int converter = static_cast<int>(entriesWith(document, kConverterSchema).front());
+    OverlaySchema& conv = *findSchema(document.overlay.entries[static_cast<std::size_t>(converter)],
+                                      kConverterSchema);
+    setAttribute(conv, overlayField(kConverterSchema, "elec:conv:input"), "elec:conv:input",
+                 "dc_48v");
+    OverlaySchema& load = *findSchema(
+        document.overlay.entries[entriesWith(document, kLoadSchema).front()], kLoadSchema);
+    setAttribute(load, overlayField(kLoadSchema, "elec:powerPort"), "elec:powerPort",
+                 "/rover_mk1/power/dc_12v");
+    // The rail's values are not this test's subject: the problems it has stay the same, and no
+    // relationship loses its bus.
+    const std::size_t problems = checkOverlay(document).size();
+    const auto noLostBus = [&] {
+        return std::ranges::none_of(checkOverlay(document), [](const Problem& p) {
+            return p.message.find("not a bus") != std::string::npos ||
+                   p.message.find("no bus") != std::string::npos;
+        });
+    };
+    ASSERT_TRUE(noLostBus()) << dump(checkOverlay(document));
+
+    const auto bus = static_cast<std::size_t>(busNamed(document, "dc_48v"));
+    ASSERT_EQ(renameEntry(document, bus, "main_bus"), "");
+    EXPECT_EQ(document.overlay.entries[bus].create, "power/main_bus");
+    EXPECT_EQ(busNamed(document, "dc_48v"), -1);
+    const std::string text = writeOverlay(document);
+    EXPECT_EQ(text.find("dc_48v"), std::string::npos) << text;
+    EXPECT_NE(text.find("elec:port:dc_out:connectedTo: power/main_bus"), std::string::npos);
+    EXPECT_NE(text.find("elec:conv:input: main_bus"), std::string::npos) << text;
+    EXPECT_NE(text.find("elec:powerPort: power/main_bus"), std::string::npos) << text;
+
+    const auto rail = static_cast<std::size_t>(busNamed(document, "dc_12v"));
+    ASSERT_EQ(renameEntry(document, rail, "rail_12v"), "");
+    EXPECT_NE(writeOverlay(document).find("elec:powerPort: /rover_mk1/power/rail_12v"),
+              std::string::npos)
+        << writeOverlay(document);
+    EXPECT_EQ(checkOverlay(document).size(), problems) << dump(checkOverlay(document));
+    EXPECT_TRUE(noLostBus()) << dump(checkOverlay(document));
+
+    // A motor is its joint's create_child: the child is renamed, the joint stays.
+    const auto motor = static_cast<std::size_t>(motorOf(document, "left_wheel_joint"));
+    ASSERT_EQ(renameEntry(document, motor, "left_drive"), "");
+    EXPECT_EQ(document.overlay.entries[motor].prim, "left_wheel_joint");
+    EXPECT_EQ(document.overlay.entries[motor].createChild, "left_drive");
+    EXPECT_EQ(motorOf(document, "left_wheel_joint"), static_cast<int>(motor));
+    // The signals say the new name.
+    const auto signals = powerSignals(document.overlay.entries[rail]);
+    ASSERT_FALSE(signals.empty());
+    EXPECT_EQ(signals.front().first, "bus/rail_12v/voltage");
+
+    // Refused: a bad name, a name in use (by a part, a link, a joint), the same name is no
+    // change, and an entry that is a link's own schemas.
+    const auto battery = entriesWith(document, kBatterySchema).front();
+    const Document before = document;
+    EXPECT_NE(renameEntry(document, battery, "2cells"), "");
+    EXPECT_NE(renameEntry(document, battery, "main_bus"), "");
+    EXPECT_NE(renameEntry(document, battery, "base_link"), "");
+    EXPECT_NE(renameEntry(document, battery, "left_wheel_joint"), "");
+    EXPECT_EQ(renameEntry(document, battery, "battery"), "");
+    EXPECT_EQ(writeOverlay(document), writeOverlay(before));
+    OverlayEntry thermal;
+    thermal.prim = "base_link";
+    thermal.schemas.push_back({"ThermalAPI_1", {}});
+    document.overlay.entries.push_back(thermal);
+    EXPECT_NE(renameEntry(document, document.overlay.entries.size() - 1, "chassis"), "");
+    EXPECT_NE(renameEntry(document, 999, "x"), "");
+}
+
+TEST(Overlay, SameBusAtBothEndsIsSeenForConvertersAndBranches) {
+    Document document = poweredRover();
+    (void)addBus(document, "dc_12v", nullptr);
+    const int high = busNamed(document, "dc_48v");
+    const int low = busNamed(document, "dc_12v");
+    (void)addConverter(document, "good", high, low);
+    (void)addConverter(document, "bad", high, high);
+    (void)addBranch(document, "fuse", "fuse", low, low);
+    (void)addBranch(document, "open", "switch", high, -1);
+    const auto at = [&](std::string_view name) -> const OverlayEntry& {
+        for (const OverlayEntry& e : document.overlay.entries) {
+            if (entryName(e) == name) {
+                return e;
+            }
+        }
+        ADD_FAILURE() << name;
+        return document.overlay.entries.front();
+    };
+    EXPECT_FALSE(sameBusAtBothEnds(document, at("good")));
+    EXPECT_TRUE(sameBusAtBothEnds(document, at("bad")));
+    EXPECT_TRUE(sameBusAtBothEnds(document, at("fuse")));
+    EXPECT_FALSE(sameBusAtBothEnds(document, at("open")));  // one end not picked yet
+    EXPECT_FALSE(sameBusAtBothEnds(document, at("dc_48v")));
+    // checkOverlay says the same.
+    EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Error, "power/bad", "same bus"))
+        << dump(checkOverlay(document));
+}
+
 TEST(Overlay, EditsAreUndoSteps) {
     History history(urdf(kTestDir / "rover_mk1.urdf"), "Open");
     Document next = history.current();

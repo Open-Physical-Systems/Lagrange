@@ -36,8 +36,12 @@ The workspace bar's right side has the builder's own controls:
 | Undo, Redo | every change is one step (**Ctrl Z**, **Ctrl Shift Z** or **Ctrl Y**); the History tab beside Properties lists them and goes back to any |
 | `doc` readout | the file name, and `unsaved · N`: the edits since the last save |
 | **Build** | the mode you edit in. Nothing is simulated, no sensor is rendered, the view is drawn Lit: building costs almost nothing |
-| **Test · empty world** | validates the robot, writes it to a temporary file and starts `lagrange_server` with it on this machine (joint control on; ROS 2 on your `ROS_DOMAIN_ID` + 1, or the domain `LAGRANGE_BUILDER_ROS_DOMAIN_ID` names, `off` for none); the viewer connects to it. Its menu (▾) has **Into the connected run**, enabled while the viewer is connected to a server that imports robots: the robot is added to that run, and Back (or closing the viewer) removes it again |
+| **Test · empty world** | validates the robot, writes it to a temporary file and starts `lagrange_server` with it on this machine (joint control on; ROS 2 on your `ROS_DOMAIN_ID` + 1, or the domain `LAGRANGE_BUILDER_ROS_DOMAIN_ID` names, `off` for none); the viewer connects to it. Its menu (▾) picks the world: the empty one, **A sample world** (the worlds of `lagrange_assets`, such as `warehouse_small` or `open_field`; the button then says `Test · warehouse_small`), or **A world file** (Browse…, or a path typed: USD, SDFormat or URDF), where the robot starts at the world's origin; and **Into the connected run**, enabled while the viewer is connected to a server that imports robots: the robot is added to that run, and Back (or closing the viewer) removes it again |
 | **Save** | **Ctrl S**; its menu has Save as…, Open…, **Export USD…** (runs `lagrange_import`) and **Check loads…** (runs `lagrange check`: can each joint hold the robot against gravity) |
+
+A run the viewer is connected to plays on while you build, unless **View → Pause the run while
+building** is ticked: then it pauses while the Builder is in front in Build mode, and plays again
+when you test, go to another workspace or close the viewer.
 
 While testing, the view is the server's, live, with Play/Pause and Step; **Drive** lists the
 ROS 2 topics the robot takes, each with a command line to copy, and **Console** shows the test
@@ -69,9 +73,13 @@ Problem. Mass, centre of mass and the inertia tensor are computed from the shape
 overridden.
 
 In the **Robot** tree, a child link's row shows its joint type and shape (`revolute · box`):
-click the joint type to select the joint. Drag a row onto another link to re-parent it; the name field in
-Properties renames it (a joint's `<ros2_control>` and `<transmission>` references follow; one they
-name that the robot lacks is a warning); **Delete** (or the bin in Properties' tab bar) removes the
+click the joint type to select the joint. Drag a row onto another link to re-parent it, or use the
+tree's **Add → Joint between…**, which lists the links the selected one can hang from. **F2** (or
+the name field in Properties) renames the selection: its row becomes a name field, **Enter**
+renames, **Esc** leaves it. Everything that names it follows: joints' parent and child, a sensor's
+link, a mimic joint's leader, the overlay's entries, and a joint's `<ros2_control>` and
+`<transmission>` references (one they name that the robot lacks is a warning); a name already in
+use is refused and Problems says why. One rename is one undo step. **Delete** (or the bin in Properties' tab bar) removes the
 selection and everything under it (one undo step). The root that every other link hangs from
 stays: a robot keeps a link.
 
@@ -145,6 +153,11 @@ URDF ([formats §9](../design/formats.md#9-importers), as the sample robots have
   a rotor motor from the samples, or empty), the **bus** it draws from, and its winding, torque
   constant, gear and current limit. The motor is named `<joint>_motor`; the Motor section lists
   the signals it will have (`motor/<name>/current_q`, `bus_current`, `joint/<joint>/torque`).
+- **Names**: each part's `name` field (its prim is `power/<name>`, a motor's
+  `<joint>/<name>`) renames it, and every connection to it follows: a battery's **output to**, the
+  motors' and loads' **bus**, converters' and branches' ends. The run's signals take the new name
+  (`bus/<name>/voltage`). A name used by another part, a link, a joint or a sensor is refused,
+  with the reason under the field.
 - **GNSS, magnetometer, barometer, radar** come from the catalog like any sensor (the Overlay
   switch lists them) and are edited in the same form. The overlay has no mount pose: they sit at
   their link's origin, so put them on a link placed where they are.
@@ -153,7 +166,7 @@ Problems checks what the loader would refuse: a required value missing, a value 
 schema's range (a negative resistance, an efficiency over 1 or of 0), an `ocvSoc` that does not
 ascend or is not as long as `ocvVoltage`, a motor on a fixed joint or a second motor on a joint, a
 motor, battery, load, converter or branch without its bus, a converter or branch with the same
-bus at both ends, two converters onto one bus (the network simulates one per output bus), a fuse
+bus at both ends (both its dropdowns are outlined red too), two converters onto one bus (the network simulates one per output bus), a fuse
 without its rating, a load with neither a power nor (resistive) a resistance, and a bus that no
 battery reaches: through a converter from a fed bus, or a branch to one (a diode only from its
 anode). Converters in a loop (a → b → a) are a warning: the network runs them, but power goes
@@ -227,8 +240,9 @@ the template stays as it is.
 
 ## Not supported yet
 
-- **Test** into a world: the empty world or *Into the connected run*; *A sample world…* and *A
-  world file…* are greyed.
+- Where the robot starts in a world: at its origin (the server's `--spawn` is not offered yet).
+- **Poses** are kept for the session only: the URDF has no place for them (RFC 0016 open
+  question 10).
 - Thermal nodes, rotors and wheels in the overlay: kept as written, not edited (the Power
   section edits buses, batteries, motors, loads, converters, fuses, switches and diodes).
 - Opening USD or SDFormat robots (phase 4); the builder opens URDF and xacro.
@@ -244,7 +258,8 @@ lagrange_viewer --headless --size 1600x1000 --workspace builder \
     --builder-save out.urdf --screenshot out.png
 ```
 
-`--builder-save` writes the document at the end (not when `--builder-open` failed: then the
+`--input` takes keys by name too (`5:key:f2`, `7:key:delete`) and `FRAME:world:FILE`, which
+makes FILE Test's world as Browse… would. `--builder-save` writes the document at the end (not when `--builder-open` failed: then the
 viewer exits with 5 and writes nothing); the JSON report on stdout has a `builder`
 object (links, joints, sensors, the mode, the history, Problems). `viewer/test/test_builder_acceptance.py`
 builds a robot this way from start to Test and back and compares the file with a golden one.

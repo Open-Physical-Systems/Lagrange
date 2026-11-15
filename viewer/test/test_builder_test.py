@@ -117,6 +117,45 @@ def test_open_rover_test_sees_its_scene(tmp_path):
     assert not (runtime / str(pid)).exists()
 
 
+# Test ▾ → A sample world → warehouse_small (the menu opens to the left at the window's edge).
+TEST_CHEVRON = "1515,48"
+SAMPLE_WORLD = "1480,134"
+WAREHOUSE_SMALL = "1310,304"
+
+
+def test_test_runs_in_a_sample_world_from_the_menu(tmp_path):
+    program("lagrange_server", "lagrange_server")
+    report, code, err, _ = run(
+        tmp_path,
+        "--builder-open",
+        str(ROVER),
+        "--input",
+        f"3:click:{TEST_CHEVRON};7:move:{SAMPLE_WORLD};11:move:{WAREHOUSE_SMALL};"
+        f"13:click:{WAREHOUSE_SMALL};18:click:{TEST_BUTTON};20:wait:connected",
+        frames=40,
+    )
+    assert code == 0, err
+    builder = report["builder"]
+    assert builder["test_target"].endswith("worlds/warehouse_small/warehouse_small.usda")
+    assert builder["mode"] == "testing", builder["loader"]
+    # The warehouse's walls and racks are prims of the scene beside the robot's 7 links.
+    assert report["prims"] >= 20
+
+
+def test_a_world_file_is_a_test_target(tmp_path):
+    """FRAME:world:FILE does what Test ▾ → A world file → Browse… does."""
+    world = tmp_path / "flat.urdf"
+    world.write_text(
+        '<robot name="flat"><link name="ground"><collision><geometry>'
+        '<box size="4 4 0.1"/></geometry></collision></link></robot>'
+    )
+    report, code, err, _ = run(
+        tmp_path, "--builder-open", str(ROVER), "--input", f"3:world:{world}", frames=6
+    )
+    assert code == 0, err
+    assert report["builder"]["test_target"] == str(world)
+
+
 def test_back_returns_to_build_and_stops_the_server(tmp_path):
     program("lagrange_server", "lagrange_server")
     report, code, err, pid = run(

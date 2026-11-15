@@ -69,6 +69,16 @@ public:
         }
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("A mesh link (STL, OBJ, DAE, glTF) on %s", target.c_str());
+        // The tree's Add → Link → Mesh…: once its menu has closed (opened while another
+        // popup is still up, ImGui closes this one with it).
+        if (session.meshPopupRequested &&
+            !ImGui::IsPopupOpen(nullptr,
+                                ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+            session.meshPopupRequested = false;
+            if (editable(session) && !target.empty()) {
+                ImGui::OpenPopup("##add-mesh");
+            }
+        }
         meshPopup(context, session, target);
 
         defaults();

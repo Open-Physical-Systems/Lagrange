@@ -63,4 +63,16 @@ struct SaveAsTarget {
 };
 [[nodiscard]] SaveAsTarget saveAsTarget(const std::filesystem::path& chosen);
 
+/// Test into a sample world (SPEC "Modes": Test's menu): the worlds of lagrange_assets'
+/// `worlds` folder, one per subfolder, by name: its `<name>.usda` (else .usd, .sdf, .urdf), else
+/// its one world file, else its first .usda. Sorted by name; empty when the folder is missing.
+struct SampleWorld {
+    std::string name;  ///< "warehouse_small"
+    std::filesystem::path file;
+};
+[[nodiscard]] std::vector<SampleWorld> sampleWorlds(const std::filesystem::path& worlds);
+
+/// True for a file Test can run as a world: .usda, .usd, .usdc, .sdf, .world, .urdf.
+[[nodiscard]] bool isWorldFile(const std::filesystem::path& path);
+
 }  // namespace lagrange::viewer::builder

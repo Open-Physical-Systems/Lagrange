@@ -173,4 +173,49 @@ std::string fitDistinct(std::string_view text, std::span<const std::string> grou
     return fitPath(text, width, measure);
 }
 
+std::vector<float> fitCells(std::span<const float> labels, float available, float padding,
+                            float minPadding) {
+    std::vector<float> cells(labels.begin(), labels.end());
+    const auto n = static_cast<float>(labels.size());
+    if (labels.empty()) {
+        return cells;
+    }
+    float text = 0.0F;
+    for (const float width : labels) {
+        text += width;
+    }
+    if (text + 2.0F * padding * n <= available) {
+        for (float& cell : cells) {
+            cell += 2.0F * padding;
+        }
+        return cells;
+    }
+    if (text + 2.0F * minPadding * n <= available) {
+        const float pad = (available - text) / (2.0F * n);  // between minPadding and padding
+        for (float& cell : cells) {
+            cell += 2.0F * pad;
+        }
+        return cells;
+    }
+    // Cut the longest labels to a common width `cap`: sum(min(label, cap)) is the room left
+    // for text. Found over the labels sorted by width (water filling).
+    const float room = std::max(available - 2.0F * minPadding * n, 0.0F);
+    std::vector<float> sorted(labels.begin(), labels.end());
+    std::ranges::sort(sorted);
+    float below = 0.0F;  // the labels shorter than the cap, whole
+    float cap = 0.0F;
+    for (std::size_t i = 0; i < sorted.size(); ++i) {
+        const auto rest = static_cast<float>(sorted.size() - i);
+        cap = (room - below) / rest;
+        if (cap <= sorted[i]) {
+            break;
+        }
+        below += sorted[i];
+    }
+    for (float& cell : cells) {
+        cell = std::min(cell, cap) + 2.0F * minPadding;
+    }
+    return cells;
+}
+
 }  // namespace lagrange::viewer

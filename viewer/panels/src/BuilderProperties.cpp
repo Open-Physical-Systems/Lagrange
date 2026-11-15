@@ -283,16 +283,7 @@ private:
         std::string renamed = name;
         if (widgets::CommitEdit("name", &renamed, nullptr, false,
                                 "Letters, digits and _; references follow the new name", false)) {
-            Document next = session.document();
-            const std::string error = builder::rename(next, kind, name, renamed);
-            if (error.empty()) {
-                commit(session, std::move(next), "Rename " + name + " to " + renamed);
-                if (kind != builder::ItemKind::Robot) {
-                    session.selection.name = renamed;
-                }
-            } else {
-                renameError_ = error;
-            }
+            renameError_ = renameItem(session, kind, name, renamed);
         }
         if (!renameError_.empty()) {
             widgets::Pill(renameError_.c_str(), widgets::PillKind::Error);

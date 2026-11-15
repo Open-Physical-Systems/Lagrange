@@ -6,6 +6,7 @@
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Files.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include <imgui.h>
 
@@ -488,6 +490,14 @@ void drawMenuBar(PanelContext& context) {
                 *context.workspace = entry.workspace;
             }
         }
+        if (context.builder != nullptr) {
+            ImGui::Separator();
+            (void)ImGui::MenuItem("Pause the run while building", nullptr,
+                                  &context.builder->pauseRunWhileBuilding);
+            ImGui::SetItemTooltip(
+                "The connected run pauses while the Builder is in front in Build mode, and "
+                "plays again when you leave it; off, the run is left alone");
+        }
         endMenu();
     }
     if (menu("Simulation")) {
@@ -615,9 +625,11 @@ void drawBuildControls(PanelContext& context) {
     if (unsaved > 0 || session.path.empty()) {
         std::snprintf(after, sizeof(after), "unsaved · %d", unsaved);
     }
-    const std::string target = session.testIntoRun          ? "connected run"
-                               : session.testTarget.empty() ? "empty world"
-                                                            : session.testTarget;
+    // A world by its file's name: "Test · warehouse_small".
+    const std::string target = session.testIntoRun ? "connected run"
+                               : session.testTarget.empty()
+                                   ? "empty world"
+                                   : std::filesystem::path(session.testTarget).stem().string();
     const std::string test = "Test · " + target + "      ";  // room for the chevron
     const float gap = px(4.0F);
     const float width = px(26.0F) * 2.0F + widgets::ReadoutWidth("doc", name.c_str(), after) +
@@ -714,12 +726,58 @@ void drawBuildControls(PanelContext& context) {
             session.testTarget.clear();
             session.testIntoRun = false;
         }
-        if (ImGui::MenuItem("A sample world…", nullptr, false, false)) {
+        // A sample world (lagrange_assets' worlds) or a world file: the test server runs with
+        // --world FILE, the robot where the server puts a robot (its origin).
+        const std::vector<builder::SampleWorld> worlds =
+            context.launcher->assetDirectory.empty()
+                ? std::vector<builder::SampleWorld>{}
+                : builder::sampleWorlds(std::filesystem::path(context.launcher->assetDirectory) /
+                                        "worlds");
+        if (ImGui::BeginMenu("A sample world", !worlds.empty())) {
+            for (const builder::SampleWorld& world : worlds) {
+                const std::string file = world.file.string();
+                if (ImGui::MenuItem(world.name.c_str(), nullptr,
+                                    !session.testIntoRun && session.testTarget == file)) {
+                    session.testTarget = file;
+                    session.testIntoRun = false;
+                }
+                ImGui::SetItemTooltip("%s", file.c_str());
+            }
+            ImGui::EndMenu();
         }
-        ImGui::SetItemTooltip("Opens with WP-F's world picker");
-        if (ImGui::MenuItem("A world file…", nullptr, false, false)) {
+        if (worlds.empty()) {
+            ImGui::SetItemTooltip("lagrange_assets is not installed");
         }
-        ImGui::SetItemTooltip("Opens with WP-F's file dialog");
+        if (ImGui::BeginMenu("A world file")) {
+            widgets::Caption("USD, SDFormat or URDF world");
+            ImGui::BeginDisabled(!context.canOpenFiles);
+            if (widgets::Button("Browse…", widgets::ButtonKind::Default)) {
+                session.worldDialogRequested = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            if (!context.canOpenFiles) {
+                ImGui::SetItemTooltip("Needs the windowed viewer's file dialog: type a path");
+            }
+            static std::string typed;  // the path field, kept while the menu is closed
+            std::string path = typed;
+            widgets::Caption("or a path:");
+            if (widgets::CommitField("##world-path", &path, nullptr, false, px(320.0F), false)) {
+                typed = path;
+            }
+            const bool usable = builder::isWorldFile(typed) && std::filesystem::exists(typed);
+            ImGui::BeginDisabled(!usable);
+            if (widgets::Button("Use this world", widgets::ButtonKind::Primary)) {
+                session.testTarget = std::filesystem::absolute(typed).lexically_normal().string();
+                session.testIntoRun = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            if (!usable && !typed.empty()) {
+                ImGui::SetItemTooltip("Not a world file here (.usda, .usd, .sdf, .world, .urdf)");
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Into the connected run", nullptr, session.testIntoRun, intoRun)) {
             session.testIntoRun = true;
         }
@@ -972,6 +1030,12 @@ void builderShortcuts(PanelContext& context) {
         if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !ImGui::IsAnyItemActive() &&
             ImGui::GetTopMostPopupModal() == nullptr) {
             builder_ui::deleteSelection(session);
+        }
+        // F2 renames the selection in its tree row (SPEC "Robot (tree)").
+        if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && !ImGui::IsAnyItemActive() &&
+            ImGui::GetTopMostPopupModal() == nullptr &&
+            session.selection.kind != BuilderSession::Selection::Kind::None) {
+            session.renameRequested = true;
         }
     } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         session.backRequested = true;

@@ -193,3 +193,39 @@ TEST(SaveAs, AddsUrdfAndAsksWhenThatNameExists) {
     std::filesystem::create_symlink(scratch / "nowhere", scratch / "dangling.urdf");
     EXPECT_TRUE(builder::saveAsTarget(scratch / "dangling").confirm);
 }
+
+// Test into a sample world: one per folder of the assets' worlds, by its own name's file.
+TEST(SampleWorlds, OneWorldPerFolderByItsName) {
+    const Scratch scratch;
+    const auto make = [&](const std::string& file) {
+        std::filesystem::create_directories((scratch / file).parent_path());
+        std::ofstream(scratch / file) << "x";
+    };
+    make("warehouse_small/warehouse_small.urdf");
+    make("warehouse_small/warehouse_small.usda");  // the .usda before the .urdf
+    make("amr_fms_warehouse/warehouse.sdf");       // its one world file
+    make("amr_fms_warehouse/notes.txt");
+    make("rack_sample/rack_baked.usda");  // two: the first .usda by name
+    make("rack_sample/rack.usda");
+    make("meshes_only/box.stl");  // no world: left out
+    make("stray.usda");           // not in a folder: left out
+    const auto worlds = builder::sampleWorlds(scratch.path());
+    ASSERT_EQ(worlds.size(), 3U);
+    EXPECT_EQ(worlds[0].name, "amr_fms_warehouse");
+    EXPECT_EQ(worlds[0].file, scratch / "amr_fms_warehouse/warehouse.sdf");
+    EXPECT_EQ(worlds[1].file, scratch / "rack_sample/rack.usda");
+    EXPECT_EQ(worlds[2].file, scratch / "warehouse_small/warehouse_small.usda");
+    EXPECT_TRUE(builder::sampleWorlds(scratch / "missing").empty());
+    EXPECT_TRUE(builder::isWorldFile("a/b.SDF"));
+    EXPECT_FALSE(builder::isWorldFile("a/b.stl"));
+}
+
+// The repository's own sample worlds are all found (the Test menu lists them).
+TEST(SampleWorlds, TheSampleWorldsOfTheAssetsAreListed) {
+    const auto worlds =
+        builder::sampleWorlds(std::filesystem::path(LAGRANGE_BUILDER_ASSETS_DIR) / ".." / "worlds");
+    EXPECT_GE(worlds.size(), 10U);
+    for (const auto& world : worlds) {
+        EXPECT_TRUE(std::filesystem::is_regular_file(world.file)) << world.file;
+    }
+}

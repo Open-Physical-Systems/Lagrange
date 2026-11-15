@@ -692,6 +692,7 @@ public:
     }
 
     ~Ui() {
+        releaseBuildingPause(true);  // a run paused while building plays on without us
         vkDeviceWaitIdle(device_.device());
         textures_.clear();
         if (texture_ != VK_NULL_HANDLE) {
@@ -826,6 +827,7 @@ public:
         }
         builderHost_.setServerProgram(launcher_.localServer);
         builderHost_.afterUi();
+        pauseWhileBuilding();
         if (launcher_.builderRequested) {
             // Build a robot: the Builder works without a server, so nothing connects (R1).
             launcher_.builderRequested = false;
@@ -851,6 +853,7 @@ public:
             if (endpoint && launcher_.error.empty()) {
                 std::fprintf(stderr, "lagrange_viewer: connecting to %s\n",
                              launcher_.connectEndpoint.c_str());
+                releaseBuildingPause(true);
                 client_.stop();
                 client_.setEndpoint(*endpoint);
                 client_.start();
@@ -876,6 +879,7 @@ public:
         }
         if (launcher_.disconnectRequested) {
             launcher_.disconnectRequested = false;
+            releaseBuildingPause(true);
             client_.stop();
             if (recentPath_.empty()) {
                 showLauncher(ImGui::GetStyle().FontScaleDpi);
@@ -1601,6 +1605,9 @@ public:
             // when the launcher was never shown (--workspace builder).
             launcher_.localServer = findLocalServer();
         }
+        if (workspace == Workspace::Builder && launcher_.assetDirectory.empty()) {
+            launcher_.assetDirectory = findShare("lagrange_assets");  // Test's sample worlds
+        }
     }
     [[nodiscard]] Workspace workspace() const { return workspace_; }
     /// --builder-open: a .urdf now, a .xacro once xacro is done (frames later).
@@ -1624,6 +1631,15 @@ public:
     /// Add → Mesh… → Browse… (Addendum A): the SDL dialog for a mesh file, asked for once.
     [[nodiscard]] bool takeBuilderMeshDialog() {
         return std::exchange(builderSession_.meshDialogRequested, false);
+    }
+    /// Test ▾ → A world file → Browse…: the SDL dialog for a world file, asked for once.
+    [[nodiscard]] bool takeBuilderWorldDialog() {
+        return std::exchange(builderSession_.worldDialogRequested, false);
+    }
+    /// The world chosen there (or headless `--input N:world:FILE`): Test's target.
+    void builderTestWorld(const std::string& path) {
+        builderSession_.testTarget = std::filesystem::absolute(path).lexically_normal().string();
+        builderSession_.testIntoRun = false;
     }
     /// A mesh chosen in that dialog, or dropped on the window while the Builder is shown: a
     /// mesh link on the Add panel's target (the selected link).
@@ -1755,8 +1771,14 @@ public:
                "\", \"prompt\": \"" + promptName(builderSession_.prompt.kind) +
                "\", \"prompt_title\": \"" + jsonEscape(builderSession_.prompt.title) +
                "\", \"test_into_run\": " + (builderSession_.testIntoRun ? "true" : "false") +
-               ", \"test_robot\": \"" + jsonEscape(builderSession_.testRobotName) +
+               ", \"run_state\": \"" +
+               (client_.status().runState == RunState::Running  ? "running"
+                : client_.status().runState == RunState::Paused ? "paused"
+                                                                : "other") +
+               "\", \"test_target\": \"" + jsonEscape(builderSession_.testTarget) +
+               "\", \"test_robot\": \"" + jsonEscape(builderSession_.testRobotName) +
                "\", \"test_passive\": " + (builderSession_.testPassive ? "true" : "false") +
+               ", \"problems\": " + messages(builderSession_.problems.builder) +
                ", \"loader\": " + messages(builderSession_.problems.loader) +
                ", \"files\": " + messages(builderSession_.problems.files) +
                ", \"check\": " + messages(builderSession_.problems.check) +
@@ -1764,6 +1786,43 @@ public:
                ", \"errors\": " + std::to_string(builderSession_.problems.errors()) +
                ", \"history\": " + historyJson(builderSession_.history) +
                ", \"geometry\": " + builder::gizmo::geometryJson(document) + "}";
+    }
+
+    void pauseWhileBuilding() {
+        const ConnectionInfo connection = client_.connection();
+        const bool ready = connection.state == ConnectionState::Ready;
+        const std::string endpoint = proto::toString(client_.endpoint());
+        const bool building = workspace_ == Workspace::Builder && !launcher_.active &&
+                              builderSession_.mode == BuilderSession::Mode::Build;
+        const RunState state = client_.status().runState;
+        if (building && builderSession_.pauseRunWhileBuilding && ready &&
+            pausedForBuilding_.empty() && state == RunState::Running) {
+            client_.pause();
+            pausedForBuilding_ = endpoint;
+        } else if (!pausedForBuilding_.empty() &&
+                   (!building || !builderSession_.pauseRunWhileBuilding)) {
+            releaseBuildingPause(false);
+        }
+    }
+
+    /// Plays the run pauseWhileBuilding() paused, if this viewer is still connected to it
+    /// (its status may not say Paused yet: the pause was sent). `wait`: the client is about to
+    /// stop (the viewer closes, connects elsewhere): give its worker a moment to send it.
+    void releaseBuildingPause(bool wait) {
+        if (pausedForBuilding_.empty()) {
+            return;
+        }
+        const bool ready = client_.connection().state == ConnectionState::Ready;
+        const std::string endpoint = proto::toString(client_.endpoint());
+        if (ready && endpoint == pausedForBuilding_) {
+            client_.play();
+            if (wait) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            }
+        }
+        if (!ready || endpoint == pausedForBuilding_) {
+            pausedForBuilding_.clear();  // played again, or that run is gone
+        }
     }
 
     /// Shows the launcher first: the client is started when the user chooses a server.
@@ -1993,6 +2052,11 @@ private:
     LauncherState launcher_;
     BuilderSession builderSession_;
     BuilderHost builderHost_{builderSession_, client_};
+    /// View → Pause the run while building (12-builder SPEC "Cost in Build mode"): the run this
+    /// viewer paused when the Builder came to the front in Build mode, by its endpoint; empty
+    /// when it paused none. It is played again when Build mode ends, the option is unticked,
+    /// or another workspace comes to the front, if still connected to that run.
+    std::string pausedForBuilding_;
     LocalServer localServer_;
     bool recordRecent_{false};
     std::string recentPath_;
@@ -2174,6 +2238,15 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
                            : name == "up"     ? ImGuiKey_UpArrow
                            : name == "down"   ? ImGuiKey_DownArrow
                                               : ImGuiKey_None;
+            if (name == "delete") {
+                key = ImGuiKey_Delete;
+            }
+            if (name.size() >= 2 && name[0] == 'f' && name[1] >= '1' && name[1] <= '9') {
+                const int n = std::atoi(std::string(name.substr(1)).c_str());  // f2: rename
+                if (n >= 1 && n <= 12) {
+                    key = static_cast<ImGuiKey>(ImGuiKey_F1 + (n - 1));
+                }
+            }
             if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
                 key = static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'a'));
             }
@@ -2331,6 +2404,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     }
                     if (event.frame == rendered && event.kind == "template") {
                         ui.builderTemplateRequest(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "world") {
+                        ui.builderTestWorld(event.text);  // Test ▾ → A world file → Browse…
                     }
                 }
             }
@@ -2731,7 +2807,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             std::vector<std::string> paths;
             std::vector<std::string> builderOpen;  // the Builder's Open… and Save as… dialogs
             std::vector<std::string> builderSave;
-            std::vector<std::string> builderMesh;  // Add → Mesh… → Browse…
+            std::vector<std::string> builderMesh;   // Add → Mesh… → Browse…
+            std::vector<std::string> builderWorld;  // Test ▾ → A world file → Browse…
         } chosen;
 
         bool running = true;
@@ -2837,6 +2914,19 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     },
                     &chosen, window, kMeshes, 2, nullptr, false);
             }
+            if (ui.takeBuilderWorldDialog()) {
+                static const SDL_DialogFileFilter kWorlds[] = {
+                    {"Worlds", "usda;usd;usdc;sdf;world;urdf"}, {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderWorld.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kWorlds, 2, nullptr, false);
+            }
             if (ui.takeBuilderSaveAsDialog()) {
                 static const SDL_DialogFileFilter kUrdf[] = {{"URDF", "urdf"}};
                 SDL_ShowSaveFileDialog(
@@ -2859,6 +2949,10 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     ui.builderAddMesh(path);
                 }
                 chosen.builderMesh.clear();
+                for (const std::string& path : chosen.builderWorld) {
+                    ui.builderTestWorld(path);
+                }
+                chosen.builderWorld.clear();
                 for (const std::string& path : chosen.builderSave) {
                     if (path.empty()) {
                         ui.builderSaveAsCancelled();
