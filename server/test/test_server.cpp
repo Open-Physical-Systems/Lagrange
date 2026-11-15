@@ -21,6 +21,7 @@
 #include <numbers>
 #include <set>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -1752,6 +1753,56 @@ TEST_F(ImportServerTest, ContentIsNamedByItsRobotElementAndRemovedAgain) {
     EXPECT_FALSE(scenery.ok()) << "the world's scenery stays";
 }
 
+// Inline content is written to a private folder of the user's ($XDG_RUNTIME_DIR/lagrange, 0700)
+// as a file made exclusively (0600), and a folder someone could swap files in is refused.
+TEST_F(ImportServerTest, InlineContentGoesToAPrivateFolder) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const char* was = std::getenv("XDG_RUNTIME_DIR");
+    const std::string saved = was != nullptr ? was : "";
+    const std::filesystem::path runtime =
+        std::filesystem::temp_directory_path() / ("lagrange_runtime_" + std::to_string(::getpid()));
+    std::filesystem::remove_all(runtime);
+    std::filesystem::create_directories(runtime);
+    ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
+    const std::filesystem::path dir = runtime / "lagrange";
+
+    const v1::CommandResult imported = importText(1, boxRobot("kept"));
+    ASSERT_TRUE(imported.ok()) << imported.error();
+    struct stat info{};
+    ASSERT_EQ(::lstat(dir.c_str(), &info), 0);
+    EXPECT_TRUE(S_ISDIR(info.st_mode));
+    EXPECT_EQ(info.st_mode & 0777, 0700U);
+    std::size_t files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        ++files;
+        ASSERT_EQ(::lstat(entry.path().c_str(), &info), 0);
+        EXPECT_EQ(info.st_mode & 0777, 0600U) << entry.path();
+        EXPECT_TRUE(entry.path().filename().string().starts_with("lagrange-spawn-"));
+    }
+    EXPECT_EQ(files, 1U);
+    ASSERT_TRUE(removeRobot(2, "kept").ok());
+    EXPECT_TRUE(std::filesystem::is_empty(dir)) << "removed with its robot";
+
+    // Open to others, or a link to elsewhere: refused, nothing written.
+    std::filesystem::permissions(dir, std::filesystem::perms::all);
+    const v1::CommandResult open = importText(3, boxRobot("open"));
+    EXPECT_FALSE(open.ok());
+    EXPECT_NE(open.error().find("not a private folder"), std::string::npos) << open.error();
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(runtime / "elsewhere");
+    std::filesystem::create_directory_symlink(runtime / "elsewhere", dir);
+    const v1::CommandResult linked = importText(4, boxRobot("linked"));
+    EXPECT_FALSE(linked.ok());
+    EXPECT_TRUE(std::filesystem::is_empty(runtime / "elsewhere"));
+
+    if (was != nullptr) {
+        ::setenv("XDG_RUNTIME_DIR", saved.c_str(), 1);
+    } else {
+        ::unsetenv("XDG_RUNTIME_DIR");
+    }
+    std::filesystem::remove_all(runtime);
+}
+
 TEST_F(ImportServerTest, ContentIsRenamedWhenItsNameIsTaken) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
     const v1::CommandResult first = importText(1, boxRobot("crate"));
@@ -1803,6 +1854,14 @@ TEST_F(ImportServerTest, RefusesContentThatIsNotTheFormatOrNotInline) {
     const v1::CommandResult empty = run(nothing);
     EXPECT_FALSE(empty.ok());
     EXPECT_NE(empty.error().find("content"), std::string::npos) << empty.error();
+
+    // A path and content at once: which one was meant is not guessed.
+    v1::Envelope both = command(8);
+    both.mutable_command()->mutable_import_robot()->set_path(LAGRANGE_TEST_AMR_URDF);
+    both.mutable_command()->mutable_import_robot()->mutable_content()->set_inline_(boxRobot("b"));
+    const v1::CommandResult twice = run(both);
+    EXPECT_FALSE(twice.ok());
+    EXPECT_NE(twice.error().find("not both"), std::string::npos) << twice.error();
 
     // A link without its inertia is the loader's to refuse; the run is untouched.
     const v1::CommandResult broken = importText(
@@ -1915,6 +1974,68 @@ TEST_F(JointCommandServerTest, RefusesWhatNoJointTakes) {
     refused(6, "pan_turn", "position", 0.5, "passive robot");
     // A good one still goes through.
     EXPECT_TRUE(commandJoint(7, "left_wheel_joint", "velocity", 1.0).ok());
+}
+
+/// A pan head on a base as the builder writes it: one revolute joint about z.
+std::string panRobot(const std::string& name) {
+    return R"(<?xml version="1.0"?>
+<robot name=")" +
+           name +
+           R"(">
+  <link name="base"><inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision></link>
+  <link name="head"><inertial><mass value="0.2"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision></link>
+  <joint name="turn" type="revolute"><parent link="base"/><child link="head"/><origin xyz="0 0 0.2"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="5" velocity="2"/></joint>
+</robot>
+)";
+}
+
+// A joint target belongs to its robot: a robot removed and imported again (the builder's Test
+// again) starts uncommanded, and a reset forgets every target.
+class EmptyJointCommandServerTest : public JointCommandServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        JointCommandServerTest::adjust(options);
+        options.robotPath.clear();
+        options.worldPath.clear();
+    }
+};
+
+TEST_F(EmptyJointCommandServerTest, TargetsGoWithTheirRobotAndWithAReset) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    ASSERT_TRUE(importText(1, panRobot("pan")).ok());
+    ASSERT_TRUE(commandJoint(2, "turn", "position", 0.8).ok());
+    stepFor(3, 2'000'000'000);
+    ASSERT_NEAR(server_->read("joint/turn/position").at(0), 0.8, 0.05);
+
+    ASSERT_TRUE(removeRobot(4, "pan").ok());
+    ASSERT_TRUE(importText(5, panRobot("pan")).ok());
+    stepFor(6, 2'000'000'000);
+    EXPECT_NEAR(server_->read("joint/turn/position").at(0), 0.0, 0.01)
+        << "the new robot went to its predecessor's target";
+
+    ASSERT_TRUE(commandJoint(7, "turn", "position", -0.6).ok());
+    v1::Envelope reset = command(8);
+    reset.mutable_command()->mutable_reset();
+    ASSERT_TRUE(run(reset).ok());
+    stepFor(9, 2'000'000'000);
+    EXPECT_NEAR(server_->read("joint/turn/position").at(0), 0.0, 0.01)
+        << "a reset run went on to a target it was given before the reset";
+}
+
+// Another robot spawned or taken away leaves the run's robot its targets.
+TEST_F(JointCommandServerTest, OtherRobotsComingAndGoingKeepTheTargets) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    ASSERT_TRUE(commandJoint(1, "front_caster_swivel", "position", 0.8).ok());
+    ASSERT_TRUE(importText(2, panRobot("pan")).ok());
+    stepFor(3, 3'000'000'000);
+    EXPECT_NEAR(server_->read("joint/front_caster_swivel/position").at(0), 0.8, 0.05);
+    ASSERT_TRUE(commandJoint(4, "front_caster_swivel", "position", -0.3).ok());
+    ASSERT_TRUE(removeRobot(5, "pan").ok());
+    stepFor(6, 3'000'000'000);
+    EXPECT_NEAR(server_->read("joint/front_caster_swivel/position").at(0), -0.3, 0.05);
 }
 
 // Without joint control (the default) the run's controller drives the robot: refused, saying how.

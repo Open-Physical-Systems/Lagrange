@@ -226,6 +226,23 @@ TEST(MotorModes, ACommandTheMotorCannotFollowIsRefused) {
     EXPECT_TRUE(voltage.commandJoint("move", "effort", 1.0));
 }
 
+// A joint whose motor takes torque, or that has no motor, takes position, velocity and effort
+// through joint control, never volts: nothing would turn them into torque (the proto's promise).
+TEST(MotorModes, VoltsWithoutAVoltageMotorAreRefused) {
+    Server torque(rig("continuous", "0 0 1", "torque", 10.0));
+    ASSERT_TRUE(torque.load().ok());
+    EXPECT_FALSE(torque.commandJoint("move", "voltage", 1.0));
+    EXPECT_TRUE(torque.commandJoint("move", "effort", 1.0));
+    EXPECT_TRUE(torque.commandJoint("move", "velocity", 1.0));
+    EXPECT_TRUE(torque.commandJoint("move", "position", 1.0));
+    ServerOptions bare = rig("continuous", "0 0 1", "voltage", 10.0);
+    bare.overlayPath.clear();  // no motor at all
+    Server none(bare);
+    ASSERT_TRUE(none.load().ok());
+    EXPECT_FALSE(none.commandJoint("move", "voltage", 1.0));
+    EXPECT_TRUE(none.commandJoint("move", "effort", 1.0));
+}
+
 // Going back to a checkpoint goes back to what the joints were told then.
 TEST(MotorModes, ARestoreBringsBackTheTargets) {
     ServerOptions o = rig("continuous", "0 0 1", "velocity", 10.0);
