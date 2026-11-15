@@ -29,15 +29,18 @@ std::filesystem::path scratch(const std::string& name) {
 }
 
 /// A joint with a motor in `mode` on a stiff 24 V bus; `gear` is N, or motor rad per m on a slide.
+/// `effortLimit` is the URDF's effort limit (0: none).
 ServerOptions rig(const std::string& joint, const std::string& axis, const std::string& mode,
-                  double gear, const std::string& physics = "mujoco", double currentLimit = 100.0) {
+                  double gear, const std::string& physics = "mujoco", double currentLimit = 100.0,
+                  double effortLimit = 0.0) {
     const std::filesystem::path urdf = scratch(joint + "_" + mode + ".urdf");
     std::ofstream(urdf) << R"(<?xml version="1.0"?><robot name="rig"><link name="world"/>
 <link name="head"><inertial><mass value="2"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0"
 iyz="0"/></inertial></link><joint name="move" type=")"
                         << joint << R"("><parent link="world"/><child link="head"/>
 <origin xyz="0 0 1"/><axis xyz=")"
-                        << axis << R"("/><limit lower="-1000" upper="1000" effort="0" velocity="0"/>
+                        << axis << R"("/><limit lower="-1000" upper="1000" effort=")" << effortLimit
+                        << R"(" velocity="0"/>
 </joint></robot>)";
     const std::filesystem::path overlay = scratch(joint + "_" + mode + ".overlay.yaml");
     std::ofstream(overlay) << R"(schema_version: 1
@@ -104,6 +107,34 @@ TEST(MotorModes, VoltageModeHitsTheNoLoadSpeedAndDrawsNothing) {
     // The motor's time constant is J R / (N Kt)² = 1 × 0.5 / 0.25 = 2 s.
     EXPECT_NEAR(server.read("joint/move/velocity").at(0), kVolts / (kGear * kKt), 0.02);
     EXPECT_NEAR(server.read("motor/motor/current_q").at(0), 0.0, 0.05);
+}
+
+// Review 2 M1: on a voltage motor the effort field carries volts, so the joint's effort limit
+// (N·m) does not hold it: 12 V above a 2 N·m limit stays 12 V and the motor runs at 12 V's speed.
+TEST(MotorModes, VoltsInTheEffortFieldAreNotClampedToTheEffortLimit) {
+    constexpr double kGear = 10.0;
+    constexpr double kVolts = 12.0;
+    constexpr double kEffortLimit = 2.0;  // N·m, below the volts asked
+    Server server(rig("continuous", "0 0 1", "voltage", kGear, "mujoco", 100.0, kEffortLimit));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    const Server::JointCommandResult effort = server.commandJointChecked("move", "effort", kVolts);
+    ASSERT_TRUE(effort.taken()) << effort.refused;
+    EXPECT_FALSE(effort.clamped) << effort.limit;
+    EXPECT_EQ(effort.value, kVolts);
+    const Server::JointCommandResult volts = server.commandJointChecked("move", "voltage", kVolts);
+    ASSERT_TRUE(volts.taken()) << volts.refused;
+    EXPECT_FALSE(volts.clamped) << volts.limit;
+    ASSERT_TRUE(server.commandJoint("move", "effort", kVolts));
+    ASSERT_TRUE(server.stepUntil(SimTime{60'000'000'000}).ok());
+    EXPECT_NEAR(server.read("joint/move/velocity").at(0), kVolts / (kGear * kKt), 0.02);
+    // A torque motor's effort is still held at the limit.
+    Server torque(rig("continuous", "0 0 1", "torque", kGear, "mujoco", 100.0, kEffortLimit));
+    ASSERT_TRUE(torque.load().ok());
+    const Server::JointCommandResult held = torque.commandJointChecked("move", "effort", kVolts);
+    ASSERT_TRUE(held.taken()) << held.refused;
+    EXPECT_TRUE(held.clamped);
+    EXPECT_EQ(held.value, kEffortLimit);
 }
 
 TEST(MotorModes, VoltageModeAtStallDrawsVoltsOverOhms) {

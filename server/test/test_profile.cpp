@@ -3,6 +3,7 @@
 #include "lagrange/server/Server.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -306,6 +307,54 @@ TEST(Profile, ALoadAProfileFollowsKeepsNotesTheProfileAnswers) {
     EXPECT_EQ(said.find("the rotors do not run"), std::string::npos) << said;
     ASSERT_TRUE(server.stepUntil(SimTime{4'000'000'000}).ok());
     EXPECT_GT(server.read("body/base_link/pose").at(2), 1.0) << "the profile's air carries it";
+}
+
+// Review 2 M3: downwash_model lbm on a robot with drag links but no rotors has no live air box
+// (it follows a multirotor), so its run stays deterministic: the server and AeroDrag answer the
+// same (AeroDrag::asksGpuAir). It used to be refused as "not deterministic".
+TEST(Profile, LiveAirOnARotorlessRobotKeepsTheRunDeterministic) {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "lagrange_test_profile_rotorless_lbm";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path urdf = dir / "kite.urdf";
+    std::ofstream(urdf) << R"(<?xml version="1.0"?><robot name="kite"><link name="body">
+<inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
+</inertial><collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision></link></robot>)";
+    const std::filesystem::path overlay = dir / "kite.overlay.yaml";
+    std::ofstream(overlay) << R"(schema_version: 1
+apply:
+  - prim: body
+    schemas:
+      AeroAPI_1:
+        aero:referenceArea: [0.04, 0.04, 0.04]
+        aero:dragCoeff: [1.0, 1.0, 1.0]
+)";
+    ServerOptions options;
+    options.robotPath = urdf.string();
+    options.overlayPath = overlay.string();
+    options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
+    options.ros = false;
+    options.demoDrive = false;
+    options.realTimeFactor = 0.0;
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    const std::string profile = "schema_version: 1\nstage: " + urdf.string() + R"(
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: false, substitute: ideal }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: true,  fidelity: drag, air_density: 1.225, downwash_model: lbm }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }
+)";
+    const Status applied = server.applyProfile(profile);
+    ASSERT_TRUE(applied.ok()) << applied.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{200'000'000}).ok());
+    EXPECT_EQ(server.read("body/body/wrench/aero").size(), 6U);
+    std::filesystem::remove_all(dir);
 }
 
 // `lagrange determinism` (roadmap 0.2-H2) steps two servers headless: the state must move on

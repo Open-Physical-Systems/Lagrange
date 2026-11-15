@@ -172,12 +172,15 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 class AeroDrag final : public IModule {
 public:
     AeroDrag() = default;
-    /// With the config it will run with, so info() is right before init: a run that asks for
-    /// the live air box on the GPU is not deterministic (invariant 7) until init finds no GPU.
-    explicit AeroDrag(const ModuleConfig& config) : gpuAsked_(asksGpuAir(config)) {}
-    /// Whether `config` asks for the live air box on a hardware GPU (downwash on, model lbm,
-    /// not downwash_lbm_cpu).
-    [[nodiscard]] static bool asksGpuAir(const ModuleConfig& config);
+    /// With the config it will run with and whether the world has rotors (RotorAPI_1), so
+    /// info() is right before init: a run that asks for the live air box on the GPU is not
+    /// deterministic (invariant 7) until init finds no GPU.
+    AeroDrag(const ModuleConfig& config, bool rotors) : gpuAsked_(asksGpuAir(config, rotors)) {}
+    /// Whether a run with `config` would compute its air in the live box on a hardware GPU:
+    /// the world has rotors (the box follows a multirotor; without one there is no box),
+    /// downwash on, model lbm, not downwash_lbm_cpu. The server asks the same for the run's
+    /// determinism, so the two never disagree.
+    [[nodiscard]] static bool asksGpuAir(const ModuleConfig& config, bool rotors);
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;

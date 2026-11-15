@@ -145,10 +145,11 @@ inline constexpr double kFloorTopToleranceM = 0.1;
 /// kFloorTopToleranceM above z = 0 (where Lagrange's ground is and robots spawn), above
 /// `standing` (the lowest point of what must stand on it; by default the lowest point of the
 /// model's moving bodies) and above the bottom of every other static collider that is not such
-/// a slab. So a building's roof, a mezzanine or a bridge deck is never taken for the floor, even
-/// with a robot spawned on it (it would fall forever off its edge). Static: on the
-/// world, or on a body welded to the world by fixed joints (an MJCF worldbody geom, an
-/// SDFormat static model, a URDF world's links). With `countPlanes` false, planes are left out
+/// a slab and whose footprint in x and y overlaps the slab's (scenery beside it, a wall sunk
+/// below z = 0 or a pit, does not count). So a building's roof, a mezzanine or a bridge deck is
+/// never taken for the floor, even with a robot spawned on it (it would fall forever off its edge).
+/// Static: on the world, or on a body welded to the world by fixed joints (an MJCF worldbody geom,
+/// an SDFormat static model, a URDF world's links). With `countPlanes` false, planes are left out
 /// (Lagrange's own ground is a plane on the world).
 [[nodiscard]] bool hasOwnFloor(const Model& model, bool countPlanes = true,
                                std::optional<double> standing = std::nullopt);

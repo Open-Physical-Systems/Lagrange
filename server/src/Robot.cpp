@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <numbers>
 #include <set>
 #include <sstream>
@@ -1164,11 +1165,13 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
 }
 
 /// While it lives, console_bridge's errors (urdfdom's parse errors) are kept for the load's
-/// message, and still printed; it puts the previous handler back. Loading runs on one thread at
-/// a time.
+/// message, and still printed; it puts the previous handler back. console_bridge's handler is
+/// one for the process, so loads on several threads (a spawn service beside the viewer's import)
+/// take turns: each holds a mutex from before it swaps the handler in until after it puts the
+/// previous one back, so no load sees another's messages or restores a handler still in use.
 class ParserMessages final : public console_bridge::OutputHandler {
 public:
-    ParserMessages() : previous_(console_bridge::getOutputHandler()) {
+    ParserMessages() : lock_(mutex()), previous_(console_bridge::getOutputHandler()) {
         console_bridge::useOutputHandler(this);
     }
     ~ParserMessages() override { console_bridge::restorePreviousOutputHandler(); }
@@ -1193,6 +1196,11 @@ public:
     [[nodiscard]] std::string text() const { return text_; }
 
 private:
+    static std::mutex& mutex() {
+        static std::mutex m;
+        return m;
+    }
+    std::lock_guard<std::mutex> lock_;  // first: taken before the swap, let go after the restore
     console_bridge::OutputHandler* previous_;
     std::string text_;
 };

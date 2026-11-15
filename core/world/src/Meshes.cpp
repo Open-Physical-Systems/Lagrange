@@ -925,6 +925,60 @@ std::optional<std::array<double, 2>> zReach(const Model& model, std::size_t i, c
     }
 }
 
+/// A collider's reach in world x and y about its pose's origin (m, half widths of its
+/// axis-aligned footprint), or nothing for the unbounded shapes (planes, height fields).
+std::optional<std::array<double, 2>> xyReach(const Model& model, std::size_t i, const Pose& pose) {
+    const World::Colliders& c = model.world.colliders;
+    const std::array<double, 3>& size = c.size[i];
+    const auto along = [&](const std::array<double, 3>& local) {
+        return rotate(pose.orientation, local);
+    };
+    switch (c.shape[i]) {
+        case ShapeType::Sphere:
+            return std::array<double, 2>{size[0], size[0]};
+        case ShapeType::Box: {
+            std::array<double, 2> r{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                std::array<double, 3> local{};
+                local[k] = size[k];
+                const std::array<double, 3> w = along(local);
+                r[0] += std::abs(w[0]);
+                r[1] += std::abs(w[1]);
+            }
+            return r;
+        }
+        case ShapeType::Capsule:
+        case ShapeType::Cylinder: {
+            // Radius size[0], half length size[1] along the shape's z.
+            const std::array<double, 3> axis = along({0, 0, 1});
+            std::array<double, 2> r{};
+            for (std::size_t k = 0; k < 2; ++k) {
+                const double a = std::abs(axis[k]);
+                const double across = c.shape[i] == ShapeType::Capsule
+                                          ? size[0]
+                                          : size[0] * std::sqrt(std::max(0.0, 1.0 - a * a));
+                r[k] = a * size[1] + across;
+            }
+            return r;
+        }
+        case ShapeType::ConvexHull: {
+            if (c.hull[i] >= model.world.hulls.size() ||
+                model.world.hulls[c.hull[i]].points.empty()) {
+                return std::nullopt;
+            }
+            std::array<double, 2> r{};
+            for (const std::array<double, 3>& point : model.world.hulls[c.hull[i]].points) {
+                const std::array<double, 3> w = along(point);
+                r[0] = std::max(r[0], std::abs(w[0]));
+                r[1] = std::max(r[1], std::abs(w[1]));
+            }
+            return r;
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
 }  // namespace
 
 std::optional<double> lowestMovingPoint(const Model& model) {
@@ -981,9 +1035,34 @@ bool hasOwnFloor(const Model& model, bool countPlanes, std::optional<double> sta
         return std::nullopt;
     };
     // What a floor must not be above: z = 0 (Lagrange's ground, where robots spawn), what
-    // stands on it, and the other static geometry.
-    double ceiling = std::min(0.0, standing ? *standing : lowestMovingPoint(model).value_or(0.0));
+    // stands on it, and the other static geometry over or under it (its footprint overlaps the
+    // slab's in x and y): a wall or pit sunk below z = 0 beside a floor does not unmake it.
+    const double ground =
+        std::min(0.0, standing ? *standing : lowestMovingPoint(model).value_or(0.0));
+    struct Footprint {
+        double x0, x1, y0, y1;
+    };
+    struct Other {
+        Footprint at;
+        double bottom;
+    };
+    const auto footprint = [&](std::size_t i, const Pose& pose) -> std::optional<Footprint> {
+        const auto r = xyReach(model, i, pose);
+        if (!r) {
+            return std::nullopt;
+        }
+        return Footprint{pose.position[0] - (*r)[0], pose.position[0] + (*r)[0],
+                         pose.position[1] - (*r)[1], pose.position[1] + (*r)[1]};
+    };
+    // Touching edges (within this, m) is beside, not over.
+    constexpr double kTouchM = 1e-6;
+    const auto overlaps = [](const Footprint& a, const Footprint& b) {
+        return a.x0 < b.x1 - kTouchM && b.x0 < a.x1 - kTouchM && a.y0 < b.y1 - kTouchM &&
+               b.y0 < a.y1 - kTouchM;
+    };
     std::vector<std::optional<double>> tops(c.body.size());
+    std::vector<std::optional<Footprint>> slabs(c.body.size());
+    std::vector<Other> others;
     for (std::size_t i = 0; i < c.body.size(); ++i) {
         if (!isStaticCollider(i)) {
             continue;
@@ -991,12 +1070,25 @@ bool hasOwnFloor(const Model& model, bool countPlanes, std::optional<double> sta
         const Pose pose = colliderPose(model, i);
         tops[i] = slabTop(i, pose);
         if (tops[i]) {
-            continue;  // another slab: a floor tile beside this one, or a floor of its own
+            // another slab: a floor tile beside this one, or a floor of its own
+            slabs[i] = footprint(i, pose);
+            continue;
         }
-        if (const auto reach = zReach(model, i, pose)) {
-            ceiling = std::min(ceiling, pose.position[2] - (*reach)[0]);
+        const auto reach = zReach(model, i, pose);
+        const auto at = footprint(i, pose);
+        if (reach && at) {
+            others.push_back({*at, pose.position[2] - (*reach)[0]});
         }
     }
+    const auto ceilingOver = [&](std::size_t i) {
+        double ceiling = ground;
+        for (const Other& o : others) {
+            if (!slabs[i] || overlaps(*slabs[i], o.at)) {
+                ceiling = std::min(ceiling, o.bottom);
+            }
+        }
+        return ceiling;
+    };
     for (std::size_t i = 0; i < c.body.size(); ++i) {
         if (!isStaticCollider(i)) {
             continue;
@@ -1011,7 +1103,7 @@ bool hasOwnFloor(const Model& model, bool countPlanes, std::optional<double> sta
             case ShapeType::HeightField:
                 return true;
             case ShapeType::Box:
-                if (tops[i] && *tops[i] <= ceiling + kFloorTopToleranceM) {
+                if (tops[i] && *tops[i] <= ceilingOver(i) + kFloorTopToleranceM) {
                     return true;
                 }
                 break;
