@@ -29,6 +29,14 @@ namespace {
 
 namespace v1 = lagrange::viewer::v1;
 
+// AddressSanitizer holds freed memory in quarantine (256 MiB on x86_64) and adds shadow memory for
+// what is allocated, so under it resident memory measures the sanitizer, not the server.
+#if defined(__SANITIZE_ADDRESS__)
+constexpr bool kAddressSanitizer = true;
+#else
+constexpr bool kAddressSanitizer = false;
+#endif
+
 // RFC 0014: limits on connections before the handshake, a handshake timeout, a per-address rate
 // of new TCP connections, and a first frame that is not a ClientHello closing the connection.
 class ConnectionLimitsTest : public ::testing::Test {
@@ -478,8 +486,13 @@ TEST_P(ConnectionFloodTest, ThousandsOfConnectionsAreRefusedAndAViewerStillGetsI
 
     const v1::ServerStats during = nextStats(monitor);
     EXPECT_EQ(during.viewers(), 1U);
-    EXPECT_LT(during.memory_bytes(), before + kAllowedGrowth)
-        << "resident memory went from " << before << " to " << during.memory_bytes() << " bytes";
+    // Thousands of short-lived connections: their freed buffers sit in AddressSanitizer's
+    // quarantine (300 MB more in the sanitizer build), so the bound holds only without it.
+    if (!kAddressSanitizer) {
+        EXPECT_LT(during.memory_bytes(), before + kAllowedGrowth)
+            << "resident memory went from " << before << " to " << during.memory_bytes()
+            << " bytes";
+    }
 
     // The waiting ones leave; a real viewer gets in (on TCP once the address has a token).
     waiting.clear();

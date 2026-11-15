@@ -1219,6 +1219,11 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
         return Unexpected{path + " has no root link"};
     }
     if (const std::string why = treeProblem(*model, *root); !why.empty()) {
+        // urdfdom holds a link's children by shared pointer, so the links of a loop hold each
+        // other and would never be freed (LeakSanitizer); let go of them before refusing.
+        for (auto& [name, link] : model->links_) {
+            link->child_links.clear();
+        }
         return Unexpected{path + ": " + why +
                           "; a URDF must be a tree of links, each with one parent joint"};
     }

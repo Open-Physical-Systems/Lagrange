@@ -1,4 +1,7 @@
 # Thread sanitizer: OpenUSD, TBB, MuJoCo and Embree are not instrumented, so their locks are not seen.
+# Run with PXR_WORK_THREAD_LIMIT=1: OpenUSD's plugin registration copies strings on TBB workers,
+# and a copy made through the test binary's own std::string code keeps no OpenUSD frame for the
+# lines below to match (test_stage, 2026-11-15); with one work thread OpenUSD runs it inline.
 called_from_lib:libusd_ms.so
 called_from_lib:libtbb.so.12
 called_from_lib:libtbbmalloc.so.2
@@ -7,3 +10,25 @@ race:libtbb.so.12
 race:pxr
 race:libmujoco
 race:libembree
+# Mesa's lavapipe and the Khronos validation layer run their own threads, uninstrumented, so
+# their locks are not seen either. NVIDIA's driver crashes under ThreadSanitizer at device
+# creation; GPU tests run on lavapipe (VK_DRIVER_FILES=.../lvp_icd.json) in a TSan build.
+race:libvulkan_lvp.so
+race:libVkLayer_khronos_validation.so
+# lavapipe compiles shaders with LLVM, whose JIT takes its locks in either order.
+race:libLLVM.so
+deadlock:libLLVM.so
+# ROS 2 libraries are not instrumented either (test_arm, 2026-11-15). Fast DDS hands a /clock
+# payload from the publishing sim thread to its own reader thread through its pool's atomics;
+# ros2_control's controller manager and broadcasters share their buffers, and a controller's
+# lifecycle node made on the service thread, with update() on the sim thread through their own
+# atomics (test_ros2_control too); class_loader and the resource manager take their own locks in
+# either order while the controller manager is freed.
+# Every racing access and lock in these reports is inside these libraries, on their own memory.
+race:libfastcdr.so
+race:libfastdds.so
+race:libcontroller_manager.so
+race:libjoint_state_broadcaster.so
+race:librclcpp_lifecycle.so
+deadlock:libclass_loader.so
+deadlock:libhardware_interface.so
