@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <tinyxml2.h>
 #include <utility>
@@ -494,6 +495,101 @@ TEST(Ground, NoWorldOrAWorldWithoutAFloorKeepsLagrangesGround) {
     EXPECT_EQ(groundColliders(robot), 1U);
     EXPECT_EQ(groundSlabs(robot), 1U);
     EXPECT_TRUE(robot.groundPlane);
+}
+
+/// An SDFormat world of static boxes, each "x y z sx sy sz" (centre and full size, m).
+std::string writeBoxWorld(const std::string& name, const std::vector<std::string>& boxes) {
+    const std::string path = (std::filesystem::path(::testing::TempDir()) / name).string();
+    std::ofstream out(path);
+    out << R"(<?xml version="1.0"?><sdf version="1.11"><world name="w">)";
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        std::istringstream in(boxes[i]);
+        double v[6] = {};
+        for (double& x : v) {
+            in >> x;
+        }
+        out << "<model name=\"m" << i << "\"><static>true</static><pose>" << v[0] << ' ' << v[1]
+            << ' ' << v[2] << " 0 0 0</pose><link name=\"l\"><collision name=\"c\"><geometry><box>"
+            << "<size>" << v[3] << ' ' << v[4] << ' ' << v[5]
+            << "</size></box></geometry></collision></link></model>";
+    }
+    out << "</world></sdf>";
+    return path;
+}
+
+TEST(Ground, ARoofADeckOrAMezzanineIsNotTheFloor) {
+    // Wide, level and flat enough for a slab, but above the robot or above other scenery: the
+    // robot beside them stands on Lagrange's plane.
+    const std::vector<std::pair<std::string, std::vector<std::string>>> worlds = {
+        {"building.sdf", {"20 0 3 24 24 6"}},    // a 24 x 24 x 6 m building
+        {"mezzanine.sdf", {"0 0 3 20 20 0.2"}},  // a floating mezzanine
+        {"mezzanine_posts.sdf",                  // on posts
+         {"0 0 3.1 20 20 0.2", "9 9 1.5 0.3 0.3 3", "-9 -9 1.5 0.3 0.3 3"}},
+        {"bridge.sdf", {"0 30 8 40 12 0.5", "-15 30 4 2 2 8", "15 30 4 2 2 8"}},  // a deck
+    };
+    for (const auto& [name, boxes] : worlds) {
+        Robot robot = amr();
+        auto added = addModel(robot, writeBoxWorld(name, boxes));
+        ASSERT_TRUE(added) << name << ": " << added.error();
+        EXPECT_EQ(robot.world.colliders.shape.front(), ShapeType::Plane) << name;
+        EXPECT_TRUE(robot.lagrangePlane) << name;
+        EXPECT_TRUE(robot.groundPlane) << name;
+        EXPECT_EQ(groundSlabs(robot), 1U) << name;
+        // Given as the robot (lagrange FILE): nothing stands on it, so z = 0 is where robots go.
+        auto alone = loadModel(writeBoxWorld(name, boxes));
+        ASSERT_TRUE(alone) << name << ": " << alone.error();
+        EXPECT_EQ(alone->world.colliders.shape.front(), ShapeType::Plane) << name;
+    }
+    // Spawned on the roof: the roof holds it, and the plane is still there when it drives off.
+    LoadOptions onRoof;
+    onRoof.spawn.position = {20.0, 0.0, 6.0};
+    auto high = loadUrdf(LAGRANGE_TEST_AMR_URDF, onRoof);
+    ASSERT_TRUE(high) << high.error();
+    ASSERT_TRUE(addModel(*high, writeBoxWorld("roof.sdf", {"20 0 3 24 24 6"})));
+    EXPECT_EQ(high->world.colliders.shape.front(), ShapeType::Plane);
+}
+
+TEST(Ground, RealFloorsAreStillTheFloor) {
+    // A slab under a mezzanine on posts: the slab is the floor.
+    Robot robot = amr();
+    ASSERT_TRUE(addModel(
+        robot, writeBoxWorld("two_levels.sdf",
+                             {"0 0 -0.1 40 40 0.2", "0 0 3.1 20 20 0.2", "9 9 1.5 0.3 0.3 3"})));
+    EXPECT_FALSE(robot.groundPlane);
+    EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              0);
+    // The AMR_FMS warehouse: its 0.1 m floor with walls on it, the robot at its spawn.
+    LoadOptions options;
+    options.spawn.position = {26.0, 8.0, 0.0};
+    auto fms = loadUrdf(LAGRANGE_TEST_AMR_FMS_URDF, options);
+    ASSERT_TRUE(fms) << fms.error();
+    ASSERT_TRUE(addModel(*fms, LAGRANGE_TEST_AMR_FMS_WAREHOUSE));
+    EXPECT_FALSE(fms->groundPlane);
+    EXPECT_EQ(std::count(fms->world.colliders.shape.begin(), fms->world.colliders.shape.end(),
+                         ShapeType::Plane),
+              0);
+    EXPECT_EQ(groundSlabs(*fms), 0U);
+}
+
+TEST(Ground, OnlyLagrangesOwnPlaneIsTakenAway) {
+    // A file's own plane (here a ramp's tilted plane, kept on the world) stays when its floor
+    // slab takes the place of Lagrange's ground.
+    Robot robot = amr();
+    ASSERT_TRUE(robot.lagrangePlane);
+    const Pose tilted{{0, 0, -5}, {std::cos(0.1), std::sin(0.1), 0, 0}};
+    robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, tilted, 1.0);
+    removeGroundPlane(robot);
+    EXPECT_FALSE(robot.lagrangePlane);
+    ASSERT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              1);
+    EXPECT_NEAR(robot.world.colliders.poseInBody.back().position[2], -5.0, 1e-12);
+    // Twice is harmless: nothing more goes.
+    removeGroundPlane(robot);
+    EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              1);
 }
 
 TEST(LoadUrdf, FixedBaseRobotAndMissingFiles) {

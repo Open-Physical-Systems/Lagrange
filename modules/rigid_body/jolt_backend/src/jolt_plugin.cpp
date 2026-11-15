@@ -197,7 +197,13 @@ lagrange_status init(void* p, const lagrange_world*, const lagrange_config* conf
     // domains.rigid_body.substeps, as the built-in backend takes it (a whole count only).
     lagrange::ModuleConfigData data;
     if (double substeps = 0.0; self.host->config_get_real(config, "substeps", &substeps) == 1) {
-        data.values["substeps"] = static_cast<std::int64_t>(std::llround(substeps));
+        // The ABI hands numbers as reals: 2.4 is refused, as the built-in backend's profile is.
+        if (!std::isfinite(substeps) || substeps != std::round(substeps) || substeps < 1.0 ||
+            substeps > 1e6) {
+            return result(self, lagrange::Status::error(lagrange::StatusCode::InvalidConfig,
+                                                        "jolt: substeps must be a whole count"));
+        }
+        data.values["substeps"] = static_cast<std::int64_t>(substeps);
     }
     return result(self, self.backend.init(lagrange::WorldView(self.world),
                                           lagrange::ModuleConfig(std::move(data)), io));

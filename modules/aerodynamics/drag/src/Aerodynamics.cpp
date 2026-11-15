@@ -295,9 +295,17 @@ Expected<Wind, std::string> AeroDrag::windOf(const ModuleConfig& config) {
 ModuleInfo AeroDrag::info() const {
     // With the live air box running on the GPU (LiveAir, rotor_aero.md §8) the step is a GPU
     // path and not bit-reproducible (invariant 7); the server reports it as on the GPU. Before
-    // init, and with the fitted downwash or the CPU reference box, it is deterministic.
-    const bool gpuAir = live_ != nullptr && !lbmCpu_;
+    // init, what the config given at construction asks for (the scheduler asks before it
+    // declares); after, whether the box started on the GPU. With the fitted downwash or the CPU
+    // reference box it is deterministic.
+    const bool gpuAir = initialised_ ? live_ != nullptr && !lbmCpu_ : gpuAsked_;
     return {"aerodynamics", "drag", 0, 1, false, !gpuAir, CapabilityTier::Tier0};
+}
+
+bool AeroDrag::asksGpuAir(const ModuleConfig& config) {
+    return config.get<bool>("downwash").value_or(true) &&
+           config.get<std::string>("downwash_model").value_or("fitted") == "lbm" &&
+           !config.get<bool>("downwash_lbm_cpu").value_or(false);
 }
 
 Duration AeroDrag::preferredStep() const {
@@ -525,6 +533,7 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
                          why.c_str());
         }
     }
+    initialised_ = true;
     return {};
 }
 

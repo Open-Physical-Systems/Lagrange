@@ -1494,6 +1494,7 @@ kinds:
         unit: px
         default: 346
         min: 1
+        max: 4096
         source: iniVation DAVIS346 specification sheet (15 August 2019)
         meaning: the pixel array (also <camera><image><width>)
       - path: height
@@ -1501,6 +1502,7 @@ kinds:
         unit: px
         default: 260
         min: 1
+        max: 4096
         source: iniVation DAVIS346 specification sheet (15 August 2019)
         meaning: (also <camera><image><height>)
       - path: horizontal_fov
@@ -2234,15 +2236,15 @@ kinds:
         type: number
         unit: rad
         default: 1.047
-        min: 0
-        max: 3.1
+        min_exclusive: 0
+        max_exclusive: 3.1
         meaning: the camera's horizontal view (sensor x forward)
       - path: vertical_fov
         type: number
         unit: rad
         default_from: from horizontal_fov and width x height
-        min: 0
-        max: 3.1
+        min_exclusive: 0
+        max_exclusive: 3.1
         meaning: the camera's vertical view
       - path: width
         type: number
@@ -2577,12 +2579,14 @@ kinds:
         unit: '1'
         default: 1
         min: 1
+        max: 4096
         meaning: element rows (rows x columns at most 4096)
       - path: columns
         type: int
         unit: '1'
         default: 1
         min: 1
+        max: 4096
         meaning: element columns
       - path: fov
         type: number
@@ -3131,6 +3135,7 @@ kinds:
         unit: px
         default: 848
         min: 2
+        max: 8192
         source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435) (a depth mode)
         meaning: the pixel array (also <camera><image><width>)
       - path: height
@@ -3138,6 +3143,7 @@ kinds:
         unit: px
         default: 480
         min: 1
+        max: 8192
         source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435) (a depth mode)
         meaning: (also <camera><image><height>)
       - path: horizontal_fov
@@ -3337,7 +3343,7 @@ kinds:
         unit: rad
         default: 0.8
         min_exclusive: 0
-        max: 3.1
+        max_exclusive: 3.1
         only_when:
           mode: qr
         meaning: the footprint across the sensor's x
@@ -3347,7 +3353,7 @@ kinds:
         unit: rad
         default_from: horizontal_fov
         min_exclusive: 0
-        max: 3.1
+        max_exclusive: 3.1
         only_when:
           mode: qr
         meaning: the footprint across the sensor's y

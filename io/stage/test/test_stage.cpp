@@ -1192,6 +1192,29 @@ apply:
     }
     EXPECT_TRUE(bare->world.sensors.names.empty());
 
+    // Not a number, or not finite, is not positive (an infinite range would never end a ray).
+    for (const char* bad : {".inf", ".nan"}) {
+        auto infinite = applyOverlay(
+            *bare, writeText("radar_infinite.overlay.yaml",
+                             std::string(R"(schema_version: 1
+apply:
+  - prim: base
+    create_child: front_radar
+    schemas:
+      SensorAPI_1: { sensor:rate: 20 }
+      RadarAPI_1: { sensor:radar:rangeMax: )") +
+                                 bad +
+                                 R"(, sensor:radar:azimuthFov: 1.2, sensor:radar:elevationFov: 0.2,
+                    sensor:radar:txPower: 0.01, sensor:radar:noiseFloor: 1e-13 }
+)")
+                       .string());
+        ASSERT_FALSE(infinite) << bad;
+        EXPECT_NE(infinite.error().find("sensor:radar:rangeMax is required and positive"),
+                  std::string::npos)
+            << infinite.error();
+    }
+    EXPECT_TRUE(bare->world.sensors.names.empty());
+
     // A sensor type an overlay does not make is refused by name.
     auto lidar = applyOverlay(*bare, writeText("lidar.overlay.yaml", R"(schema_version: 1
 apply:

@@ -411,6 +411,9 @@ std::string bareRefusal(const std::string& kind,
 
 class OutOfRangeIsRefused : public testing::TestWithParam<std::string> {};
 
+/// Inclusive edges a kind takes only with another parameter moved too (kind/path, and why).
+const std::set<std::string> kEdgeNeedsOthers = {};
+
 // Sensors QA F2 (2026-11-15): every number parameter outside the catalog's range is refused by
 // the kind, with a message naming the parameter, so the builder's form and the run agree and no
 // value is silently clamped or ignored. Parameters of another mode run in that mode.
@@ -442,6 +445,53 @@ TEST_P(OutOfRangeIsRefused, EveryCatalogRange) {
                                         << " is outside the catalog's range but the kind starts";
             EXPECT_NE(error.find(path + " = "), std::string::npos)
                 << kind << ": " << path << " = " << bad << " refused without naming it: " << error;
+        }
+    }
+}
+
+class OnTheEdgeIsTaken : public testing::TestWithParam<std::string> {};
+
+// Review L4 (2026-11-15): the catalog's table and the kind's own checks agree at each bound: a
+// value on an inclusive edge starts the kind (its own checks refuse nothing the table allows),
+// and every value at an exclusive edge or past an edge is refused (EveryCatalogRange). For the
+// kinds that need a Vulkan device, only a range refusal counts (the device comes after).
+TEST_P(OnTheEdgeIsTaken, EveryInclusiveBound) {
+    const std::string kind = GetParam();
+    const bool bare = builtinKindRenders(kind) || kNeedsTheCameraScene.contains(kind);
+    const YAML::Node params = catalog()["kinds"][kind]["params"];
+    for (const auto& param : params) {
+        const std::string type = param["type"].as<std::string>();
+        if (type != "number" && type != "int") {
+            continue;
+        }
+        const std::string path = param["path"].as<std::string>();
+        catalogtest::Setup world = bare ? catalogtest::Setup{} : cases().at(kind).make();
+        if (!bare && !readInMode(param, params, world)) {
+            for (const auto& item : param["only_when"]) {
+                const std::string choice = item.second.as<std::string>();
+                world.text[item.first.as<std::string>()] = choice.substr(0, choice.find('|'));
+            }
+        }
+        std::vector<double> edges;
+        if (param["min"]) {
+            edges.push_back(param["min"].as<double>());
+        }
+        if (param["max"]) {
+            edges.push_back(param["max"].as<double>());
+        }
+        for (const double edge : edges) {
+            if (kEdgeNeedsOthers.contains(kind + "/" + path)) {
+                continue;
+            }
+            auto numbers = world.numbers;
+            numbers[path] = edge;
+            const std::string error =
+                bare ? bareRefusal(kind, numbers) : run(kind, numbers, world.text, 2).error;
+            const bool rangeRefusal = error.find("out of range") != std::string::npos ||
+                                      error.find(path + " = ") != std::string::npos;
+            EXPECT_TRUE(bare ? !rangeRefusal : error.empty())
+                << kind << ": " << path << " = " << edge
+                << " is on the catalog's inclusive edge but the kind refuses it: " << error;
         }
     }
 }
@@ -504,6 +554,8 @@ INSTANTIATE_TEST_SUITE_P(SensorCatalog, ExplicitDefaultsChangeNothing,
                          testing::ValuesIn(allKinds()),
                          [](const testing::TestParamInfo<std::string>& p) { return p.param; });
 INSTANTIATE_TEST_SUITE_P(SensorCatalog, OutOfRangeIsRefused, testing::ValuesIn(allKinds()),
+                         [](const testing::TestParamInfo<std::string>& p) { return p.param; });
+INSTANTIATE_TEST_SUITE_P(SensorCatalog, OnTheEdgeIsTaken, testing::ValuesIn(allKinds()),
                          [](const testing::TestParamInfo<std::string>& p) { return p.param; });
 
 }  // namespace

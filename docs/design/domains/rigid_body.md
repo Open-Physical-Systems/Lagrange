@@ -228,7 +228,9 @@ not a setting of Lagrange's:
 
 `domains.rigid_body.substeps: N` (profile, 1 to 64, default 1; Jolt only, MuJoCo has nothing to
 divide) runs N Jolt steps of Δt/N per scheduler step, collision detection included, so it costs
-about N times as much. Measured on the pendulum and the comparison's scenes (one core):
+about N times as much. Joint reactions, limit torques and the contact force left over from them
+are the last sub-step's constraint impulses over Δt/N (Jolt's total lambdas start afresh each
+sub-step; `SubstepsKeepTheReactionAndInventNoContact` in test_jolt). Measured on the pendulum and the comparison's scenes (one core):
 
 | substeps | energy after 60 s | 200 boxes, real-time factor | AMR in the warehouse, real-time factor |
 |---|---|---|---|

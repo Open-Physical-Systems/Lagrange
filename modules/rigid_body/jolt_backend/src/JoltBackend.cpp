@@ -1252,9 +1252,10 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.acceleration.valid()) {
             // Jolt has no joint-space acceleration: the change of velocity over the step.
             io.write(j.acceleration, j.lastAcceleration);
-            // The limit's impulse over the step, on the child along the axis. Contacts are not
-            // projected onto the joint (MuJoCo's qfrc_constraint includes them).
-            io.write(j.constraintTorque, limitLambda / dt);
+            // The limit's impulse over the last sub-step (Jolt's total lambda restarts each
+            // sub-step), on the child along the axis. Contacts are not projected onto the joint
+            // (MuJoCo's qfrc_constraint includes them).
+            io.write(j.constraintTorque, limitLambda / (dt / s.substeps));
             const Vec3 anchor = s.anchorOf(j);
             io.write(j.effectiveInertia, j.armature + s.subtreeInertia(j, dv(axis), anchor));
         }
@@ -1291,13 +1292,16 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
 }
 
 // Jolt keeps its contact impulses to itself, but its constraints give theirs (GetTotalLambda*:
-// the impulse over the step, + on body 2, the child, − on body 1, the parent; the hinge's
+// the impulse over the last sub-step, dt / substeps, since each sub-step solves afresh from
+// its warm start; + on body 2, the child, − on body 1, the parent; the hinge's
 // rotation impulse in its basis b2 = a2⊥, c2 = a2 × b2, as HingeRotationConstraintPart builds
 // it). So a joint's reaction is its constraint impulses over the step plus the effort applied
 // through it, and what touches a group is what is left of its momentum change: m·Δv/Δt − m·g −
 // its external forces − the joints' forces on it (Newton's second law).
 void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
     const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    // The time the constraint impulses are over: one sub-step.
+    const auto h = static_cast<float>(dt / substeps);
     std::vector<Vec3> jointForce(groups.size(), Vec3{});  // on each group, from its joints
     const auto rotationOf = [&](JPH::BodyID id) {
         if (id.IsInvalid()) {
@@ -1320,8 +1324,8 @@ void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
             force = n1 * across[0] + n2 * across[1] +
                     axis * (slider.GetTotalLambdaPositionLimits() + slider.GetTotalLambdaMotor());
             torque = slider.GetTotalLambdaRotation();
-            force = force / static_cast<float>(dt) + axis * static_cast<float>(j.applied);
-            torque = torque / static_cast<float>(dt);
+            force = force / h + axis * static_cast<float>(j.applied);
+            torque = torque / h;
         } else {
             const auto& hinge = static_cast<const JPH::HingeConstraint&>(*j.constraint);
             const JPH::Vec3 a1 = (r1 * hinge.GetLocalSpaceHingeAxis1()).Normalized();
@@ -1329,10 +1333,10 @@ void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
             const JPH::Vec3 b2 = a2.GetNormalizedPerpendicular();
             const JPH::Vec3 c2 = a2.Cross(b2);
             const JPH::Vector<2> bend = hinge.GetTotalLambdaRotation();
-            force = hinge.GetTotalLambdaPosition() / static_cast<float>(dt);
+            force = hinge.GetTotalLambdaPosition() / h;
             torque = (b2.Cross(a1) * bend[0] + c2.Cross(a1) * bend[1] +
                       a1 * (hinge.GetTotalLambdaRotationLimits() + hinge.GetTotalLambdaMotor())) /
-                         static_cast<float>(dt) +
+                         h +
                      a2 * static_cast<float>(j.applied);
         }
         // The forces act at the anchor; the torque goes to the child body's origin.

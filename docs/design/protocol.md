@@ -514,7 +514,10 @@ message CommandJoint { string joint = 1; string mode = 2; double value = 3; } //
 // match the text. `overlay_path`, or `overlay_content` (inline YAML, or a SPICE netlist ending
 // in `.end`), is applied to that robot as --overlay is (formats.md §9). `xacro_args` and
 // FORMAT_XACRO are refused (run xacro first). The robot is passive (nothing drives it) when the
-// run already has one; else it is the robot ROS drives.
+// run already has one; else it is the robot ROS drives. Both `path` and `content` is refused
+// ("by path or content, not both"; older servers took the path and ignored the rest).
+// Inline text is written, created exclusively and 0600, into $XDG_RUNTIME_DIR/lagrange (else
+// <tmp>/lagrange-<uid>), a 0700 folder of the server's user; any other folder there is refused.
 // RemoveRobot: as /delete_entity (cli.md "Spawning robots"), by top prim name with or without
 // "/"; refused for the robot ros2_control drives and for scenery. A server older than these
 // additions answers an unknown command with ok = false and an error, so a viewer can try it.
@@ -523,8 +526,10 @@ message CommandJoint { string joint = 1; string mode = 2; double value = 3; } //
 // "effort" (N·m, N) or "voltage" (V, a voltage-mode motor); the joint holds it until told
 // otherwise. Refused, with the reason in `error`, for a joint the run does not have (fixed
 // joints are merged at load), a mimic joint, a joint of a passive robot, an unknown mode, a
-// value that is not finite, a mode the joint's motor cannot follow, and a run without joint
-// control or whose joints ros2_control or a vehicle or multicopter controller drives. The
+// value that is not finite, a mode the joint's motor cannot follow ("voltage" needs a motor in
+// voltage mode), and a run without joint control or whose joints ros2_control or a vehicle or
+// multicopter controller drives. A target belongs to its robot: removing the robot (or a
+// reset) forgets it, and other robots coming and going keep it. The
 // builder's Joints sliders send it while testing, at most 30 times a second per joint (RFC 0016
 // §7.3); the mock server refuses it (a replay).
 

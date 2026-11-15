@@ -4,6 +4,7 @@
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/world/World.hpp"
 
+#include <cmath>
 #include <memory>
 #include <span>
 #include <string>
@@ -33,8 +34,10 @@ struct KindParamRange {
     bool maxExclusive;
     std::string_view unit;  // as the catalog writes it ("°C", "m"); "1": a pure number
 
+    /// Finite values only: ±inf and NaN are never in a range (a parameter has no "unbounded").
     [[nodiscard]] bool contains(double v) const {
-        return (minExclusive ? v > min : v >= min) && (maxExclusive ? v < max : v <= max);
+        return std::isfinite(v) && (minExclusive ? v > min : v >= min) &&
+               (maxExclusive ? v < max : v <= max);
     }
 };
 

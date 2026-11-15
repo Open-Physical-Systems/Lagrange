@@ -56,6 +56,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -80,6 +81,7 @@
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <tinyxml2.h>
 #include <tuple>
 #include <unistd.h>
@@ -549,6 +551,68 @@ std::string modelNameOf(const std::string& text) {
     return name;
 }
 
+/// The folder for files the server writes from text it was sent (an inline robot or overlay):
+/// $XDG_RUNTIME_DIR/lagrange, or <tmp>/lagrange-<uid>, made 0700. Refused when it is a symbolic
+/// link, not a folder, someone else's, or open to others (another user could swap the files
+/// between writing and loading).
+Expected<std::filesystem::path, std::string> privateRuntimeDir() {
+    std::filesystem::path dir;
+    if (const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+        runtime != nullptr && runtime[0] == '/') {
+        dir = std::filesystem::path(runtime) / "lagrange";
+    } else {
+        dir = std::filesystem::temp_directory_path() / ("lagrange-" + std::to_string(::getuid()));
+    }
+    if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
+        return Unexpected{"cannot make " + dir.string() + ": " + std::strerror(errno)};
+    }
+    struct stat info{};
+    if (::lstat(dir.c_str(), &info) != 0) {
+        return Unexpected{"cannot look at " + dir.string() + ": " + std::strerror(errno)};
+    }
+    if (!S_ISDIR(info.st_mode) || info.st_uid != ::getuid() || (info.st_mode & 077) != 0) {
+        return Unexpected{dir.string() +
+                          " is not a private folder of this user (a link, someone else's, or "
+                          "open to others): not writing the robot there"};
+    }
+    return dir;
+}
+
+/// Writes `text` to a new file of its own (mkstemps: created exclusively, 0600, never through a
+/// link) in privateRuntimeDir, named lagrange-spawn-XXXXXX<extension>.
+Expected<std::string, std::string> writeTemporary(const std::string& text,
+                                                  const std::string& extension) {
+    const auto dir = privateRuntimeDir();
+    if (!dir) {
+        return Unexpected{dir.error()};
+    }
+    std::string name = (*dir / ("lagrange-spawn-XXXXXX" + extension)).string();
+    const int fd = ::mkstemps(name.data(), static_cast<int>(extension.size()));
+    if (fd < 0) {
+        return Unexpected{"cannot write in " + dir->string() + ": " + std::strerror(errno)};
+    }
+    std::size_t done = 0;
+    while (done < text.size()) {
+        const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            ::close(fd);
+            std::error_code ignored;
+            std::filesystem::remove(name, ignored);
+            return Unexpected{"cannot write " + name};
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    if (::close(fd) != 0) {
+        std::error_code ignored;
+        std::filesystem::remove(name, ignored);
+        return Unexpected{"cannot write " + name};
+    }
+    return name;
+}
+
 /// Writes an overlay given as text (formats.md §9: YAML, or a SPICE netlist §9.1) to a
 /// temporary file, with the extension applyOverlay tells them apart by.
 Expected<std::string, std::string> writeOverlay(const std::string& text) {
@@ -566,17 +630,7 @@ Expected<std::string, std::string> writeOverlay(const std::string& text) {
         netlist = netlist || line == ".end";
         start = end + 1;
     }
-    static int written = 0;
-    const std::filesystem::path path =
-        std::filesystem::temp_directory_path() /
-        ("lagrange-spawn-" + std::to_string(::getpid()) + "-overlay-" + std::to_string(++written) +
-         (netlist ? ".cir" : ".yaml"));
-    std::ofstream out(path);
-    out << text;
-    if (!out) {
-        return Unexpected{"cannot write " + path.string()};
-    }
-    return path.string();
+    return writeTemporary(text, netlist ? ".cir" : ".yaml");
 }
 
 }  // namespace
@@ -736,8 +790,14 @@ struct Server::Impl {
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
         const bool rendering = cameraScene != nullptr && !off("sensors");
+        // So is one whose air the live box computes on the GPU (aerodynamics.downwash_model:
+        // lbm without downwash_lbm_cpu; rotor_aero.md §8).
+        ModuleConfigData asked;
+        asked.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+        const bool gpuAir = !off("aerodynamics") && hasRotors() &&
+                            aerodynamics::AeroDrag::asksGpuAir(ModuleConfig(asked));
         auto next = std::make_unique<Scheduler>(
-            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering &&
+            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering && !gpuAir &&
                                               !options.px4Port && !options.ardupilotPort});
         // What plugin modules get from the host (ABI 1.1): the run's colliders for their ray and
         // overlap queries, placed at the bus's body poses when they ask.
@@ -1101,7 +1161,8 @@ struct Server::Impl {
             } else {
                 downwashInRun =
                     hasRotors() && ModuleConfig(aero).get<bool>("downwash").value_or(true);
-                next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+                next->add(std::make_unique<aerodynamics::AeroDrag>(ModuleConfig(aero)),
+                          ModuleConfig(aero));
                 windInRun = true;
             }
         }
@@ -4963,7 +5024,39 @@ struct Server::Impl {
 
     /// Rebuilds the run from its files after the robots changed, where it was. On failure the
     /// change is undone by `undo` and the run rebuilt as it was.
+    /// Each joint's robot, by name: whose a joint target is.
+    [[nodiscard]] std::map<std::string, std::string> jointOwners() const {
+        std::map<std::string, std::string> out;
+        const World& w = robot.world;
+        for (std::size_t j = 0; j < w.joints.names.size(); ++j) {
+            const BodyId child = w.joints.child[j];
+            if (child.index >= w.bodies.robot.size()) {
+                continue;
+            }
+            const std::uint32_t r = w.bodies.robot[child.index];
+            out[w.joints.names[j]] = r < w.robots.size() ? w.robots[r] : std::string();
+        }
+        return out;
+    }
+
+    /// After a rebuild: the targets of joints still in the run on the same robot stay; those
+    /// of a robot taken away go with it, so a robot imported again (the builder's Test) starts
+    /// uncommanded instead of jumping to its predecessor's target.
+    void keepTargetsOf(const std::map<std::string, std::string>& before) {
+        const std::map<std::string, std::string> now = jointOwners();
+        std::map<std::string, JointTarget> kept;
+        for (auto& [joint, target] : jointTargets->all()) {
+            const auto was = before.find(joint);
+            const auto is = now.find(joint);
+            if (was != before.end() && is != now.end() && was->second == is->second) {
+                kept.emplace(joint, target);
+            }
+        }
+        jointTargets->replace(std::move(kept));
+    }
+
     Status recompose(const std::function<void()>& undo) {
+        const std::map<std::string, std::string> owners = jointOwners();
         const Carried carried = carry();
         // The modules' own state (controllers, filters, odometry, batteries), by label: a module
         // that reads and writes the same signals in the new run goes on where it was (QA
@@ -5011,6 +5104,7 @@ struct Server::Impl {
             }
             return status;
         }
+        keepTargetsOf(owners);
         composedMidRun = true;
         error.clear();
         owedNs = 0;
@@ -5143,20 +5237,28 @@ struct Server::Impl {
         if (joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
             return joint + " copies another joint (mimic): command that one";
         }
+        // The motor's mode (electrical::driveModes; none while the electrical domain is
+        // substituted: then every joint takes torque).
+        std::string driveMode = "torque";
         if (!options.substituted.contains("electrical")) {
             if (!driveModesCache) {
                 driveModesCache = electrical::driveModes(WorldView(robot.world));
             }
             if (const auto drive = driveModesCache->find(joint); drive != driveModesCache->end()) {
-                const bool fits = drive->second == "voltage"
-                                      ? mode == "voltage" || mode == "effort"
-                                      : mode == "velocity" || mode == "position";
-                if (!fits) {
-                    return joint + "'s motor follows a " + drive->second + ": it takes " +
-                           (drive->second == "voltage" ? "voltage or effort (volts)"
-                                                       : "position or velocity");
-                }
+                driveMode = drive->second;
             }
+        }
+        if (driveMode != "torque") {
+            const bool fits = driveMode == "voltage" ? mode == "voltage" || mode == "effort"
+                                                     : mode == "velocity" || mode == "position";
+            if (!fits) {
+                return joint + "'s motor follows a " + driveMode + ": it takes " +
+                       (driveMode == "voltage" ? "voltage or effort (volts)"
+                                               : "position or velocity");
+            }
+        } else if (mode == "voltage") {
+            // Joint control turns torque into the joint itself; volts would leave it limp.
+            return joint + " has no motor in voltage mode: it takes position, velocity or effort";
         }
         JointTarget target;
         target.value = value;
@@ -5197,6 +5299,9 @@ struct Server::Impl {
     Expected<std::string, std::string> importRobot(const v1::ImportRobot& request) {
         if (!request.xacro_args().empty() || request.format() == v1::ImportRobot::FORMAT_XACRO) {
             return Unexpected{std::string("xacro is not taken when importing: run xacro first")};
+        }
+        if (!request.path().empty() && request.has_content()) {
+            return Unexpected{std::string("give the robot by path or content, not both")};
         }
         const auto inlineText = [](const v1::DataRef& ref,
                                    const char* what) -> Expected<std::string, std::string> {
@@ -5363,6 +5468,7 @@ struct Server::Impl {
             fail(status);
             return status;
         }
+        jointTargets->replace({});  // back to t = 0: nothing commanded yet
         state = wasRunning ? v1::RUN_STATE_RUNNING : v1::RUN_STATE_PAUSED;
         error.clear();
         owedNs = 0;
@@ -7205,16 +7311,7 @@ Expected<std::string, std::string> writeResource(const std::string& text) {
                               "> is not URDF, SDFormat or MJCF (xacro: run xacro first)"};
         }
     }
-    static int written = 0;
-    const std::filesystem::path path =
-        std::filesystem::temp_directory_path() / ("lagrange-spawn-" + std::to_string(::getpid()) +
-                                                  "-" + std::to_string(++written) + extension);
-    std::ofstream out(path);
-    out << text;
-    if (!out) {
-        return Unexpected{"cannot write " + path.string()};
-    }
-    return path.string();
+    return writeTemporary(text, extension);
 }
 
 class SimulationControl final : public ros2::SimulationHandler {
