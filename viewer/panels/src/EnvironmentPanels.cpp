@@ -1,5 +1,6 @@
 // Environment workspace: what the environment is, a slice of one of its fields with a probe,
 // and the list of fields that can be shown (docs/design/ui/07-environment/SPEC.md).
+#include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
@@ -65,6 +66,23 @@ struct EnvironmentView {
 
     /// Chooses the first available field when none is chosen, and keeps the stream open.
     void follow(PanelContext& context) {
+        // --slice: a field and plane asked for on the command line.
+        if (context.fieldSlice != nullptr && !context.fieldSlice->empty() &&
+            context.client.environment()) {
+            std::string asked = *context.fieldSlice;
+            SliceOrientation plane = SliceOrientation::Horizontal;
+            if (const std::size_t colon = asked.rfind(':'); colon != std::string::npos) {
+                const std::string name = asked.substr(colon + 1);
+                plane = name == "xz"   ? SliceOrientation::VerticalXZ
+                        : name == "yz" ? SliceOrientation::VerticalYZ
+                                       : SliceOrientation::Horizontal;
+                asked.resize(colon);
+            }
+            field = asked;
+            orientation = plane;
+            stream.reset();
+            context.fieldSlice->clear();
+        }
         const std::shared_ptr<const EnvironmentInfo> info = context.client.environment();
         if (!info) {
             return;
@@ -77,6 +95,10 @@ struct EnvironmentView {
         if (!field.empty() && !available(field)) {
             field.clear();
             stream.reset();
+        }
+        // Design: |B| is the layer shown first when the run has EMI; else the first one.
+        if (field.empty() && available(kFluxField)) {
+            field = kFluxField;
         }
         if (field.empty()) {
             for (const EnvironmentInfo::Field& candidate : info->fields) {
@@ -223,6 +245,16 @@ public:
         if (info.synthetic) {
             ImGui::SameLine(0.0F, px(8.0F));
             widgets::Pill("not modelled by this server", widgets::PillKind::Warn);
+        }
+        // Design: "Swap..." picks another environment; the server takes whole weathers as the
+        // presets (there is no layer to load by name over the protocol), so it opens them.
+        ImGui::SameLine();
+        widgets::AlignRight(widgets::ButtonWidth("Swap…") + px(8.0F));
+        if (widgets::Button("Swap…", widgets::ButtonKind::Ghost)) {
+            ImGui::SetWindowFocus("Presets###EnvironmentPresets");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Pick another weather from the presets");
         }
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
         const float pad = px(8.0F);
@@ -622,6 +654,145 @@ private:
     std::shared_ptr<SentSite> sent_;
 };
 
+/// The header of both field views: the plane (XY, XZ, YZ: design 07's slice choices; upright
+/// only for the air and |B|) and the height of a level slice.
+void sliceTools(EnvironmentView& view, const char* id) {
+    // Wide enough for all of it: "slice", three planes, "height" and a 130 px field.
+    if (!widgets::BeginPanelTools(id, px(340.0F))) {
+        return;
+    }
+    ImGui::AlignTextToFramePadding();
+    widgets::Caption("slice");
+    ImGui::SameLine(0.0F, px(6.0F));
+    static constexpr std::array<const char*, 3> kPlanes{"XY", "XZ", "YZ"};
+    int plane = static_cast<int>(view.orientation);
+    ImGui::BeginDisabled(!slicedUpright(view.field));
+    if (widgets::Segmented("##plane", kPlanes.data(), static_cast<int>(kPlanes.size()), &plane)) {
+        view.orientation = static_cast<SliceOrientation>(plane);
+        view.stream.reset();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.0F, px(12.0F));
+    ImGui::AlignTextToFramePadding();
+    widgets::Caption("height");
+    ImGui::SameLine(0.0F, px(6.0F));
+    ImGui::BeginDisabled(view.orientation != SliceOrientation::Horizontal);
+    ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+    ImGui::SetNextItemWidth(px(130.0F));
+    // A slider from the ground to 10 m; Ctrl+click types any height.
+    double height = view.heightM;
+    constexpr double kLowest = 0.0;
+    constexpr double kHighest = 10.0;
+    if (ImGui::SliderScalar("##height", ImGuiDataType_Double, &height, &kLowest, &kHighest,
+                            "%.2f m") &&
+        std::isfinite(height)) {
+        view.heightM = std::clamp(height, -100.0, 1000.0);
+    }
+    ImGui::PopFont();
+    ImGui::EndDisabled();
+    widgets::EndPanelTools();
+}
+
+/// How a slice's values map onto the colour map: |B| spans decades (it falls as 1/r to 1/r³), so
+/// it is coloured on a log scale over its top four decades; the rest linearly.
+struct SliceScale {
+    bool logScale{false};
+    float logLow{0.0F};
+    float logHigh{0.0F};
+    float lowest{0.0F};
+    float range{1.0F};
+
+    SliceScale(const std::string& field, const FieldSliceData& slice)
+        : logScale(field == kFluxField && slice.valueMax > 0.0F)
+        , logHigh(logScale ? std::log10(slice.valueMax) : 0.0F)
+        , lowest(slice.valueMin)
+        , range(std::max(slice.valueMax - slice.valueMin, 1e-12F)) {
+        logLow = logScale ? std::max(std::log10(std::max(slice.valueMin, 1e-30F)), logHigh - 4.0F)
+                          : 0.0F;
+    }
+    [[nodiscard]] float fraction(float value) const {
+        if (logScale) {
+            return (std::log10(std::max(value, 1e-30F)) - logLow) /
+                   std::max(logHigh - logLow, 1e-6F);
+        }
+        return (value - lowest) / range;
+    }
+};
+
+/// The field the view shows, as the server describes it; null when none.
+const EnvironmentInfo::Field* shownField(const PanelContext& context, const EnvironmentView& view) {
+    const std::shared_ptr<const EnvironmentInfo> info = context.client.environment();
+    if (!info) {
+        return nullptr;
+    }
+    for (const EnvironmentInfo::Field& candidate : info->fields) {
+        if (candidate.name == view.field) {
+            return &candidate;
+        }
+    }
+    return nullptr;
+}
+
+/// Design: the legend at bottom right of a field view: the field's name and unit, the colour
+/// bar and its range; `wind` adds the air's line when its particles are drawn.
+void sliceLegend(ImDrawList* draw, const ImVec2& origin, const ImVec2& size, const char* label,
+                 const char* unit, const std::string& field, const FieldSliceData& slice,
+                 const char* wind) {
+    const theme::Fonts& fonts = theme::fonts();
+    const float small = px(theme::kCaptionSize);
+    const float tall = wind != nullptr ? px(96.0F) : px(74.0F);
+    const ImVec2 legendMin(origin.x + size.x - px(250.0F), origin.y + size.y - tall);
+    const ImVec2 legendMax(origin.x + size.x - px(10.0F), origin.y + size.y - px(10.0F));
+    draw->AddRectFilled(legendMin, legendMax, u32(theme::hex(0x091120, 0.92F)), px(4.0F));
+    draw->AddRect(legendMin, legendMax, u32(c::lineStrong), px(4.0F));
+    draw->AddText(fonts.sansSemiBold, px(theme::kLabelSize),
+                  ImVec2(legendMin.x + px(10.0F), legendMin.y + px(7.0F)), u32(c::t1), label);
+    const float unitWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, unit).x;
+    draw->AddText(fonts.mono, small,
+                  ImVec2(legendMax.x - unitWidth - px(10.0F), legendMin.y + px(8.0F)), u32(c::t3),
+                  unit);
+    const float barLeft = legendMin.x + px(10.0F);
+    const float barRight = legendMax.x - px(10.0F);
+    const float barTop = legendMin.y + px(28.0F);
+    constexpr int kSteps = 48;
+    for (int i = 0; i < kSteps; ++i) {
+        const float a = static_cast<float>(i) / kSteps;
+        draw->AddRectFilled(
+            ImVec2(barLeft + (barRight - barLeft) * a, barTop),
+            ImVec2(barLeft + (barRight - barLeft) * (a + 1.0F / kSteps) + 0.5F, barTop + px(8.0F)),
+            u32(viridis(a)));
+    }
+    const bool logLegend = field == kFluxField && slice.valueMax > 0.0F;
+    const double lowest = logLegend ? std::max(static_cast<double>(slice.valueMin),
+                                               static_cast<double>(slice.valueMax) * 1e-4)
+                                    : static_cast<double>(slice.valueMin);
+    char text[64];
+    std::snprintf(text, sizeof(text), logLegend ? "%.3g · log" : "%.3g", lowest);
+    draw->AddText(fonts.mono, small, ImVec2(barLeft, barTop + px(12.0F)), u32(c::t3), text);
+    std::snprintf(text, sizeof(text), "%.3g", static_cast<double>(slice.valueMax));
+    const float maxWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+    draw->AddText(fonts.mono, small, ImVec2(barRight - maxWidth, barTop + px(12.0F)), u32(c::t3),
+                  text);
+    if (wind != nullptr) {
+        const float y = barTop + px(36.0F);
+        draw->AddLine(ImVec2(barLeft, y), ImVec2(barLeft + px(18.0F), y),
+                      u32(widgets::domainColor("aerodynamics")), px(2.0F));
+        draw->AddText(fonts.sans, small, ImVec2(barLeft + px(26.0F), y - small * 0.5F), u32(c::t2),
+                      wind);
+    }
+}
+
+/// A caption in a box over a field view (its top left: what is shown).
+void viewBox(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color) {
+    ImFont* font = theme::fonts().mono;
+    const float size = px(theme::kMonoSize);
+    const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
+    const ImVec2 max(min.x + width + px(16.0F), min.y + px(26.0F));
+    draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+    draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
+    draw->AddText(font, size, ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(color), text);
+}
+
 // --- a slice of the chosen field ----------------------------------------------------------
 
 class FieldSlicePanel final : public Panel {
@@ -638,56 +809,8 @@ public:
             ImGui::End();
             return;
         }
-        // --slice: a field and plane asked for on the command line.
-        if (context.fieldSlice != nullptr && !context.fieldSlice->empty() &&
-            context.client.environment()) {
-            std::string asked = *context.fieldSlice;
-            SliceOrientation plane = SliceOrientation::Horizontal;
-            if (const std::size_t colon = asked.rfind(':'); colon != std::string::npos) {
-                const std::string name = asked.substr(colon + 1);
-                plane = name == "xz"   ? SliceOrientation::VerticalXZ
-                        : name == "yz" ? SliceOrientation::VerticalYZ
-                                       : SliceOrientation::Horizontal;
-                asked.resize(colon);
-            }
-            view_->field = asked;
-            view_->orientation = plane;
-            view_->stream.reset();
-            context.fieldSlice->clear();
-        }
         view_->follow(context);
-        // Header: the plane (XY, XZ, YZ: design 07's slice choices; upright for the air and |B|)
-        // and the height of a horizontal slice.
-        if (widgets::BeginPanelTools("##slice-tools", px(150.0F))) {
-            static constexpr std::array<const char*, 3> kPlanes{"XY", "XZ", "YZ"};
-            int plane = static_cast<int>(view_->orientation);
-            ImGui::BeginDisabled(!slicedUpright(view_->field));
-            if (widgets::Segmented("##plane", kPlanes.data(), static_cast<int>(kPlanes.size()),
-                                   &plane)) {
-                view_->orientation = static_cast<SliceOrientation>(plane);
-                view_->stream.reset();
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine(0.0F, px(12.0F));
-            ImGui::AlignTextToFramePadding();
-            widgets::Caption("height");
-            ImGui::SameLine(0.0F, px(6.0F));
-            ImGui::BeginDisabled(view_->orientation != SliceOrientation::Horizontal);
-            ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
-            ImGui::SetNextItemWidth(px(160.0F));
-            // A slider from the ground to 10 m; Ctrl+click types any height.
-            double height = view_->heightM;
-            constexpr double kLowest = 0.0;
-            constexpr double kHighest = 10.0;
-            if (ImGui::SliderScalar("##height", ImGuiDataType_Double, &height, &kLowest, &kHighest,
-                                    "%.2f m") &&
-                std::isfinite(height)) {
-                view_->heightM = std::clamp(height, -100.0, 1000.0);
-            }
-            ImGui::PopFont();
-            ImGui::EndDisabled();
-            widgets::EndPanelTools();
-        }
+        sliceTools(*view_, "##slice-tools");
         if (!context.client.environment() || view_->field.empty()) {
             ImGui::SetCursorPos(
                 ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
@@ -726,21 +849,8 @@ public:
             return ImVec2(base.x + static_cast<float>(x - left) * scale,
                           base.y - static_cast<float>(y - bottom) * scale);
         };
-        // |B| spans decades (it falls as 1/r to 1/r³): coloured on a log scale over the top
-        // four decades; the rest linearly.
-        const bool logScale = view_->field == kFluxField && slice->valueMax > 0.0F;
-        const float logHigh = logScale ? std::log10(slice->valueMax) : 0.0F;
-        const float logLow =
-            logScale ? std::max(std::log10(std::max(slice->valueMin, 1e-30F)), logHigh - 4.0F)
-                     : 0.0F;
-        const float range = std::max(slice->valueMax - slice->valueMin, 1e-12F);
-        const auto fraction = [&](float value) {
-            if (logScale) {
-                return (std::log10(std::max(value, 1e-30F)) - logLow) /
-                       std::max(logHigh - logLow, 1e-6F);
-            }
-            return (value - slice->valueMin) / range;
-        };
+        const SliceScale colours(view_->field, *slice);
+        const auto fraction = [&colours](float value) { return colours.fraction(value); };
         const float cell = static_cast<float>(slice->cellM) * scale;
         for (std::uint32_t r = 0; r < slice->height; ++r) {
             for (std::uint32_t col = 0; col < slice->width; ++col) {
@@ -803,7 +913,7 @@ public:
                                                                                  : "z";
         std::snprintf(text, sizeof(text), "%s  ·  %u × %u cells of %.2f m  ·  %s %.2f m", label,
                       slice->width, slice->height, slice->cellM, plane, slice->heightM);
-        box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, c::t1);
+        viewBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, c::t1);
 
         // Probe: the value under the cursor (design: crosshair with a tooltip).
         if (hovered) {
@@ -832,51 +942,432 @@ public:
         }
 
         // Bottom right: the legend.
-        const ImVec2 legendMin(origin.x + size.x - px(250.0F), origin.y + size.y - px(74.0F));
-        const ImVec2 legendMax(origin.x + size.x - px(10.0F), origin.y + size.y - px(10.0F));
-        draw->AddRectFilled(legendMin, legendMax, u32(theme::hex(0x091120, 0.92F)), px(4.0F));
-        draw->AddRect(legendMin, legendMax, u32(c::lineStrong), px(4.0F));
-        draw->AddText(fonts.sansSemiBold, px(theme::kLabelSize),
-                      ImVec2(legendMin.x + px(10.0F), legendMin.y + px(7.0F)), u32(c::t1), label);
-        const float unitWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, unit).x;
-        draw->AddText(fonts.mono, small,
-                      ImVec2(legendMax.x - unitWidth - px(10.0F), legendMin.y + px(8.0F)),
-                      u32(c::t3), unit);
-        const float barLeft = legendMin.x + px(10.0F);
-        const float barRight = legendMax.x - px(10.0F);
-        const float barTop = legendMin.y + px(28.0F);
-        constexpr int kSteps = 48;
-        for (int i = 0; i < kSteps; ++i) {
-            const float a = static_cast<float>(i) / kSteps;
-            draw->AddRectFilled(ImVec2(barLeft + (barRight - barLeft) * a, barTop),
-                                ImVec2(barLeft + (barRight - barLeft) * (a + 1.0F / kSteps) + 0.5F,
-                                       barTop + px(8.0F)),
-                                u32(viridis(a)));
-        }
-        const bool logLegend = view_->field == kFluxField && slice->valueMax > 0.0F;
-        const double lowest = logLegend ? std::max(static_cast<double>(slice->valueMin),
-                                                   static_cast<double>(slice->valueMax) * 1e-4)
-                                        : static_cast<double>(slice->valueMin);
-        std::snprintf(text, sizeof(text), logLegend ? "%.3g · log" : "%.3g", lowest);
-        draw->AddText(fonts.mono, small, ImVec2(barLeft, barTop + px(12.0F)), u32(c::t3), text);
-        std::snprintf(text, sizeof(text), "%.3g", static_cast<double>(slice->valueMax));
-        const float maxWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
-        draw->AddText(fonts.mono, small, ImVec2(barRight - maxWidth, barTop + px(12.0F)),
-                      u32(c::t3), text);
+        sliceLegend(draw, origin, size, label, unit, view_->field, *slice, nullptr);
         ImGui::End();
     }
 
 private:
-    static void box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color) {
-        ImFont* font = theme::fonts().mono;
-        const float size = px(theme::kMonoSize);
-        const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
-        const ImVec2 max(min.x + width + px(16.0F), min.y + px(26.0F));
-        draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
-        draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
-        draw->AddText(font, size, ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(color), text);
+    std::shared_ptr<EnvironmentView> view_;
+};
+
+// --- the field in the 3D view --------------------------------------------------------------
+
+/// A point of a slice's plane (its two axes u, v) in the region frame.
+std::array<double, 3> slicePoint(const FieldSliceData& slice, double u, double v) {
+    switch (slice.orientation) {
+        case SliceOrientation::VerticalXZ:
+            return {u, slice.heightM, v};
+        case SliceOrientation::VerticalYZ:
+            return {slice.heightM, u, v};
+        case SliceOrientation::Horizontal:
+            break;
+    }
+    return {u, v, slice.heightM};
+}
+
+/// "Viewport · fields" (design 07): the scene as the Scene workspace draws it, with the chosen
+/// field's slice laid in it where it is, the EMI sources marked and named, a probe under the
+/// cursor and the legend. Dragging orbits, the right button pans, the wheel zooms.
+class FieldViewportPanel final : public Panel {
+public:
+    explicit FieldViewportPanel(std::shared_ptr<EnvironmentView> view) : view_(std::move(view)) {}
+    [[nodiscard]] const char* title() const override { return "Viewport · fields"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Environment; }
+
+    void draw(PanelContext& context) override {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        const bool open =
+            ImGui::Begin("Viewport · fields###FieldViewport", nullptr,
+                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleVar();
+        if (!open) {
+            ImGui::End();
+            return;
+        }
+        view_->follow(context);
+        sliceTools(*view_, "##viewport-slice-tools");
+        if (!context.scene) {
+            ImGui::SetCursorPos(
+                ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
+            if (!emptyState(context)) {
+                widgets::Caption("Waiting for the scene ...");
+            }
+            ImGui::End();
+            return;
+        }
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+        context.requestedViewportWidth =
+            static_cast<std::uint32_t>(std::max(available.x * scale.x, 1.0F));
+        context.requestedViewportHeight =
+            static_cast<std::uint32_t>(std::max(available.y * scale.y, 1.0F));
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        if (context.viewportTexture != 0) {
+            ImGui::Image(static_cast<ImTextureID>(context.viewportTexture), available);
+        }
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::InvisibleButton(
+            "##fields", available,
+            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        const bool hovered = ImGui::IsItemHovered();
+        camera(context, available);
+
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->PushClipRect(origin, ImVec2(origin.x + available.x, origin.y + available.y), true);
+        const double aspect = static_cast<double>(available.x) / std::max(available.y, 1.0F);
+        const Mat4 matrix = context.camera.viewProjection(aspect);
+        const std::array<double, 3> eye = context.camera.eye();
+        const auto project = [&](const std::array<double, 3>& p) -> std::optional<ImVec2> {
+            const auto x = static_cast<float>(p[0] - eye[0]);
+            const auto y = static_cast<float>(p[1] - eye[1]);
+            const auto z = static_cast<float>(p[2] - eye[2]);
+            const float w = matrix[12] * x + matrix[13] * y + matrix[14] * z;
+            if (w <= 0.01F) {
+                return std::nullopt;  // behind the camera
+            }
+            const float nx = (matrix[0] * x + matrix[1] * y + matrix[2] * z) / w;
+            const float ny = (matrix[4] * x + matrix[5] * y + matrix[6] * z) / w;
+            return ImVec2(origin.x + (nx + 1.0F) * 0.5F * available.x,
+                          origin.y + (ny + 1.0F) * 0.5F * available.y);
+        };
+
+        const EnvironmentInfo::Field* field = shownField(context, *view_);
+        const char* unit = field != nullptr ? field->unit.c_str() : "";
+        const char* label = field != nullptr ? field->label.c_str() : view_->field.c_str();
+        const std::shared_ptr<const FieldSliceData> slice =
+            view_->stream ? view_->stream->latest() : nullptr;
+        if (slice && slice->width > 0 && slice->height > 0) {
+            drawSlice(draw, *slice, project);
+        }
+        sources(context, draw, project);
+
+        // Top left: what the view shows.
+        char text[200];
+        if (view_->field.empty()) {
+            std::snprintf(text, sizeof(text), "Fields  ·  no field shown");
+        } else if (!slice) {
+            std::snprintf(text, sizeof(text), "Fields  ·  %s  ·  waiting for the first slice",
+                          label);
+        } else {
+            std::snprintf(text, sizeof(text), "Fields  ·  %s  ·  %.2f m cells%s", label,
+                          slice->cellM, context.renderOptions->airflow ? "  ·  airflow shown" : "");
+        }
+        viewBox(draw, ImVec2(origin.x + px(12.0F), origin.y + px(12.0F)), text, c::t1);
+
+        if (hovered && slice) {
+            probe(context, *slice, origin, available, label, unit, field);
+        }
+        if (slice) {
+            char wind[64];
+            std::snprintf(wind, sizeof(wind), "airflow · particles move with the air");
+            sliceLegend(draw, origin, available, label, unit, view_->field, *slice,
+                        context.renderOptions->airflow ? wind : nullptr);
+        }
+        draw->PopClipRect();
+        if (!emptyState(context) && view_->field.empty()) {
+            ImGui::SetCursorScreenPos(ImVec2(origin.x + px(12.0F), origin.y + px(46.0F)));
+            widgets::Caption("No field of this run can be shown. The Overlays panel says why.");
+        }
+        ImGui::End();
     }
 
+private:
+    static constexpr double kOrbitRadiansPerPixel = 0.005;
+    static constexpr double kZoomPerWheelStep = 0.9;
+    static constexpr std::uint32_t kMostQuadsPerSide = 96;  // larger slices are merged cells
+
+    static void camera(PanelContext& context, const ImVec2& size) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            context.camera.orbit(-io.MouseDelta.x * kOrbitRadiansPerPixel,
+                                 io.MouseDelta.y * kOrbitRadiansPerPixel);
+        }
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+            context.camera.pan(-io.MouseDelta.x / std::max(size.y, 1.0F),
+                               io.MouseDelta.y / std::max(size.y, 1.0F));
+        }
+        if (ImGui::IsItemHovered() && io.MouseWheel != 0.0F) {
+            context.camera.zoom(std::pow(kZoomPerWheelStep, io.MouseWheel));
+        }
+    }
+
+    /// The slice where it is: a quad per cell (or per block of cells on a large slice), in the
+    /// field colour map at the Overlays panel's opacity.
+    template <typename Project>
+    void drawSlice(ImDrawList* draw, const FieldSliceData& slice, const Project& project) const {
+        const SliceScale colours(view_->field, slice);
+        const std::uint32_t step = std::max<std::uint32_t>(
+            1, (std::max(slice.width, slice.height) + kMostQuadsPerSide - 1) / kMostQuadsPerSide);
+        const double half = slice.cellM * 0.5;
+        for (std::uint32_t r = 0; r < slice.height; r += step) {
+            for (std::uint32_t col = 0; col < slice.width; col += step) {
+                const float value = slice.values[(static_cast<std::size_t>(r) * slice.width + col) *
+                                                 slice.components];
+                if (std::isnan(value)) {
+                    continue;
+                }
+                const std::uint32_t lastCol = std::min(col + step, slice.width) - 1;
+                const std::uint32_t lastRow = std::min(r + step, slice.height) - 1;
+                const double u0 = slice.originX + slice.cellM * col - half;
+                const double u1 = slice.originX + slice.cellM * lastCol + half;
+                const double v0 = slice.originY + slice.cellM * r - half;
+                const double v1 = slice.originY + slice.cellM * lastRow + half;
+                const auto a = project(slicePoint(slice, u0, v0));
+                const auto b = project(slicePoint(slice, u1, v0));
+                const auto cc = project(slicePoint(slice, u1, v1));
+                const auto d = project(slicePoint(slice, u0, v1));
+                if (!a || !b || !cc || !d) {
+                    continue;
+                }
+                ImVec4 colour = viridis(colours.fraction(value));
+                colour.w = view_->opacity;
+                draw->AddQuadFilled(*a, *b, *cc, *d, u32(colour));
+            }
+        }
+        // The slice's edge.
+        const double u0 = slice.originX - half;
+        const double v0 = slice.originY - half;
+        const double u1 = u0 + slice.cellM * slice.width;
+        const double v1 = v0 + slice.cellM * slice.height;
+        const auto a = project(slicePoint(slice, u0, v0));
+        const auto b = project(slicePoint(slice, u1, v0));
+        const auto cc = project(slicePoint(slice, u1, v1));
+        const auto d = project(slicePoint(slice, u0, v1));
+        if (a && b && cc && d) {
+            draw->AddQuad(*a, *b, *cc, *d, u32(c::lineStrong));
+        }
+    }
+
+    /// Design: the EMI sources in the scene, each a mark in the EMI colour with its name and
+    /// numbers.
+    template <typename Project>
+    static void sources(const PanelContext& context, ImDrawList* draw, const Project& project) {
+        const std::shared_ptr<const EnvironmentInfo> info = context.client.environment();
+        if (!info || !context.scene) {
+            return;
+        }
+        const ImVec4 emi = widgets::domainColor("emi");
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const std::vector<PrimData>& prims = context.scene->statics->prims;
+        for (const EnvironmentInfo::EmiSource& source : info->emiSources) {
+            // The server may not say which prim a source is (prim none): its name is the
+            // prim's instance name (emi::Source::name), so find it by that.
+            std::uint32_t prim = source.prim;
+            for (std::uint32_t i = 0; prim == kNone && i < prims.size(); ++i) {
+                if (prims[i].name == source.name) {
+                    prim = i;
+                }
+            }
+            if (prim >= context.scene->transforms.size()) {
+                continue;
+            }
+            const auto& p = context.scene->transforms[prim].position;
+            const auto at = project({p[0], p[1], p[2]});
+            if (!at) {
+                continue;
+            }
+            char text[160];
+            if (source.currentA != 0.0) {
+                std::snprintf(text, sizeof(text), "%s  ·  %g A  ·  %g Hz", source.name.c_str(),
+                              source.currentA, source.frequencyHz);
+            } else {
+                std::snprintf(text, sizeof(text), "%s  ·  %g Hz", source.name.c_str(),
+                              source.frequencyHz);
+            }
+            draw->AddCircleFilled(*at, px(4.0F), u32(emi));
+            draw->AddCircle(*at, px(8.0F), u32(emi), 0, px(1.5F));
+            draw->AddText(fonts.sans, small, ImVec2(at->x + px(12.0F), at->y - small - px(2.0F)),
+                          u32(emi), text);
+        }
+    }
+
+    /// Design: a crosshair under the cursor where its ray meets the slice's plane, with a
+    /// tooltip of the field there and the site's wind and air (what the server reports of them;
+    /// the other fields are not streamed while one is shown).
+    void probe(const PanelContext& context, const FieldSliceData& slice, const ImVec2& origin,
+               const ImVec2& size, const char* label, const char* unit,
+               const EnvironmentInfo::Field* field) const {
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const double aspect = static_cast<double>(size.x) / std::max(size.y, 1.0F);
+        const Ray ray = context.camera.ray((mouse.x - origin.x) / size.x * 2.0 - 1.0,
+                                           (mouse.y - origin.y) / size.y * 2.0 - 1.0, aspect);
+        const std::size_t axis = slice.orientation == SliceOrientation::VerticalXZ   ? 1
+                                 : slice.orientation == SliceOrientation::VerticalYZ ? 0
+                                                                                     : 2;
+        if (std::abs(ray.direction.at(axis)) < 1e-9) {
+            return;
+        }
+        const double t = (slice.heightM - ray.origin.at(axis)) / ray.direction.at(axis);
+        if (t <= 0.0) {
+            return;
+        }
+        std::array<double, 3> hit{};
+        for (std::size_t k = 0; k < 3; ++k) {
+            hit.at(k) = ray.origin.at(k) + ray.direction.at(k) * t;
+        }
+        const double u = axis == 0 ? hit[1] : hit[0];
+        const double v = axis == 2 ? hit[1] : hit[2];
+        const float value = slice.sample(u, v);
+        if (std::isnan(value)) {
+            return;
+        }
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddCircle(mouse, px(7.0F), u32(c::t1), 0, px(1.5F));
+        draw->AddLine(ImVec2(mouse.x - px(11.0F), mouse.y), ImVec2(mouse.x + px(11.0F), mouse.y),
+                      u32(c::t1));
+        draw->AddLine(ImVec2(mouse.x, mouse.y - px(11.0F)), ImVec2(mouse.x, mouse.y + px(11.0F)),
+                      u32(c::t1));
+        ImGui::BeginTooltip();
+        widgets::Mono(c::t3, "probe · x %.2f  y %.2f  z %.2f m", hit[0], hit[1], hit[2]);
+        widgets::Dot(field != nullptr ? widgets::domainColor(field->domain) : c::t2);
+        ImGui::SameLine(0.0F, px(6.0F));
+        const std::shared_ptr<const EnvironmentInfo> info = context.client.environment();
+        if (view_->field == kFluxField && info && info->emiSources.size() == 1) {
+            // One source: its field is at its frequency (design: "|B| 29.4 µT · 60 Hz").
+            widgets::Mono(c::t1, "%s  %.3g %s · %g Hz", label, static_cast<double>(value), unit,
+                          info->emiSources.front().frequencyHz);
+        } else {
+            widgets::Mono(c::t1, "%s  %.3g %s", label, static_cast<double>(value), unit);
+        }
+        if (info) {
+            if (view_->field != kAirField && info->windSpeed > 0.0) {
+                widgets::Dot(widgets::domainColor("aerodynamics"));
+                ImGui::SameLine(0.0F, px(6.0F));
+                widgets::Mono(c::t1, "wind %.1f m/s · from %.0f° (site mean)", info->windSpeed,
+                              info->windFromDeg);
+            }
+            if (info->fogVisibilityM > 0.0 && info->fogVisibilityM < kClearAirM &&
+                (field == nullptr || field->domain != "weather")) {
+                widgets::Dot(widgets::domainColor("weather"));
+                ImGui::SameLine(0.0F, px(6.0F));
+                // Koschmieder: visibility 3.912 / sigma at a 2 % contrast threshold.
+                widgets::Mono(c::t1, "σ_fog %.3g /m", kKoschmieder / info->fogVisibilityM);
+            }
+            if (info->ambientTemperatureK > 0.0) {
+                widgets::Dot(widgets::domainColor("thermal"));
+                ImGui::SameLine(0.0F, px(6.0F));
+                widgets::Mono(c::t1, "air %.1f °C (site)", info->ambientTemperatureK - 273.15);
+            }
+        }
+        ImGui::EndTooltip();
+    }
+
+    // Koschmieder's constant, -ln(0.02): visibility at a 2 % contrast threshold (WMO).
+    static constexpr double kKoschmieder = 3.912;
+    static constexpr double kClearAirM = 10'000.0;  // the Environment panel's clear air
+
+    std::shared_ptr<EnvironmentView> view_;
+};
+
+// --- what the field shown is ----------------------------------------------------------------
+
+/// "Field info" (design 07, beside Overlays): the field shown and its last slice, how much
+/// arrives, and every field of the run with why it can or cannot be shown.
+class FieldInfoPanel final : public Panel {
+public:
+    explicit FieldInfoPanel(std::shared_ptr<EnvironmentView> view) : view_(std::move(view)) {}
+    [[nodiscard]] const char* title() const override { return "Field info"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Environment; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin("Field info###FieldInfo")) {
+            ImGui::End();
+            return;
+        }
+        if (emptyState(context)) {
+            ImGui::End();
+            return;
+        }
+        view_->follow(context);
+        const EnvironmentInfo& info = *context.client.environment();
+        const EnvironmentInfo::Field* field = shownField(context, *view_);
+        const std::shared_ptr<const FieldSliceData> slice =
+            view_->stream ? view_->stream->latest() : nullptr;
+        char text[96];
+        if (widgets::SectionHeader("Shown", field != nullptr ? field->label.c_str() : "none")) {
+            ImGui::Indent(px(8.0F));
+            if (field == nullptr) {
+                widgets::Caption("No field shown: pick one in Overlays.");
+            } else {
+                widgets::PropertyRow("name", field->name.c_str(), nullptr);
+                widgets::PropertyRow(
+                    "domain", std::string(widgets::domainLabel(field->domain)).c_str(), nullptr);
+                widgets::PropertyRow("unit", field->unit.c_str(), nullptr);
+                std::snprintf(text, sizeof(text), "%u", field->components);
+                widgets::PropertyRow("components", text, nullptr);
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        if (field != nullptr && widgets::SectionHeader("Last slice", slice ? nullptr : "waiting")) {
+            ImGui::Indent(px(8.0F));
+            if (!slice) {
+                widgets::Caption("Waiting for the first slice ...");
+            } else {
+                const char* plane = slice->orientation == SliceOrientation::VerticalXZ   ? "XZ"
+                                    : slice->orientation == SliceOrientation::VerticalYZ ? "YZ"
+                                                                                         : "XY";
+                const char* across = slice->orientation == SliceOrientation::VerticalXZ   ? "y"
+                                     : slice->orientation == SliceOrientation::VerticalYZ ? "x"
+                                                                                          : "z";
+                std::snprintf(text, sizeof(text), "%s at %s = %.2f", plane, across, slice->heightM);
+                widgets::PropertyRow("plane", text, "m");
+                std::snprintf(text, sizeof(text), "%u × %u", slice->width, slice->height);
+                widgets::PropertyRow("grid", text, "cells");
+                row("cell", "m", "%.3f", slice->cellM);
+                std::snprintf(text, sizeof(text), "%.2f, %.2f", slice->originX, slice->originY);
+                widgets::PropertyRow("first cell", text, "m");
+                std::snprintf(text, sizeof(text), "%.1f × %.1f", slice->cellM * slice->width,
+                              slice->cellM * slice->height);
+                widgets::PropertyRow("bounds", text, "m");
+                std::snprintf(text, sizeof(text), "%.4g … %.4g",
+                              static_cast<double>(slice->valueMin),
+                              static_cast<double>(slice->valueMax));
+                widgets::PropertyRow("range", text, field->unit.c_str());
+                const double kib =
+                    static_cast<double>(slice->values.size() * sizeof(float)) / 1024.0;
+                row("size", "KiB", "%.1f", kib);
+                std::snprintf(text, sizeof(text), "%llu",
+                              static_cast<unsigned long long>(view_->stream->slices()));
+                widgets::PropertyRow("slices received", text, nullptr);
+                row("sim time", "s", "%.2f", static_cast<double>(slice->simTimeNs) * 1e-9);
+                const double age =
+                    static_cast<double>(context.status.simTimeNs - slice->simTimeNs) * 1e-9;
+                row("age", "s", "%.2f", std::max(age, 0.0));
+                widgets::PropertyRow("colour scale",
+                                     SliceScale(view_->field, *slice).logScale
+                                         ? "viridis · log, top 4 decades"
+                                         : "viridis · linear",
+                                     nullptr);
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        std::snprintf(text, sizeof(text), "%zu", info.fields.size());
+        if (widgets::SectionHeader("Fields of this run", text)) {
+            ImGui::Indent(px(8.0F));
+            for (const EnvironmentInfo::Field& f : info.fields) {
+                widgets::Dot(widgets::domainColor(f.domain), f.available);
+                ImGui::SameLine(0.0F, px(6.0F));
+                widgets::Mono(f.available ? c::t1 : c::t3, "%s", f.name.c_str());
+                if (!f.available) {
+                    ImGui::PushTextWrapPos(0.0F);
+                    widgets::Caption("    %s", f.unavailableReason.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        if (info.synthetic) {
+            ImGui::PushTextWrapPos(0.0F);
+            widgets::Caption(
+                "This server has no environment model: a field shown is an estimate it derives "
+                "from the recording.");
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::End();
+    }
+
+private:
     std::shared_ptr<EnvironmentView> view_;
 };
 
@@ -1106,8 +1597,10 @@ std::vector<std::unique_ptr<Panel>> createEnvironmentPanels() {
     auto sent = std::make_shared<SentSite>();
     panels.push_back(std::make_unique<EnvironmentPanel>(sent));
     panels.push_back(std::make_unique<PresetsPanel>(sent));
+    panels.push_back(std::make_unique<FieldViewportPanel>(view));
     panels.push_back(std::make_unique<FieldSlicePanel>(view));
     panels.push_back(std::make_unique<OverlaysPanel>(view));
+    panels.push_back(std::make_unique<FieldInfoPanel>(view));
     return panels;
 }
 

@@ -302,25 +302,29 @@ public:
                 const NetLive& live = state_->nets[n];
                 const double volts = latest(live.voltage);
                 // Sources first, then the bus, then what it feeds (indented), as in the design.
+                // Design (Interactions): Alt-clicking a value adds it to the scopes.
                 for (std::size_t t = 0; t < net.terminals.size(); ++t) {
-                    if (net.terminals[t].isSource()) {
+                    if (net.terminals[t].isSource() &&
                         row(context, statics, net.terminals[t].prim, 0, volts,
-                            latest(live.terminals[t].current));
+                            latest(live.terminals[t].current))) {
+                        probe(context, net.terminals[t].currentSignal);
                     }
                 }
-                if (net.busPrim != kNone) {
-                    row(context, statics, net.busPrim, 0, volts, NAN, " bus");
+                if (net.busPrim != kNone &&
+                    row(context, statics, net.busPrim, 0, volts, NAN, " bus")) {
+                    probe(context, net.voltageSignal);
                 }
                 for (std::size_t t = 0; t < net.terminals.size(); ++t) {
-                    if (!net.terminals[t].isSource()) {
+                    if (!net.terminals[t].isSource() &&
                         row(context, statics, net.terminals[t].prim, 1, volts,
-                            latest(live.terminals[t].current));
+                            latest(live.terminals[t].current))) {
+                        probe(context, net.terminals[t].currentSignal);
                     }
                 }
             }
             ImGui::EndTable();
         }
-        widgets::Caption("  V in volts  ·  I in amps  ·  P in watts");
+        widgets::Caption("  V in volts  ·  I in amps  ·  P in watts  ·  Alt-click: probe");
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         if (widgets::SectionHeader("Limits and events", "last 10 s")) {
             limits(context, statics);
@@ -346,15 +350,25 @@ private:
         widgets::Mono(color, "%s", text);
     }
 
-    static void row(PanelContext& context, const SceneStatics& statics, std::uint32_t prim,
+    /// Adds a signal to the Electrical scopes (a probe), when the run has it.
+    void probe(PanelContext& context, const std::string& signal) const {
+        if (context.catalog && !signal.empty()) {
+            (void)state_->scopes.add(context.client, *context.catalog, signal);
+        }
+    }
+
+    /// One row of the table; true when it was Alt-clicked (a probe asked for).
+    static bool row(PanelContext& context, const SceneStatics& statics, std::uint32_t prim,
                     int depth, double volts, double amperes, const char* suffix = "") {
         ImGui::PushID(static_cast<int>(prim) * 2 + (*suffix != '\0' ? 1 : 0));
         ImGui::TableNextRow(ImGuiTableRowFlags_None, px(23.0F));
         ImGui::TableNextColumn();
         const bool selected = context.selectedPrim == prim;
+        bool probed = false;
         if (ImGui::Selectable(
                 "##row", selected,
                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+            probed = ImGui::GetIO().KeyAlt;
             context.selectedPrim = prim;  // the selection is global: tree, viewport, inspector
         }
         ImGui::SameLine(px(8.0F) + px(18.0F) * static_cast<float>(depth));
@@ -374,6 +388,7 @@ private:
         number(volts * amperes, "%.0f", text, sizeof(text));
         rightMono(std::isnan(amperes) ? c::t3 : c::t1, text);
         ImGui::PopID();
+        return probed;
     }
 
     /// What the bus did over the last ten seconds, and whether the branch currents add up to
@@ -1429,12 +1444,379 @@ private:
     std::shared_ptr<ElectricalState> state_;
 };
 
+// --- Probes, + scope, History (design: the tabs beside Network, Scopes and Inspector) ------
+
+/// Every scalar signal of the stage's power system, in the nets' order: each net's voltage,
+/// then the signals of the prims on it (sources first). What a probe can be put on.
+std::vector<const SignalInfo*> electricalSignals(const PanelContext& context) {
+    std::vector<const SignalInfo*> out;
+    if (!context.scene || !context.catalog) {
+        return out;
+    }
+    const SignalCatalog& catalog = *context.catalog;
+    const auto take = [&out](const SignalInfo* info) {
+        if (info != nullptr && info->components == 1 && !info->image &&
+            std::ranges::find(out, info) == out.end()) {
+            out.push_back(info);
+        }
+    };
+    for (const ElectricalNet& net : context.scene->statics->nets) {
+        take(catalog.find(net.voltageSignal));
+        for (const bool sources : {true, false}) {
+            for (const NetTerminal& terminal : net.terminals) {
+                if (terminal.isSource() != sources) {
+                    continue;
+                }
+                take(catalog.find(terminal.currentSignal));
+                for (const SignalInfo& info : catalog.signals) {
+                    if (info.prim == terminal.prim) {
+                        take(&info);
+                    }
+                }
+            }
+        }
+    }
+    // Signals of the electrical domain on no prim of a net (fuses, converters' own outputs).
+    for (const SignalInfo& info : catalog.signals) {
+        if (info.writer.find("electrical") != std::string::npos) {
+            take(&info);
+        }
+    }
+    return out;
+}
+
+/// The probes: what the Electrical scopes plot, each with its value now and its range over the
+/// scopes' window; Alt-click in Network or "+ scope" adds one, x removes it.
+class ProbesPanel final : public Panel {
+public:
+    explicit ProbesPanel(std::shared_ptr<ElectricalState> state) : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return title_.c_str(); }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Electrical; }
+
+    void draw(PanelContext& context) override {
+        state_->follow(context);
+        ScopeSession& scopes = state_->scopes;
+        title_ = "Probes · " + std::to_string(scopes.traces().size()) + "###ElectricalProbes";
+        if (!ImGui::Begin(title_.c_str())) {
+            ImGui::End();
+            return;
+        }
+        if (emptyState(context, *state_)) {
+            ImGui::End();
+            return;
+        }
+        const ScopeSession::View view = scopes.view();
+        std::optional<std::size_t> remove;
+        // One probe per row: its name over its range in the scopes' window, its value now on
+        // the right (the names are too long for a range column in 300 px).
+        if (ImGui::BeginTable("##probes", 3,
+                              ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp |
+                                  ImGuiTableFlags_NoPadOuterX)) {
+            ImGui::TableSetupColumn("probe", ImGuiTableColumnFlags_None, 3.0F);
+            ImGui::TableSetupColumn("now", ImGuiTableColumnFlags_None, 1.2F);
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, px(18.0F));
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, px(24.0F));
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, u32(c::bg2));
+            ImGui::TableNextColumn();
+            widgets::Caption("  probe  ·  min … max");
+            ImGui::TableNextColumn();
+            rightCaption("now");
+            ImGui::TableNextColumn();
+            const std::vector<ScopeTrace>& traces = scopes.traces();
+            for (std::size_t i = 0; i < traces.size(); ++i) {
+                const ScopeTrace& trace = traces[i];
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, px(38.0F));
+                ImGui::TableNextColumn();
+                const SignalInfo* info =
+                    context.catalog ? context.catalog->find(trace.name) : nullptr;
+                const bool selected =
+                    info != nullptr && context.selectedPrim == info->prim && info->prim != kNone;
+                if (ImGui::Selectable(
+                        "##row", selected,
+                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                        ImVec2(0.0F, px(34.0F))) &&
+                    info != nullptr && info->prim != kNone) {
+                    context.selectedPrim = info->prim;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", trace.label.c_str());
+                }
+                const ImVec2 top = ImGui::GetItemRectMin();
+                ImGui::SetCursorScreenPos(ImVec2(top.x + px(8.0F), top.y + px(2.0F)));
+                widgets::Swatch(theme::kSeries[static_cast<std::size_t>(trace.color) % 8]);
+                ImGui::SameLine(0.0F, px(6.0F));
+                widgets::Mono(c::t1, "%s", shortSignalName(trace.label));
+                ScopeBuffer::Statistics range;
+                if (trace.buffer) {
+                    range = trace.buffer->statistics(view.beginNs, view.endNs + 1);
+                }
+                char text[64];
+                ImGui::SetCursorScreenPos(ImVec2(top.x + px(26.0F), ImGui::GetCursorScreenPos().y));
+                if (range.count == 0) {
+                    widgets::Mono(c::t3, "–");
+                } else {
+                    widgets::Mono(c::t3, "%.4g … %.4g", range.min, range.max);
+                }
+                const double now = trace.buffer ? trace.buffer->latest() : NAN;
+                ImGui::TableNextColumn();
+                ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, top.y + px(2.0F)));
+                std::snprintf(text, sizeof(text), "%.4g %s", now, unitText(trace.unit));
+                rightMono(std::isnan(now) ? c::t3 : c::t1, std::isnan(now) ? "–" : text);
+                ImGui::TableNextColumn();
+                ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, top.y + px(2.0F)));
+                if (ImGui::SmallButton("×")) {
+                    remove = i;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Remove this probe from the scopes");
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (remove) {
+            scopes.remove(context.client, *remove);
+        }
+        char window[48];
+        std::snprintf(window, sizeof(window), "%.0f s", view.seconds());
+        widgets::Caption("  range over the scopes' window (%s)", window);
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        ImGui::PushTextWrapPos(0.0F);
+        widgets::Caption(
+            "  Alt-click a row of Network, or pick a signal in + scope, to add a probe.");
+        ImGui::PopTextWrapPos();
+        ImGui::End();
+    }
+
+private:
+    static const char* unitText(const std::string& unit) { return unit == "1" ? "" : unit.c_str(); }
+    static void rightCaption(const char* text) {
+        ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+        widgets::AlignRight(ImGui::CalcTextSize(text).x);
+        ImGui::PopFont();
+        widgets::Caption("%s", text);
+    }
+    static void rightMono(const ImVec4& color, const char* text) {
+        ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+        widgets::AlignRight(ImGui::CalcTextSize(text).x);
+        ImGui::PopFont();
+        widgets::Mono(color, "%s", text);
+    }
+
+    std::shared_ptr<ElectricalState> state_;
+    std::string title_ = "Probes###ElectricalProbes";
+};
+
+/// "+ scope": every signal of the power system not plotted yet, with a filter; a click adds it
+/// to the scopes and brings them in front.
+class AddScopePanel final : public Panel {
+public:
+    explicit AddScopePanel(std::shared_ptr<ElectricalState> state) : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return "+ scope###ElectricalAddScope"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Electrical; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        state_->follow(context);
+        if (emptyState(context, *state_)) {
+            ImGui::End();
+            return;
+        }
+        ScopeSession& scopes = state_->scopes;
+        (void)widgets::SearchField("##filter", "filter signals", filter_.data(), filter_.size(),
+                                   px(260.0F));
+        ImGui::SameLine(0.0F, px(10.0F));
+        ImGui::AlignTextToFramePadding();
+        const std::vector<const SignalInfo*> signals = electricalSignals(context);
+        std::size_t plotted = 0;
+        for (const SignalInfo* info : signals) {
+            plotted += scopes.find(info->name) >= 0 ? 1 : 0;
+        }
+        widgets::Caption("%zu signals of the power system · %zu on the scopes", signals.size(),
+                         plotted);
+        const std::string_view filter(filter_.data());
+        ImGui::BeginChild("##signals");
+        std::string added;
+        for (const SignalInfo* info : signals) {
+            if (!filter.empty() && info->name.find(filter) == std::string::npos) {
+                continue;
+            }
+            const bool on = scopes.find(info->name) >= 0;
+            ImGui::PushID(info->name.c_str());
+            ImGui::BeginDisabled(on);
+            if (ImGui::Selectable("##add", false, ImGuiSelectableFlags_AllowOverlap,
+                                  ImVec2(0.0F, px(22.0F))) &&
+                context.catalog) {
+                if (scopes.add(context.client, *context.catalog, info->name)) {
+                    added = info->name;
+                }
+            }
+            ImGui::SameLine(px(8.0F));
+            ImGui::AlignTextToFramePadding();
+            widgets::Mono(on ? c::t3 : c::t1, "%s%s", on ? "" : "+ ", info->name.c_str());
+            ImGui::SameLine();
+            const char* unit = info->unit == "1" ? "" : info->unit.c_str();
+            char right[64];
+            std::snprintf(right, sizeof(right), "%s%s%s", unit, *unit != '\0' ? "  ·  " : "",
+                          on ? "on a scope" : rate(info->dtNs).c_str());
+            ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+            widgets::AlignRight(ImGui::CalcTextSize(right).x + px(8.0F));
+            ImGui::TextColored(c::t3, "%s", right);
+            ImGui::PopFont();
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        if (!added.empty()) {
+            ImGui::SetWindowFocus("Scopes");
+        }
+        ImGui::End();
+    }
+
+private:
+    static std::string rate(std::int64_t dtNs) {
+        if (dtNs <= 0) {
+            return "on change";
+        }
+        const double hz = 1e9 / static_cast<double>(dtNs);
+        char text[32];
+        if (hz >= 1000.0) {
+            std::snprintf(text, sizeof(text), "%.0f kHz", hz / 1000.0);
+        } else {
+            std::snprintf(text, sizeof(text), "%.0f Hz", hz);
+        }
+        return text;
+    }
+
+    std::shared_ptr<ElectricalState> state_;
+    std::array<char, 64> filter_{};
+};
+
+/// History (beside the Inspector): the electrical events of the run so far, newest first, and
+/// what each bus did while this viewer watched (its lowest and highest voltage, the largest
+/// current of each branch) — the scopes' buffers, not a new request.
+class ElectricalHistoryPanel final : public Panel {
+public:
+    explicit ElectricalHistoryPanel(std::shared_ptr<ElectricalState> state)
+        : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return "History###ElectricalHistory"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Electrical; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        state_->follow(context);
+        if (emptyState(context, *state_)) {
+            ImGui::End();
+            return;
+        }
+        const SceneStatics& statics = *context.scene->statics;
+        const std::shared_ptr<const EventLog> log = context.client.events();
+        std::size_t count = 0;
+        for (const EventInfo& event : log->events) {
+            count += event.domain == "electrical" ? 1 : 0;
+        }
+        char meta[32];
+        std::snprintf(meta, sizeof(meta), "%zu", count);
+        if (widgets::SectionHeader("Events", meta)) {
+            ImGui::Indent(px(8.0F));
+            int shown = 0;
+            for (std::size_t i = log->events.size(); i-- > 0 && shown < kEventsShown;) {
+                const EventInfo& event = log->events[i];
+                if (event.domain != "electrical") {
+                    continue;
+                }
+                ++shown;
+                ImGui::PushID(static_cast<int>(i));
+                widgets::Pill(event.kind.c_str(), event.severity == EventInfo::Severity::Error
+                                                      ? widgets::PillKind::Error
+                                                  : event.severity == EventInfo::Severity::Warning
+                                                      ? widgets::PillKind::Warn
+                                                      : widgets::PillKind::Info);
+                ImGui::SameLine(0.0F, px(8.0F));
+                ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - px(70.0F));
+                ImGui::TextUnformatted(event.text.c_str());
+                ImGui::PopTextWrapPos();
+                if (ImGui::IsItemClicked() && event.prim != kNone) {
+                    context.selectedPrim = event.prim;
+                }
+                char at[32];
+                std::snprintf(at, sizeof(at), "%.2f s", static_cast<double>(event.beginNs) * 1e-9);
+                ImGui::SameLine();
+                ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                widgets::AlignRight(ImGui::CalcTextSize(at).x);
+                ImGui::PopFont();
+                widgets::Mono(c::t3, "%s", at);
+                ImGui::PopID();
+            }
+            if (shown == 0) {
+                widgets::Caption("No electrical event in this run yet.");
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        if (widgets::SectionHeader("Since this viewer connected", nullptr)) {
+            ImGui::Indent(px(8.0F));
+            for (std::size_t n = 0; n < statics.nets.size() && n < state_->nets.size(); ++n) {
+                const ElectricalNet& net = statics.nets[n];
+                const NetLive& live = state_->nets[n];
+                widgets::Mono(kDischarge, "%s", net.name.c_str());
+                char text[64];
+                if (const auto range = held(live.voltage); range.count != 0) {
+                    std::snprintf(text, sizeof(text), "%.2f … %.2f", range.min, range.max);
+                    widgets::PropertyRow("bus voltage", text, "V");
+                }
+                for (std::size_t t = 0; t < net.terminals.size() && t < live.terminals.size();
+                     ++t) {
+                    const auto range = held(live.terminals[t].current);
+                    if (range.count == 0 || net.terminals[t].prim >= statics.prims.size()) {
+                        continue;
+                    }
+                    const double peak = std::max(std::abs(range.min), std::abs(range.max));
+                    std::snprintf(text, sizeof(text), "%.2f", peak);
+                    // The largest |I| of each branch: its name, then the value in "A peak".
+                    widgets::PropertyRow(statics.prims[net.terminals[t].prim].name.c_str(), text,
+                                         "A peak");
+                }
+                if (live.voltage) {
+                    const std::int64_t oldest = live.voltage->oldestTimeNs();
+                    const std::int64_t newest = live.voltage->newestTimeNs();
+                    if (oldest >= 0 && newest >= oldest) {
+                        widgets::Caption("held %.1f s of samples (the scopes' buffers)",
+                                         static_cast<double>(newest - oldest) * 1e-9);
+                    }
+                }
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        ImGui::End();
+    }
+
+private:
+    static constexpr int kEventsShown = 200;
+
+    static ScopeBuffer::Statistics held(const std::shared_ptr<ScopeBuffer>& buffer) {
+        if (!buffer || buffer->newestTimeNs() < 0) {
+            return {};
+        }
+        return buffer->statistics(buffer->oldestTimeNs(), buffer->newestTimeNs() + 1);
+    }
+
+    std::shared_ptr<ElectricalState> state_;
+};
+
 }  // namespace
 
 std::vector<std::unique_ptr<Panel>> createElectricalPanels() {
     auto state = std::make_shared<ElectricalState>();
     std::vector<std::unique_ptr<Panel>> panels;
     panels.push_back(std::make_unique<NetworkPanel>(state));
+    panels.push_back(std::make_unique<ProbesPanel>(state));
     panels.push_back(std::make_unique<SchematicPanel>(state));
     panels.push_back(std::make_unique<CircuitPanel>(state));
     panels.push_back(std::make_unique<OverlayPanel>(state));
@@ -1443,6 +1825,8 @@ std::vector<std::unique_ptr<Panel>> createElectricalPanels() {
         return state->nets.empty() ? nullptr : &state->circuit;
     }));
     panels.push_back(std::make_unique<ElectricalScopesPanel>(state));
+    panels.push_back(std::make_unique<AddScopePanel>(state));
+    panels.push_back(std::make_unique<ElectricalHistoryPanel>(state));
     return panels;
 }
 
