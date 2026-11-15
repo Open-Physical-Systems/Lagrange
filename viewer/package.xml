@@ -25,6 +25,7 @@
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>lagrange_assets</test_depend>
+  <test_depend>lagrange_core</test_depend>
   <test_depend>lagrange_mock_server</test_depend>
   <test_depend>lagrange_server</test_depend>
   <test_depend>mesa-vulkan-drivers</test_depend>
