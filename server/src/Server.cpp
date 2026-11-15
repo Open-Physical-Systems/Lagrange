@@ -3012,8 +3012,16 @@ struct Server::Impl {
         // benchmarks.md) and keep the run deterministic. --lidar gpu takes the compute kernel.
         if (!hasLidar || options.lidar != Lidar::Gpu) {
             if (hasLidar) {
+                // Said whatever the machine's tier: on a Tier 1 or 2 GPU the CPU is chosen, not
+                // fallen back to (QA 2026-11-14: "auto picks the CPU on Tier 2").
                 log(v1::LOG_LEVEL_INFO, "sensors",
-                    "lidar on the CPU (Tier 0: exact casts, Embree culling, all cores)");
+                    options.lidar == Lidar::Auto
+                        ? "lidar on the CPU (--lidar auto, on any GPU: the exact caster with "
+                          "Embree culling on all cores is faster than the GPU kernel's round "
+                          "trip for scans of this size and keeps the run deterministic, "
+                          "docs/design/benchmarks.md; --lidar gpu casts on the GPU)"
+                        : "lidar on the CPU (--lidar cpu: exact casts, Embree culling, all "
+                          "cores)");
             }
             return {};
         }
