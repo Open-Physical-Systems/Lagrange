@@ -605,6 +605,8 @@ public:
     ViewerClient& operator=(const ViewerClient&) = delete;
 
     void start();
+    /// Commands queued before it still reach a Ready server (the worker writes them for at most
+    /// 200 ms before closing); the rest are dropped, never sent to the next endpoint.
     void stop();
     /// True between start() and stop().
     [[nodiscard]] bool running() const { return thread_.joinable(); }
@@ -756,6 +758,8 @@ private:
     void handle(const v1::Envelope& envelope);
     void countQuietable(const v1::Envelope& envelope);
     void enqueue(std::unique_ptr<v1::Envelope> envelope);
+    /// On the worker, as it stops: sends the queued commands to a Ready server (bounded).
+    void deliverBeforeClosing();
     void handleSignalBlock(const v1::Envelope& envelope);
     void sendSubscriptions();
     void requestSnapshot();

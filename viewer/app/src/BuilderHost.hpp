@@ -57,6 +57,12 @@ public:
     /// lagrange_server as the Launcher found it (App: findLocalServer); empty: look it up in the
     /// ament prefixes.
     void setServerProgram(std::string program) { serverProgram_ = std::move(program); }
+    /// Called on the UI thread just before a Test moves the client off the run it follows to
+    /// its own server (App: play the run that "Pause the run while building" paused, so the
+    /// client's stop() still delivers that Play to it; review M2).
+    void setBeforeLeavingRun(std::function<void()> callback) {
+        beforeLeavingRun_ = std::move(callback);
+    }
     /// True while a Test owns the client's connection (Starting or Testing): the App then
     /// neither re-aims the Scene camera nor adds the test run to the Recent list (R3).
     [[nodiscard]] bool ownsConnection() const {
@@ -169,6 +175,7 @@ private:
     std::vector<std::unique_ptr<Job>> jobs_;
     proto::Endpoint previousEndpoint_;
     bool previousRunning_{false};
+    std::function<void()> beforeLeavingRun_;
     std::uint64_t snapshotsAtStart_{0};
     bool inRun_{false};  ///< the Test runs in the connected run
     /// Test ▾ → Start at…: the start pose of the test server's run. The Builder view's camera

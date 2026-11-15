@@ -182,3 +182,36 @@ def test_the_run_is_left_alone_unless_paused_while_building(tmp_path, warehouse)
     )
     assert report["workspace"] == "Scene"
     assert report["builder"]["run_state"] == "running"
+
+
+EMPTY_WORLD_TEST = "1430,48"  # "Test · empty world": a test server of its own
+
+
+def test_a_run_paused_while_building_plays_while_testing_and_after_back(tmp_path, warehouse):
+    """Review M2: Test moves the viewer to its own server; the run it paused must not stay
+    paused. Ticked, Test in an empty world, Back (paused again: building), then the Scene
+    workspace: the user's run plays."""
+    endpoint, log = warehouse
+    report = run(
+        tmp_path,
+        endpoint,
+        f"4:click:{VIEW_MENU};8:click:{PAUSE_WHILE_BUILDING};12:wait:ready;"
+        f"16:click:{EMPTY_WORLD_TEST};18:wait:connected;28:key:escape;30:wait:build;"
+        "31:wait:idle;32:wait:ready;44:key:ctrl+1",
+        70,
+    )
+    assert report["workspace"] == "Scene"
+    assert report["builder"]["test_into_run"] is False
+    assert report["builder"]["run_state"] == "running", log.read_text()[-2000:]
+    # Closed in Build mode after a Test: the run it paused plays on (stop() delivers the Play).
+    report = run(
+        tmp_path,
+        endpoint,
+        f"4:click:{VIEW_MENU};8:click:{PAUSE_WHILE_BUILDING};12:wait:ready;"
+        f"16:click:{EMPTY_WORLD_TEST};18:wait:connected;28:key:escape;30:wait:build;"
+        "31:wait:idle;32:wait:ready",
+        50,
+    )
+    assert report["builder"]["mode"] == "build"
+    report = run(tmp_path, endpoint, "4:key:tab", 30)
+    assert report["builder"]["run_state"] == "running"

@@ -178,7 +178,7 @@ def test_test_starts_the_robot_where_start_at_says(tmp_path):
     builder = report["builder"]
     assert builder["mode"] == "testing", builder["loader"]
     assert builder["start_at"] == "2, -1.5, 0 · 90°"
-    assert builder["test_spawn"] == "2,-1.5,0,1.5708"  # --spawn X,Y,Z,YAW (rad)
+    assert builder["test_spawn"] == "2,-1.5,0,1.5707963267948966"  # --spawn X,Y,Z,YAW (rad)
     x, y, z, heading = builder["test_root"]
     assert abs(x - 2.0) < 0.05 and abs(y + 1.5) < 0.05, builder["test_root"]
     assert 0.0 < z < 0.5  # on the floor (its lowest point at z = 0), not under it
@@ -196,7 +196,7 @@ def test_test_starts_the_robot_where_start_at_says(tmp_path):
         frames=20,
     )
     assert code == 0, err
-    assert report["builder"]["test_spawn"] == "2,-1.5,0,1.5708"
+    assert report["builder"]["test_spawn"] == "2,-1.5,0,1.5707963267948966"
     x, y, _, _ = report["builder"]["test_root"]
     assert abs(x - 2.0) < 0.05 and abs(y + 1.5) < 0.05
 

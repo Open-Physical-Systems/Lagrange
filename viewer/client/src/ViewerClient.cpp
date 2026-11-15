@@ -128,6 +128,13 @@ void ViewerClient::stop() {
     wake();
     if (thread_.joinable()) {
         thread_.join();
+        {
+            // The worker delivered what it could to its server (run()): what is left was meant
+            // for that server, never for the next one (a Play queued for run A must not play
+            // the Builder's test server).
+            const std::lock_guard lock(commandMutex_);
+            commands_.clear();
+        }
         // Stopped: not connected to anything (the worker no longer publishes). A refusal stays.
         if (worker_->info.state != ConnectionState::Refused) {
             worker_->info.state = ConnectionState::Disconnected;
@@ -1711,7 +1718,44 @@ void ViewerClient::run() {
             (void)w.connection.flush(ec);
         }
     }
+    deliverBeforeClosing();
     w.connection.close();
+}
+
+void ViewerClient::deliverBeforeClosing() {
+    // stop() asked: the commands queued before it (a Play for the run the viewer leaves) still
+    // go to a server that is Ready, written for a short bounded time on this worker thread, so
+    // the UI thread never sleeps for them (CLAUDE.md §8).
+    Worker& w = *worker_;
+    if (w.connection.state() != proto::Connection::State::Connected ||
+        w.info.state != ConnectionState::Ready) {
+        return;
+    }
+    std::deque<std::unique_ptr<v1::Envelope>> pending;
+    {
+        const std::lock_guard lock(commandMutex_);
+        pending.swap(commands_);
+    }
+    for (const auto& command : pending) {
+        (void)w.connection.queue(*command);
+    }
+    // A local socket takes a few small frames at once; a slow TCP peer gets 200 ms at most.
+    constexpr auto kDeliverFor = std::chrono::milliseconds(200);
+    const auto until = std::chrono::steady_clock::now() + kDeliverFor;
+    std::error_code ec;
+    while (w.connection.pendingOutputBytes() > 0) {
+        const proto::IoStatus status = w.connection.flush(ec);
+        if (status == proto::IoStatus::Closed || status == proto::IoStatus::Error) {
+            return;
+        }
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            until - std::chrono::steady_clock::now());
+        if (w.connection.pendingOutputBytes() == 0 || left.count() <= 0) {
+            return;
+        }
+        pollfd fd{w.connection.fd(), POLLOUT, 0};
+        ::poll(&fd, 1, static_cast<int>(left.count()));
+    }
 }
 
 }  // namespace lagrange::viewer

@@ -634,6 +634,7 @@ public:
         , panels_(createDefaultPanels())
         , scopeSignals_(std::move(scopeSignals)) {
         renderOptions_.wireframeAvailable = renderer_.wireframeSupported();
+        builderHost_.setBeforeLeavingRun([this] { releaseBuildingPause(); });
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -692,7 +693,7 @@ public:
     }
 
     ~Ui() {
-        releaseBuildingPause(true);  // a run paused while building plays on without us
+        releaseBuildingPause();  // a run paused while building plays on without us
         vkDeviceWaitIdle(device_.device());
         textures_.clear();
         if (texture_ != VK_NULL_HANDLE) {
@@ -853,7 +854,7 @@ public:
             if (endpoint && launcher_.error.empty()) {
                 std::fprintf(stderr, "lagrange_viewer: connecting to %s\n",
                              launcher_.connectEndpoint.c_str());
-                releaseBuildingPause(true);
+                releaseBuildingPause();
                 client_.stop();
                 client_.setEndpoint(*endpoint);
                 client_.start();
@@ -879,7 +880,7 @@ public:
         }
         if (launcher_.disconnectRequested) {
             launcher_.disconnectRequested = false;
-            releaseBuildingPause(true);
+            releaseBuildingPause();
             client_.stop();
             if (recentPath_.empty()) {
                 showLauncher(ImGui::GetStyle().FontScaleDpi);
@@ -1847,14 +1848,15 @@ public:
             pausedForBuilding_ = endpoint;
         } else if (!pausedForBuilding_.empty() &&
                    (!building || !builderSession_.pauseRunWhileBuilding)) {
-            releaseBuildingPause(false);
+            releaseBuildingPause();
         }
     }
 
     /// Plays the run pauseWhileBuilding() paused, if this viewer is still connected to it
-    /// (its status may not say Paused yet: the pause was sent). `wait`: the client is about to
-    /// stop (the viewer closes, connects elsewhere): give its worker a moment to send it.
-    void releaseBuildingPause(bool wait) {
+    /// (its status may not say Paused yet: the pause was sent). Called before the client leaves
+    /// that run too (a Test's own server, another server, the viewer closing): the client's
+    /// stop() still delivers the queued Play to it, so nothing here waits (CLAUDE.md §8).
+    void releaseBuildingPause() {
         if (pausedForBuilding_.empty()) {
             return;
         }
@@ -1862,9 +1864,6 @@ public:
         const std::string endpoint = proto::toString(client_.endpoint());
         if (ready && endpoint == pausedForBuilding_) {
             client_.play();
-            if (wait) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            }
         }
         if (!ready || endpoint == pausedForBuilding_) {
             pausedForBuilding_.clear();  // played again, or that run is gone
@@ -2393,7 +2392,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         FrameProfile profile;
         std::uint32_t written = 0;
         // FRAME:wait:WHAT holds the frame count at FRAME until the Builder is there (R6):
-        // connected (a Test is running), build (back in Build), idle (no tool runs). Frames
+        // connected (a Test is running), build (back in Build), idle (no tool runs), ready
+        // (the client is Ready on whatever server it follows). Frames
         // are not timed, so a server start is waited for, not guessed in frames.
         std::uint32_t applied = ~0U;
         std::optional<Clock::time_point> waitingSince;
@@ -2403,13 +2403,14 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     continue;
                 }
                 const BuilderSession& builder = ui.builderSession();
-                const bool done = event.text == "connected"
-                                      ? builder.mode == BuilderSession::Mode::Testing &&
-                                            client.connection().state == ConnectionState::Ready
-                                  : event.text == "build"
-                                      ? builder.mode == BuilderSession::Mode::Build
-                                  : event.text == "idle" ? !ui.builderBusy()
-                                                         : true;
+                const bool done =
+                    event.text == "connected"
+                        ? builder.mode == BuilderSession::Mode::Testing &&
+                              client.connection().state == ConnectionState::Ready
+                    : event.text == "build" ? builder.mode == BuilderSession::Mode::Build
+                    : event.text == "ready" ? client.connection().state == ConnectionState::Ready
+                    : event.text == "idle"  ? !ui.builderBusy()
+                                            : true;
                 if (!done) {
                     return true;
                 }

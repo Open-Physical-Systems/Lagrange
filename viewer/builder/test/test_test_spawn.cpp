@@ -25,9 +25,31 @@ TEST(TestSpawn, SampleWorldsStartWhereTheirSampleRunsStart) {
 TEST(TestSpawn, ArgumentIsTheServersSpawnWithTheHeadingInRadians) {
     EXPECT_EQ(spawnArgument({}), "");  // the origin: no --spawn at all
     EXPECT_EQ(spawnArgument({2.0, -1.5, 0.0, 0.0}), "2,-1.5,0,0");
-    EXPECT_EQ(spawnArgument({26.0, 8.0, 0.0, 180.0}), "26,8,0,3.14159");
-    EXPECT_EQ(spawnArgument({0.0, 0.0, 0.0, 90.0}), "0,0,0,1.5708");
+    EXPECT_EQ(spawnArgument({26.0, 8.0, 0.0, 180.0}), "26,8,0,3.141592653589793");
+    EXPECT_EQ(spawnArgument({0.0, 0.0, 0.0, 90.0}), "0,0,0,1.5707963267948966");
     EXPECT_EQ(spawnLabel({26.0, 8.0, 0.0, 180.0}), "26, 8, 0 · 180°");
+}
+
+// Review L6: far from the origin six significant digits are not enough (12345.67 was passed
+// as 12345.7, 7 cm off; 100 km out, 100000.25 as 100000, 25 cm off). The label may round.
+TEST(TestSpawn, FarPosesReachTheServerAndTheFileExactly) {
+    EXPECT_EQ(spawnArgument({12345.67, -100000.25, 0.0, 0.0}), "12345.67,-100000.25,0,0");
+    EXPECT_EQ(spawnArgument({100000.0, 99999.875, 1.5, 0.0}), "100000,99999.875,1.5,0");
+    EXPECT_EQ(spawnLabel({12345.67, -100000.25, 0.0, 0.0}), "12345.7, -100000, 0 · 0°");
+
+    const auto file = std::filesystem::temp_directory_path() /
+                      ("lagrange_far_spawns_" + std::to_string(::getpid())) / "builder_spawns.tsv";
+    std::filesystem::remove_all(file.parent_path());
+    const SpawnPose far{12345.67, -100000.25, 0.125, 33.3333};
+    {
+        SpawnMemory memory;
+        memory.load(file);
+        memory.set("/w/huge.usda", far);
+    }
+    SpawnMemory memory;
+    memory.load(file);
+    EXPECT_EQ(memory.at("/w/huge.usda"), far);  // bit for bit
+    std::filesystem::remove_all(file.parent_path());
 }
 
 TEST(TestSpawn, ServerGetsSpawnOnlyWhenOneIsChosen) {
