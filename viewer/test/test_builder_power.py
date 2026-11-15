@@ -385,6 +385,43 @@ def test_save_writes_the_overlay_beside_the_urdf_and_it_opens_again(tmp_path):
     assert again["builder"]["errors"] == 0
 
 
+# A radar the Builder keeps in the overlay (URDF has no element for one), with the catalog's
+# required values; the rest are the schema's fallbacks.
+RADAR = """\
+  - prim: base_link
+    create_child: front_radar
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 20.0
+      RadarAPI_1:
+        sensor:radar:rangeMax: 60.0
+        sensor:radar:azimuthFov: 1.2
+        sensor:radar:elevationFov: 0.2
+        sensor:radar:txPower: 0.01
+        sensor:radar:noiseFloor: 1.0e-13
+"""
+
+
+def test_an_overlay_radar_runs_in_the_test(tmp_path):
+    # The server once refused every radar in an overlay, so Test never started.
+    program("lagrange_server", "lagrange_server")
+    urdf = powered_rover(tmp_path)
+    (tmp_path / "rover_mk1.overlay.yaml").write_text(OVERLAY + RADAR)
+    report = run(
+        tmp_path,
+        "--builder-open",
+        str(urdf),
+        "--input",
+        f"3:click:{TEST_BUTTON};6:wait:connected",
+        frames=30,
+    )
+    builder = report["builder"]
+    assert builder["sensors"] == 6  # four in the URDF, the GNSS and the radar from the overlay
+    assert builder["errors"] == 0
+    assert builder["mode"] == "testing", builder["loader"]
+    assert "bus/dc_48v/voltage" in set(builder["electrical_signals"])
+
+
 def test_an_overlay_that_does_not_read_is_left_as_it_is(tmp_path):
     urdf = powered_rover(tmp_path)
     overlay = tmp_path / "rover_mk1.overlay.yaml"

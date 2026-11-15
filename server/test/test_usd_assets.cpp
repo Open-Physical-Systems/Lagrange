@@ -5,6 +5,7 @@
 //                   assets/robots/amr_diffdrive/amr_diffdrive.usda
 #include "lagrange/server/MapExport.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/server/Server.hpp"
 #include "lagrange/stage/Stage.hpp"
 
 #include <algorithm>
@@ -245,6 +246,64 @@ TEST(Overlay, ARobotFileWithAnOverlayHasTheOverlaysSensors) {
     auto back = loadModel(out.string());
     ASSERT_TRUE(back) << back.error();
     EXPECT_EQ(back->world.sensors.names.size(), 4U);
+}
+
+// A radar is one of the sensors the robot builder writes into the overlay (URDF has no element
+// for it): a robot file with that overlay runs with the radar, and lagrange_import keeps it in
+// the USD it writes. (The overlay loader once refused every radar.)
+TEST(Overlay, ARadarFromAnOverlayRunsAndIsImported) {
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_overlay_radar";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path overlay = dir / "radar.overlay.yaml";
+    std::ofstream(overlay) << R"(schema_version: 1
+apply:
+  - prim: base_link
+    create_child: front_radar
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 20
+      RadarAPI_1:
+        sensor:radar:carrierFrequency: 77000000000
+        sensor:radar:rangeMax: 60
+        sensor:radar:azimuthFov: 1.2
+        sensor:radar:elevationFov: 0.2
+        sensor:radar:txPower: 0.01
+        sensor:radar:noiseFloor: 1.0e-13
+)";
+    ServerOptions options;
+    options.endpoint = proto::Endpoint::unixSocket((dir / "radar.sock").string());
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.overlayPath = overlay.string();
+    options.realTimeFactor = 0.0;
+    Server server(options);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    while (server.simTime().ns < 1'000'000'000) {
+        server.runOnce(0);
+        ASSERT_TRUE(server.running());
+    }
+    const std::vector<double> count = server.read("sensor/front_radar/count");
+    ASSERT_EQ(count.size(), 1U);
+    EXPECT_GE(count[0], 0.0);
+    EXPECT_FALSE(server.read("sensor/front_radar/detections").empty());
+
+    auto robot = loadModel(LAGRANGE_TEST_AMR_URDF);
+    ASSERT_TRUE(robot) << robot.error();
+    ASSERT_TRUE(stage::applyOverlay(*robot, overlay.string()));
+    const std::filesystem::path out = dir / "amr_radar.usda";
+    ASSERT_TRUE(stage::writeStage(*robot, out.string()));
+    auto back = loadModel(out.string());
+    ASSERT_TRUE(back) << back.error();
+    const World::Sensors& a = robot->world.sensors;
+    const World::Sensors& b = back->world.sensors;
+    const std::size_t i = named(a.names, "front_radar");
+    const std::size_t k = named(b.names, "front_radar");
+    ASSERT_LT(i, a.names.size());
+    ASSERT_LT(k, b.names.size());
+    EXPECT_EQ(b.type[k], SensorType::Radar);
+    EXPECT_EQ(b.settings[k], a.settings[i]);
 }
 
 TEST(Overlay, TheImportedAmrGainsThePowerSystemOfTheHandWrittenSample) {
