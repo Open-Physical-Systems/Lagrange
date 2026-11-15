@@ -362,6 +362,12 @@ void builderContext(const PanelContext& context) {
     widgets::Kbd("Ctrl K");
 }
 
+/// The server shows a recording: started with --replay (it can seek), or a live server that
+/// opened one (its status then has a recorded range). Nothing to record then (L10).
+bool replaying(const PanelContext& context) {
+    return context.connection.canSeek || context.status.replayEndNs > context.status.replayBeginNs;
+}
+
 /// A recording seeks back to its first moment; a live run restarts at t = 0 on the server.
 void resetToStart(PanelContext& context) {
     if (context.connection.canSeek) {
@@ -459,7 +465,9 @@ void drawMenuBar(PanelContext& context) {
         endMenu();
     }
     if (menu("Tools")) {
-        ImGui::MenuItem("Command palette", "Ctrl+K", false, false);  // not built yet
+        if (ImGui::MenuItem("Command palette", "Ctrl+K")) {
+            openCommandPalette();
+        }
         endMenu();
     }
     if (menu("Window")) {
@@ -469,7 +477,7 @@ void drawMenuBar(PanelContext& context) {
         endMenu();
     }
     if (menu("Help")) {
-        ImGui::MenuItem("Lagrange viewer, v0.1 in development", nullptr, false, false);
+        ImGui::MenuItem("Lagrange viewer " LAGRANGE_VIEWER_VERSION, nullptr, false, false);
         ImGui::MenuItem("Apache-2.0 · fonts: IBM Plex, SIL OFL 1.1", nullptr, false, false);
         endMenu();
     }
@@ -505,17 +513,30 @@ void drawMenuBar(PanelContext& context) {
         }
     }
     const float gap = px(12.0F);
-    float width = px(44.0F);  // the Ctrl K hint
-    if (*stage != '\0') {
-        width += contextWidth("stage", stage) + gap;
-    }
-    if (*robot != '\0') {
-        width += contextWidth("robot", robot) + gap;
-    }
-    if (*profile != '\0') {
-        width += contextWidth("profile", profile) + gap;
-    }
+    // What does not fit beside the menus is left out, the stage first (the Scene tree names it).
     ImGui::SameLine();
+    const float room = ImGui::GetContentRegionAvail().x - px(8.0F);
+    float width = 0.0F;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        width = px(44.0F);  // the Ctrl K hint
+        if (*stage != '\0') {
+            width += contextWidth("stage", stage) + gap;
+        }
+        if (*robot != '\0') {
+            width += contextWidth("robot", robot) + gap;
+        }
+        if (*profile != '\0') {
+            width += contextWidth("profile", profile) + gap;
+        }
+        if (width <= room) {
+            break;
+        }
+        if (*stage != '\0') {
+            stage = "";
+        } else {
+            robot = "";
+        }
+    }
     widgets::AlignRight(width);
     if (*stage != '\0') {
         contextItem("stage", stage);
@@ -943,6 +964,19 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         ImGui::BeginViewportSideBar("##workspace-bar", viewport, ImGuiDir_Up, px(40.0F), kBarFlags);
     ImGui::PopStyleVar(2);
     if (open) {
+        // A small window (1024 px wide) cannot hold the labelled tabs and the run controls: the
+        // tabs then show their icons alone, and the run controls keep their place (they are
+        // what a run needs; a tab's name is in its tooltip and its Ctrl key).
+        const bool builderControls =
+            *context.workspace == Workspace::Builder && !context.launcher->active;
+        float tabs = px(1.0F);
+        for (const WorkspaceEntry& entry : kWorkspaces) {
+            tabs += widgets::BarTabWidth(entry.label);
+        }
+        const float room = ImGui::GetContentRegionAvail().x;
+        // The run controls at their widest, or the Builder's (which ask for about as much).
+        const float controls = px(builderControls ? 560.0F : 520.0F);
+        const bool compactTabs = tabs + controls > room;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         for (const WorkspaceEntry& entry : kWorkspaces) {
             if (entry.workspace == Workspace::Builder) {
@@ -955,14 +989,14 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(1.0F));
             }
             if (widgets::BarTab(entry.label, entry.icon, *context.workspace == entry.workspace,
-                                entry.dockspace != nullptr)) {
+                                entry.dockspace != nullptr, compactTabs)) {
                 *context.workspace = entry.workspace;
             }
             ImGui::SameLine();
         }
         ImGui::PopStyleVar();
 
-        if (*context.workspace == Workspace::Builder && !context.launcher->active) {
+        if (builderControls) {
             // The Builder's own controls replace the run controls (SPEC "Modes").
             if (context.builder->mode == BuilderSession::Mode::Build) {
                 drawBuildControls(context);
@@ -984,11 +1018,21 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         std::snprintf(target, sizeof(target), "/ %.2f", context.status.realTimeFactorTarget);
 
         // Width of the control group, to right-align it: three buttons, two readouts, Record.
+        // Narrower still than the compact tabs leave room for: Play and Record lose their words.
         const float gap = px(4.0F);
+        float used = 0.0F;
+        for (const WorkspaceEntry& entry : kWorkspaces) {
+            used += widgets::BarTabWidth(entry.label, compactTabs);
+        }
+        const bool compactButtons = used + controls > room;
         ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
-        const float playWidth =
-            px(20.0F) + px(14.0F) + px(6.0F) + ImGui::CalcTextSize(running ? "Pause" : "Play").x;
-        const float recordWidth = px(20.0F) + px(8.0F) + px(6.0F) + ImGui::CalcTextSize("Record").x;
+        const float playWidth = compactButtons
+                                    ? px(26.0F)
+                                    : px(20.0F) + px(14.0F) + px(6.0F) +
+                                          ImGui::CalcTextSize(running ? "Pause" : "Play").x;
+        const float recordWidth =
+            compactButtons ? px(20.0F)
+                           : px(20.0F) + px(8.0F) + px(6.0F) + ImGui::CalcTextSize("Record").x;
         ImGui::PopFont();
         const float width = px(26.0F) * 2.0F + playWidth + recordWidth +
                             widgets::ReadoutWidth("sim t", time) +
@@ -1016,13 +1060,18 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         ImGui::EndDisabled();
         next();
         ImGui::BeginDisabled(!ready);
-        if (widgets::Button(running ? "Pause" : "Play", widgets::ButtonKind::Primary,
-                            running ? widgets::Icon::Pause : widgets::Icon::Play, true)) {
+        if (widgets::Button(
+                compactButtons ? (running ? "##pause" : "##play") : (running ? "Pause" : "Play"),
+                widgets::ButtonKind::Primary, running ? widgets::Icon::Pause : widgets::Icon::Play,
+                true)) {
             if (running) {
                 context.client.pause();
             } else {
                 context.client.play();
             }
+        }
+        if (compactButtons) {
+            ImGui::SetItemTooltip("%s (Space)", running ? "Pause" : "Play");
         }
         ImGui::EndDisabled();
         next();
@@ -1038,17 +1087,20 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         widgets::Readout("RTF", rate, target);
         next();
         // Record (design: its red dot means recording): a live run, on the server's machine.
-        const bool canRecord = ready && !context.connection.canSeek;  // not a replay
+        const bool canRecord = ready && !replaying(context);  // not a replay
         const bool recording = !context.status.recordingPath.empty();
         ImGui::BeginDisabled(!canRecord);
         const ImVec2 record = ImGui::GetCursorScreenPos();
-        if (widgets::Button("     Record", widgets::ButtonKind::Default, widgets::Icon::Count,
-                            true)) {
+        if (compactButtons ? widgets::Button("##record", widgets::ButtonKind::Default,
+                                             widgets::Icon::Count, true)
+                           : widgets::Button("     Record", widgets::ButtonKind::Default,
+                                             widgets::Icon::Count, true)) {
             context.client.setRecording(!recording);
         }
         const ImVec4 dot = recording ? c::error : c::t3;
         ImGui::GetWindowDrawList()->AddCircleFilled(
-            ImVec2(record.x + px(14.0F), record.y + px(13.0F)), px(4.0F),
+            ImVec2(record.x + (compactButtons ? px(10.0F) : px(14.0F)), record.y + px(13.0F)),
+            px(4.0F),
             ImGui::ColorConvertFloat4ToU32(
                 ImVec4(dot.x, dot.y, dot.z, canRecord ? 1.0F : ImGui::GetStyle().DisabledAlpha)));
         ImGui::EndDisabled();
@@ -1083,41 +1135,10 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
             return;
         }
         ProfileSession& session = *context.profileSession;
-        centreInBar(ImGui::GetTextLineHeight());
-        widgets::Caption("Domains");
-        if (session.domains().empty()) {
-            ImGui::SameLine(0.0F, px(10.0F));
-            widgets::Caption("%s", context.connection.state == ConnectionState::Ready
-                                       ? "waiting for the server's profile"
-                                       : "not connected");
-        }
-        for (const DomainView& view : session.domains()) {
-            if (!format::isPhysicsDomain(view.name)) {
-                continue;  // additional modules are listed in the Domains workspace
-            }
-            char detail[96];
-            format::domainDetail(view, detail, sizeof(detail));
-            widgets::ChipState state = widgets::ChipState::On;
-            if (session.domainHasError(view.name)) {
-                state = widgets::ChipState::Error;
-            } else if (view.pending) {
-                state = widgets::ChipState::Pending;
-            } else if (!view.enabled) {
-                state = widgets::ChipState::Substitute;
-            }
-            ImGui::SameLine(0.0F, px(6.0F));
-            centreInBar(px(22.0F));
-            const std::string_view label = widgets::domainShortLabel(view.name);
-            char name[32];
-            std::snprintf(name, sizeof(name), "%.*s", static_cast<int>(label.size()), label.data());
-            if (widgets::DomainChip(view.name.c_str(), widgets::domainColor(view.name), name,
-                                    detail, state)) {
-                *context.workspace = Workspace::Domains;
-                session.selectedDomain = view.name;
-            }
-        }
 
-        // On the right: what the profile's state is, and the way to edit it.
+        // On the right: what the profile's state is, and the way to edit it. These keep their
+        // place in a small window; the chips give up their detail, then their names (both in
+        // their tooltips) to leave room for them.
         char text[64] = "";
         widgets::PillKind kind = widgets::PillKind::Ok;
         const std::size_t changes = session.draft().changedLineCount();
@@ -1135,6 +1156,76 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
         const float button = ImGui::CalcTextSize("Edit profile").x + px(16.0F);
         ImGui::PopFont();
         const float pill = *text != '\0' ? widgets::PillWidth(text) + px(8.0F) : 0.0F;
+
+        struct Chip {
+            const DomainView* view;
+            char name[32];
+            char detail[96];
+            widgets::ChipState state;
+        };
+        std::array<Chip, 16> chips{};
+        std::size_t count = 0;
+        for (const DomainView& view : session.domains()) {
+            if (!format::isPhysicsDomain(view.name) || count == chips.size()) {
+                continue;  // additional modules are listed in the Domains workspace
+            }
+            Chip& chip = chips.at(count++);
+            chip.view = &view;
+            format::domainDetail(view, chip.detail, sizeof(chip.detail));
+            chip.state = widgets::ChipState::On;
+            if (session.domainHasError(view.name)) {
+                chip.state = widgets::ChipState::Error;
+            } else if (view.pending) {
+                chip.state = widgets::ChipState::Pending;
+            } else if (!view.enabled) {
+                chip.state = widgets::ChipState::Substitute;
+            }
+            const std::string_view label = widgets::domainShortLabel(view.name);
+            std::snprintf(chip.name, sizeof(chip.name), "%.*s", static_cast<int>(label.size()),
+                          label.data());
+        }
+        ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+        const float caption = ImGui::CalcTextSize("Domains").x;
+        ImGui::PopFont();
+        const float room = ImGui::GetContentRegionAvail().x - pill - button - px(12.0F);
+        // 0: name and detail; 1: name; 2: the dot alone.
+        int level = 0;
+        for (; level < 2; ++level) {
+            float width = caption;
+            for (std::size_t i = 0; i < count; ++i) {
+                width += px(6.0F) + widgets::DomainChipWidth(level < 2 ? chips.at(i).name : "",
+                                                             level < 1 ? chips.at(i).detail : "");
+            }
+            if (width <= room) {
+                break;
+            }
+        }
+
+        centreInBar(ImGui::GetTextLineHeight());
+        widgets::Caption("Domains");
+        if (session.domains().empty()) {
+            ImGui::SameLine(0.0F, px(10.0F));
+            widgets::Caption("%s", context.connection.state == ConnectionState::Ready
+                                       ? "waiting for the server's profile"
+                                       : "not connected");
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const Chip& chip = chips.at(i);
+            ImGui::SameLine(0.0F, px(6.0F));
+            centreInBar(px(22.0F));
+            if (widgets::DomainChip(chip.view->name.c_str(), widgets::domainColor(chip.view->name),
+                                    level < 2 ? chip.name : "", level < 1 ? chip.detail : "",
+                                    chip.state)) {
+                *context.workspace = Workspace::Domains;
+                session.selectedDomain = chip.view->name;
+            }
+            if (level > 0) {
+                ImGui::SetItemTooltip(
+                    "%.*s · %s", static_cast<int>(widgets::domainLabel(chip.view->name).size()),
+                    widgets::domainLabel(chip.view->name).data(), chip.detail);
+            }
+        }
+
         ImGui::SameLine();
         widgets::AlignRight(pill + button);
         if (*text != '\0') {
@@ -1425,12 +1516,19 @@ const char* toString(Workspace workspace) {
 }
 
 std::optional<Workspace> parseWorkspace(std::string_view name) {
+    // Case, spaces, '_' and '-' do not matter: "ROS 2", "ros2" and "ros_2" are one workspace.
+    const auto key = [](std::string_view text) {
+        std::string out;
+        for (const char ch : text) {
+            if (ch != ' ' && ch != '_' && ch != '-') {
+                out += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+        }
+        return out;
+    };
+    const std::string wanted = key(name);
     for (const WorkspaceEntry& entry : kWorkspaces) {
-        const std::string_view label = entry.label;
-        if (std::ranges::equal(name, label, [](char a, char b) {
-                return std::tolower(static_cast<unsigned char>(a)) ==
-                       std::tolower(static_cast<unsigned char>(b));
-            })) {
+        if (!wanted.empty() && key(entry.label) == wanted) {
             return entry.workspace;
         }
     }
@@ -1485,6 +1583,7 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
 void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context) {
     if (context.launcher->active) {
         drawLauncher(context);  // the first screen: nothing else is shown until connected
+        drawCommandPalette(context);
         return;
     }
     context.profileSession->update(context.client,
@@ -1514,7 +1613,7 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
                 context.client.play();
             }
         }
-        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && !context.connection.canSeek) {
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && !replaying(context)) {
             context.client.setRecording(context.status.recordingPath.empty());
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Period, false) && context.connection.canStep &&
@@ -1533,6 +1632,7 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     bool resetLayout = false;
     context.resetLayout = &resetLayout;
     drawMenuBar(context);
+    drawCommandPalette(context);  // before the dock spaces: it may reset the layout
     drawWorkspaceBar(context, viewport);
     drawDomainStrip(context, viewport);
     drawStatusBar(context, viewport);

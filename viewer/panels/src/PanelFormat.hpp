@@ -4,7 +4,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
+
+#include <imgui.h>
 
 /// Text formatting shared by panels. Everything writes into a caller's buffer: panels do not
 /// allocate while drawing.
@@ -20,3 +23,21 @@ void domainDetail(const DomainView& view, char* buffer, std::size_t size);
 [[nodiscard]] bool isPhysicsDomain(std::string_view name);
 
 }  // namespace lagrange::viewer::format
+
+/// Text cut to a width with an ellipsis (lagrange/viewer/TextFit.hpp, measured in an ImGui font):
+/// at the end for titles; `middle` for paths and signal names (fitPath: the last part whole).
+namespace lagrange::viewer::fit {
+
+/// `text` cut to `width` in `font` at `size` (pixels).
+[[nodiscard]] std::string cut(ImFont* font, float size, std::string_view text, float width,
+                              bool middle = false);
+
+/// Draws `text` at `at`, cut to `width`. Returns true when it was cut.
+bool draw(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
+          std::string_view text, float width, bool middle = false);
+
+/// TextUnformatted in the current font and colour, cut to `width`; hovering a cut text shows
+/// all of it in a tooltip.
+void text(std::string_view text, float width, bool middle = false);
+
+}  // namespace lagrange::viewer::fit

@@ -1,6 +1,9 @@
 #include "PanelFormat.hpp"
+#include "lagrange/viewer/TextFit.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cstdio>
 
 namespace lagrange::viewer::format {
@@ -56,3 +59,45 @@ bool isPhysicsDomain(std::string_view name) {
 }
 
 }  // namespace lagrange::viewer::format
+
+namespace lagrange::viewer::fit {
+
+namespace {
+
+float widthOf(ImFont* font, float size, std::string_view text) {
+    return font->CalcTextSizeA(size, FLT_MAX, 0.0F, text.data(), text.data() + text.size()).x;
+}
+
+}  // namespace
+
+std::string cut(ImFont* font, float size, std::string_view text, float width, bool middle) {
+    const TextWidth measure = [font, size](std::string_view s) { return widthOf(font, size, s); };
+    return middle ? fitPath(text, width, measure) : fitEnd(text, width, measure);
+}
+
+bool draw(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
+          std::string_view text, float width, bool middle) {
+    if (widthOf(font, size, text) <= width) {
+        draw->AddText(font, size, at, color, text.data(), text.data() + text.size());
+        return false;
+    }
+    const std::string shown = cut(font, size, text, width, middle);
+    draw->AddText(font, size, at, color, shown.c_str());
+    return true;
+}
+
+void text(std::string_view text, float width, bool middle) {
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize();
+    if (widthOf(font, size, text) <= width) {
+        ImGui::TextUnformatted(text.data(), text.data() + text.size());
+        return;
+    }
+    const std::string shown = cut(font, size, text, std::max(width, 0.0F), middle);
+    ImGui::TextUnformatted(shown.c_str());
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%.*s", static_cast<int>(text.size()), text.data());
+    }
+}
+
+}  // namespace lagrange::viewer::fit

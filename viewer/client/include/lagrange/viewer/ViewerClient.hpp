@@ -588,6 +588,11 @@ struct ClientStats {
 /// A worker thread owns the socket: it connects, reconnects with a backoff, decodes messages
 /// and builds scene frames. The UI thread only reads the latest published state and enqueues
 /// commands; it never waits on the network.
+/// The viewer protocol version this viewer speaks in its Hello (the server's must have the same
+/// major).
+inline constexpr std::uint32_t kProtocolMajor = 0;
+inline constexpr std::uint32_t kProtocolMinor = 1;
+
 class ViewerClient {
 public:
     explicit ViewerClient(proto::Endpoint endpoint);

@@ -1,16 +1,19 @@
 // Signals workspace: the signal browser on the left, and the cursor table and statistics on
 // the right (docs/design/ui/05-signals/SPEC.md).
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/SignalList.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -25,13 +28,10 @@ using widgets::px;
 constexpr std::int64_t kFastDtNs = 10'000'000;      // "rate >= 100 Hz"
 constexpr double kStatisticsIntervalSeconds = 0.2;  // statistics are recomputed at 5 Hz
 
-bool containsNoCase(std::string_view text, std::string_view needle) {
-    const auto it =
-        std::search(text.begin(), text.end(), needle.begin(), needle.end(), [](char a, char b) {
-            return std::tolower(static_cast<unsigned char>(a)) ==
-                   std::tolower(static_cast<unsigned char>(b));
-        });
-    return it != text.end();
+/// A search the command palette asked for; the Signals panel takes it.
+std::string& requestedSearch() {
+    static std::string search;
+    return search;
 }
 
 void rate(std::int64_t dtNs, char* out, std::size_t size) {
@@ -58,16 +58,6 @@ void number(double value, char* out, std::size_t size, const char* format = "%.4
     }
 }
 
-/// The last two parts of a signal name.
-const char* shortName(const std::string& label) {
-    const std::size_t last = label.rfind('/');
-    if (last == std::string::npos || last == 0) {
-        return label.c_str();
-    }
-    const std::size_t before = label.rfind('/', last - 1);
-    return label.c_str() + (before == std::string::npos ? 0 : before + 1);
-}
-
 // --- browser ------------------------------------------------------------------------------
 
 class SignalsPanel final : public Panel {
@@ -89,6 +79,16 @@ public:
             return;
         }
         const SignalCatalog& catalog = *context.catalog;
+        if (!requestedSearch().empty()) {
+            std::snprintf(search_, sizeof(search_), "%s", requestedSearch().c_str());
+            requestedSearch().clear();
+            for (Group& group : groups_) {
+                group.selected = false;
+            }
+            unit_.clear();
+            fastOnly_ = false;
+            dirty_ = true;
+        }
         if (catalog.generation != generation_) {
             generation_ = catalog.generation;
             index(catalog);
@@ -172,14 +172,17 @@ public:
             char name[64];
             std::snprintf(name, sizeof(name), "%.*s", static_cast<int>(label.size()), label.data());
             char meta[24];
-            std::snprintf(meta, sizeof(meta), "%zu", group.rows.size());
+            std::snprintf(meta, sizeof(meta), "%zu", group.signals);  // signals, not rows
             if (widgets::SectionHeader(name, meta)) {
                 // Only the rows in view: a big robot has thousands.
                 ImGuiListClipper clipper;
                 clipper.Begin(static_cast<int>(group.rows.size()));
                 while (clipper.Step()) {
                     for (int k = clipper.DisplayStart; k < clipper.DisplayEnd; ++k) {
-                        row(context, session, catalog, group.rows[static_cast<std::size_t>(k)]);
+                        if (row(context, session, catalog,
+                                group.rows[static_cast<std::size_t>(k)])) {
+                            dirty_ = true;  // opened or closed: the rows change next frame
+                        }
                     }
                 }
             }
@@ -194,27 +197,20 @@ public:
     }
 
 private:
-    struct Row {
-        std::uint32_t signal;
-        std::uint32_t component;
-    };
     struct Group {
         std::string domain;
         bool selected{false};  // filter chip
-        std::vector<Row> rows;
+        std::vector<SignalRow> rows;
+        std::size_t signals{0};  // listed in rows
     };
-
-    static std::string domainOf(const SignalInfo& info) {
-        return info.writer.substr(0, info.writer.find('/'));
-    }
 
     /// The domains of the catalog, in the order they first appear.
     void index(const SignalCatalog& catalog) {
         std::vector<Group> groups;
         total_ = 0;
         for (const SignalInfo& info : catalog.signals) {
-            total_ += info.components;
-            const std::string domain = domainOf(info);
+            total_ += info.components == 0 ? 0 : 1;  // signals, not their components
+            const std::string domain = signalDomain(info);
             const bool known = std::ranges::any_of(
                 groups, [&](const Group& group) { return group.domain == domain; });
             if (!known) {
@@ -233,6 +229,20 @@ private:
         }
         std::ranges::sort(units_);
         units_.erase(std::unique(units_.begin(), units_.end()), units_.end());
+        // The unit and rate columns: as wide as their widest entries.
+        ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+        unitColumn_ = px(24.0F);
+        for (const std::string& u : units_) {
+            unitColumn_ = std::max(unitColumn_, ImGui::CalcTextSize(u.c_str()).x + px(8.0F));
+        }
+        unitColumn_ = std::min(unitColumn_, px(90.0F));
+        rateColumn_ = px(24.0F);
+        char hz[24];
+        for (const SignalInfo& info : catalog.signals) {
+            rate(info.dtNs, hz, sizeof(hz));
+            rateColumn_ = std::max(rateColumn_, ImGui::CalcTextSize(hz).x);
+        }
+        ImGui::PopFont();
         if (!unit_.empty() && !std::ranges::binary_search(units_, unit_)) {
             unit_.clear();  // no longer in the run
         }
@@ -241,41 +251,69 @@ private:
     void filter(const SignalCatalog& catalog) {
         const bool anyDomain =
             std::ranges::any_of(groups_, [](const Group& group) { return group.selected; });
+        SignalFilter filter;
+        filter.search = search_;
+        filter.unit = unit_;
+        filter.fastOnly = fastOnly_;
+        filter.fastDtNs = kFastDtNs;
         matches_ = 0;
         for (Group& group : groups_) {
             group.rows.clear();
+            group.signals = 0;
             if (anyDomain && !group.selected) {
                 continue;
             }
-            for (const SignalInfo& info : catalog.signals) {
-                if (domainOf(info) != group.domain || (fastOnly_ && info.dtNs > kFastDtNs) ||
-                    (!unit_.empty() && info.unit != unit_)) {
-                    continue;
-                }
-                if (search_[0] != '\0' && !containsNoCase(info.name, search_) &&
-                    !containsNoCase(info.unit, search_)) {
-                    continue;
-                }
-                for (std::uint32_t component = 0; component < info.components; ++component) {
-                    group.rows.push_back({info.id, component});
-                }
-            }
-            matches_ += group.rows.size();
+            group.rows = signalRows(catalog, group.domain, filter, open_, &group.signals);
+            matches_ += group.signals;
         }
         dirty_ = false;
     }
 
-    static void row(PanelContext& context, ScopeSession& session, const SignalCatalog& catalog,
-                    const Row& entry) {
+    /// One row. Returns true when an array's row was opened or closed.
+    bool row(PanelContext& context, ScopeSession& session, const SignalCatalog& catalog,
+             const SignalRow& entry) {
         const SignalInfo& info = catalog.signals[entry.signal];
-        const int plotted = session.find(info.name, entry.component);
-        ImGui::PushID(static_cast<int>(entry.signal * 64 + entry.component));
-        // Columns at fixed places from the right edge: unit, then rate.
+        const bool whole = entry.component == SignalRow::kWhole;
+        const std::uint32_t component = whole ? 0 : entry.component;
+        const int plotted = whole ? -1 : session.find(info.name, component);
+        ImGui::PushID(static_cast<int>(entry.signal));
+        ImGui::PushID(static_cast<int>(entry.component));
+        // Columns at fixed places from the right edge: unit, then rate, each as wide as the
+        // widest of the catalog needs; the name has the rest.
         const float rowEnd = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(8.0F);
-        const float unitX = rowEnd - px(110.0F);
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(10.0F));
-        bool on = plotted >= 0;
-        bool toggled = widgets::Checkbox("##plot", &on);
+        const float unitX = rowEnd - rateColumn_ - px(8.0F) - unitColumn_;
+        bool toggled = false;
+        bool opened = false;
+        if (whole) {
+            // An array or a pose: a caret in place of the box, its size after the name.
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(10.0F));
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            const float side = px(14.0F);  // as wide as the box of a plain row
+            const float height = ImGui::GetFrameHeight();
+            if (ImGui::InvisibleButton("##open", ImVec2(side, height))) {
+                opened = true;
+            }
+            ImGui::SetItemTooltip("%s", entry.expanded ? "Close" : "Show each component");
+            const ImVec2 mid(at.x + side * 0.5F, at.y + height * 0.5F);
+            const float r = px(3.5F);
+            const ImU32 ink =
+                ImGui::ColorConvertFloat4ToU32(ImGui::IsItemHovered() ? c::t1 : c::t3);
+            if (entry.expanded) {
+                ImGui::GetWindowDrawList()->AddTriangleFilled(ImVec2(mid.x - r, mid.y - r * 0.5F),
+                                                              ImVec2(mid.x + r, mid.y - r * 0.5F),
+                                                              ImVec2(mid.x, mid.y + r * 0.7F), ink);
+            } else {
+                ImGui::GetWindowDrawList()->AddTriangleFilled(ImVec2(mid.x - r * 0.5F, mid.y - r),
+                                                              ImVec2(mid.x - r * 0.5F, mid.y + r),
+                                                              ImVec2(mid.x + r * 0.7F, mid.y), ink);
+            }
+        } else {
+            // A component of an opened row is indented under it.
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                 (info.components > 1 ? px(32.0F) : px(10.0F)));
+            bool on = plotted >= 0;
+            toggled = widgets::Checkbox("##plot", &on);
+        }
         ImGui::SameLine(0.0F, px(8.0F));
         ImGui::AlignTextToFramePadding();
         if (plotted >= 0) {
@@ -284,37 +322,54 @@ private:
                                ScopeSession::kColors]);
             ImGui::SameLine(0.0F, px(6.0F));
         }
-        char name[200];
-        if (info.components > 1) {
-            std::snprintf(name, sizeof(name), "%s.%s", info.name.c_str(),
-                          entry.component < info.componentNames.size()
-                              ? info.componentNames[entry.component].c_str()
-                              : "?");
+        // The full path of what the row plots, as the tooltip and the drag payload give it.
+        const std::string path = whole ? info.name : componentPath(info, component);
+        // The name: a component row shows its component only; an array its size.
+        std::string shown;
+        if (whole) {
+            shown = info.name;
+        } else if (info.components > 1) {
+            shown = "." + componentLabel(info, component);
         } else {
-            std::snprintf(name, sizeof(name), "%s", info.name.c_str());
+            shown = info.name;
         }
-        // The unit and the rate keep their place on the right; the name is cut before them.
+        char size[24] = "";
+        if (whole) {
+            std::snprintf(size, sizeof(size), " [%u]", info.components);
+        }
+        // The unit and the rate keep their place on the right; a long name is cut in the middle
+        // (both its start and its end say what it is) and is whole in the tooltip.
         char hz[24];
         rate(info.dtNs, hz, sizeof(hz));
-        const float nameWidth = std::max(unitX - ImGui::GetCursorPosX() - px(8.0F), px(40.0F));
         ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
-        const ImVec2 at = ImGui::GetCursorScreenPos();
-        ImGui::PushClipRect(at, ImVec2(at.x + nameWidth, at.y + ImGui::GetFrameHeight()), true);
-        ImGui::TextUnformatted(name);
-        ImGui::PopClipRect();
+        const float sizeWidth = *size != '\0' ? ImGui::CalcTextSize(size).x : 0.0F;
+        const float nameWidth =
+            std::max(unitX - ImGui::GetCursorPosX() - px(8.0F) - sizeWidth, px(40.0F));
+        const std::string fitted =
+            fit::cut(ImGui::GetFont(), ImGui::GetFontSize(), shown, nameWidth, true);
+        ImGui::TextUnformatted(fitted.c_str());
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", name);
-            toggled = toggled || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+            ImGui::SetTooltip("%s%s", path.c_str(), size);
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                toggled = toggled || !whole;
+                opened = opened || whole;
+            }
+        } else if (whole && ImGui::IsItemClicked()) {
+            opened = true;
         }
         // Dragged onto a scope, it is plotted there (on the plot of its unit).
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+        if (!whole && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
             char payload[256];
-            const int n = std::snprintf(payload, sizeof(payload), "%s\n%u", info.name.c_str(),
-                                        entry.component);
+            const int n =
+                std::snprintf(payload, sizeof(payload), "%s\n%u", info.name.c_str(), component);
             ImGui::SetDragDropPayload(kSignalPayload, payload,
                                       static_cast<std::size_t>(std::max(n, 0)) + 1);
-            ImGui::TextUnformatted(name);
+            ImGui::TextUnformatted(path.c_str());
             ImGui::EndDragDropSource();
+        }
+        if (*size != '\0') {
+            ImGui::SameLine(0.0F, 0.0F);
+            ImGui::TextColored(c::t3, "%s", size);
         }
         ImGui::PopFont();
         ImGui::SameLine(unitX);
@@ -325,13 +380,26 @@ private:
         ImGui::SameLine(rowEnd - hzWidth);
         widgets::Mono(c::t3, "%s", hz);
         ImGui::PopID();
+        ImGui::PopID();
         if (toggled) {
             if (plotted >= 0) {
                 session.remove(context.client, static_cast<std::size_t>(plotted));
             } else {
-                session.add(context.client, catalog, info.name, entry.component);
+                session.add(context.client, catalog, info.name, component);
             }
         }
+        if (opened) {
+            if (entry.expanded && open_.contains(info.name)) {
+                open_.erase(info.name);
+            } else if (entry.expanded) {
+                // Opened by the search: closing it clears the search's hold on it.
+                search_[0] = '\0';
+            } else {
+                open_.insert(info.name);
+            }
+            return true;
+        }
+        return false;
     }
 
     std::vector<Group> groups_;
@@ -339,6 +407,9 @@ private:
     std::size_t total_{0};
     std::size_t matches_{0};
     char search_[96]{};
+    std::set<std::string, std::less<>> open_;  // arrays the user opened, by signal name
+    float unitColumn_{0.0F};
+    float rateColumn_{0.0F};
     std::vector<std::string> units_;  // of the catalog, sorted
     std::string unit_;                // the unit filter; empty: any
     bool fastOnly_{false};
@@ -347,8 +418,10 @@ private:
 
 // --- cursors ------------------------------------------------------------------------------
 
-constexpr ImGuiTableFlags kTableFlags =
-    ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX;
+// Resizable: a long signal name can be given more of the width (M4).
+constexpr ImGuiTableFlags kTableFlags = ImGuiTableFlags_BordersInnerH |
+                                        ImGuiTableFlags_SizingStretchProp |
+                                        ImGuiTableFlags_NoPadOuterX | ImGuiTableFlags_Resizable;
 
 void headerCell(const char* text, bool right) {
     ImGui::TableNextColumn();
@@ -364,7 +437,10 @@ void traceCell(const ScopeTrace& trace) {
     ImGui::TableNextColumn();
     widgets::Swatch(theme::kSeries[trace.color % ScopeSession::kColors]);
     ImGui::SameLine(0.0F, px(6.0F));
-    ImGui::TextUnformatted(shortName(trace.label));
+    // All of the name that fits, cut in the middle; whole in the tooltip.
+    const std::string shown = fit::cut(ImGui::GetFont(), ImGui::GetFontSize(), trace.label,
+                                       ImGui::GetContentRegionAvail().x, true);
+    ImGui::TextUnformatted(shown.c_str());
     ImGui::SetItemTooltip("%s  [%s]", trace.label.c_str(), trace.unit.c_str());
 }
 
@@ -481,7 +557,7 @@ public:
 
         widgets::Caption("over the visible window");
         if (ImGui::BeginTable("##statistics", 5, kTableFlags)) {
-            ImGui::TableSetupColumn("signal", ImGuiTableColumnFlags_None, 2.0F);
+            ImGui::TableSetupColumn("signal", ImGuiTableColumnFlags_None, 3.0F);
             for (const char* name : {"min", "max", "mean", "rms"}) {
                 ImGui::TableSetupColumn(name, ImGuiTableColumnFlags_None, 1.0F);
             }
@@ -549,6 +625,10 @@ private:
 };
 
 }  // namespace
+
+void requestSignalSearch(std::string name) {
+    requestedSearch() = std::move(name);
+}
 
 std::unique_ptr<Panel> createSignalsPanel() {
     return std::make_unique<SignalsPanel>();

@@ -1,6 +1,7 @@
 // The launcher: the first screen, shown until the viewer is connected. System check on the
 // left, what to open in the middle, which server on the right
 // (docs/design/ui/01-launcher/SPEC.md).
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
@@ -78,7 +79,7 @@ void about(const LauncherState& state) {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(66.0F));
     ImGui::BeginGroup();
     text(theme::fonts().sansSemiBold, 28.0F, c::t1, "lagrange");
-    widgets::Mono(c::t3, "0.1.0-dev  ·  Apache-2.0");
+    widgets::Mono(c::t3, "%s  ·  Apache-2.0", LAGRANGE_VIEWER_VERSION);
     ImGui::EndGroup();
     ImGui::Dummy(ImVec2(0.0F, px(18.0F)));
     ImGui::PushTextWrapPos(0.0F);
@@ -141,15 +142,24 @@ bool action(const char* id, widgets::Icon icon, const char* title, const char* d
         iconSize, u32(c::t1), u32(c::bg3));
     const theme::Fonts& fonts = theme::fonts();
     const float x = boxMin.x + box + px(12.0F);
-    draw->PushClipRect(min, ImVec2(max.x - px(64.0F), max.y), true);
-    draw->AddText(fonts.sansMedium, px(14.0F), ImVec2(x, min.y + px(14.0F)), u32(c::t1), title);
-    draw->AddText(fonts.sans, px(theme::kLabelSize), ImVec2(x, min.y + px(36.0F)), u32(c::t3),
-                  detail);
-    draw->PopClipRect();
-    // Shortcut hint at the right.
+    // Shortcut hint at the right; the title and what it takes are cut before it (ellipsis).
+    // In a narrow tile the title comes first: the hint goes (it stays in the tooltip).
     const float size = px(10.0F);
     const ImVec2 extent = fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, shortcut);
     const ImVec2 kbdMin(max.x - extent.x - px(22.0F), min.y + (height - px(16.0F)) * 0.5F);
+    const float titleWidth = fonts.sansMedium->CalcTextSizeA(px(14.0F), FLT_MAX, 0.0F, title).x;
+    const bool showShortcut = kbdMin.x - px(8.0F) - x >= titleWidth;
+    const float room = (showShortcut ? kbdMin.x - px(8.0F) : max.x - px(12.0F)) - x;
+    const bool cutTitle = fit::draw(draw, fonts.sansMedium, px(14.0F), ImVec2(x, min.y + px(14.0F)),
+                                    u32(c::t1), title, room);
+    const bool cutDetail = fit::draw(draw, fonts.sans, px(theme::kLabelSize),
+                                     ImVec2(x, min.y + px(36.0F)), u32(c::t3), detail, room);
+    if ((cutTitle || cutDetail || !showShortcut) && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s  (%s)\n%s", title, shortcut, detail);
+    }
+    if (!showShortcut) {
+        return clicked;
+    }
     draw->AddRect(kbdMin, ImVec2(kbdMin.x + extent.x + px(10.0F), kbdMin.y + px(16.0F)),
                   u32(c::lineStrong), px(2.0F));
     draw->AddText(fonts.mono, size, ImVec2(kbdMin.x + px(5.0F), kbdMin.y + px(3.0F)), u32(c::t3),
@@ -309,15 +319,22 @@ bool card(int index, const RobotClass& item, bool selected, const ImVec2& size) 
         u32(c::bg0));
 
     const theme::Fonts& fonts = theme::fonts();
-    draw->PushClipRect(ImVec2(min.x + pad, min.y), ImVec2(max.x - pad, max.y), true);
+    const float inner = size.x - pad * 2.0F;
     float y = artMax.y + px(10.0F);
-    draw->AddText(fonts.sansMedium, px(14.0F), ImVec2(min.x + pad, y),
-                  u32(item.available ? c::t1 : c::t2), item.name);
+    const bool cutName = fit::draw(draw, fonts.sansMedium, px(14.0F), ImVec2(min.x + pad, y),
+                                   u32(item.available ? c::t1 : c::t2), item.name, inner);
     y += px(24.0F);
-    draw->AddText(fonts.sans, px(theme::kLabelSize), ImVec2(min.x + pad, y), u32(c::t3),
-                  item.description, nullptr, size.x - pad * 2.0F);
-    // Bottom line: the domains the class turns on, and what it integrates with.
+    // The description wraps; what does not fit above the bottom line is cut (all of it is in
+    // the tooltip).
     const float bottom = max.y - pad - px(14.0F);
+    const float small = px(theme::kLabelSize);
+    const ImVec2 wrapped = fonts.sans->CalcTextSizeA(small, FLT_MAX, inner, item.description);
+    const bool cutDescription = y + wrapped.y > bottom - px(4.0F);
+    draw->PushClipRect(ImVec2(min.x + pad, y), ImVec2(max.x - pad, bottom - px(4.0F)), true);
+    draw->AddText(fonts.sans, small, ImVec2(min.x + pad, y), u32(c::t3), item.description, nullptr,
+                  inner);
+    draw->PopClipRect();
+    // Bottom line: the domains the class turns on, and what it integrates with after them.
     for (int d = 0; d < item.domainCount; ++d) {
         draw->AddCircleFilled(
             ImVec2(min.x + pad + px(4.0F) + px(11.0F) * static_cast<float>(d), bottom + px(7.0F)),
@@ -325,13 +342,16 @@ bool card(int index, const RobotClass& item, bool selected, const ImVec2& size) 
             u32(theme::kDomainColor[static_cast<int>(
                 item.domains.at(static_cast<std::size_t>(d)))]));
     }
-    const float small = px(theme::kLabelSize);
-    const float width = fonts.sans->CalcTextSizeA(small, FLT_MAX, 0.0F, item.integrations).x;
+    const float dots = px(11.0F) * static_cast<float>(item.domainCount) + px(6.0F);
+    const std::string integrations =
+        fit::cut(fonts.sans, small, item.integrations, std::max(inner - dots, 0.0F));
+    const float width = fonts.sans->CalcTextSizeA(small, FLT_MAX, 0.0F, integrations.c_str()).x;
     draw->AddText(fonts.sans, small, ImVec2(max.x - pad - width, bottom), u32(c::t3),
-                  item.integrations);
-    draw->PopClipRect();
-    if (hovered && !item.available) {
-        ImGui::SetTooltip("No sample of this robot class yet");
+                  integrations.c_str());
+    const bool cut = cutName || cutDescription || integrations != item.integrations;
+    if (hovered && (!item.available || cut)) {
+        ImGui::SetTooltip("%s\n%s\n%s%s", item.name, item.description, item.integrations,
+                          item.available ? "" : "\n\nNo sample of this robot class yet");
     }
     return clicked && item.available;
 }
@@ -379,16 +399,19 @@ void start(PanelContext& context, LauncherState& state) {
     ImGui::AlignTextToFramePadding();
     text(theme::fonts().sans, theme::kBodySize, c::t3, "sample robot, world and sim profile");
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-    const ImVec2 cardSize((width - gap * 3.0F) / 4.0F, px(178.0F));
+    // Four cards a row (design); three when four would be too narrow for their names.
+    const int perRow = (width - gap * 3.0F) / 4.0F < px(128.0F) ? 3 : 4;
+    const ImVec2 cardSize(
+        (width - gap * static_cast<float>(perRow - 1)) / static_cast<float>(perRow), px(178.0F));
     for (int i = 0; i < static_cast<int>(kClasses.size()); ++i) {
-        if (i % 4 != 0) {
+        if (i % perRow != 0) {
             ImGui::SameLine(0.0F, gap);
         }
         if (card(i, kClasses.at(static_cast<std::size_t>(i)), state.robotClass == i, cardSize)) {
             state.robotClass = i;
             state.openTarget.clear();  // the sample the server already serves
         }
-        if (i % 4 == 3) {
+        if (i % perRow == perRow - 1) {
             ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
         }
     }
@@ -402,7 +425,10 @@ void start(PanelContext& context, LauncherState& state) {
                          sizeof(state.recentFilter), px(220.0F));
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, c::bg1);
-    ImGui::BeginChild("##recent", ImVec2(0.0F, 0.0F), ImGuiChildFlags_Borders);
+    // The rest of the column, but never less than a few rows: in a small window the column
+    // scrolls to it instead.
+    const float recentHeight = std::max(ImGui::GetContentRegionAvail().y, px(150.0F));
+    ImGui::BeginChild("##recent", ImVec2(0.0F, recentHeight), ImGuiChildFlags_Borders);
     ImGui::PopStyleColor();
     const std::vector<RecentEntry>& recent = state.recent.entries();
     if (recent.empty()) {
@@ -442,15 +468,19 @@ void start(PanelContext& context, LauncherState& state) {
                 state.openTarget = entry.stage.find('/') == 0 ? entry.stage : std::string{};
             }
             ImGui::SameLine(px(8.0F));
-            ImGui::TextUnformatted(entry.stage.c_str());
+            fit::text(entry.stage, ImGui::GetContentRegionAvail().x, true);
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(entry.robot.c_str());
+            fit::text(entry.robot, ImGui::GetContentRegionAvail().x);
+            ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
             ImGui::TableNextColumn();
-            widgets::Mono(c::t1, "%s", entry.profile.c_str());
+            fit::text(entry.profile, ImGui::GetContentRegionAvail().x);
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
             ImGui::TableNextColumn();
-            widgets::Mono(c::t2, "%s", entry.endpoint.c_str());
+            fit::text(entry.endpoint, ImGui::GetContentRegionAvail().x, true);
             ImGui::TableNextColumn();
-            widgets::Mono(c::t2, "%s", entry.opened.c_str());
+            fit::text(entry.opened, ImGui::GetContentRegionAvail().x);
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -480,13 +510,15 @@ bool serverRow(const char* id, const char* name, const char* detail, const char*
     }
     const theme::Fonts& fonts = theme::fonts();
     const float x = min.x + px(36.0F);
-    draw->PushClipRect(min, ImVec2(max.x - px(96.0F), max.y), true);
-    draw->AddText(fonts.sansMedium, px(14.0F), ImVec2(x, min.y + px(9.0F)),
-                  u32(enabled ? c::t1 : c::t2), name);
-    draw->AddText(fonts.mono, px(theme::kLabelSize), ImVec2(x, min.y + px(30.0F)), u32(c::t3),
-                  detail);
-    draw->PopClipRect();
     const float pillWidth = widgets::PillWidth(pill);
+    const float room = max.x - pillWidth - px(18.0F) - x;
+    const bool cutName = fit::draw(draw, fonts.sansMedium, px(14.0F), ImVec2(x, min.y + px(9.0F)),
+                                   u32(enabled ? c::t1 : c::t2), name, room);
+    const bool cutDetail = fit::draw(draw, fonts.mono, px(theme::kLabelSize),
+                                     ImVec2(x, min.y + px(30.0F)), u32(c::t3), detail, room, true);
+    if ((cutName || cutDetail) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s\n%s", name, detail);
+    }
     ImGui::SetCursorScreenPos(ImVec2(max.x - pillWidth - px(10.0F), min.y + px(17.0F)));
     widgets::Pill(pill, kind);
     ImGui::SetCursorScreenPos(ImVec2(min.x, max.y + px(8.0F)));
@@ -592,7 +624,10 @@ void servers(LauncherState& state) {
                       ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
-    widgets::PropertyRow("protocol", "0.1 · this viewer", nullptr);
+    char protocol[48];
+    std::snprintf(protocol, sizeof(protocol), "%u.%u · this viewer", kProtocolMajor,
+                  kProtocolMinor);
+    widgets::PropertyRow("protocol", protocol, nullptr);
     widgets::PropertyRow("transport",
                          endpoint.rfind("tcp", 0) == 0 ? "TCP" : "Unix socket on this machine",
                          nullptr);
@@ -645,14 +680,14 @@ void servers(LauncherState& state) {
 }
 
 void column(const char* id, const ImVec2& position, const ImVec2& size, const ImVec4& background,
-            const ImVec2& padding) {
+            const ImVec2& padding, ImGuiWindowFlags flags = kFixed) {
     ImGui::SetNextWindowPos(position);
     ImGui::SetNextWindowSize(size);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, background);
-    ImGui::Begin(id, nullptr, kFixed);
+    ImGui::Begin(id, nullptr, flags);
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
 }
@@ -689,7 +724,7 @@ void drawLauncher(PanelContext& context) {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {
-            ImGui::MenuItem("Lagrange viewer, v0.1 in development", nullptr, false, false);
+            ImGui::MenuItem("Lagrange viewer " LAGRANGE_VIEWER_VERSION, nullptr, false, false);
             ImGui::MenuItem("Apache-2.0 · fonts: IBM Plex, SIL OFL 1.1", nullptr, false, false);
             ImGui::EndMenu();
         }
@@ -745,8 +780,10 @@ void drawLauncher(PanelContext& context) {
     column("##launcher-about", origin, ImVec2(left, size.y), c::bg1, ImVec2(px(28.0F), px(36.0F)));
     about(state);
     ImGui::End();
+    // The middle column scrolls when a small window cannot hold its tiles, cards and Recent.
     column("##launcher-start", ImVec2(origin.x + left, origin.y),
-           ImVec2(size.x - left - right, size.y), c::bg0, ImVec2(px(28.0F), px(28.0F)));
+           ImVec2(size.x - left - right, size.y), c::bg0, ImVec2(px(28.0F), px(28.0F)),
+           kFixed & ~ImGuiWindowFlags_NoScrollbar);
     start(context, state);
     ImGui::End();
     column("##launcher-server", ImVec2(origin.x + size.x - right, origin.y), ImVec2(right, size.y),
