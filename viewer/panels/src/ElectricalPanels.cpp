@@ -377,7 +377,10 @@ private:
             widgets::Dot(kDischarge);
             ImGui::SameLine(0.0F, px(6.0F));
         }
-        ImGui::Text("%s%s", statics.prims[prim].name.c_str(), suffix);
+        // A long part name is cut with an ellipsis in a narrow column, whole in a tooltip.
+        char name[160];
+        std::snprintf(name, sizeof(name), "%s%s", statics.prims[prim].name.c_str(), suffix);
+        fit::text(name, ImGui::GetContentRegionAvail().x);
         char text[32];
         ImGui::TableNextColumn();
         number(volts, "%.1f", text, sizeof(text));
@@ -1430,7 +1433,12 @@ public:
         widgets::Segmented("##window", kWindows.data(), 3, &scopes.window);
         ImGui::SameLine(0.0F, px(12.0F));
         ImGui::AlignTextToFramePadding();
-        widgets::Caption("min/max decimation · %zu points drawn", scopes.drawnPoints);
+        // The caption takes what the Freeze button leaves, cut with an ellipsis (QA3 at 1024).
+        char caption[64];
+        std::snprintf(caption, sizeof(caption), "min/max decimation · %zu points drawn",
+                      scopes.drawnPoints);
+        fit::caption(caption, ImGui::GetContentRegionAvail().x - widgets::ButtonWidth("Freeze") -
+                                  ImGui::GetStyle().ItemSpacing.x);
         ImGui::SameLine();
         widgets::AlignRight(widgets::ButtonWidth("Freeze"));
         if (widgets::Button(

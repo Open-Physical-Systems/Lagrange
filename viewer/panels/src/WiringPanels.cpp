@@ -547,7 +547,10 @@ public:
         const WiringInfo& wiring = context.profileSession->wiring();
         char sync[24];
         format::step(wiring.syncNs, sync, sizeof(sync));
-        widgets::Caption("10 ms window  ·  modules exchange signals every %s", sync);
+        char caption[96];
+        std::snprintf(caption, sizeof(caption),
+                      "10 ms window  ·  modules exchange signals every %s", sync);
+        fit::caption(caption, ImGui::GetContentRegionAvail().x);
 
         rows_.clear();
         for (const WiringInfo::Node& node : wiring.nodes) {

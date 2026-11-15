@@ -1,3 +1,4 @@
+#include "PanelFormat.hpp"
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Widgets.hpp"
@@ -7,6 +8,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
+#include <string_view>
 
 #include <imgui.h>
 #include <implot.h>
@@ -106,46 +108,127 @@ void ScopePlotter::plots(ScopeSession& session) {
     }
 }
 
-/// Title at the top right of a plot: the unit, then each trace with its colour.
+/// Title at the top right of a plot: the unit, then each trace with its colour. When they do not
+/// fit the plot's width, the longest names are cut to one width (fit::cutAll, so that two names
+/// never read the same) and the legend starts inside the plot's left edge.
 void ScopePlotter::legend(const ScopeSession& session, const std::string& unit) {
     const theme::Fonts& fonts = theme::fonts();
     ImDrawList* draw = ImPlot::GetPlotDrawList();
     const ImVec2 origin = ImPlot::GetPlotPos();
     const ImVec2 size = ImPlot::GetPlotSize();
     const float text = px(theme::kLabelSize);
+    const float mono = px(theme::kMonoSize);
+    const float swatch = px(30.0F);  // 12 px line, 6 px to its name, 12 px to the one before
     float x = origin.x + size.x - px(10.0F);
     const float y = origin.y + px(8.0F);
+    const char* shown = unit == "1" ? "ratio" : unit.c_str();
+    const float unitWidth = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, shown).x;
+
+    // The names of this plot, cut when they do not fit (cached: cut again only when the names or
+    // the room change, so that drawing a frame allocates nothing).
+    LegendNames& names = legendNames_[unit];
+    bool same = true;
+    std::size_t count = 0;
+    for (const ScopeTrace& trace : session.traces()) {
+        if (trace.unit == unit) {
+            same = same && count < names.full.size() &&
+                   names.full[count] == std::string_view(shortName(trace.label));
+            ++count;
+        }
+    }
+    same = same && count == names.full.size();
+    const float room = std::max(size.x - px(20.0F) - unitWidth, 0.0F);
+    if (!same || room != names.room) {
+        names.full.clear();
+        for (const ScopeTrace& trace : session.traces()) {
+            if (trace.unit == unit) {
+                names.full.emplace_back(shortName(trace.label));
+            }
+        }
+        names.room = room;
+        names.shown = names.full;
+        std::vector<float> widths;
+        float total = 0.0F;
+        for (const std::string& name : names.full) {
+            widths.push_back(fonts.sans->CalcTextSizeA(text, FLT_MAX, 0.0F, name.c_str()).x);
+            total += swatch + widths.back();
+        }
+        if (total > room && !widths.empty()) {
+            // The widest width every name may take so that all of them fit (water filling).
+            const float budget = std::max(room - swatch * static_cast<float>(widths.size()), 0.0F);
+            std::vector<float> sorted = widths;
+            std::sort(sorted.begin(), sorted.end());
+            float cap = 0.0F;
+            float used = 0.0F;
+            for (std::size_t i = 0; i < sorted.size(); ++i) {
+                const float left = static_cast<float>(sorted.size() - i);
+                cap = (budget - used) / left;
+                if (cap <= sorted[i]) {
+                    break;
+                }
+                used += sorted[i];
+                cap = sorted[i];
+            }
+            // Too narrow for even the start of each name: the part that differs from trace to
+            // trace, the component after the last '.' or '/' ("x" of imu/specific_force.x).
+            std::vector<std::string> tails;
+            bool tailsDiffer = true;
+            if (cap < px(40.0F)) {
+                for (const std::string& name : names.full) {
+                    const std::size_t at = name.find_last_of("./");
+                    tails.push_back(at == std::string::npos ? name : name.substr(at + 1));
+                }
+                for (std::size_t i = 0; i < tails.size() && tailsDiffer; ++i) {
+                    for (std::size_t j = i + 1; j < tails.size(); ++j) {
+                        tailsDiffer = tailsDiffer && tails[i] != tails[j];
+                    }
+                }
+            }
+            if (!tails.empty() && tailsDiffer) {
+                names.shown = fit::cutAll(fonts.sans, text, tails, std::max(cap, px(12.0F)));
+            } else {
+                names.shown = fit::cutAll(fonts.sans, text, names.full, cap);
+            }
+        }
+    }
+
+    float total = unitWidth;
+    for (const std::string& name : names.shown) {
+        total += swatch + fonts.sans->CalcTextSizeA(text, FLT_MAX, 0.0F, name.c_str()).x;
+    }
     ImPlot::PushPlotClipRect();
     // A backdrop under the legend, so that it stays readable over the newest samples (the
     // traces end at the right edge, under it).
-    const char* shown = unit == "1" ? "ratio" : unit.c_str();
-    const float mono = px(theme::kMonoSize);
-    float total = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, shown).x;
-    for (const ScopeTrace& trace : session.traces()) {
-        if (trace.unit == unit) {
-            total += px(30.0F) +
-                     fonts.sans->CalcTextSizeA(text, FLT_MAX, 0.0F, shortName(trace.label)).x;
+    const ImVec2 backMin(std::max(x - total - px(6.0F), origin.x + px(4.0F)), y - px(3.0F));
+    const ImVec2 backMax(x + px(6.0F), y + text + px(4.0F));
+    draw->AddRectFilled(backMin, backMax, u32(ImVec4(c::bg0.x, c::bg0.y, c::bg0.z, 0.82F)),
+                        px(3.0F));
+    // A cut legend shows the whole names when hovered.
+    if (names.shown != names.full && ImGui::IsMouseHoveringRect(backMin, backMax)) {
+        ImGui::BeginTooltip();
+        for (const std::string& name : names.full) {
+            ImGui::TextUnformatted(name.c_str());
         }
+        ImGui::EndTooltip();
     }
-    draw->AddRectFilled(ImVec2(x - total - px(6.0F), y - px(3.0F)),
-                        ImVec2(x + px(6.0F), y + text + px(4.0F)),
-                        u32(ImVec4(c::bg0.x, c::bg0.y, c::bg0.z, 0.82F)), px(3.0F));
+    std::size_t n = names.shown.size();
     for (std::size_t i = session.traces().size(); i-- > 0;) {
         const ScopeTrace& trace = session.traces()[i];
-        if (trace.unit != unit) {
+        if (trace.unit != unit || n == 0) {
             continue;
         }
-        const char* name = shortName(trace.label);
-        const float width = fonts.sans->CalcTextSizeA(text, FLT_MAX, 0.0F, name).x;
+        const std::string& name = names.shown[--n];
+        const float width = fonts.sans->CalcTextSizeA(text, FLT_MAX, 0.0F, name.c_str()).x;
         x -= width;
-        draw->AddText(fonts.sans, text, ImVec2(x, y), u32(c::t2), name);
+        draw->AddText(fonts.sans, text, ImVec2(x, y), u32(c::t2), name.c_str());
         x -= px(18.0F);
         draw->AddLine(ImVec2(x, y + text * 0.55F), ImVec2(x + px(12.0F), y + text * 0.55F),
                       u32(theme::kSeries[trace.color % ScopeSession::kColors]), px(2.0F));
         x -= px(12.0F);
     }
-    const float width = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, shown).x;
-    draw->AddText(fonts.mono, mono, ImVec2(x - width, y), u32(c::t3), shown);
+    if (x - unitWidth >= origin.x + px(4.0F)) {  // whole or not at all
+        draw->AddText(fonts.mono, mono, ImVec2(x - unitWidth, y), u32(c::t3), shown);
+    }
     ImPlot::PopPlotClipRect();
 }
 
