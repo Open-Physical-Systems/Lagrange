@@ -9,6 +9,19 @@ namespace {
 
 Fonts gFonts;  // UI thread only, like everything else that touches ImGui
 
+/// The faces' configuration: the design's sizes are CSS font sizes (the em), so each glyph is
+/// scaled up from Dear ImGui's line height to the em (kPlexLineHeightEm), while the font size
+/// that Dear ImGui lays out with stays the token's size. Oversampled twice across, crisp at the
+/// fractional pixel positions that the larger glyphs take.
+ImFontConfig faceConfig(bool merge) {
+    ImFontConfig config;
+    config.MergeMode = merge;
+    config.ExtraSizeScale = kPlexLineHeightEm;
+    config.OversampleH = 2;
+    config.OversampleV = 1;
+    return config;
+}
+
 }  // namespace
 
 const Fonts& loadFonts(const std::string& directory) {
@@ -39,10 +52,11 @@ const Fonts& loadFonts(const std::string& directory) {
     gFonts = Fonts{};
     if (complete) {
         for (const Face& face : kFaces) {
-            gFonts.*face.slot = atlas->AddFontFromFileTTF((base / face.file).c_str(), face.size);
+            const ImFontConfig own = faceConfig(false);
+            gFonts.*face.slot =
+                atlas->AddFontFromFileTTF((base / face.file).c_str(), face.size, &own);
             if (face.fallback != nullptr && gFonts.*face.slot != nullptr) {
-                ImFontConfig merge;
-                merge.MergeMode = true;
+                const ImFontConfig merge = faceConfig(true);
                 atlas->AddFontFromFileTTF((base / face.fallback).c_str(), face.size, &merge);
             }
             complete = complete && gFonts.*face.slot != nullptr;

@@ -332,11 +332,14 @@ private:
         } else {
             std::snprintf(name, sizeof(name), "%s", node.module.c_str());
         }
+        const char* tag = node.substitute ? "sub" : node.detail.c_str();
+        const float tagWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, tag).x;
+        // A long name stops short of the tag on the right instead of running under it.
+        draw->PushClipRect(min, ImVec2(max.x - tagWidth - px(14.0F), max.y), true);
         draw->AddText(fonts.sansSemiBold, label,
                       ImVec2(min.x + px(22.0F), min.y + (header - label) * 0.5F - px(1.0F)),
                       u32(node.substitute ? c::accent : c::t1), name);
-        const char* tag = node.substitute ? "sub" : node.detail.c_str();
-        const float tagWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, tag).x;
+        draw->PopClipRect();
         draw->AddText(fonts.mono, small,
                       ImVec2(max.x - tagWidth - px(8.0F), min.y + (header - small) * 0.5F),
                       u32(node.substitute ? c::accent : c::t3), tag);
