@@ -2655,7 +2655,8 @@ int runViewer(const Options& options) {
         const std::optional<Workspace> parsed = parseWorkspace(options.workspace);
         if (!parsed) {
             std::fprintf(stderr,
-                         "error: unknown workspace '%s' (scene, domains, signals, ..., builder)\n",
+                         "error: unknown workspace '%s' (scene, domains, electrical, signals, "
+                         "sensors, environment, replay, ros2, world, performance, builder)\n",
                          options.workspace.c_str());
             return 2;
         }

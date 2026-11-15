@@ -203,6 +203,16 @@ public:
 /// Draws the launcher (see LauncherState). Called by drawPanels() while it is active.
 void drawLauncher(PanelContext& context);
 
+/// The command palette (Ctrl K): fuzzy search over commands, prims, signals and topics. Called by
+/// drawPanels() every frame, on the launcher too; draws nothing until Ctrl K.
+void drawCommandPalette(PanelContext& context);
+/// Opens the command palette on the next frame (Tools → Command palette).
+void openCommandPalette();
+/// Shows a signal in the Signals browser: its search set to `name` (the palette's way there).
+void requestSignalSearch(std::string name);
+/// Selects a topic in the ROS 2 workspace's Topics panel.
+void requestRosTopic(std::string name);
+
 /// Draws the application chrome (menu bar, workspace bar, domain strip, status bar) and the
 /// panels of the workspace shown, laying them out on first use.
 void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context);

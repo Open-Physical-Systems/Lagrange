@@ -83,6 +83,8 @@ enum class ChipState { On, Substitute, Off, Pending, Error };
 /// A fully transparent `color` draws a neutral chip without a dot (the Builder's Robot strip).
 bool DomainChip(const char* id, const ImVec4& color, const char* name, const char* detail,
                 ChipState state);
+/// The width DomainChip takes with this name and detail (empty strings leave them out).
+[[nodiscard]] float DomainChipWidth(const char* name, const char* detail);
 
 /// A selectable card with a title and one line of description. Returns true when clicked.
 bool OptionCard(const char* id, const char* title, const char* description, bool selected,
@@ -95,7 +97,10 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen = true,
 
 /// A workspace tab: icon and label, accent underline when active. `available` is false for a
 /// workspace that is not built yet; it is drawn dimmer.
-bool BarTab(const char* label, Icon icon, bool active, bool available);
+/// `compact` draws the icon alone (a small window), with the label in a tooltip.
+bool BarTab(const char* label, Icon icon, bool active, bool available, bool compact = false);
+/// The width BarTab takes.
+[[nodiscard]] float BarTabWidth(const char* label, bool compact = false);
 
 /// A row of exclusive choices (time windows, level filters). Returns true when it changed.
 bool Segmented(const char* id, const char* const* options, int count, int* index);

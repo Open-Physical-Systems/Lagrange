@@ -73,6 +73,26 @@ void bandwidth(double bitsPerSecond, char* out, std::size_t size) {
     }
 }
 
+std::string& requestedTopic();
+
+/// A hidden ROS name: one of its parts starts with "_" ("/points/_buf_cpu"). `ros2 topic list`
+/// leaves them out unless asked; so does this workspace.
+bool hiddenName(std::string_view name) {
+    for (std::size_t at = name.find('_'); at != std::string_view::npos;
+         at = name.find('_', at + 1)) {
+        if (at == 0 || name[at - 1] == '/') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// How many of `names` are not hidden.
+std::size_t shownCount(const std::vector<std::string>& names) {
+    return static_cast<std::size_t>(
+        std::ranges::count_if(names, [](const std::string& name) { return !hiddenName(name); }));
+}
+
 /// "sensor_msgs/msg/PointCloud2" -> "PointCloud2".
 const char* shortType(const std::string& type) {
     const std::size_t slash = type.rfind('/');
@@ -88,6 +108,12 @@ public:
     [[nodiscard]] Workspace workspace() const override { return Workspace::Ros2; }
 
     void draw(PanelContext& context) override {
+        if (!requestedTopic().empty()) {
+            *selected_ = std::move(requestedTopic());
+            requestedTopic().clear();
+            filter_[0] = '\0';
+            scope_ = 1;  // all: the palette lists every topic
+        }
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         const bool open = ImGui::Begin(title());
         ImGui::PopStyleVar();
@@ -135,7 +161,7 @@ public:
                 widgets::Caption("%s", name);
             }
             for (const RosGraphInfo::Topic& topic : graph->topics) {
-                if ((scope_ == 0 && !topic.fromBridge) ||
+                if ((scope_ == 0 && !topic.fromBridge) || hiddenName(topic.name) ||
                     (filter_[0] != '\0' && !containsNoCase(topic.name, filter_))) {
                     continue;
                 }
@@ -271,6 +297,9 @@ public:
         const float small = px(theme::kCaptionSize);
         for (std::size_t from = 0; from < graph->nodes.size(); ++from) {
             for (const std::string& topic : graph->nodes[from].publishes) {
+                if (hiddenName(topic)) {
+                    continue;
+                }
                 for (std::size_t to = 0; to < graph->nodes.size(); ++to) {
                     const auto& wanted = graph->nodes[to].subscribes;
                     if (from == to || std::ranges::find(wanted, topic) == wanted.end()) {
@@ -319,8 +348,8 @@ public:
             if (!node.detail.empty()) {
                 std::snprintf(line, sizeof(line), "%s", node.detail.c_str());
             } else {
-                std::snprintf(line, sizeof(line), "pub %zu · sub %zu", node.publishes.size(),
-                              node.subscribes.size());
+                std::snprintf(line, sizeof(line), "pub %zu · sub %zu", shownCount(node.publishes),
+                              shownCount(node.subscribes));
             }
             draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), min.y + px(34.0F)),
                           u32(c::t2), line);
@@ -445,8 +474,11 @@ public:
             std::snprintf(text, sizeof(text), "%u", graph->domainId);
             widgets::PropertyRow("ROS_DOMAIN_ID", text, nullptr);
             widgets::PropertyRow("RMW", graph->rmw.c_str(), nullptr);
+            const auto topics = std::ranges::count_if(
+                graph->topics,
+                [](const RosGraphInfo::Topic& topic) { return !hiddenName(topic.name); });
             std::snprintf(text, sizeof(text), "%zu nodes · %zu topics", graph->nodes.size(),
-                          graph->topics.size());
+                          static_cast<std::size_t>(topics));
             widgets::PropertyRow("graph", text, nullptr);
             ImGui::Unindent(px(8.0F));
         }
@@ -455,6 +487,20 @@ public:
 };
 
 }  // namespace
+
+namespace {
+
+/// A topic the command palette asked to show; the Topics panel takes it.
+std::string& requestedTopic() {
+    static std::string topic;
+    return topic;
+}
+
+}  // namespace
+
+void requestRosTopic(std::string name) {
+    requestedTopic() = std::move(name);
+}
 
 std::vector<std::unique_ptr<Panel>> createRos2Panels() {
     auto selected = std::make_shared<std::string>();  // the topic chosen in the table

@@ -12,10 +12,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <map>
 #include <numbers>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -97,6 +99,10 @@ public:
 
         header(context, prim, transform);
 
+        // The sections scroll; the Apply footer stays under them, always in view while there
+        // are edits not applied (M11).
+        const float footer = footerHeight(context, prim);
+        ImGui::BeginChild("##inspector-body", ImVec2(0.0F, footer > 0.0F ? -footer : 0.0F));
         // Design 04-electrical: a battery's state as cards, and where it is on its curve.
         const bool battery = workspace_ == Workspace::Electrical &&
                              std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(),
@@ -114,7 +120,6 @@ public:
             ImGui::Unindent(px(8.0F));
         }
         attributes(context, statics, prim);
-        editsFooter(context, id);
         if (prim.mesh != kNone && widgets::SectionHeader("Geometry", "render mesh")) {
             const MeshData& mesh = statics.meshes[prim.mesh];
             char text[32];
@@ -129,6 +134,8 @@ public:
             }
             ImGui::Unindent(px(8.0F));
         }
+        ImGui::EndChild();
+        editsFooter(context, statics, id);
         ImGui::End();
     }
 
@@ -320,9 +327,8 @@ private:
             context.client.unsubscribe(entry.buffer);
         }
         live_.clear();
-        if (prim != prim_) {
-            edits_.clear();  // edits are local to the prim they were typed for
-        }
+        // Edits stay with the prim they were typed for (by path) until applied or reverted:
+        // selecting another prim keeps them, and the footer says they wait.
         prim_ = prim;
         sceneGeneration_ = sceneGeneration;
         catalog_ = catalog;
@@ -512,14 +518,19 @@ private:
         }
         if (attribute.editable && attribute.kind == AttributeInfo::Kind::Real) {
             // Design: edits stay local until Apply; an edited field gets the accent border.
-            auto it = edits_.find(attribute.name);
+            Edits& edits = edits_[statics.prims[prim_].path];
+            auto it = edits.find(attribute.name);
             std::array<char, 48> buffer{};
-            const std::string& shown = it != edits_.end() ? it->second : attribute.value;
+            const std::string& shown = it != edits.end() ? it->second : attribute.value;
             std::snprintf(buffer.data(), buffer.size(), "%s", shown.c_str());
-            const bool edited = it != edits_.end() && it->second != attribute.value;
+            const bool edited = it != edits.end() && it->second != attribute.value;
             if (widgets::PropertyEdit(label, buffer.data(), buffer.size(), attribute.unit.c_str(),
                                       edited, attribute.doc.c_str())) {
-                edits_[attribute.name] = buffer.data();
+                if (buffer.data() == attribute.value) {
+                    edits.erase(attribute.name);  // typed back to what it is
+                } else {
+                    edits[attribute.name] = buffer.data();
+                }
             }
             return;
         }
@@ -527,43 +538,116 @@ private:
                              attribute.kind == AttributeInfo::Kind::Asset, attribute.doc.c_str());
     }
 
-    /// Design: "N edits", Revert and Apply; Apply sends one set_attribute per edit. The server
-    /// applies them to the running simulation from its next step.
-    void editsFooter(PanelContext& context, std::uint32_t prim) {
+    using Edits = std::map<std::string, std::string, std::less<>>;  // attribute -> typed text
+
+    /// The edits of this prim that differ from its values as the server last gave them.
+    [[nodiscard]] std::size_t changedCount(const PanelContext& context,
+                                           const PrimData& prim) const {
+        const auto found = edits_.find(prim.path);
+        if (found == edits_.end()) {
+            return 0;
+        }
         const std::shared_ptr<const PrimAttributes> answer = context.client.attributes();
+        if (!answer || answer->requestId != requestId_) {
+            return found->second.size();  // not loaded yet: as typed
+        }
         std::size_t count = 0;
-        for (const auto& [name, text] : edits_) {
-            for (const AttributeInfo& a : answer ? answer->attributes : kNoAttributes) {
+        for (const auto& [name, text] : found->second) {
+            for (const AttributeInfo& a : answer->attributes) {
                 count += a.name == name && a.value != text ? 1 : 0;
             }
         }
-        if (count == 0) {
+        return count;
+    }
+
+    /// Edits waiting on other prims: how many, and the first such prim.
+    [[nodiscard]] std::pair<std::size_t, const std::string*> elsewhere(const PrimData& prim) const {
+        std::size_t count = 0;
+        const std::string* first = nullptr;
+        for (const auto& [path, edits] : edits_) {
+            if (path != prim.path && !edits.empty()) {
+                count += edits.size();
+                first = first == nullptr ? &path : first;
+            }
+        }
+        return {count, first};
+    }
+
+    /// The height the footer takes this frame; 0 when there is nothing to apply anywhere.
+    [[nodiscard]] float footerHeight(const PanelContext& context, const PrimData& prim) const {
+        const bool here = changedCount(context, prim) != 0;
+        const bool there = elsewhere(prim).first != 0;
+        if (!here && !there) {
+            return 0.0F;
+        }
+        const float line = ImGui::GetFrameHeightWithSpacing();
+        return px(8.0F) + (here ? line : 0.0F) + (there ? line : 0.0F);
+    }
+
+    /// Design: "N edits", Revert and Apply; Apply sends one set_attribute per edit. The server
+    /// applies them to the running simulation from its next step. Drawn under the scrolling
+    /// sections, so it is always in view; edits typed on other prims are named here too.
+    void editsFooter(PanelContext& context, const SceneStatics& statics, std::uint32_t prim) {
+        const PrimData& data = statics.prims[prim];
+        const std::size_t count = changedCount(context, data);
+        const auto [others, firstOther] = elsewhere(data);
+        if (count == 0 && others == 0) {
             return;
         }
-        ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
         ImGui::Separator();
-        ImGui::AlignTextToFramePadding();
-        widgets::Caption("%zu %s · applies to the running simulation", count,
-                         count == 1 ? "edit" : "edits");
-        const float revert = widgets::ButtonWidth("Revert");
-        const float apply = widgets::ButtonWidth("Apply");
-        ImGui::SameLine();
-        widgets::AlignRight(revert + apply + px(6.0F));
-        if (widgets::Button("Revert", widgets::ButtonKind::Ghost)) {
-            edits_.clear();
-        }
-        ImGui::SameLine(0.0F, px(6.0F));
-        if (widgets::PrimaryButton("Apply")) {
-            for (const auto& [name, text] : edits_) {
-                char* end = nullptr;
-                const double value = std::strtod(text.c_str(), &end);
-                if (end == text.c_str() || *end != '\0' || !std::isfinite(value)) {
-                    continue;  // not a number: left as typed, for the user to correct
-                }
-                context.client.setAttribute(prim, name, value, false);
+        ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+        if (count != 0) {
+            ImGui::AlignTextToFramePadding();
+            widgets::Caption("%zu %s · applies to the running simulation", count,
+                             count == 1 ? "edit" : "edits");
+            const float revert = widgets::ButtonWidth("Revert");
+            const float apply = widgets::ButtonWidth("Apply");
+            ImGui::SameLine();
+            widgets::AlignRight(revert + apply + px(6.0F));
+            if (widgets::Button("Revert", widgets::ButtonKind::Ghost)) {
+                edits_.erase(data.path);
             }
-            edits_.clear();
-            requestId_ = context.client.requestAttributes(prim);  // the values as applied
+            ImGui::SameLine(0.0F, px(6.0F));
+            if (widgets::PrimaryButton("Apply")) {
+                for (const auto& [name, text] : edits_[data.path]) {
+                    char* end = nullptr;
+                    const double value = std::strtod(text.c_str(), &end);
+                    if (end == text.c_str() || *end != '\0' || !std::isfinite(value)) {
+                        continue;  // not a number: left as typed, for the user to correct
+                    }
+                    context.client.setAttribute(prim, name, value, false);
+                }
+                edits_.erase(data.path);
+                requestId_ = context.client.requestAttributes(prim);  // the values as applied
+            }
+        }
+        if (others != 0 && firstOther != nullptr) {
+            // Selecting another prim kept them: say where they wait, and go there.
+            ImGui::AlignTextToFramePadding();
+            const std::string name = firstOther->substr(firstOther->rfind('/') + 1);
+            widgets::Caption("%zu unapplied %s on %s%s", others, others == 1 ? "edit" : "edits",
+                             name.c_str(),
+                             others > edits_.at(*firstOther).size() ? " and more" : "");
+            const float show = widgets::ButtonWidth("Show");
+            const float discard = widgets::ButtonWidth("Discard");
+            ImGui::SameLine();
+            widgets::AlignRight(show + discard + px(6.0F));
+            if (widgets::Button("Discard", widgets::ButtonKind::Ghost)) {
+                for (auto it = edits_.begin(); it != edits_.end();) {
+                    it = it->first == data.path ? std::next(it) : edits_.erase(it);
+                }
+                return;
+            }
+            ImGui::SameLine(0.0F, px(6.0F));
+            if (widgets::Button("Show")) {
+                for (std::uint32_t i = 0; i < statics.prims.size(); ++i) {
+                    if (statics.prims[i].path == *firstOther) {
+                        context.selectedPrim = i;
+                        locked_ = false;
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -571,8 +655,7 @@ private:
     const char* tools_;
     Workspace workspace_;
     std::vector<Live> live_;
-    std::map<std::string, std::string, std::less<>> edits_;  // attribute -> typed text
-    static inline const std::vector<AttributeInfo> kNoAttributes;
+    std::map<std::string, Edits, std::less<>> edits_;  // prim path -> its edits, until applied
     bool locked_{false};
     std::uint32_t lockedPrim_{kNone};
     std::uint64_t lockedScene_{0};

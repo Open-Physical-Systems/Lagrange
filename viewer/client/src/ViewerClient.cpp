@@ -21,8 +21,6 @@ namespace lagrange::viewer {
 
 namespace {
 
-constexpr std::uint32_t kProtocolMajor = 0;
-constexpr std::uint32_t kProtocolMinor = 1;
 constexpr int kPollTimeoutMs = 100;
 
 }  // namespace

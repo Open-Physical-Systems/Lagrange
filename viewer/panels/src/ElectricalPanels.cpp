@@ -7,6 +7,7 @@
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Circuit.hpp"
 #include "lagrange/viewer/Fonts.hpp"
+#include "lagrange/viewer/LabelLayout.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Picking.hpp"
 #include "lagrange/viewer/RenderOptions.hpp"
@@ -1246,9 +1247,29 @@ private:
         const float small = px(theme::kCaptionSize);
         const auto known = context.client.attributesOf();
         const std::vector<CircuitBus>& buses = state_->circuit.buses;
-        float listY = origin.y + px(10.0F);
+
+        // Labels in the image: one per placed part and bus. Parts of a robot sit within
+        // centimetres of each other, so their labels are stacked in a column beside the points
+        // with a leader line to each, never on top of each other (M10).
+        struct Label {
+            ImVec2 anchor;
+            std::string text;
+            ImU32 color;
+        };
+        std::vector<Label> labels;
+        // The legend in the corner: every part with its current, and each bus with its voltage.
+        struct Entry {
+            std::string name;
+            std::string value;
+            ImU32 color;
+            bool bus;
+        };
+        std::vector<Entry> legend;
         for (std::size_t b = 0; b < buses.size() && b < state_->nets.size(); ++b) {
             const auto bus = project(buses[b].prim);
+            char volts[48];
+            number(latest(state_->nets[b].voltage), "%.1f V", volts, sizeof(volts));
+            legend.push_back({buses[b].name, volts, u32(kDischarge), true});
             for (std::size_t p = 0;
                  p < buses[b].parts.size() && p < state_->nets[b].terminals.size(); ++p) {
                 const CircuitPart& part = buses[b].parts[p];
@@ -1264,35 +1285,93 @@ private:
                 const double amperes = latest(state_->nets[b].terminals[p].current);
                 const double magnitude = std::isnan(amperes) ? 0.0 : std::abs(amperes);
                 const ImU32 color = u32(amperes < 0.0 ? kRegen : kDischarge);
-                char text[96];
+                char text[48];
                 std::snprintf(text, sizeof(text), "%.2f A", magnitude);
+                legend.push_back({part.name, text, color, false});
                 const auto at = project(where);
                 if (bus && at && apart(where, buses[b].prim)) {
                     const float width = std::clamp(
                         px(1.5F) + static_cast<float>(magnitude) * px(0.35F), px(1.5F), px(6.0F));
                     draw->AddLine(*bus, *at, color, width);
                     draw->AddCircleFilled(*at, px(3.5F), color);
-                    draw->AddText(fonts.mono, small, ImVec2(at->x + px(6.0F), at->y - px(6.0F)),
-                                  u32(c::t1), text);
-                } else {
-                    // A battery or load placed nowhere of its own: named in the corner instead.
-                    draw->AddCircleFilled(ImVec2(origin.x + px(16.0F), listY + small * 0.5F),
-                                          px(3.5F), color);
-                    const std::string line = part.name + "  " + text;
-                    draw->AddText(fonts.mono, small, ImVec2(origin.x + px(26.0F), listY),
-                                  u32(c::t1), line.c_str());
-                    listY += px(16.0F);
+                    labels.push_back({*at, part.name + "  " + text, color});
                 }
             }
             if (bus) {
                 draw->AddCircleFilled(*bus, px(5.0F), u32(kDischarge));
-                char label[96];
-                number(latest(state_->nets[b].voltage), "%.1f V", label, sizeof(label));
-                const std::string name = buses[b].name + "  " + label;
-                draw->AddText(fonts.mono, px(theme::kMonoSize),
-                              ImVec2(bus->x + px(8.0F), bus->y - px(18.0F)), u32(c::t1),
-                              name.c_str());
+                labels.push_back({*bus, buses[b].name + "  " + volts, u32(kDischarge)});
             }
+        }
+
+        // The column: right of the rightmost point, or left of the leftmost when there is no
+        // room on the right.
+        if (!labels.empty()) {
+            float widest = 0.0F;
+            float left = FLT_MAX;
+            float right = -FLT_MAX;
+            std::vector<float> anchors;
+            for (const Label& label : labels) {
+                widest = std::max(
+                    widest, fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, label.text.c_str()).x);
+                left = std::min(left, label.anchor.x);
+                right = std::max(right, label.anchor.x);
+                anchors.push_back(label.anchor.y);
+            }
+            const float pad = px(4.0F);
+            const float boxWidth = widest + pad * 2.0F;
+            const float reach = px(36.0F);
+            float x = right + reach;
+            const bool onRight = x + boxWidth <= origin.x + size.x - px(8.0F);
+            if (!onRight) {
+                x = std::max(left - reach - boxWidth, origin.x + px(8.0F));
+            }
+            const float height = small + pad;
+            const std::vector<float> tops = stackLabels(
+                anchors, height, px(3.0F), origin.y + px(8.0F), origin.y + size.y - px(8.0F));
+            for (std::size_t i = 0; i < labels.size(); ++i) {
+                const Label& label = labels[i];
+                const ImVec2 boxMin(x, tops[i]);
+                const ImVec2 boxMax(x + boxWidth, tops[i] + height);
+                const ImVec2 end(onRight ? boxMin.x : boxMax.x, (boxMin.y + boxMax.y) * 0.5F);
+                draw->AddLine(label.anchor, end, u32(c::t3), px(1.0F));
+                draw->AddRectFilled(boxMin, boxMax,
+                                    u32(ImVec4(c::bg0.x, c::bg0.y, c::bg0.z, 0.85F)), px(3.0F));
+                draw->AddRect(boxMin, boxMax, label.color, px(3.0F));
+                draw->AddText(fonts.mono, small, ImVec2(boxMin.x + pad, boxMin.y + pad * 0.5F),
+                              u32(c::t1), label.text.c_str());
+            }
+        }
+
+        // The legend, top left: what flows where, every part included (under the pill that says
+        // the domain is off, when it is).
+        float y = origin.y + (electricalOff(context) ? px(42.0F) : px(10.0F));
+        const float x = origin.x + px(12.0F);
+        float nameWidth = 0.0F;
+        for (const Entry& entry : legend) {
+            nameWidth = std::max(
+                nameWidth, fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, entry.name.c_str()).x);
+        }
+        if (!legend.empty()) {
+            const float row = px(16.0F);
+            draw->AddRectFilled(ImVec2(x - px(6.0F), y - px(4.0F)),
+                                ImVec2(x + px(32.0F) + nameWidth + px(64.0F),
+                                       y + row * static_cast<float>(legend.size()) + px(2.0F)),
+                                u32(ImVec4(c::bg0.x, c::bg0.y, c::bg0.z, 0.75F)), px(3.0F));
+        }
+        for (const Entry& entry : legend) {
+            const float indent = entry.bus ? 0.0F : px(10.0F);
+            if (entry.bus) {
+                draw->AddRectFilled(ImVec2(x, y + small * 0.5F - px(3.0F)),
+                                    ImVec2(x + px(6.0F), y + small * 0.5F + px(3.0F)), entry.color);
+            } else {
+                draw->AddCircleFilled(ImVec2(x + indent + px(3.0F), y + small * 0.5F), px(3.5F),
+                                      entry.color);
+            }
+            draw->AddText(fonts.mono, small, ImVec2(x + indent + px(12.0F), y),
+                          u32(entry.bus ? c::t1 : c::t2), entry.name.c_str());
+            draw->AddText(fonts.mono, small, ImVec2(x + px(32.0F) + nameWidth, y), u32(c::t1),
+                          entry.value.c_str());
+            y += px(16.0F);
         }
         draw->PopClipRect();
     }

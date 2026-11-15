@@ -5,6 +5,7 @@
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
 
 #include <imgui.h>
@@ -47,16 +48,22 @@ void drawScheduleChart(std::span<const ScheduleRow> schedule, std::int64_t syncN
         }
     }
     draw->AddLine(ImVec2(left, axisY), ImVec2(right, axisY), u32(c::lineStrong));
-    for (int ms = 0; ms <= 10; ms += 2) {
-        char text[8];
-        std::snprintf(text, sizeof(text), "%d", ms);
-        draw->AddText(
-            fonts.mono, small,
-            ImVec2(toX(static_cast<std::int64_t>(ms) * 1'000'000) - px(3.0F), axisY + px(4.0F)),
-            u32(c::t3), text);
+    // Tick labels centred on their ticks; the last one carries the unit and ends at the edge,
+    // so that "10" and "ms" never run into each other (L7).
+    const int lastMs = static_cast<int>(kScheduleWindowNs / 1'000'000);
+    for (int ms = 0; ms <= lastMs; ms += 2) {
+        char text[16];
+        std::snprintf(text, sizeof(text), ms == lastMs ? "%d ms" : "%d", ms);
+        const float width = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+        const float tick = toX(static_cast<std::int64_t>(ms) * 1'000'000);
+        float x = tick - width * 0.5F;
+        if (ms == 0) {
+            x = tick;
+        } else if (ms == lastMs) {
+            x = std::min(tick - px(6.0F), origin.x + size.x - px(2.0F) - width);
+        }
+        draw->AddText(fonts.mono, small, ImVec2(x, axisY + px(4.0F)), u32(c::t3), text);
     }
-    draw->AddText(fonts.mono, small, ImVec2(right - px(14.0F), axisY + px(4.0F)), u32(c::t3),
-                  " ms");
 
     // One row per module that runs: ticks when it steps often, blocks when it steps a
     // few times in the window, and the time of its next step when that is beyond it.
@@ -68,8 +75,8 @@ void drawScheduleChart(std::span<const ScheduleRow> schedule, std::int64_t syncN
     for (const ScheduleRow& node : schedule) {
         const ImVec4 color = widgets::domainColor(node.domain);
         const float midY = y + pitch * 0.5F;
-        draw->AddText(fonts.sans, label, ImVec2(origin.x + px(4.0F), midY - label * 0.5F),
-                      u32(c::t2), node.label);
+        fit::draw(draw, fonts.sans, label, ImVec2(origin.x + px(4.0F), midY - label * 0.5F),
+                  u32(c::t2), node.label, left - origin.x - px(10.0F));
         const float barHalf = std::min(pitch * 0.32F, px(8.0F));
         char text[64];
         if (node.dtNs <= 0) {

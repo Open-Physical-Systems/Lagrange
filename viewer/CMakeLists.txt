@@ -27,6 +27,9 @@ add_library(
     client/src/FlowLegend.cpp
     client/src/RadarScale.cpp
     client/src/SchematicLayout.cpp
+    client/src/SignalList.cpp
+    client/src/LabelLayout.cpp
+    client/src/Fuzzy.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
 target_include_directories(lagrange_viewer_client PUBLIC client/include)
@@ -152,6 +155,7 @@ add_library(
     app/theme/src/Fonts.cpp
     app/widgets/src/Icons.cpp
     app/widgets/src/Widgets.cpp
+    app/widgets/src/TextFit.cpp
 )
 lagrange_target_defaults(lagrange_viewer_widgets)
 target_include_directories(
@@ -174,6 +178,7 @@ add_library(
     panels/src/BuilderTree.cpp
     panels/src/BuilderTest.cpp
     panels/src/Chrome.cpp
+    panels/src/CommandPalette.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
@@ -201,6 +206,14 @@ add_library(
 )
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)
+# The version the launcher and Help show: this package's, from package.xml.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/package.xml" _package_xml)
+string(REGEX MATCH "<version>([^<]+)</version>" _ "${_package_xml}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS package.xml)
+target_compile_definitions(
+    lagrange_viewer_panels
+    PRIVATE LAGRANGE_VIEWER_VERSION="${CMAKE_MATCH_1}"
+)
 target_link_libraries(
     lagrange_viewer_panels
     PUBLIC
@@ -291,6 +304,7 @@ if(BUILD_TESTING)
         client/test/test_scene_fuzz.cpp
         client/test/test_scope_buffer.cpp
         client/test/test_scope_session.cpp
+        client/test/test_text_layout.cpp
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
         render/test/test_picking.cpp
@@ -301,6 +315,7 @@ if(BUILD_TESTING)
         test_viewer_client
         lagrange_viewer_client
         lagrange_viewer_render
+        lagrange_viewer_widgets
         Threads::Threads
     )
     target_compile_definitions(
