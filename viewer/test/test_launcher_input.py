@@ -14,10 +14,10 @@ import pytest
 from ament_index_python.packages import PackageNotFoundError, get_package_prefix
 
 # Where things are at --size 1600x1000.
-FILE_MENU = "102,14"
-VIEW_MENU = "137,14"
-TOOLS_MENU = "177,14"
-HELP_MENU = "216,14"
+FILE_MENU = "117,14"
+VIEW_MENU = "159,14"
+TOOLS_MENU = "205,14"
+HELP_MENU = "251,14"
 # Menu items, one row every 17 px from y = 43 (separators add 5 px).
 FILE_BUILD = "120,99"
 FILE_RECENT = "150,121"

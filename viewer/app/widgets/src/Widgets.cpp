@@ -331,6 +331,15 @@ bool BeginPanelTools(const char* id, float width) {
     // The tab bar belongs to the dock node, not to the panel, so the tools are a small
     // window of their own laid over its right end.
     const ImRect bar = node->TabBar->BarRect;
+    // In a panel too narrow for both, the tabs stay readable and the tools are left out
+    // (they would be drawn over the tab names).
+    float tabsEnd = bar.Min.x;
+    for (const ImGuiTabItem& tab : node->TabBar->Tabs) {
+        tabsEnd = std::max(tabsEnd, bar.Min.x + tab.Offset + tab.Width);
+    }
+    if (bar.Max.x - width - px(4.0F) < tabsEnd + px(4.0F)) {
+        return false;
+    }
     const float height = px(22.0F);
     ImGui::SetNextWindowPos(ImVec2(bar.Max.x - width - px(4.0F), bar.Min.y));
     ImGui::SetNextWindowSize(ImVec2(width, bar.GetHeight()));
@@ -656,9 +665,17 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen, const 
     if (meta != nullptr && *meta != '\0') {
         const float metaSize = px(theme::kCaptionSize);
         const ImVec2 extent = fonts.mono->CalcTextSizeA(metaSize, FLT_MAX, 0.0F, meta);
-        draw->AddText(fonts.mono, metaSize,
-                      ImVec2(max.x - extent.x - px(10.0F), midY - extent.y * 0.5F), u32(c::t3),
-                      meta);
+        // The title comes first: a meta too long for the rest of the header is cut at its end.
+        const float titleEnd =
+            titleX + fonts.sansSemiBold->CalcTextSizeA(titleSize, FLT_MAX, 0.0F, title).x;
+        const float metaX = std::max(max.x - extent.x - px(10.0F), titleEnd + px(10.0F));
+        const TextWidth measure = [&fonts, metaSize](std::string_view s) {
+            return fonts.mono->CalcTextSizeA(metaSize, FLT_MAX, 0.0F, s.data(), s.data() + s.size())
+                .x;
+        };
+        const std::string shown = fitEnd(meta, std::max(max.x - px(10.0F) - metaX, 0.0F), measure);
+        draw->AddText(fonts.mono, metaSize, ImVec2(metaX, midY - extent.y * 0.5F), u32(c::t3),
+                      shown.c_str());
     }
     return open;
 }
@@ -805,11 +822,14 @@ void rowLabel(const char* label) {
     const float start = ImGui::GetCursorPosX();
     ImGui::AlignTextToFramePadding();
     ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
-    // A label longer than its column ends in an ellipsis, whole in the tooltip.
+    // The design's key labels are 12 px regular (`.kv .k`). One longer than its column ends in
+    // an ellipsis, whole in the tooltip.
+    ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
     bool cut = false;
     const std::string shown =
-        fitted(ImGui::GetFont(), ImGui::GetFontSize(), label, px(kLabelColumn) - px(10.0F), &cut);
+        fitted(ImGui::GetFont(), ImGui::GetFontSize(), label, px(kLabelColumn) - px(4.0F), &cut);
     ImGui::TextUnformatted(shown.c_str());
+    ImGui::PopFont();
     if (cut && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", label);
     }

@@ -185,11 +185,21 @@ void check(bool ok, const char* line, const char* detail, const char* accent = n
     ImGui::BeginGroup();
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, px(1.0F)));
     text(theme::fonts().sans, theme::kLabelSize, c::t1, line);
+    // The accent follows the detail on its line when both fit; else it gets a line of its own
+    // (after a wrapped detail, SameLine would put it past the column's edge).
+    const float caption = px(theme::kCaptionSize);
+    const float room = ImGui::GetContentRegionAvail().x;
+    const float detailWidth = theme::fonts().sans->CalcTextSizeA(caption, FLT_MAX, 0.0F, detail).x;
+    const bool oneLine =
+        accent != nullptr &&
+        detailWidth + theme::fonts().sans->CalcTextSizeA(caption, FLT_MAX, 0.0F, accent).x <= room;
     ImGui::PushTextWrapPos(0.0F);
     text(theme::fonts().sans, theme::kCaptionSize, c::t3, detail);
     ImGui::PopTextWrapPos();
     if (accent != nullptr) {
-        ImGui::SameLine(0.0F, 0.0F);
+        if (oneLine) {
+            ImGui::SameLine(0.0F, 0.0F);
+        }
         text(theme::fonts().sans, theme::kCaptionSize, c::accent, accent);
     }
     ImGui::PopStyleVar();

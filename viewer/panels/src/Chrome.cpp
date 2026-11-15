@@ -1428,21 +1428,27 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         }
         const theme::Fonts& fonts = theme::fonts();
         const float size = px(theme::kCaptionSize);
-        float width = fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "GPU").x +
-                      fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "viewer").x +
-                      fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, gpu).x +
-                      fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, viewer).x + px(6.0F) * 2.0F +
-                      gap;
-        if (!ros.empty()) {
-            width += fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "ROS 2").x +
-                     fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, ros.c_str()).x + px(6.0F) + gap;
-        }
-        ImGui::SameLine();
-        widgets::AlignRight(width);
-        statusItem("GPU", c::t2, "%s", gpu);
+        const auto itemWidth = [&](const char* key, const char* value) {
+            return fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, key).x +
+                   fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, value).x + px(6.0F);
+        };
+        const float viewerWidth = itemWidth("viewer", viewer);
+        const float gpuWidth = itemWidth("GPU", gpu) + gap;
+        const float rosWidth = ros.empty() ? 0.0F : itemWidth("ROS 2", ros.c_str()) + gap;
         ImGui::SameLine(0.0F, gap);
+        // In a narrow window the right group keeps what fits beside the left one: the viewer's
+        // frame time always, then the GPU, then ROS 2.
+        const float room = ImGui::GetContentRegionAvail().x;
+        const bool showGpu = viewerWidth + gpuWidth <= room;
+        const bool showRos = !ros.empty() && showGpu && viewerWidth + gpuWidth + rosWidth <= room;
+        widgets::AlignRight(viewerWidth + (showGpu ? gpuWidth : 0.0F) +
+                            (showRos ? rosWidth : 0.0F));
+        if (showGpu) {
+            statusItem("GPU", c::t2, "%s", gpu);
+            ImGui::SameLine(0.0F, gap);
+        }
         statusItem("viewer", c::t2, "%s", viewer);
-        if (!ros.empty()) {
+        if (showRos) {
             ImGui::SameLine(0.0F, gap);
             statusItem("ROS 2", c::t2, "%s", ros.c_str());
         }

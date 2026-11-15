@@ -143,8 +143,9 @@ def test_geodesy_tab_reads_out_the_cursor(server) -> None:
     assert "Geodesy" in stats["windows"], stats["windows"]
     bright = count(rows, RIGHT_DOCK)
     # Georeferenced, the tab has the geo origin's nine rows and the cursor's and the agents'
-    # latitude and longitude; without a geo origin a caption stands in for them.
+    # latitude and longitude; without a geo origin a caption stands in for them. (Text drawn at
+    # the design's CSS sizes: about 5000 bright pixels with the rows, 2600 with the caption.)
     if kind == "geo":
-        assert bright > 2200, bright
+        assert bright > 3700, bright
     else:
-        assert 600 < bright < 2000, bright
+        assert 1000 < bright < 3400, bright

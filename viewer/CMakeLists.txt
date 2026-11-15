@@ -377,6 +377,15 @@ if(BUILD_TESTING)
     # The Geodesy tab's WGS84 <-> ENU, a header of the viewer's own, against the core's
     # coords that the server uses. lagrange_core in this test only: the client and panels do not.
     find_package(lagrange_core REQUIRED)
+    # The design's font sizes are CSS em sizes (app/theme/src/Fonts.cpp).
+    ament_add_gtest(test_viewer_fonts app/theme/test/test_fonts.cpp TIMEOUT 60)
+    target_link_libraries(test_viewer_fonts lagrange_viewer_widgets)
+    target_compile_definitions(
+        test_viewer_fonts
+        PRIVATE LAGRANGE_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
+    )
+    lagrange_target_defaults(test_viewer_fonts)
+
     ament_add_gtest(test_geodesy client/test/test_geodesy.cpp TIMEOUT 60)
     target_link_libraries(
         test_geodesy
