@@ -368,6 +368,64 @@ std::string findLocalServer() {
     return {};
 }
 
+/// A package's share directory in the ROS install (AMENT_PREFIX_PATH); empty if none.
+std::string findShare(const std::string& package) {
+    const char* prefixes = std::getenv("AMENT_PREFIX_PATH");
+    if (prefixes == nullptr) {
+        return {};
+    }
+    const std::string list = prefixes;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const std::size_t end = std::min(list.find(':', start), list.size());
+        const std::filesystem::path candidate =
+            std::filesystem::path(list.substr(start, end - start)) / "share" / package;
+        std::error_code ec;
+        if (end > start && std::filesystem::is_directory(candidate, ec)) {
+            return candidate.string();
+        }
+        start = end + 1;
+    }
+    return {};
+}
+
+/// Pages shown in the system's browser or file manager (xdg-open): never inside the viewer
+/// (CLAUDE.md invariant 13). Started without waiting; finished ones are reaped later.
+class PageOpener {
+public:
+    PageOpener() = default;
+    PageOpener(const PageOpener&) = delete;
+    PageOpener& operator=(const PageOpener&) = delete;
+    ~PageOpener() { reap(); }
+
+    /// Returns an error message, or empty when xdg-open was started.
+    std::string open(const std::string& page) {
+        reap();
+        std::string program = "xdg-open";
+        std::string argument = page;
+        std::array<char*, 3> argv{program.data(), argument.data(), nullptr};
+        pid_t pid = -1;
+        const int error =
+            ::posix_spawnp(&pid, program.c_str(), nullptr, nullptr, argv.data(), environ);
+        if (error != 0) {
+            return "could not run xdg-open: " + std::string(std::strerror(error));
+        }
+        children_.push_back(pid);
+        return {};
+    }
+
+    /// Collects the xdg-open processes that finished (never blocks).
+    void reap() {
+        std::erase_if(children_, [](pid_t pid) {
+            int status = 0;
+            return ::waitpid(pid, &status, WNOHANG) != 0;
+        });
+    }
+
+private:
+    std::vector<pid_t> children_;
+};
+
 /// A simulation server started by the viewer from the launcher. Stopped with the viewer.
 class LocalServer {
 public:
@@ -376,10 +434,18 @@ public:
     LocalServer& operator=(const LocalServer&) = delete;
     ~LocalServer() { stop(); }
 
-    /// Starts `program --listen <endpoint>`. Returns an error message, or empty on success.
-    std::string start(const std::string& program, const std::string& endpoint) {
+    /// Starts `program --listen <endpoint> <extra...>`. Returns an error message, or empty on
+    /// success.
+    std::string start(const std::string& program, const std::string& endpoint,
+                      const std::vector<std::string>& extra = {}) {
         stop();
         std::vector<std::string> args{program, "--listen", endpoint};
+        args.insert(args.end(), extra.begin(), extra.end());
+        std::string line;
+        for (const std::string& arg : args) {
+            line += (line.empty() ? "" : " ") + arg;
+        }
+        std::fprintf(stderr, "lagrange_viewer: starting %s\n", line.c_str());
         std::vector<char*> argv;
         for (std::string& arg : args) {
             argv.push_back(arg.data());
@@ -776,12 +842,15 @@ public:
                 launcher_.error.clear();
                 if (launcher_.startLocalRequested) {
                     // The client keeps retrying until the new server has bound its socket.
-                    launcher_.error =
-                        localServer_.start(launcher_.localServer, launcher_.connectEndpoint);
+                    launcher_.error = localServer_.start(
+                        launcher_.localServer, launcher_.connectEndpoint, launcher_.startArguments);
                 }
                 launcher_.startLocalRequested = false;
+                launcher_.startArguments.clear();
             }
             if (endpoint && launcher_.error.empty()) {
+                std::fprintf(stderr, "lagrange_viewer: connecting to %s\n",
+                             launcher_.connectEndpoint.c_str());
                 client_.stop();
                 client_.setEndpoint(*endpoint);
                 client_.start();
@@ -791,6 +860,18 @@ public:
                 }
                 launcher_.active = false;
                 recordRecent_ = true;
+            }
+        }
+        if (!launcher_.openPageRequested.empty()) {
+            // Headless runs (tests) say what they would open instead of opening it.
+            const std::string page = std::exchange(launcher_.openPageRequested, {});
+            if (opensPages_) {
+                const std::string error = pages_.open(page);
+                if (!error.empty()) {
+                    std::fprintf(stderr, "lagrange_viewer: %s\n", error.c_str());
+                }
+            } else {
+                std::fprintf(stderr, "lagrange_viewer: would open %s\n", page.c_str());
             }
         }
         if (launcher_.disconnectRequested) {
@@ -1508,6 +1589,8 @@ public:
     /// How many times the 3D view was drawn (it is not when nothing in it changed).
     [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
+    /// Links open in the system's browser (a window); headless runs only print them.
+    void setOpensPages(bool value) { opensPages_ = value; }
     void setWorkspace(Workspace workspace) {
         workspace_ = workspace;
         if (workspace == Workspace::Builder && launcher_.localServer.empty()) {
@@ -1672,6 +1755,7 @@ public:
         launcher_.defaultEndpoint =
             proto::toString(proto::Endpoint::unixSocket(proto::defaultUnixSocketPath()));
         launcher_.localServer = findLocalServer();
+        launcher_.assetDirectory = findShare("lagrange_assets");
         launcher_.server = launcher_.localServer.empty() ? 1 : 0;
         recentPath_ = launcher_.system.configDirectory + "/recent.json";
         launcher_.recent.load(recentPath_);
@@ -1839,6 +1923,8 @@ private:
     std::string iniPath_;
     std::vector<std::string> scopeSignals_;
     bool canOpenFiles_{false};
+    bool opensPages_{false};
+    PageOpener pages_;
     Workspace workspace_{Workspace::Scene};
     ProfileSession profileSession_;
     ScopeSession scopeSession_;
@@ -2587,6 +2673,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setGpuTimer(&gpuTimer);
         ImGui_ImplSDL3_InitForVulkan(window);
         ui.setCanOpenFiles(true);
+        ui.setOpensPages(true);
         if (launcher) {
             ui.showLauncher(dpiScale);
         }

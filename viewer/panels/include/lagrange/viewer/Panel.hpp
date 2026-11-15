@@ -64,17 +64,25 @@ struct LauncherState {
     char otherEndpoint[160]{};     ///< A server typed in by the user.
     bool showOther{false};
     std::string localServer;  ///< lagrange_server found in the ROS install; empty if none.
+    /// lagrange_assets' share directory (the robot-class samples); empty if not installed.
+    std::string assetDirectory;
     int server{1};  ///< 0: start lagrange_server, 1: the default local server, 2: the typed one.
     int robotClass{0};       ///< Selected card.
     std::string openTarget;  ///< File to ask the server to open after connecting; may be empty.
     RecentList recent;
     char recentFilter[64]{};
+    int recentRow{-1};  ///< The Recent row picked last (highlighted), or -1.
     std::string error;  ///< Why the last attempt to connect could not start.
 
     // Out, read by the application after the frame.
     bool connectRequested{false};
     bool startLocalRequested{false};  ///< Start lagrange_server first, then connect.
+    /// What lagrange_server is started with besides --listen: the chosen robot class's sample.
+    std::vector<std::string> startArguments;
     std::string connectEndpoint;
+    /// A page to show in the system's browser (xdg-open, never inside the viewer: CLAUDE.md
+    /// invariant 13): the documentation, a guide, the issue tracker, the config folder.
+    std::string openPageRequested;
     bool disconnectRequested{false};  ///< Stop the client and show the launcher again.
     /// Build a robot (tile or Ctrl B): leave the launcher for the Builder workspace without
     /// connecting (RFC 0016 open question 6, R1).
