@@ -90,7 +90,8 @@ engines' own substeps are internal and do not show to the scheduler. Jolt holds 
 constraints between free bodies, which loses a little energy every step: a pendulum swinging
 freely from 1 rad loses 16 % of its energy in 60 s at 1 ms, where MuJoCo keeps it within
 0.1 %. A profile's `rigid_body: {substeps: N}` divides Jolt's step N times. That brings the loss
-to 9 % at 2 sub-steps and 5 % at 4, at N times the cost
+to 9 % at 2 sub-steps and 5 % at 4, at N times the cost; joint reactions and contact forces
+are then the constraint impulses averaged over the sub-steps
 ([rigid_body.md §8.1](../design/domains/rigid_body.md)). A run on MuJoCo is
 bit-for-bit repeatable: two runs with the same seed give the same state hash, and a saved state
 restored runs on bit-identically (Jolt passes the same check).

@@ -28,7 +28,8 @@ such joint, a mimic joint, a mode its motor does not follow, joint control off);
 limit, an effort beyond its effort limit or a position outside its range (from the robot file) is
 clamped to it: `clamped`, `value` and `limit` say so
 (`JointCommand(taken, value=10, clamped to its velocity limit, 10 rad/s)`). The viewer's joint
-commands are clamped the same way.
+commands are clamped the same way; `/joint_commands` is not (an effort is still limited by the
+effort limit, as above).
 
 To keep a run's settings, put them in one file and run that:
 

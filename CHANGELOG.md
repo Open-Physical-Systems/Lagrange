@@ -7,7 +7,7 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ## Unreleased
 
-Merged into `dev` after 1.3.0 (#332–#406).
+Merged into `dev` after 1.3.0 (#332–#410).
 
 ### Breaking or behaviour changes
 
@@ -35,6 +35,13 @@ Merged into `dev` after 1.3.0 (#332–#406).
 - **Builder, unsaved work:** New, Open, a template or a dropped robot ask before replacing a document with unsaved edits (#402)
 - **Builder rename:** F2 (or the name field in Properties) renames the selection in its tree row; joints' parent and child, a sensor's link, a mimic leader, the overlay's entries and `<ros2_control>`/`<transmission>` references follow, a name in use is refused with the reason in Problems; a power part's name renames its prim and every connection to it, so the run's signals take the new name (`bus/<name>/voltage`) (#405)
 - **Builder Test into a world:** Test ▾ picks the empty world, a sample world of `lagrange_assets` (the button then names it) or a world file; a run the viewer is connected to plays on while you build unless View → Pause the run while building is ticked (#405). **Start at…** sets where the robot starts in that world (x, y, z, heading; `--spawn`), remembered per world in `builder_spawns.tsv`; a sample world starts where its sample run does (`tiled_town`, `amr_fms_warehouse`, `town`), any other at its origin (#406)
+- **`/spawn_entity` naming:** a robot is renamed on a clash only with `allow_renaming: true`; without it a name that is taken, the request's or the file's own (`<robot name>`, the file name), fails with `NAME_NOT_UNIQUE`, and text that names no robot fails with `NAME_INVALID`. A file that does not parse comes back as `RESOURCE_PARSE_ERROR` with urdfdom's own message, not a temporary file's path (docs/guide/cli.md "Spawning robots") (#408)
+- **Python `command_joint`:** returns a `lagrange.JointCommand` (true when the joint took the command, as the `bool` it returned) with `reason` (why it was refused), `value`, `clamped` and `limit`; `strict=True` raises `ValueError` with the reason. A velocity beyond the joint's velocity limit, an effort beyond its effort limit or a position outside its range from the robot file is clamped to it (the viewer's `CommandJoint` too; ROS `/joint_commands` is not clamped this way). It is refused, with the reason, while joint control is off (docs/guide/run-file.md) (#408)
+- **Replays of robots with cameras:** a recording of a run with cameras (or other image and point buffers) replays; before, it did not replay. Recordings hold no images, so a replayed camera shows no frame; the recorder and the replay log which buffers are left out (#408)
+- **Jolt sub-step forces averaged:** with `rigid_body.substeps` above 1, joint reactions, limit torques and the contact force left from them are the constraint impulses averaged over the step's N sub-steps, over Δt/N, not the last sub-step's (#403); a swinging pendulum no longer leaves part of its pull to "contact" (4 % of m·g at 4 sub-steps). Jolt runs with sub-steps report different joint reactions and contact forces (rigid_body.md §8.1) (#408)
+- **Profile refusals:** an enabled domain this robot or world gives nothing to run on says what is missing and what to do (a power profile on a robot without its overlay: "electrical cannot run here: the robot has no power system…"), not "has no module in this server yet" (#408)
+- **Builder, link named `world`:** a link may be named `world` only as a shapeless, massless root (a robot fixed to the ground); any other is an error in Problems and a rename to it is refused, and a new part from a mesh named `world.stl` is named `world_2` (#407)
+- **Builder Test after Pause the run while building:** the run the viewer paused while you built plays again when Test moves to its own server, without the UI thread sleeping; a command queued for one server never reaches the next. Start at… poses go to `--spawn` and `builder_spawns.tsv` exactly as typed, not rounded to six digits (#410)
 
 ### Features
 
@@ -85,6 +92,10 @@ Merged into `dev` after 1.3.0 (#332–#406).
 - **server:** code review: Jolt sub-step forces, raised slabs not floors, `CommandJoint`, temporary files, parameter ranges against NaN and infinity (#403)
 - **viewer:** wrapped text on the design's line heights, nothing clipped; the launcher by keyboard (#404)
 - **viewer:** builder small gaps: F2 rename, power part names, the same-bus outline, joint types that fit, Test into a world (#405)
+- **viewer:** QA round 3: no link named `world`, cut text with an ellipsis in every panel (Chrome, Console, Environment, Performance, Profile, Replay, Schedule, Sensors, Wiring, World), no overlapping readouts in the Builder view, distinct rows, compiler warnings (#407)
+- **server:** QA round 3: camera recordings replay, Jolt sub-step forces averaged, `/spawn_entity` naming and urdfdom's parse errors in the reply (console_bridge), domain refusals that say what is missing, `command_joint` reasons and clamping, compiler warnings (#408)
+- **server:** sanitizer findings: the live air box's `memcpy` from a null span with no rotors, the links of a refused URDF loop leaked, connection-limit and sensor-catalog test fixes, TSan suppressions in `tools/ci/tsan.supp` (#409)
+- **viewer:** a run paused while building plays again after Test, no UI-thread sleep, exact start poses; headless `--input FRAME:wait:ready` (#410)
 
 ### Performance
 
@@ -102,6 +113,7 @@ Merged into `dev` after 1.3.0 (#332–#406).
 - **rfcs:** RFC 0018, the radiation domain (Draft) (#383); RFC 0019, legged robots (Draft) (#385)
 - **plan:** the legged contact spike, RFC 0019 step 1 measured (`docs/plan/spikes/legged-contact.md`) (#389, #393, #394); the owner's decisions after 2026-11-15 in one place (`docs/plan/owner-decisions-2026-11-15.md`) (#400)
 - **docs:** the changelog, CLAUDE.md and progress through #400 (#401)
+- **guide:** `/spawn_entity` naming and errors (`cli.md`), Python `command_joint` results (`run-file.md`), the sedan demo among traffic (`docs/physics/vehicles.md`), Jolt sub-step forces (`rigid_body.md` §8.1) (#408); the changelog, CLAUDE.md and guide through #410
 - **examples:** the quadruped's time varies with the node's timing, not a regression (#398); `lagrange_example_rl` documents the parallel environments and their speed (#392, #397)
 
 ## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)
