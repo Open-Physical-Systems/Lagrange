@@ -149,6 +149,27 @@ struct BuilderSession {
     bool checkRequested{false};      ///< Check loads… (lagrange_check)
     bool templateRequested{false};
     std::string templateName;  ///< with templateRequested: assets/robots/templates/<name>.urdf
+    /// A question before something goes ahead (code review M2, L6, L7): unsaved edits before
+    /// Open, a dropped file or a template; an autosave left by a viewer that did not close; a
+    /// Save as… name that gained ".urdf" and exists. BuilderHost asks (fills it) and acts on
+    /// the answer; the panels draw it as a modal sheet and write `choice`. `kind` None: none.
+    struct Prompt {
+        enum class Kind : std::uint8_t { None, Unsaved, Restore, Overwrite };
+        enum class Choice : std::uint8_t { None, Primary, Secondary, Cancel };
+        Kind kind{Kind::None};
+        std::string title;    ///< "Unsaved changes"
+        std::string message;  ///< one or two sentences
+        std::string primary;  ///< the accent button: "Save", "Restore", "Replace"
+        bool primaryEnabled{true};
+        std::string primaryHint;      ///< tooltip of a disabled primary (why it cannot)
+        std::string secondary;        ///< "Discard"; empty: no second button
+        std::string cancel;           ///< "Cancel", "Not now"
+        Choice choice{Choice::None};  ///< out: the button pressed (Esc: Cancel)
+    };
+    Prompt prompt;
+    /// True while a child process that replaces or edits the document runs (a xacro expansion,
+    /// a split): Test waits for it (code review M3).
+    bool documentJobRunning{false};
     /// The windowed viewer's file dialogs (SDL): Open… (.urdf, .xacro) and Save as… (.urdf).
     /// The chosen file comes back as openRequested / saveRequested with its path.
     bool openDialogRequested{false};

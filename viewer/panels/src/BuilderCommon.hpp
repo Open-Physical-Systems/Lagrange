@@ -43,6 +43,10 @@ inline void select(BuilderSession& session, Kind kind, std::string name) {
 /// joint's child, a selected sensor's link, else the first root link. Empty: no link at all.
 [[nodiscard]] std::string targetLink(const BuilderSession& session);
 
+/// The session's prompt (BuilderSession::Prompt) as a modal sheet, while one is asked and not
+/// answered: Esc or the cancel button answers Cancel. drawPanels() calls it in the Builder.
+void drawPrompt(BuilderSession& session);
+
 /// Short words of the tree and the strip: "rev", "cont", "fixed", "prism"; "cyl", "sphere".
 [[nodiscard]] const char* shortType(builder::Joint::Type type);
 [[nodiscard]] const char* shortShape(builder::Shape::Kind kind);

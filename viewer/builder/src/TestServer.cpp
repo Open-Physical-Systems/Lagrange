@@ -91,8 +91,10 @@ std::string ChildProcess::start(const std::vector<std::string>& argv,
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    // The log is the user's own: never written through a link planted at its name (code
+    // review L2); the start then fails with ELOOP.
     posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, log.c_str(),
-                                     O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                                     O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
     posix_spawnattr_t attributes;
     posix_spawnattr_init(&attributes);

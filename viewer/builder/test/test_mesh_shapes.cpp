@@ -678,6 +678,109 @@ TEST(CollisionSplit, PartsAreWrittenAndLoadWithNoNotes) {
     EXPECT_NE(text.find("bracket"), std::string::npos);
 }
 
+// --- names in the split's paths (code review L3), with a stand-in for bake_urdf ----------------
+
+namespace {
+
+/// Writes two parts for the one link of the URDF it is given, where bake_urdf would:
+/// `<urdf without .urdf>_collision/<link>_0_00N.obj`.
+std::filesystem::path fakeBake(const std::filesystem::path& dir) {
+    const auto program = dir / "fake_bake";
+    if (std::filesystem::exists(program)) {
+        return program;
+    }
+    std::ofstream(program) << "#!/bin/sh\n"
+                              "urdf=\"$1\"\n"
+                              "dir=\"${urdf%.urdf}_collision\"\n"
+                              "link=$(sed -n 's/.*<link name=\"\\([^\"]*\\)\".*/\\1/p' \"$urdf\")\n"
+                              "mkdir -p \"$dir\"\n"
+                              "echo 'v 0 0 0' > \"$dir/${link}_0_000.obj\"\n"
+                              "echo 'v 0 0 0' > \"$dir/${link}_0_001.obj\"\n";
+    std::filesystem::permissions(program, std::filesystem::perms::owner_all);
+    return program;
+}
+
+/// Runs one split to its end; the parts, or empty with the reason in `error`.
+std::vector<std::string> split(const std::filesystem::path& dir, const std::string& robot,
+                               const std::string& link, std::string& error) {
+    builder::CollisionSplit run;
+    builder::SplitRequest request;
+    request.program = fakeBake(dir).string();
+    request.robotFile = dir / "robot.urdf";
+    request.robot = robot;
+    request.link = link;
+    request.mesh = "part.obj";
+    request.meshBase = dir;
+    error = run.start(request);
+    if (!error.empty()) {
+        return {};
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (run.poll() == builder::CollisionSplit::State::Running &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    error = run.error();
+    return run.parts();
+}
+
+}  // namespace
+
+TEST(CollisionSplitNames, OneLinksPartsNeverTakeAwayOthers) {
+    const auto dir = scratch("split_names");
+    std::ofstream(dir / "part.obj") << "v 0 0 0\n";
+    std::string error;
+    const auto arm = split(dir, "rover", "arm", error);
+    ASSERT_EQ(arm.size(), 2U) << error;
+    const auto one = split(dir, "rover", "arm_1", error);
+    ASSERT_EQ(one.size(), 2U) << error;
+    const auto suffixed = split(dir, "rover", "arm_0", error);
+    ASSERT_EQ(suffixed.size(), 2U) << error;
+    // A '.' is not "any character": arm.1's split leaves arm_1's parts (it took them once).
+    const auto dotted = split(dir, "rover", "arm.1", error);
+    ASSERT_EQ(dotted.size(), 2U) << error;
+    const auto again = split(dir, "rover", "arm", error);  // replaces arm's own only
+    ASSERT_EQ(again.size(), 2U) << error;
+    for (const auto& list : {arm, one, dotted, suffixed}) {
+        for (const std::string& part : list) {
+            EXPECT_TRUE(std::filesystem::exists(part)) << part;
+            EXPECT_EQ(std::filesystem::path(part).parent_path(), dir / "rover_collision");
+        }
+    }
+}
+
+TEST(CollisionSplitNames, HostileNamesStayInTheRobotsFolderAndNeverThrow) {
+    const auto dir = scratch("split_hostile");
+    std::ofstream(dir / "part.obj") << "v 0 0 0\n";
+    std::string error;
+    // A regex metacharacter in the link (it used to throw std::regex_error on the UI thread).
+    std::vector<std::string> parts;
+    ASSERT_NO_THROW(parts = split(dir, "rover", "arm(", error));
+    ASSERT_EQ(parts.size(), 2U) << error;
+    // "a/b" and "a_b" are two links: their parts are two sets.
+    const auto slash = split(dir, "rover", "a/b", error);
+    const auto underscore = split(dir, "rover", "a_b", error);
+    ASSERT_EQ(slash.size(), 2U) << error;
+    ASSERT_EQ(underscore.size(), 2U) << error;
+    EXPECT_NE(slash.front(), underscore.front());
+    EXPECT_TRUE(std::filesystem::exists(slash.front()));
+    // A robot named like an absolute path, or one that climbs out: beside the robot's file.
+    for (const char* robot : {"/tmp/lagrange_split_escape", "../../escape", ".."}) {
+        const auto out = split(dir, robot, "arm", error);
+        ASSERT_EQ(out.size(), 2U) << robot << ": " << error;
+        for (const std::string& part : out) {
+            const std::filesystem::path folder = std::filesystem::path(part).parent_path();
+            EXPECT_EQ(folder.parent_path(), dir) << robot << ": " << part;
+            EXPECT_EQ(folder.filename(), builder::splitFolderName(robot));
+        }
+    }
+    EXPECT_FALSE(std::filesystem::exists("/tmp/lagrange_split_escape_collision"));
+    // No work folder left behind.
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        EXPECT_FALSE(entry.path().filename().string().starts_with(".")) << entry.path();
+    }
+}
+
 // --- the gizmos on Addendum A's shapes ---------------------------------------------------------
 
 TEST(MeshGizmo, CapsuleHasSizeHandles) {

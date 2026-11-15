@@ -166,6 +166,85 @@ void addSensorOn(BuilderSession& session, const std::string& link, const std::st
     select(session, Kind::Sensor, name);
 }
 
+void drawPrompt(BuilderSession& session) {
+    namespace c = theme::c;
+    using Prompt = BuilderSession::Prompt;
+    using widgets::px;
+    Prompt& prompt = session.prompt;
+    constexpr const char* kPopup = "##builder-prompt";
+    if (prompt.kind == Prompt::Kind::None || prompt.choice != Prompt::Choice::None) {
+        return;
+    }
+    if (!ImGui::IsPopupOpen(kPopup)) {
+        ImGui::OpenPopup(kPopup);
+    }
+    // A sheet as the command palette draws one (bg1, a lineStrong border), 440 px wide, in the
+    // middle of the window, modal: nothing else takes a click or a key until answered.
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float width = std::min(px(440.0F), viewport->WorkSize.x - px(32.0F));
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5F,
+                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.4F),
+                            ImGuiCond_Always, ImVec2(0.5F, 0.5F));
+    ImGui::SetNextWindowSize(ImVec2(width, 0.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(16.0F), px(14.0F)));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, c::bg1);
+    ImGui::PushStyleColor(ImGuiCol_Border, c::lineStrong);
+    const bool shown =
+        ImGui::BeginPopupModal(kPopup, nullptr,
+                               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+    if (!shown) {
+        return;
+    }
+    const theme::Fonts& fonts = theme::fonts();
+    ImGui::PushFont(fonts.sansSemiBold, theme::kTitleSize);
+    ImGui::TextUnformatted(prompt.title.c_str());
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+    ImGui::PushTextWrapPos(0.0F);
+    ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+    ImGui::TextUnformatted(prompt.message.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0.0F, px(10.0F)));
+
+    // Buttons on the right, the accent one last: Cancel · Discard · Save.
+    const float gap = px(8.0F);
+    float row = widgets::ButtonWidth(prompt.primary.c_str()) +
+                widgets::ButtonWidth(prompt.cancel.c_str()) + gap;
+    if (!prompt.secondary.empty()) {
+        row += widgets::ButtonWidth(prompt.secondary.c_str()) + gap;
+    }
+    widgets::AlignRight(row);
+    Prompt::Choice choice = Prompt::Choice::None;
+    if (widgets::Button(prompt.cancel.c_str(), widgets::ButtonKind::Ghost) ||
+        (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput)) {
+        choice = Prompt::Choice::Cancel;
+    }
+    if (!prompt.secondary.empty()) {
+        ImGui::SameLine(0.0F, gap);
+        if (widgets::Button(prompt.secondary.c_str())) {
+            choice = Prompt::Choice::Secondary;
+        }
+    }
+    ImGui::SameLine(0.0F, gap);
+    ImGui::BeginDisabled(!prompt.primaryEnabled);
+    if (widgets::PrimaryButton(prompt.primary.c_str())) {
+        choice = Prompt::Choice::Primary;
+    }
+    ImGui::EndDisabled();
+    if (!prompt.primaryEnabled && !prompt.primaryHint.empty()) {
+        ImGui::SetItemTooltip("%s", prompt.primaryHint.c_str());
+    }
+    if (choice != Prompt::Choice::None) {
+        prompt.choice = choice;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 }  // namespace builder_ui
 
 std::vector<std::unique_ptr<Panel>> createBuilderPanels() {

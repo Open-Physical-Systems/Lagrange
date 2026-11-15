@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::viewer::builder {
@@ -34,6 +35,13 @@ struct SplitRequest {
     int seed{0};             ///< CoACD's seed: the same seed gives the same parts
 };
 
+/// A robot or link name as the split's files use it (distinctFileName: no '/', no "..", no
+/// leading '.', and names that differ keep different files): the parts of link L are
+/// `splitFolderName(robot)/splitFileName(L)_0_<NNN>.obj` beside the robot's file.
+[[nodiscard]] std::string splitFileName(std::string_view name);
+/// `<splitFileName(robot)>_collision`: the folder of the parts beside the robot's file.
+[[nodiscard]] std::string splitFolderName(std::string_view robot);
+
 /// lib/lagrange_collision_bake/bake_urdf under $AMENT_PREFIX_PATH; nullopt when not installed.
 [[nodiscard]] std::optional<std::filesystem::path> findBakeProgram();
 
@@ -47,7 +55,8 @@ public:
     CollisionSplit& operator=(const CollisionSplit&) = delete;
 
     /// Starts the split. Returns "" when started, else why not (one line): the robot is not
-    /// saved, the mesh is not found, bake_urdf is not installed, one is already running.
+    /// saved, the mesh is not found, bake_urdf is not installed, one is already running, a
+    /// file could not be written. Never throws.
     [[nodiscard]] std::string start(const SplitRequest& request);
     /// Non-blocking; call once a frame. On the exit of the child moves the parts into place
     /// (Done) or keeps the reason (Failed).
@@ -67,6 +76,7 @@ public:
     void reset();
 
 private:
+    [[nodiscard]] std::string startProcess(const SplitRequest& request);
     struct Process;
     std::unique_ptr<Process> process_;
 };

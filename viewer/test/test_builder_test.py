@@ -289,6 +289,10 @@ def test_autosave_writes_to_the_state_folder(tmp_path):
     report, code, err, _ = run(tmp_path, "--input", "3:click:40,862", frames=60 * 32)
     assert code == 0, err
     assert report["builder"]["links"] == 2
-    autosave = tmp_path / "state" / "lagrange" / "builder" / "robot.autosave.urdf"
-    assert autosave.exists()
-    assert "<robot" in autosave.read_text()
+    # One per document file and viewer (code review L6): robot-new.<pid>.autosave.urdf for a
+    # robot with no file yet.
+    folder = tmp_path / "state" / "lagrange" / "builder"
+    autosaves = list(folder.glob("robot-new.*.autosave.urdf"))
+    assert len(autosaves) == 1, list(folder.iterdir())
+    assert "<robot" in autosaves[0].read_text()
+    assert folder.stat().st_mode & 0o777 == 0o700
