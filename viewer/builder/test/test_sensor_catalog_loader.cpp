@@ -93,6 +93,9 @@ kinds:
         min: 0
 )";
 
+// The catalog lives in the result, so a temporary result is refused at compile time.
+const SensorCatalog& loaded(std::variant<SensorCatalog, SensorCatalog::LoadError>&& result) =
+    delete;
 const SensorCatalog& loaded(const std::variant<SensorCatalog, SensorCatalog::LoadError>& result) {
     if (const auto* error = std::get_if<SensorCatalog::LoadError>(&result)) {
         ADD_FAILURE() << error->file << ":" << error->line << ": " << error->message;
@@ -170,7 +173,9 @@ kinds:
 TEST_F(CatalogLoader, PluginFileAddsKinds) {
     const fs::path base = write("base.yaml", kSmall);
     const fs::path plugin = write("tof.yaml", kPlugin);
-    const SensorCatalog& alone = loaded(SensorCatalog::load({base}));
+    // Held by name: a reference into the temporary result would dangle (AddressSanitizer).
+    const auto aloneResult = SensorCatalog::load({base});
+    const SensorCatalog& alone = loaded(aloneResult);
     EXPECT_EQ(alone.entries().size(), 2U);
     EXPECT_EQ(alone.find("tof"), nullptr);
 

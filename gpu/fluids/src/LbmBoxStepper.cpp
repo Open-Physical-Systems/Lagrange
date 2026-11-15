@@ -219,7 +219,10 @@ void LbmBoxStepper::setAmbient(const std::array<float, 3>& wind) {
 void LbmBoxStepper::setDiscs(std::span<const Disc> discs) {
     Impl& s = *impl_;
     const std::size_t count = std::min(discs.size(), kMaxDiscs);
-    std::memcpy(s.discs.mapped, discs.data(), count * sizeof(Disc));
+    // No discs is an empty span whose data() may be null, which memcpy must not be given.
+    if (count > 0) {
+        std::memcpy(s.discs.mapped, discs.data(), count * sizeof(Disc));
+    }
     s.params.discs = static_cast<std::int32_t>(count);
 }
 

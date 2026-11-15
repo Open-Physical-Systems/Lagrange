@@ -415,6 +415,8 @@ if(BUILD_TESTING)
         builder/test/test_scene_renderer_statics.cpp
         builder/test/test_mesh_shapes.cpp
         builder/test/test_overlay.cpp
+        # test_scene_renderer_statics draws on a Vulkan device (cmake/lagrange_cmake-extras.cmake).
+        ENV ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
         TIMEOUT 600
     )
     target_link_libraries(
