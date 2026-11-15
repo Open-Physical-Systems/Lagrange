@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: the robot builder and the viewer's workspace tabs merged into `dev` (#340–#381, unreleased). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: the robot builder, the viewer's workspace tabs, the legged contact spike and faster parallel environments merged into `dev` (#340–#400, unreleased); what waits on the owner is in [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -64,7 +64,7 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   proposed answers; 0014's connection limits are in, its frame cap and 0015 follow. Until 0015, writing
   those sensors to USD is refused instead of written wrong.
 
-## 2026-11-15, on `dev` (#340–#381, unreleased)
+## 2026-11-15, on `dev` (#340–#400, unreleased)
 
 What merged (CHANGELOG "Unreleased" has every PR):
 
@@ -94,9 +94,35 @@ What merged (CHANGELOG "Unreleased" has every PR):
 - **MuJoCo 4**: spike `docs/plan/spikes/mujoco-4.md`, draft RFC 0017, opt-in
   `-DLAGRANGE_MUJOCO_PACKAGE=mujoco` (#364).
 
+Later the same day (#382–#400):
+
+- **Viewer workspaces, continued**: Signals' Saved sets, Measure and FFT (#384); Scene's Layers
+  and History, sensor views beside the viewport (#386); the launcher as its design, with menus
+  and sample cards (#387); World's Regions and Geodesy (#388, with the region in the World
+  message, #391); Electrical's Probes, + scope and History, Environment's Viewport · fields and
+  Field info (#390). Text at the design's CSS size, 1.3× larger glyphs (#399).
+- **Legged robots**: RFC 0019 (Draft, #385) and its step 1, the legged contact spike
+  (`docs/plan/spikes/legged-contact.md`, #389): Jolt friction per collider and MJCF helper
+  frames' mass from their link (#393), MuJoCo `noslip_iterations` and MJCF joint armature
+  (#394), a sample quadruped in `assets/robots/quadruped` with profiles `quadruped_trot` and
+  `quadruped_trot_powered` (#397), the example's timing explained (#398).
+- **Learning**: `ParallelEnvs` over shared memory with `send`/`recv` (about 90 % of independent
+  processes on 12 workers) and a Gymnasium `VectorEnv` (#392); environments and `Simulation`
+  take a profile, an overlay and a world (#397).
+- **Fixes**: a zero aerodynamics substitute when the air is off, `/spawn_entity` naming by
+  `<robot name>`, an MJCF robot's mass checked through USD (#395); EMI sources with their prim
+  (#391); QA round 2: test dependencies, Check loads, the sedan demo among traffic, `--panel`
+  titles, Domains' readers, truncation, warnings (#396).
+- **Radiation**: RFC 0018 (Draft, #383).
+- **Docs**: the changelog, CLAUDE.md and a viewer guide for the morning's work (#382); the owner's
+  decisions in one place (#400).
+
 Owed, waiting on the owner:
 
+Every open decision, each with a proposed answer: [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). Among them:
+
 - **RFC 0017** (MuJoCo 4.x for the MuJoCo backend): Draft, the owner's decision.
+- **RFC 0018** (radiation) and **RFC 0019** (legged robots): Draft, the owner's decision.
 - **Builder phase 4** (USD and SDFormat robots): the open questions of
   `docs/plan/builder-phase4-plan.md` §11, and the draft RFC 0016 Addendum B.
 - **Protocol additions** (1.x additive, owner approval): ROS 2 services and parameters in the

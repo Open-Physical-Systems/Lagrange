@@ -7,7 +7,7 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ## Unreleased
 
-Merged into `dev` after 1.3.0 (#332–#381).
+Merged into `dev` after 1.3.0 (#332–#400).
 
 ### Breaking or behaviour changes
 
@@ -18,6 +18,15 @@ Merged into `dev` after 1.3.0 (#332–#381).
 - **Joint loops refused:** a URDF whose joints do not make one tree (a link with two parent joints, a loop off the root) is refused at load with the two joints named (#366)
 - **Demo drives:** the AMR's figure-eight is closed-loop, two 1.2 m loops that touch where it starts, so it keeps to its aisle; the sedan's demo backs away and tries again when held still for 2 s (#376)
 - **State hashes:** runs on MuJoCo whose world has static bodies (the sample AMR in the warehouse, the box pile) give new state hashes, since the static scenery is now MuJoCo world geometry; the box pile settles differently. The new demo drive changes the sample AMR's hashes too. Each run stays deterministic (#373, #376)
+- **Jolt friction per collider:** Jolt now gives each collider its own friction (the larger of the two at a contact, as MuJoCo does) instead of the largest of the body's colliders for all of them, and turns off manifold reduction on a body whose colliders differ. Jolt runs with mixed-friction bodies (feet of one friction on a body of another) give new state hashes and move differently; bodies with one friction on all their colliders are bit for bit the same (#393)
+- **MJCF helper masses:** the helper frame `lagrange_import` and the loader put between an MJCF body's joints (1 g each) now takes its mass, centre of mass and inertia out of its link when the link is heavy enough to give it, so an MJCF robot weighs what the MJCF says (it weighed 1 g more per helper); state hashes of such robots change (#393)
+- **Aerodynamics off:** with the aerodynamics domain off on a robot with `AeroAPI_1` links or rotors (and the site's air density given), its zero substitute `aerodynamics::ZeroAero` now runs: still air, zero `body/<b>/wrench/aero` and `env/wind/*`, `airspeed` the link's own speed; before, nothing wrote those signals (#395)
+- **ParallelEnvs:** rewritten over shared memory (no pickling per step). `reset()` and `step()` give what they gave; `reset(seed=)` also takes a list of seeds or None, a worker that raises or dies raises `WorkerError` with its traceback and closes all (it used to hang), workers must start within `start_timeout` (300 s), and `close()` or a `with` block ends them (#392)
+- **Sedan demo:** spawned away from its circle it heads for the junction; held still it backs away further on a second try in a row and then waits 3 s so the traffic that waited for it goes first. The car controller's saved state carries three more values (#396)
+- **Viewer text size:** text draws at the design's CSS size: the glyphs are 1.3 times larger than before (Dear ImGui had scaled IBM Plex's line height, 1.3 em, to the token size), at the same control heights; screenshots and golden images change (#399)
+- **`--panel`:** the viewer's `--panel` also takes a tab's visible title (`Threads`) or its `###id`, among the windows drawn this frame or the last (#396)
+- **`/spawn_entity`:** robot text spawned without a name is named by its own `<robot name>` (renamed on a clash), as the viewer's ImportRobot does, not after its temporary file (#395)
+- **Quadruped asset moved:** the trotting example's robot moved from `examples/lagrange_example_quadruped/robot/quadruped.urdf` to `assets/robots/quadruped/quadruped.urdf` (package `lagrange_assets`, `lagrange.sample_quadruped()`) (#397)
 
 ### Features
 
@@ -39,6 +48,14 @@ Merged into `dev` after 1.3.0 (#332–#381).
 - **viewer:** the Profile panel's YAML is the draft, edited both ways with the domain rows (#374)
 - **mod/rigid_body:** a profile's `rigid_body: {substeps: N}` (1–64) divides Jolt's step, and its joint energy loss, N times; a pendulum conformance check (#353)
 - **build:** `-DLAGRANGE_MUJOCO_PACKAGE=mujoco` takes MuJoCo's own CMake package instead of `mujoco_vendor` (opt-in, for the MuJoCo 4 spike) (#364)
+- **viewer:** the Signals workspace's Saved sets (`<config>/signal_sets.tsv`), Measure and FFT tabs (#384)
+- **viewer:** the Scene workspace's Layers and History tabs; sensor views as tabs beside the viewport, streamed only while in front (#386)
+- **viewer:** the launcher as its design: File, View, Tools and Help menus, links opened in the system's browser, sample cards that start their sample (#387)
+- **viewer:** the World workspace's Regions and Geodesy tabs (#388)
+- **viewer:** the Electrical workspace's Probes, + scope and History tabs; the Environment workspace's Viewport · fields and Field info (#390)
+- **python:** `ParallelEnvs` with `step_async`/`step_wait`, `send`/`recv` (each environment at its own pace), `envs_per_worker`, `spin_seconds`; `lagrange.envs.VectorEnv` (Gymnasium's VectorEnv, same-step autoreset); `sim.read_many`, `sim.command_joints` (#392)
+- **python:** `LagrangeEnv`, `ParallelEnvs` and `VectorEnv` take `world=`, `profile=` (a path or an example's name) and `overlay=`, the parallel ones a robot file with `env_options=` in place of `make`; `Simulation(overlay=)`; `lagrange.sample_quadruped()`, `sample_quadruped_overlay()`, profiles `quadruped_trot.yaml` and `quadruped_trot_powered.yaml` (#397)
+- **mod/rigid_body:** a profile's `rigid_body: {noslip_iterations: N}` (0–100, default 0) runs MuJoCo's noslip post-solver, which stops soft contacts creeping on slopes at 30–60 % more per step (rigid_body.md §8.2); an MJCF joint's `armature` (and its actuators' `armature · gear²`) is the joint's armature (not written to USD) (#394)
 
 ### Fixes
 
@@ -51,11 +68,16 @@ Merged into `dev` after 1.3.0 (#332–#381).
 - **server:** viewer QA: every running domain reported with its module, preview substitutes, the World workspace lists traffic, other robots and people, measured domain costs, a weather preset rebuilds the run once (#374)
 - **viewer:** viewer QA: small windows, Launcher, Signals rows, names, overlays, Inspector, lows (#375)
 - **server:** replay moves the scene; no spurious replay warnings; the server log says why `--lidar auto` picks the CPU (#376)
+- **server:** EMI sources carry their scene prim, and the World message the run's region (around the scenery and robots, or the loaded tiles of a streamed world) (#391)
+- **mod/rigid_body:** Jolt friction per collider; MJCF helper frames' mass from their link; an MJCF robot's mass checked through USD (#393, #395)
+- **server:** QA round 2: test and run dependencies (`lagrange_collision_bake`, the viewer's tests), the builder's Check loads… when `lagrange` is found, the sedan demo among the town's traffic, `--panel` by tab title, the Domains substitute cards listing the modules that read the domain, cut text with an ellipsis and whole in a tooltip, Validation of a constant real signal by its RMSE (*const ref*), compiler warnings (#396)
+- **viewer:** text at the design's CSS size (#399)
 
 ### Performance
 
 - **core:** one-copy output commits on the signal bus (#359)
 - **mod/rigid_body:** MuJoCo reads only connected inputs and keeps a standing kinematic body's twist (#367); static scenery on MuJoCo's world body (#373)
+- **python:** `ParallelEnvs` over shared memory and semaphores: `send`/`recv` reaches about 90 % of independent processes on 12 workers (the legged spike's quadruped from 7,710 to 23,200 policy steps of 20 ms per second; `examples/lagrange_example_rl/README.md`) (#392)
 
 ### Documentation
 
@@ -63,7 +85,10 @@ Merged into `dev` after 1.3.0 (#332–#381).
 - **validation:** a measured comparison with Gazebo Jetty, MuJoCo and PyBullet (#338); the home page opens on the advanced features and that comparison (#336)
 - **plan:** the builder's phase 1 work plan (#337) and phase 4 plan with a draft RFC 0016 Addendum B (#371); the MuJoCo 4 spike and a draft RFC 0017 (#364)
 - **site:** the robot builder on the home page, a builder clip and its guide (#363); six v1.3 sensor clips (#362)
-- **guide:** the viewer's workspaces (`docs/guide/viewer.md`)
+- **guide:** the viewer's workspaces (`docs/guide/viewer.md`) (#382)
+- **rfcs:** RFC 0018, the radiation domain (Draft) (#383); RFC 0019, legged robots (Draft) (#385)
+- **plan:** the legged contact spike, RFC 0019 step 1 measured (`docs/plan/spikes/legged-contact.md`) (#389, #393, #394); the owner's decisions after 2026-11-15 in one place (`docs/plan/owner-decisions-2026-11-15.md`) (#400)
+- **examples:** the quadruped's time varies with the node's timing, not a regression (#398); `lagrange_example_rl` documents the parallel environments and their speed (#392, #397)
 
 ## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)
 
