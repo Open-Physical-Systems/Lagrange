@@ -41,7 +41,8 @@ The workspace bar's right side has the builder's own controls:
 
 A run the viewer is connected to plays on while you build, unless **View → Pause the run while
 building** is ticked: then it pauses while the Builder is in front in Build mode, and plays again
-when you test, go to another workspace or close the viewer.
+when you test (before the viewer leaves it for the test server), go to another workspace or close
+the viewer.
 
 While testing, the view is the server's, live, with Play/Pause and Step; **Drive** lists the
 ROS 2 topics the robot takes, each with a command line to copy, and **Console** shows the test
@@ -79,7 +80,9 @@ the name field in Properties) renames the selection: its row becomes a name fiel
 renames, **Esc** leaves it. Everything that names it follows: joints' parent and child, a sensor's
 link, a mimic joint's leader, the overlay's entries, and a joint's `<ros2_control>` and
 `<transmission>` references (one they name that the robot lacks is a warning); a name already in
-use is refused and Problems says why. One rename is one undo step. **Delete** (or the bin in Properties' tab bar) removes the
+use is refused and Problems says why. `world` is the ground's name in a run: only a shapeless,
+massless root link (a robot fixed to the ground) may take it, any other link named so is an error,
+and a mesh named `world.stl` makes a link `world_2`. One rename is one undo step. **Delete** (or the bin in Properties' tab bar) removes the
 selection and everything under it (one undo step). The root that every other link hangs from
 stays: a robot keeps a link.
 

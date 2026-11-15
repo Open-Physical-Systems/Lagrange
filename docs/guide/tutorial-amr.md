@@ -130,7 +130,9 @@ ros2 run lagrange_server lagrange_server --replay run.mcap
 
 then connect the viewer (`ros2 run lagrange_viewer lagrange_viewer`, Connect). The scene and
 every recorded signal come back sample for sample, and the Replay workspace's timeline seeks
-anywhere in the run. A replay runs no physics and publishes nothing to ROS.
+anywhere in the run. A replay runs no physics and publishes nothing to ROS. Recordings hold no
+camera images or point buffers: a robot with cameras replays, but its cameras show no frame
+(the console names the buffers left out).
 
 ## 5. Switch a domain off
 
