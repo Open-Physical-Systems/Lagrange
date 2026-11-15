@@ -4,6 +4,7 @@
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
 
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -408,7 +409,7 @@ private:
                       std::pair{"tx_power", "sensor:radar:txPower"},
                       std::pair{"noise_floor", "sensor:radar:noiseFloor"}}) {
                     const std::optional<double> value = real(attribute);
-                    if (!value || *value <= 0.0) {
+                    if (!value || !std::isfinite(*value) || *value <= 0.0) {
                         errors_.push_back(path + ": " + attribute + " is required and positive");
                         complete = false;
                         continue;
@@ -428,7 +429,7 @@ private:
                 continue;
             }
             const std::optional<double> rate = real("sensor:rate");
-            if (!rate || *rate <= 0.0) {
+            if (!rate || !std::isfinite(*rate) || *rate <= 0.0) {
                 errors_.push_back(path + ": sensor:rate is required and positive");
                 continue;
             }
