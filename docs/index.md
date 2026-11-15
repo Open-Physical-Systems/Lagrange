@@ -2,8 +2,8 @@
 
 :::{container} lg-hero
 
-<p class="lg-new"><a href="release/v1.3.0.html"><span>New in v1.3</span> 37 more sensors, a 4D
-imaging radar, sensor faults, and runs 4 to 12 times faster →</a></p>
+<p class="lg-new"><a href="release/v1.4.0.html"><span>New in v1.4</span> build a robot in the viewer:
+parts, meshes, sensors and power, then test it in a world →</a></p>
 
 <p class="lg-tagline">Simulate the whole robot, not only its rigid bodies: its battery and motors,
 the heat in its parts, the air round its rotors, the weather on its sensors and the interference

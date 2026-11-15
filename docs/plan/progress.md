@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: the robot builder, the viewer's workspace tabs, the legged contact spike and faster parallel environments merged into `dev` (#340–#400, unreleased); what waits on the owner is in [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: v1.4.0 released (the robot builder, the viewer's workspace tabs, the legged contact spike, faster parallel environments, downwash on tethers, OpenDRIVE banked roads, four QA rounds; #332–#423, docs/release/v1.4.0.md); what waits on the owner is in [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 

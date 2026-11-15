@@ -5,9 +5,9 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [1.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.3.0...v1.4.0) (2026-11-15)
 
-Merged into `dev` after 1.3.0 (#332–#420).
+The robot builder and everything merged into `dev` after 1.3.0 (#332–#423).
 
 ### Breaking or behaviour changes
 
@@ -27,11 +27,9 @@ Merged into `dev` after 1.3.0 (#332–#420).
 - **`--panel`:** the viewer's `--panel` also takes a tab's visible title (`Threads`) or its `###id`, among the windows drawn this frame or the last (#396)
 - **`/spawn_entity`:** robot text spawned without a name is named by its own `<robot name>` (renamed on a clash), as the viewer's ImportRobot does, not after its temporary file (#395)
 - **Quadruped asset moved:** the trotting example's robot moved from `examples/lagrange_example_quadruped/robot/quadruped.urdf` to `assets/robots/quadruped/quadruped.urdf` (package `lagrange_assets`, `lagrange.sample_quadruped()`) (#397)
-- **Python `command_joint`:** returns a `JointCommand` (truthy when the joint took the command; `reason`, `value`, `clamped`, `limit`) instead of a bool. `if sim.command_joint(...)`, `not ...`, `== True` and `== False` behave as before, but `... is True` no longer holds and the result is not JSON-serialisable; use `bool(...)` or `.taken` for a plain bool (#408)
 - **Floor rule:** a file's level slab counts as its own floor (one ground per run, #369) only when its top is the lowest ground there is: within 0.1 m of z = 0 or below, not above the robots' lowest point and not above the foot of any other static scenery. A building's roof, a mezzanine or a bridge deck is no longer taken for the floor, so a robot beside or under it keeps Lagrange's plane; a file's own planes are never taken away (docs/guide/cli.md "Importing a robot") (#403)
 - **`CommandJoint` refusals:** `"voltage"` is refused for a joint whose motor is not in voltage mode, and a joint's target belongs to its robot: removing the robot or a reset forgets it, other robots coming and going keep it (protocol.md §4.5) (#403)
 - **`ImportRobot` with both `path` and `content`** is refused ("by path or content, not both"; before, the path was taken and the rest ignored). Inline text is written, created exclusively with mode 0600, into `$XDG_RUNTIME_DIR/lagrange` (else `<tmp>/lagrange-<uid>`), a 0700 folder of the server's user; any other folder there is refused (#403)
-- **Jolt sub-step forces:** with `rigid_body.substeps` above 1, joint reactions, limit torques and the contact force left from them are the last sub-step's constraint impulses over Δt/N (rigid_body.md §8.1) (#403)
 - **Builder, unsaved work:** New, Open, a template or a dropped robot ask before replacing a document with unsaved edits (#402)
 - **Builder rename:** F2 (or the name field in Properties) renames the selection in its tree row; joints' parent and child, a sensor's link, a mimic leader, the overlay's entries and `<ros2_control>`/`<transmission>` references follow, a name in use is refused with the reason in Problems; a power part's name renames its prim and every connection to it, so the run's signals take the new name (`bus/<name>/voltage`) (#405)
 - **Builder Test into a world:** Test ▾ picks the empty world, a sample world of `lagrange_assets` (the button then names it) or a world file; a run the viewer is connected to plays on while you build unless View → Pause the run while building is ticked (#405). **Start at…** sets where the robot starts in that world (x, y, z, heading; `--spawn`), remembered per world in `builder_spawns.tsv`; a sample world starts where its sample run does (`tiled_town`, `amr_fms_warehouse`, `town`), any other at its origin (#406)
@@ -51,6 +49,8 @@ Merged into `dev` after 1.3.0 (#332–#420).
 - **Test isolation:** each test process gets a private `TMPDIR`, ROS tests honour the caller's `ROS_DOMAIN_ID`, and the examples' launch files take `endpoint:=` (a socket per run), so suites and CI scripts run side by side (#413)
 
 ### Features
+
+- **mod/vehicle_dynamics:** tyre forces in the road plane with the normal load along the road normal (scene rays return the surface normal); the brake holds as stick-slip friction, so a braked car stands on a slope (#422)
 
 - **viewer:** the robot builder (RFC 0016 phase 1 and Addendum A): a Builder workspace that builds a robot from shapes and meshes, joints and catalog sensors, tests it in a simulator of its own and saves it as URDF (`--workspace builder`, `--builder-open`, `--builder-save`, Ctrl B; docs/guide/builder.md) (#340, #343–#346, #348–#350, #356)
 - **viewer:** builder meshes (STL, OBJ, DAE, glTF) and the per-link collision choice: same as the mesh, split by CoACD, template shapes with Fit to mesh, or drawn (RFC 0016 Addendum A) (#352)
@@ -83,6 +83,8 @@ Merged into `dev` after 1.3.0 (#332–#420).
 - **io:** OpenDRIVE superelevation, lane heights and raised roads: roads are banked by their cross section, kerbs from lane `<height>`, and a raised road gets convex slab colliders (`ConvertOptions::colliderStep`, `colliderDepth`) so cars drive on banked curves, ramps and bridges; traffic agents ride at their lane's height, pitch and roll with it; sample `assets/worlds/banked_ring` (formats.md §3.11) (#417)
 
 ### Fixes
+
+- **mod/traffic:** traffic vehicles see a robot by its footprint and where it is going, and wait at a junction's line while it crosses their lane; no traffic vehicle drives into the sedan in the city block (#423)
 
 - **server:** the quadcopter flies with the electrical domain off; the PX4/ArduPilot ESCs bound their torque then (#341, #359)
 - **core:** `convexHullOf` closes nearly flat point sets (#355)
