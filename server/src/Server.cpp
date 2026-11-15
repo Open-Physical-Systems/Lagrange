@@ -7782,10 +7782,14 @@ Status Server::start() {
                               : "multicopter: the built-in controller waits on the ground until "
                                 "/cmd_vel asks it to climb, and lands when brought down") +
                   (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
-    } else if (!s.primaryPath().empty()) {
-        s.log(v1::LOG_LEVEL_WARN, "controller",
-              "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
-                  std::to_string(s.robot.actuatedJoints.size()));
+    } else if (!s.replay && !s.jointControlled() && !s.robot.actuatedJoints.empty()) {
+        // A replay drives nothing, joint control drives every joint, and a robot without
+        // actuated joints has nothing to drive: only a robot with motors a demo cannot use.
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "no demo driver: a demo drives two actuated wheel joints, swerve modules, a car "
+              "or a multicopter; the robot has " +
+                  std::to_string(s.robot.actuatedJoints.size()) +
+                  " actuated joints (drive them with --joint-control or ros2_control)");
     }
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;

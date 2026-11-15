@@ -243,12 +243,14 @@ Status ReplaySubstitute::step(const StepContext& context, SignalBus& bus) {
                     o.last[c] = v;
                 }
             }
-        } else if (!f.endLogged) {
+        } else if (!f.endLogged && end - f.step.ns >= f.recording.duration.ns) {
+            // Only a step after the one that reached the end of the whole run (bench mode
+            // running on): a signal sampled coarser than the run's length, or a replay reaching
+            // its end, where the server stops, is nothing to report.
             f.endLogged = true;
-            services::log(services::LogLevel::Warning, domain_ + "/replay",
+            services::log(services::LogLevel::Info, domain_ + "/replay",
                           path_ + " ends at " +
-                              std::to_string(static_cast<double>(s.sampleCount() - 1) *
-                                             static_cast<double>(dt) / 1e9) +
+                              std::to_string(static_cast<double>(f.recording.duration.ns) / 1e9) +
                               " s; holding its last values");
         }
         bus.writeN(o.id, o.last);
