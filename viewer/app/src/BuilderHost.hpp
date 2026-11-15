@@ -22,6 +22,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lagrange::viewer {
@@ -92,6 +93,12 @@ public:
     /// The Save as… dialog was closed without a choice: what waited for that save (an Open
     /// after "Save" in the unsaved-changes prompt) does not happen.
     void saveAsCancelled();
+    /// The viewer's window is asked to close (QA4 M1): true when it may close now (no unsaved
+    /// edits); else the unsaved-changes prompt asks Save, Discard or Cancel, and takeClose()
+    /// turns true once Save or Discard was chosen.
+    [[nodiscard]] bool requestClose();
+    /// True once, after the unsaved-changes prompt of requestClose() let the viewer close.
+    [[nodiscard]] bool takeClose() { return std::exchange(closeApproved_, false); }
     /// The windowed viewer has file dialogs (the unsaved-changes prompt's Save as…).
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     /// The folder the document's relative meshes resolve against (BuilderSession::meshFolder,
@@ -110,7 +117,7 @@ private:
     /// A new document asked for while the current one had unsaved edits (code review M2):
     /// what to open once the prompt is answered (Save, Discard).
     struct PendingReplace {
-        enum class What : std::uint8_t { None, Open, Template } what{What::None};
+        enum class What : std::uint8_t { None, Open, Template, Close } what{What::None};
         std::filesystem::path path;  ///< Open: the file
         std::string name;            ///< Template: its name
         bool waitingForSave{false};  ///< "Save as…" was chosen: replaced once that save is done
@@ -208,6 +215,7 @@ private:
     std::filesystem::path overwriteTarget_;  ///< with the Overwrite prompt: Save as… target
     PendingReplace pending_;
     bool canOpenFiles_{false};
+    bool closeApproved_{false};     ///< requestClose()'s prompt was answered Save or Discard
     std::uint64_t jobSerial_{0};    ///< names each xacro's output and log apart
     std::uint64_t splitOpened_{0};  ///< session.opened when the split started
     /// An overlay beside the opened URDF that did not read: Save leaves it as it is, rather

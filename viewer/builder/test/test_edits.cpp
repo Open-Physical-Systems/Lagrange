@@ -20,6 +20,27 @@ Document rover() {
     return document;
 }
 
+TEST(Edits, ANewRobotIsValidAndItsSensorsSitOnItsShape) {
+    // QA4 L3: base_link has a density (a mass) from the start.
+    Document document = newDocument();
+    EXPECT_GT(document.links[0].inertial.density, 0.0);
+    // QA4 M3: a lidar on top of the 0.3 × 0.2 × 0.1 box, a camera on its front (+x) face, not
+    // at the origin inside it. QA4 L4: an IMU at 100 Hz.
+    const std::string lidar = addSensor(document, "base_link", "lidar");
+    const std::string camera = addSensor(document, "base_link", "camera");
+    const std::string imu = addSensor(document, "base_link", "imu");
+    const Sensor* l = findSensor(document, lidar);
+    const Sensor* c = findSensor(document, camera);
+    const Sensor* i = findSensor(document, imu);
+    ASSERT_TRUE(l != nullptr && c != nullptr && i != nullptr);
+    EXPECT_DOUBLE_EQ(l->origin.xyz[2], 0.05);
+    EXPECT_DOUBLE_EQ(l->origin.xyz[0], 0.0);
+    EXPECT_DOUBLE_EQ(c->origin.xyz[0], 0.15);
+    EXPECT_DOUBLE_EQ(c->origin.xyz[2], 0.0);
+    EXPECT_DOUBLE_EQ(i->updateRate, 100.0);
+    EXPECT_DOUBLE_EQ(l->updateRate, 10.0);  // the reader's default, unchanged
+}
+
 TEST(Edits, AddLinkSitsOnTopOfItsParentWithNoInventedLimits) {
     Document document = newDocument();
     const AddedLink added =

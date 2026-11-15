@@ -1,19 +1,20 @@
-// Child processes of the builder (RFC 0016 §7.1, plan WP-F and R4): posix_spawn with the
+// Child processes of the builder (RFC 0016 §7.1, plan WP-F and R4): fork and exec with the
 // output in a log file, waitpid(WNOHANG) once a frame, SIGTERM then SIGKILL after a grace.
 #include "lagrange/viewer/builder/TestServer.hpp"
 
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <map>
 #include <signal.h>
-#include <spawn.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 
-extern char** environ;  // NOLINT(readability-redundant-declaration): POSIX, for posix_spawn
+extern char** environ;  // NOLINT(readability-redundant-declaration): POSIX, the environment
 
 namespace lagrange::viewer::builder {
 
@@ -88,38 +89,70 @@ std::string ChildProcess::start(const std::vector<std::string>& argv,
     }
     argp.push_back(nullptr);
 
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-    // The log is the user's own: never written through a link planted at its name (code
-    // review L2); the start then fails with ELOOP.
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, log.c_str(),
-                                     O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-    posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
-    posix_spawnattr_t attributes;
-    posix_spawnattr_init(&attributes);
-    // A process group of its own: the stop reaches whatever the child starts, and a Ctrl C in
-    // the viewer's terminal does not reach the child.
-    posix_spawnattr_setpgroup(&attributes, 0);
-    // The viewer may block or ignore signals; the child starts with the defaults.
-    sigset_t none;
-    sigemptyset(&none);
-    posix_spawnattr_setsigmask(&attributes, &none);
-    sigset_t defaults;
-    sigemptyset(&defaults);
-    sigaddset(&defaults, SIGTERM);
-    sigaddset(&defaults, SIGINT);
-    sigaddset(&defaults, SIGPIPE);
-    posix_spawnattr_setsigdefault(&attributes, &defaults);
-    posix_spawnattr_setflags(
-        &attributes, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
-    pid_t pid = -1;
-    const int error =
-        ::posix_spawn(&pid, args.front().c_str(), &actions, &attributes, argp.data(), envp.data());
-    posix_spawnattr_destroy(&attributes);
-    posix_spawn_file_actions_destroy(&actions);
-    if (error != 0) {
+    // fork and exec rather than posix_spawn (QA4 L2): the child asks the kernel for SIGTERM
+    // when the viewer dies (PR_SET_PDEATHSIG), so a crashed or killed viewer leaves no test
+    // server behind. Everything the child needs is made before fork; between fork and exec it
+    // calls async-signal-safe functions only, and reports a failure through a close-on-exec
+    // pipe.
+    const pid_t parent = ::getpid();
+    int report[2] = {-1, -1};
+    if (::pipe2(report, O_CLOEXEC) != 0) {
+        return std::string("could not start ") + args.front() + ": " + std::strerror(errno);
+    }
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        const int error = errno;
+        ::close(report[0]);
+        ::close(report[1]);
         return "could not start " + args.front() + ": " + std::strerror(error);
+    }
+    if (pid == 0) {
+        const auto fail = [&](int stage) {
+            const int error = errno;
+            const int message[2] = {stage, error};
+            (void)!::write(report[1], message, sizeof(message));
+            ::_exit(127);
+        };
+        // A process group of its own: the stop reaches whatever the child starts, and a Ctrl C
+        // in the viewer's terminal does not reach the child.
+        ::setpgid(0, 0);
+        if (::prctl(PR_SET_PDEATHSIG, SIGTERM) != 0) {
+            fail(1);
+        }
+        if (::getppid() != parent) {
+            ::_exit(0);  // the viewer died before the request took hold
+        }
+        // The viewer may block or catch signals; the child starts with the defaults.
+        struct sigaction defaults{};
+        defaults.sa_handler = SIG_DFL;
+        sigemptyset(&defaults.sa_mask);
+        for (const int signal : {SIGTERM, SIGINT, SIGPIPE}) {
+            ::sigaction(signal, &defaults, nullptr);
+        }
+        sigset_t none;
+        sigemptyset(&none);
+        ::sigprocmask(SIG_SETMASK, &none, nullptr);
+        const int in = ::open("/dev/null", O_RDONLY);
+        // The log is the user's own: never written through a link planted at its name (code
+        // review L2); the start then fails with ELOOP.
+        const int out = ::open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+        if (in < 0 || out < 0 || ::dup2(in, STDIN_FILENO) < 0 || ::dup2(out, STDOUT_FILENO) < 0 ||
+            ::dup2(out, STDERR_FILENO) < 0) {
+            fail(2);
+        }
+        ::execve(argp.front(), argp.data(), envp.data());
+        fail(3);
+    }
+    ::close(report[1]);
+    int message[2] = {0, 0};
+    ssize_t got = -1;
+    do {
+        got = ::read(report[0], message, sizeof(message));
+    } while (got < 0 && errno == EINTR);
+    ::close(report[0]);
+    if (got == static_cast<ssize_t>(sizeof(message))) {
+        ::waitpid(pid, nullptr, 0);  // it exits at once with 127
+        return "could not start " + args.front() + ": " + std::strerror(message[1]);
     }
     p = Process{};
     p.state = State::Running;

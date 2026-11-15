@@ -681,10 +681,28 @@ OverlayReadResult readOverlay(std::string_view yaml, Document& document,
         }
         std::istringstream again{std::string(yaml)};
         bool body = false;
+        std::string schema;  // the map the line is in, as the writer nests it
         for (std::string line; std::getline(again, line);) {
             const std::string t = trim(line);
             body = body || (!t.empty() && !t.starts_with('#'));
-            more = more || (body && line.find(" #") != std::string::npos);
+            const std::size_t hash = line.find(" #");
+            if (!body || t.empty()) {
+                continue;
+            }
+            // Attribute names hold ':' ("elec:port:bus:voltage"); the value follows ": ".
+            const std::string key = trim(t.substr(0, t.find(": ")));
+            if (hash == std::string::npos) {
+                if (!t.starts_with('#') && t.ends_with(':')) {
+                    schema = t.substr(0, t.size() - 1);  // "PortAPI_1:bus:" opens its attributes
+                }
+                continue;
+            }
+            // QA4 L1: the unit comment the builder writes after a value is its own, not one
+            // that would be lost.
+            const OverlayField* field = overlayField(schema, key);
+            const bool unitComment = field != nullptr && !t.starts_with('#') &&
+                                     trim(line.substr(hash + 2)) == displayUnit(field->unit);
+            more = more || !unitComment;
         }
         if (more) {
             result.notes.push_back(
@@ -776,13 +794,23 @@ std::string writeOverlay(const Document& document, const OverlayWriteOptions& op
         return {};
     }
     Writer w{{}, options};
-    if (!document.overlay.header.empty()) {
+    // The builder's own header is written again (QA4 L7: with the saved file's names, which a
+    // Save as… changes); a header the user wrote is kept.
+    const bool ownHeader =
+        document.overlay.header.starts_with("# The overlay of ") &&
+        document.overlay.header.find("written by the robot builder") != std::string::npos;
+    if (!document.overlay.header.empty() && !ownHeader) {
         w.out << document.overlay.header;
     } else {
+        const std::string urdf = options.savedAt.empty() ? document.robot + ".urdf"
+                                                         : options.savedAt.filename().string();
+        const std::string overlay = options.savedAt.empty()
+                                        ? document.robot + ".overlay.yaml"
+                                        : overlayPathFor(options.savedAt).filename().string();
         w.out << "# The overlay of " << document.robot
               << " (docs/design/formats.md §9), written by the robot builder:\n"
                  "# `lagrange_server --robot "
-              << document.robot << ".urdf --overlay " << document.robot << ".overlay.yaml`.\n";
+              << urdf << " --overlay " << overlay << "`.\n";
     }
     w.out << "schema_version: 1\napply:";
     std::set<std::string, std::less<>> written;

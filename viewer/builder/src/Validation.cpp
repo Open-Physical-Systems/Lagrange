@@ -1,14 +1,17 @@
 // The builder's own, live validation (RFC 0016 §8.1). One rule per item of §8.1, each with a
 // message that says what is wrong and what to do. The server's loader stays the judge (§8.2).
+#include "Math.hpp"
 #include "TreeCheck.hpp"
 #include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/Edits.hpp"
+#include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
 #include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -497,12 +500,65 @@ std::optional<double> parseNumber(std::string_view text, bool integer) {
     return value;
 }
 
+/// Sensors that cast rays from their origin (lidars, cameras, range and radio sensors): one
+/// inside its own link's collision sees that shape.
+bool castsRays(std::string_view type) {
+    static constexpr std::array<std::string_view, 19> kRays{
+        "lidar",          "ray",           "gpu_lidar",      "gpu_ray",       "camera",
+        "depth",          "depth_camera",  "rgbd_camera",    "rgbd",          "thermal",
+        "thermal_camera", "rangefinder",   "sonar",          "ultrasonic",    "tof",
+        "radar",          "imaging_radar", "safety_scanner", "ir_thermometer"};
+    return std::ranges::find(kRays, type) != kRays.end();
+}
+
+/// Whether `point` (link frame) lies strictly inside the primitive `shape` (a mesh: never).
+bool strictlyInside(const Shape& shape, const std::array<double, 3>& point) {
+    constexpr double kSkin = 1e-6;  // m: on the surface is not inside
+    const detail::Mat3 r = detail::matrixOf(toFrame(shape.origin).rotation);
+    const std::array<double, 3> d{point[0] - shape.origin.xyz[0], point[1] - shape.origin.xyz[1],
+                                  point[2] - shape.origin.xyz[2]};
+    std::array<double, 3> p{};  // in the shape's frame: Rᵀ d
+    for (std::size_t i = 0; i < 3; ++i) {
+        p[i] = r[0][i] * d[0] + r[1][i] * d[1] + r[2][i] * d[2];
+    }
+    const auto& size = shape.size;
+    switch (shape.kind) {
+        case Shape::Kind::Box:
+            return std::abs(p[0]) < size[0] * 0.5 - kSkin &&
+                   std::abs(p[1]) < size[1] * 0.5 - kSkin && std::abs(p[2]) < size[2] * 0.5 - kSkin;
+        case Shape::Kind::Cylinder:
+            return std::hypot(p[0], p[1]) < size[0] - kSkin &&
+                   std::abs(p[2]) < size[1] * 0.5 - kSkin;
+        case Shape::Kind::Sphere:
+            return std::hypot(p[0], p[1], p[2]) < size[0] - kSkin;
+        case Shape::Kind::Capsule: {
+            const double z = std::clamp(p[2], -size[1] * 0.5, size[1] * 0.5);
+            return std::hypot(p[0], p[1], p[2] - z) < size[0] - kSkin;
+        }
+        case Shape::Kind::Mesh:
+            return false;
+    }
+    return false;
+}
+
 void checkSensor(Findings& findings, const Document& document, const Sensor& sensor,
                  const SensorCatalog* catalog) {
     const std::string name = inQuotes(sensor.name);
-    if (findLink(document, sensor.link) == nullptr) {
+    const Link* link = findLink(document, sensor.link);
+    if (link == nullptr) {
         findings.error(sensor.name, "sensor " + name + " is on link " + inQuotes(sensor.link) +
                                         ", which does not exist; pick a link");
+    } else if (castsRays(sensor.type) && std::ranges::any_of(link->shapes, [&](const Shape& shape) {
+                   return shape.collision && strictlyInside(shape, sensor.origin.xyz);
+               })) {
+        // QA4 M3: its rays start inside the shape and hit it (the server does not leave the
+        // sensor's own link out).
+        findings.warning(sensor.name,
+                         "sensor " + name + " sits inside the collision of its own link " +
+                             inQuotes(sensor.link) +
+                             ": its rays start in that shape and see it; move it to the "
+                             "shape's surface (the top is at z = " +
+                             number(topOf(*link)) + " m)");
     }
     if (!(sensor.updateRate > 0.0)) {
         findings.error(sensor.name, "sensor " + name + ": the update rate " +

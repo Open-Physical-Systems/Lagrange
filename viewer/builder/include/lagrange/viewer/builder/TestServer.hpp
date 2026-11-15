@@ -2,8 +2,9 @@
 
 // The test server of the builder's own (RFC 0016 §7.1, R4), and the other child processes the
 // builder runs (Export USD, Check loads, xacro). Owner: WP-F.
-// posix_spawn, stdout and stderr to a log file, polled with waitpid(WNOHANG); never blocks the UI
-// thread (CLAUDE.md §8). Not LocalServer: that one blocks in stop() and keeps no log.
+// fork and exec, stdout and stderr to a log file, polled with waitpid(WNOHANG); never blocks the
+// UI thread (CLAUDE.md §8). The child gets SIGTERM when the viewer dies (PR_SET_PDEATHSIG). Not
+// LocalServer: that one blocks in stop() and keeps no log.
 
 #include <cstddef>
 #include <filesystem>

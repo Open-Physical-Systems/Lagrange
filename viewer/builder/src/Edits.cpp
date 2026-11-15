@@ -250,14 +250,67 @@ AddedLink addLink(Document& document, std::string_view parent, Shape::Kind kind,
     return added;
 }
 
+namespace {
+
+/// Half the shape's extent along x in its frame (rotation ignored, as halfHeight).
+double halfDepth(const Shape& shape) {
+    switch (shape.kind) {
+        case Shape::Kind::Box:
+            return shape.size[0] * 0.5;
+        case Shape::Kind::Cylinder:
+        case Shape::Kind::Sphere:
+        case Shape::Kind::Capsule:
+            return shape.size[0];
+        case Shape::Kind::Mesh:
+            return 0.0;
+    }
+    return 0.0;
+}
+
+bool looksForward(std::string_view type) {
+    return type == "camera" || type == "depth" || type == "depth_camera" || type == "rgbd_camera" ||
+           type == "rgbd" || type == "thermal" || type == "thermal_camera";
+}
+
+/// The catalog's built-in types read 10 Hz when the URDF gives no rate; an IMU that slow is of
+/// little use, so a new one starts at 100 Hz, as the builder's diff_drive_base template and the
+/// sample sedan's IMU (QA4 L4).
+constexpr double kNewImuRateHz = 100.0;
+
+}  // namespace
+
 std::string addSensor(Document& document, std::string_view link, std::string_view type) {
-    if (findLink(document, link) == nullptr || type.empty()) {
+    const Link* on = findLink(document, link);
+    if (on == nullptr || type.empty()) {
         return {};
     }
     Sensor sensor;
     sensor.name = uniqueName(document, type);
     sensor.link = std::string(link);
     sensor.type = std::string(type);
+    if (type == "imu") {
+        sensor.updateRate = kNewImuRateHz;
+    }
+    // QA4 M3: on the link's shape, not inside it (a lidar at the origin of its own box sees
+    // the box): a camera on the front (+x) face, looking out along x; anything else on top,
+    // over the shape that is highest.
+    const Shape* outer = nullptr;
+    double best = 0.0;
+    for (const Shape& shape : on->shapes) {
+        const double reach = looksForward(type) ? shape.origin.xyz[0] + halfDepth(shape)
+                                                : shape.origin.xyz[2] + halfHeight(shape);
+        if (shape.kind != Shape::Kind::Mesh && (outer == nullptr || reach > best)) {
+            outer = &shape;
+            best = reach;
+        }
+    }
+    if (outer != nullptr && best > 0.0) {
+        if (looksForward(type)) {
+            sensor.origin.xyz = {best, outer->origin.xyz[1], outer->origin.xyz[2]};
+        } else {
+            sensor.origin.xyz = {outer->origin.xyz[0], outer->origin.xyz[1], best};
+        }
+    }
     std::string name = sensor.name;
     document.sensors.push_back(std::move(sensor));
     return name;

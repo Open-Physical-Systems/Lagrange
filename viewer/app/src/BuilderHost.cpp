@@ -433,6 +433,9 @@ void BuilderHost::afterUi() {
         // The document is read-only while testing: file requests wait for Build.
         session_.saveRequested = session_.openRequested = session_.templateRequested = false;
         session_.exportUsdRequested = session_.checkRequested = false;
+        if (pending_.what == PendingReplace::What::Close) {
+            answerPrompt();  // QA4 M1: closing the viewer is answered in every mode
+        }
         return;
     }
     answerPrompt();
@@ -1021,19 +1024,36 @@ void BuilderHost::requestReplace(PendingReplace request) {
     askUnsaved();
 }
 
+bool BuilderHost::requestClose() {
+    if (session_.history.editsSinceSave() == 0) {
+        return true;
+    }
+    pending_ = {PendingReplace::What::Close, {}, {}};
+    askUnsaved();
+    if (session_.mode != BuilderSession::Mode::Build && session_.path.empty()) {
+        // Save as… waits for Build (the document is read-only while testing).
+        session_.prompt.primaryEnabled = false;
+        session_.prompt.primaryHint = "Save as… after Back; or Discard";
+    }
+    return false;
+}
+
 void BuilderHost::askUnsaved() {
     const int edits = session_.history.editsSinceSave();
-    const std::string what = pending_.what == PendingReplace::What::Template
+    const bool closing = pending_.what == PendingReplace::What::Close;
+    const std::string what = closing ? std::string()
+                             : pending_.what == PendingReplace::What::Template
                                  ? "the template " + pending_.name
                                  : pending_.path.filename().string();
     BuilderSession::Prompt& prompt = session_.prompt;
     prompt = {};
     prompt.kind = BuilderSession::Prompt::Kind::Unsaved;
     prompt.title = "Unsaved changes";
-    prompt.message = session_.document().robot + " has " + std::to_string(edits) + " unsaved edit" +
-                     (edits == 1 ? "" : "s") + ". Save " + (edits == 1 ? "it" : "them") +
-                     " before opening " + what + "? Discard throws " +
-                     (edits == 1 ? "it" : "them") + " and the undo history away.";
+    prompt.message =
+        session_.document().robot + " has " + std::to_string(edits) + " unsaved edit" +
+        (edits == 1 ? "" : "s") + ". Save " + (edits == 1 ? "it" : "them") +
+        (closing ? std::string(" before closing the viewer") : " before opening " + what) +
+        "? Discard throws " + (edits == 1 ? "it" : "them") + " and the undo history away.";
     prompt.primary = session_.path.empty() ? "Save as…" : "Save";
     prompt.primaryEnabled = !session_.path.empty() || canOpenFiles_;
     prompt.primaryHint = "Needs the windowed viewer's file dialog";
@@ -1047,6 +1067,8 @@ void BuilderHost::replacePending() {
         open(request.path);
     } else if (request.what == PendingReplace::What::Template) {
         openTemplate(request.name);
+    } else if (request.what == PendingReplace::What::Close) {
+        closeApproved_ = true;
     }
 }
 
@@ -1799,7 +1821,7 @@ void BuilderHost::runSplit() {
         session_.split.running = false;
         session_.split.failed = false;
         session_.split.message = std::to_string(parts.size()) + " convex parts in " +
-                                 builder::splitFolderName(session_.document().robot) + "/";
+                                 builder::splitFolderFor(session_.path) + "/";
         session_.view.collision = true;
         split_.reset();
     } else if (state == builder::CollisionSplit::State::Failed) {
