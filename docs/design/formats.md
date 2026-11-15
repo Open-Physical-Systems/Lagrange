@@ -1672,8 +1672,30 @@ apply:
 declaration in `io/stage/include/lagrange/stage/Stage.hpp`); `lagrange_server --overlay` and
 `lagrange_import --overlay` use it, and the stage writer writes the instances, so an imported
 robot keeps them in USD. Values are checked as the stage loader checks a stage, and every
-problem is reported together. Overlays add schema instances; they do not yet create simulated
-sensors, so lidars on an MJCF robot still need USD for now.
+problem is reported together. Overlays add schema instances, and a `create_child` prim with
+`SensorAPI_1` and one of `ImuAPI_1`, `GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` or
+`RadarAPI_1` becomes a simulated sensor on that link, read as the stage reader reads it in USD
+(the schema's fallbacks; `sensor:rate` and the radar's `rangeMax`, `azimuthFov`, `elevationFov`,
+`txPower` and `noiseFloor` required and positive; at the link's origin, an overlay has no mount
+pose). These are the catalog's `overlay_only` sensors, which the robot builder writes into
+`<robot>.overlay.yaml`:
+
+```yaml
+  - prim: base_link
+    create_child: front_radar
+    schemas:
+      SensorAPI_1: { sensor:rate: 20 }
+      RadarAPI_1:
+        sensor:radar:rangeMax: 60          # m
+        sensor:radar:azimuthFov: 1.2       # rad
+        sensor:radar:elevationFov: 0.2     # rad
+        sensor:radar:txPower: 0.01         # W
+        sensor:radar:noiseFloor: 1.0e-13   # W
+```
+
+Any other sensor type (a camera or a lidar) is refused with a message naming the prim, never
+dropped: it belongs in the robot file's own `<sensor>` or its USD, so lidars on an MJCF robot
+still need USD for now.
 
 ### 9.1 A SPICE netlist as an overlay
 

@@ -1086,6 +1086,129 @@ apply:
     EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
 }
 
+// A radar from an overlay, as the robot builder writes one (catalog `overlay_only`), is the
+// robot's radar with the settings the stage reader gives the same prim in USD: the schema's
+// fallbacks for what is left out. Its required attributes are reported together, and a sensor
+// type an overlay cannot make is refused, never dropped.
+TEST(Overlay, MakesARadarAsTheStageReaderDoes) {
+    const char* const bot = R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+%s    }
+}
+)";
+    const auto stageWith = [&](const char* name, const std::string& child) {
+        std::string text(bot);
+        text.replace(text.find("%s"), 2, child);
+        return writeText(name, text);
+    };
+    auto model = loadStage(stageWith("radarbot.usda", "").string());
+    ASSERT_TRUE(model) << model.error();
+    ASSERT_TRUE(model->world.sensors.names.empty());
+    const std::filesystem::path overlay = writeText("radarbot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: base
+    create_child: front_radar
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 20
+        sensor:latency: 0.01
+      RadarAPI_1:
+        sensor:radar:carrierFrequency: 77000000000
+        sensor:radar:rangeMax: 60
+        sensor:radar:azimuthFov: 1.2
+        sensor:radar:elevationFov: 0.2
+        sensor:radar:rangeResolution: 0.5
+        sensor:radar:txPower: 0.01
+        sensor:radar:noiseFloor: 1.0e-13
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World::Sensors& s = model->world.sensors;
+    ASSERT_EQ(s.names.size(), 1U);
+    EXPECT_EQ(s.names[0], "front_radar");
+    EXPECT_EQ(s.type[0], SensorType::Radar);
+    EXPECT_DOUBLE_EQ(s.rateHz[0], 20.0);
+    EXPECT_EQ(model->world.bodies.names[s.body[0].index], "base");
+    const auto& settings = s.settings[0];
+    EXPECT_DOUBLE_EQ(settings.at("max_range"), 60.0);
+    EXPECT_DOUBLE_EQ(settings.at("azimuth_fov"), 1.2);
+    EXPECT_DOUBLE_EQ(settings.at("elevation_fov"), 0.2);
+    EXPECT_DOUBLE_EQ(settings.at("range_resolution"), 0.5);
+    EXPECT_DOUBLE_EQ(settings.at("tx_power"), 0.01);
+    EXPECT_DOUBLE_EQ(settings.at("noise_floor"), 1.0e-13);
+    EXPECT_DOUBLE_EQ(settings.at("azimuth_resolution"), 0.035);  // fallbacks
+    EXPECT_DOUBLE_EQ(settings.at("detection_threshold"), 10.0);
+    EXPECT_DOUBLE_EQ(settings.at("latency"), 0.01);
+
+    // The same radar written in USD reads to the same sensor.
+    auto usd = loadStage(
+        stageWith(
+            "radarbot_usd.usda",
+            R"(        def Xform "front_radar" ( prepend apiSchemas = ["SensorAPI_1", "RadarAPI_1"] )
+        {
+            double sensor:rate = 20
+            double sensor:latency = 0.01
+            double sensor:radar:rangeMax = 60
+            double sensor:radar:azimuthFov = 1.2
+            double sensor:radar:elevationFov = 0.2
+            double sensor:radar:rangeResolution = 0.5
+            double sensor:radar:txPower = 0.01
+            double sensor:radar:noiseFloor = 1e-13
+        }
+)")
+            .string());
+    ASSERT_TRUE(usd) << usd.error();
+    ASSERT_EQ(usd->world.sensors.names.size(), 1U);
+    EXPECT_EQ(usd->world.sensors.type[0], SensorType::Radar);
+    EXPECT_EQ(usd->world.sensors.settings[0], settings);
+
+    // Required attributes missing: each named, and the model is left as it was.
+    auto bare = loadStage(stageWith("radarbot2.usda", "").string());
+    ASSERT_TRUE(bare) << bare.error();
+    auto missing = applyOverlay(*bare, writeText("radar_missing.overlay.yaml",
+                                                 R"(schema_version: 1
+apply:
+  - prim: base
+    create_child: front_radar
+    schemas:
+      SensorAPI_1: { sensor:rate: 20 }
+      RadarAPI_1: { sensor:radar:rangeMax: 60, sensor:radar:azimuthFov: 1.2 }
+)")
+                                           .string());
+    ASSERT_FALSE(missing);
+    for (const char* attribute :
+         {"sensor:radar:elevationFov", "sensor:radar:txPower", "sensor:radar:noiseFloor"}) {
+        EXPECT_NE(missing.error().find(std::string(attribute) + " is required and positive"),
+                  std::string::npos)
+            << missing.error();
+    }
+    EXPECT_TRUE(bare->world.sensors.names.empty());
+
+    // A sensor type an overlay does not make is refused by name.
+    auto lidar = applyOverlay(*bare, writeText("lidar.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: base
+    create_child: lidar
+    schemas:
+      SensorAPI_1: { sensor:rate: 10 }
+      LidarAPI_1: { sensor:lidar:rangeMin: 0.1, sensor:lidar:rangeMax: 30 }
+)")
+                                         .string());
+    ASSERT_FALSE(lidar);
+    EXPECT_NE(lidar.error().find("/bot/base/lidar: an overlay on a robot file makes"),
+              std::string::npos)
+        << lidar.error();
+    EXPECT_TRUE(bare->world.sensors.names.empty());
+}
+
 // RFC 0012: a link's thermal material and two heat sources on it, from an overlay.
 TEST(Overlay, AppliesAThermalMaterialAndHeatSources) {
     auto model = loadStage(writeText("heatbot.usda", R"(#usda 1.0
