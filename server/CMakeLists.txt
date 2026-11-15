@@ -432,7 +432,6 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_ros_topics
         test/test_ros_topics.cpp
-        ENV ROS_DOMAIN_ID=88
         TIMEOUT 120
     )
     target_link_libraries(
@@ -452,7 +451,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_spawn_service
         test/test_spawn_service.cpp
-        ENV ROS_DOMAIN_ID=87 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 120
     )
     target_link_libraries(
@@ -467,7 +466,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_kind_topics
         test/test_kind_topics.cpp
-        ENV ROS_DOMAIN_ID=77 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 120
     )
     target_link_libraries(
@@ -484,6 +483,20 @@ if(BUILD_TESTING)
     )
     lagrange_target_defaults(test_kind_topics)
     lagrange_target_defaults(test_server)
+    # Each run in a temporary directory of its own and, for the ROS tests, on $ROS_DOMAIN_ID
+    # when set (else the default here), so that runs on one machine do not collide.
+    lagrange_test_private_tmpdir(
+        test_server
+        test_connection_limits
+        test_arm
+        test_ros_topics
+        test_spawn_service
+        test_kind_topics
+    )
+    lagrange_test_ros_domain(test_ros_topics 88)
+    lagrange_test_ros_domain(test_spawn_service 87)
+    lagrange_test_ros_domain(test_kind_topics 77)
+    lagrange_test_ros_domain(test_arm 86)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot
         --robot

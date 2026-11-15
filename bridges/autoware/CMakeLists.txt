@@ -52,11 +52,12 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_autoware_interface
         test/test_autoware_interface.cpp
-        ENV ROS_DOMAIN_ID=74 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 60
     )
     target_link_libraries(test_autoware_interface lagrange_autoware)
     lagrange_target_defaults(test_autoware_interface)
+    lagrange_test_ros_domain(test_autoware_interface 74)
 endif()
 
 ament_package()

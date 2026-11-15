@@ -59,12 +59,13 @@ def test_spawn_and_delete_need_their_arguments() -> None:
 
 
 def test_robots_are_spawned_into_an_empty_run_and_deleted(tmp_path: Path) -> None:
-    # A headless empty server with ROS on a domain of its own; the CLI spawns and deletes.
+    # A headless empty server with ROS on a domain of its own ($ROS_DOMAIN_ID when set); the CLI
+    # spawns and deletes.
     robot = Path(__file__).resolve().parents[3] / "assets/robots/amr_diffdrive/amr_diffdrive.urdf"
     env = {
         **os.environ,
         "XDG_RUNTIME_DIR": str(tmp_path),
-        "ROS_DOMAIN_ID": str(100 + os.getpid() % 100),
+        "ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID") or str(100 + os.getpid() % 100),
     }
     server = subprocess.Popen(
         [CLI, "--server-only", "empty", "--listen", f"unix:{tmp_path}/s.sock"],

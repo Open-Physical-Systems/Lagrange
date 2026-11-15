@@ -1,6 +1,7 @@
 // The custom sensors' default topics (KindTopics.hpp, sensors.md §9 "ROS topics of the built-in
-// kinds") over a real DDS domain (ROS_DOMAIN_ID 77, localhost): a fake module writes the signals a
-// kind would, the bridge publishes them with no --ros-topics map, and a test node listens.
+// kinds") over a real DDS domain ($ROS_DOMAIN_ID, else 77; localhost): a fake module writes the
+// signals a kind would, the bridge publishes them with no --ros-topics map, and a test node
+// listens.
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/ros2/KindTopics.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"

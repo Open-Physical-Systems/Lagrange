@@ -41,6 +41,7 @@ if(BUILD_TESTING)
         mcap_vendor::mcap
     )
     lagrange_target_defaults(test_recording)
+    lagrange_test_private_tmpdir(test_recording)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
