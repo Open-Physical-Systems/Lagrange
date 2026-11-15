@@ -38,7 +38,7 @@ ADD_MOTOR = "1313,772"  # a wheel joint's Motor → Add a motor
 FIRST_MOTOR = "1360,802"  # its menu: "wheel drive, 20:1 · sample AMR"
 TEST_BUTTON = "1430,48"  # "Test · empty world"
 TEST_CHEVRON = "1515,48"
-INTO_THE_RUN = "1500,169"
+INTO_THE_RUN = "1500,191"
 TEST_INTO_RUN = "1440,48"
 
 # The power system by clicks: bus, battery, a motor on each wheel joint (4 frames a click).

@@ -142,6 +142,82 @@ def test_test_runs_in_a_sample_world_from_the_menu(tmp_path):
     assert report["prims"] >= 20
 
 
+# Test ▾ → Start at… (below A world file) and its x, y and heading fields.
+START_AT = "1480,177"
+START_X = "1330,207"
+START_Y = "1330,233"
+START_HEADING = "1330,285"
+
+
+def warehouse_small() -> Path:
+    try:
+        share = Path(get_package_prefix("lagrange_assets")) / "share" / "lagrange_assets"
+    except PackageNotFoundError:
+        pytest.skip("needs lagrange_assets installed")
+    return share / "worlds" / "warehouse_small" / "warehouse_small.usda"
+
+
+def test_test_starts_the_robot_where_start_at_says(tmp_path):
+    """Start at… typed in the Test menu: the test server gets --spawn and the robot's base
+    starts there, facing the heading; the choice is remembered for that world."""
+    program("lagrange_server", "lagrange_server")
+    world = warehouse_small()
+    report, code, err, _ = run(
+        tmp_path,
+        "--builder-open",
+        str(ROVER),
+        "--input",
+        f"2:world:{world};3:click:{TEST_CHEVRON};6:move:{START_AT};9:move:1400,177;"
+        f"10:move:{START_X};11:click:{START_X};13:text:2;14:key:enter;"
+        f"16:click:{START_Y};18:text:-1.5;19:key:enter;"
+        f"21:click:{START_HEADING};23:text:90;24:key:enter;"
+        f"27:click:700,600;30:click:{TEST_BUTTON};32:wait:connected",
+        frames=50,
+    )
+    assert code == 0, err
+    builder = report["builder"]
+    assert builder["mode"] == "testing", builder["loader"]
+    assert builder["start_at"] == "2, -1.5, 0 · 90°"
+    assert builder["test_spawn"] == "2,-1.5,0,1.5708"  # --spawn X,Y,Z,YAW (rad)
+    x, y, z, heading = builder["test_root"]
+    assert abs(x - 2.0) < 0.05 and abs(y + 1.5) < 0.05, builder["test_root"]
+    assert 0.0 < z < 0.5  # on the floor (its lowest point at z = 0), not under it
+    assert abs(heading - 90.0) < 3.0
+    remembered = (tmp_path / "cfg" / "lagrange" / "builder_spawns.tsv").read_text()
+    assert f"2\t-1.5\t0\t90\t{world}" in remembered
+
+    # Remembered: the next viewer starts the robot there again without asking.
+    report, code, err, _ = run(
+        tmp_path,
+        "--builder-open",
+        str(ROVER),
+        "--input",
+        f"2:world:{world};5:click:{TEST_BUTTON};7:wait:connected",
+        frames=20,
+    )
+    assert code == 0, err
+    assert report["builder"]["test_spawn"] == "2,-1.5,0,1.5708"
+    x, y, _, _ = report["builder"]["test_root"]
+    assert abs(x - 2.0) < 0.05 and abs(y + 1.5) < 0.05
+
+
+def test_a_world_without_a_start_starts_at_its_origin(tmp_path):
+    """No --spawn at all for a world nobody chose a start in (the server's own default)."""
+    program("lagrange_server", "lagrange_server")
+    report, code, err, _ = run(
+        tmp_path,
+        "--builder-open",
+        str(ROVER),
+        "--input",
+        f"2:world:{warehouse_small()};5:click:{TEST_BUTTON};7:wait:connected",
+        frames=20,
+    )
+    assert code == 0, err
+    assert report["builder"]["test_spawn"] == ""
+    x, y, _, _ = report["builder"]["test_root"]
+    assert abs(x) < 0.05 and abs(y) < 0.05
+
+
 def test_a_world_file_is_a_test_target(tmp_path):
     """FRAME:world:FILE does what Test ▾ → A world file → Browse… does."""
     world = tmp_path / "flat.urdf"

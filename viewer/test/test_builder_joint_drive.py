@@ -26,7 +26,7 @@ ASSETS = HERE.parent.parent / "assets"
 # Where things are at --size 1600x1000 in the Builder's Test layout (12-builder SPEC).
 TEST_BUTTON = "1430,48"  # "Test · empty world", left of its chevron
 TEST_CHEVRON = "1515,48"
-INTO_THE_RUN = "1500,169"
+INTO_THE_RUN = "1500,191"
 TEST_INTO_RUN = "1440,48"
 PAN_KNOB = (562, 879)  # pan_joint's slider at zero, in the Joints panel
 # Dragged from the knob to here, then let go: about +105° on its -170 … 170° track.

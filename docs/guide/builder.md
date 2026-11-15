@@ -36,7 +36,7 @@ The workspace bar's right side has the builder's own controls:
 | Undo, Redo | every change is one step (**Ctrl Z**, **Ctrl Shift Z** or **Ctrl Y**); the History tab beside Properties lists them and goes back to any |
 | `doc` readout | the file name, and `unsaved · N`: the edits since the last save |
 | **Build** | the mode you edit in. Nothing is simulated, no sensor is rendered, the view is drawn Lit: building costs almost nothing |
-| **Test · empty world** | validates the robot, writes it to a temporary file and starts `lagrange_server` with it on this machine (joint control on; ROS 2 on your `ROS_DOMAIN_ID` + 1, or the domain `LAGRANGE_BUILDER_ROS_DOMAIN_ID` names, `off` for none); the viewer connects to it. Its menu (▾) picks the world: the empty one, **A sample world** (the worlds of `lagrange_assets`, such as `warehouse_small` or `open_field`; the button then says `Test · warehouse_small`), or **A world file** (Browse…, or a path typed: USD, SDFormat or URDF), where the robot starts at the world's origin; and **Into the connected run**, enabled while the viewer is connected to a server that imports robots: the robot is added to that run, and Back (or closing the viewer) removes it again |
+| **Test · empty world** | validates the robot, writes it to a temporary file and starts `lagrange_server` with it on this machine (joint control on; ROS 2 on your `ROS_DOMAIN_ID` + 1, or the domain `LAGRANGE_BUILDER_ROS_DOMAIN_ID` names, `off` for none); the viewer connects to it. Its menu (▾) picks the world: the empty one, **A sample world** (the worlds of `lagrange_assets`, such as `warehouse_small` or `open_field`; the button then says `Test · warehouse_small`), or **A world file** (Browse…, or a path typed: USD, SDFormat or URDF); **Start at…** sets where the robot starts in that world (x, y, z in m in the world's frame, the heading in °; z is where the robot's lowest point goes), passed to the server as `--spawn`: each world remembers its own (`builder_spawns.tsv` in the viewer's config folder), and a sample world starts where its sample run does until changed (`tiled_town` at 1036, 1036; `amr_fms_warehouse` at 26, 8 facing 180°; `town` at 30, −1.75 on the lane), any other world at its origin; and **Into the connected run**, enabled while the viewer is connected to a server that imports robots: the robot is added to that run, and Back (or closing the viewer) removes it again |
 | **Save** | **Ctrl S**; its menu has Save as…, Open…, **Export USD…** (runs `lagrange_import`) and **Check loads…** (runs `lagrange check`: can each joint hold the robot against gravity) |
 
 A run the viewer is connected to plays on while you build, unless **View → Pause the run while
@@ -240,7 +240,8 @@ the template stays as it is.
 
 ## Not supported yet
 
-- Where the robot starts in a world: at its origin (the server's `--spawn` is not offered yet).
+- Where the robot starts when it goes **Into the connected run**: where its file puts it (the
+  protocol's `ImportRobot` carries no pose; Start at… applies to a test server's own run).
 - **Poses** are kept for the session only: the URDF has no place for them (RFC 0016 open
   question 10).
 - Thermal nodes, rotors and wheels in the overlay: kept as written, not edited (the Power

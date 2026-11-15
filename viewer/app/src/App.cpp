@@ -1641,6 +1641,22 @@ public:
         builderSession_.testTarget = std::filesystem::absolute(path).lexically_normal().string();
         builderSession_.testIntoRun = false;
     }
+    /// Headless `--input N:spawn:X,Y,Z,HEADING` (m, °): what Test ▾ → Start at… does for the
+    /// current Test world. False when the text is not four numbers.
+    bool builderTestSpawn(const std::string& text) {
+        builder::SpawnPose pose;
+        if (std::sscanf(text.c_str(), "%lf,%lf,%lf,%lf", &pose.x, &pose.y, &pose.z, &pose.yawDeg) !=
+            4) {
+            return false;
+        }
+        if (!builderSession_.testSpawns.loaded() && !configDirectory().empty()) {
+            builderSession_.testSpawns.load(std::filesystem::path(configDirectory()) /
+                                            "builder_spawns.tsv");
+        }
+        builderSession_.testSpawns.set(
+            builderSession_.testTarget.empty() ? "none" : builderSession_.testTarget, pose);
+        return true;
+    }
     /// A mesh chosen in that dialog, or dropped on the window while the Builder is shown: a
     /// mesh link on the Add panel's target (the selected link).
     void builderAddMesh(const std::string& path) {
@@ -1687,6 +1703,32 @@ public:
     }
     /// The Builder's document in the headless report (RFC 0016 WP-E's input tests): counts,
     /// the selection, the edits since the last save.
+    /// Where the run shows the document's root link (headless report, Start at…'s test):
+    /// [x, y, z (m), heading (°)] of the scene prim of that name; null without one.
+    [[nodiscard]] std::string testRootJson(const builder::Document& document) const {
+        const builder::Tree tree = builder::buildTree(document);
+        const auto frame = client_.scene();
+        if (tree.root < 0 || !frame || !frame->statics) {
+            return "null";
+        }
+        const std::string& root = document.links[static_cast<std::size_t>(tree.root)].name;
+        const auto& prims = frame->statics->prims;
+        for (std::size_t i = prims.size(); i-- > 0;) {
+            if (prims[i].name != root || i >= frame->transforms.size()) {
+                continue;
+            }
+            const Transform& at = frame->transforms[i];
+            const auto& q = at.rotation;  // w x y z
+            const double yaw = std::atan2(2.0 * (q[0] * q[3] + q[1] * q[2]),
+                                          1.0 - 2.0 * (q[2] * q[2] + q[3] * q[3]));
+            char text[160];
+            std::snprintf(text, sizeof(text), "[%.4f, %.4f, %.4f, %.3f]", at.position[0],
+                          at.position[1], at.position[2], yaw * 180.0 / std::numbers::pi);
+            return text;
+        }
+        return "null";
+    }
+
     [[nodiscard]] std::string builderReport() const {
         const builder::Document& document = builderSession_.document();
         std::string joints;
@@ -1776,6 +1818,10 @@ public:
                 : client_.status().runState == RunState::Paused ? "paused"
                                                                 : "other") +
                "\", \"test_target\": \"" + jsonEscape(builderSession_.testTarget) +
+               "\", \"test_spawn\": \"" + jsonEscape(builderSession_.testSpawn) +
+               "\", \"test_root\": " + testRootJson(document) + ", \"start_at\": \"" +
+               jsonEscape(builder::spawnLabel(builderSession_.testSpawns.at(
+                   builderSession_.testTarget.empty() ? "none" : builderSession_.testTarget))) +
                "\", \"test_robot\": \"" + jsonEscape(builderSession_.testRobotName) +
                "\", \"test_passive\": " + (builderSession_.testPassive ? "true" : "false") +
                ", \"problems\": " + messages(builderSession_.problems.builder) +
@@ -2407,6 +2453,10 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     }
                     if (event.frame == rendered && event.kind == "world") {
                         ui.builderTestWorld(event.text);  // Test ▾ → A world file → Browse…
+                    }
+                    if (event.frame == rendered && event.kind == "spawn" &&
+                        !ui.builderTestSpawn(event.text)) {
+                        std::fprintf(stderr, "--input: spawn needs X,Y,Z,HEADING\n");
                     }
                 }
             }

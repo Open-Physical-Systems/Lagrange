@@ -58,6 +58,7 @@ void usage() {
         "                         FRAME:open:FILE, FRAME:saveas:FILE, FRAME:template:NAME do\n"
         "                         what a dropped robot, Save as… and a template card do;\n"
         "                         FRAME:world:FILE makes FILE the builder Test's world\n"
+        "                         FRAME:spawn:X,Y,Z,HEADING sets its Start at (m, deg)\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --compare <file.mcap>  Replay: compare the replayed recording with this one\n"
         "  --suite <file.yaml>    Replay: the validation suite for --compare\n"

@@ -27,7 +27,7 @@ ASSETS = HERE.parent.parent / "assets"
 
 # Where things are at --size 1600x1000 in the Builder's default layout (12-builder SPEC).
 TEST_CHEVRON = "1515,48"  # the ▾ of "Test · empty world"
-INTO_THE_RUN = "1500,169"  # "Into the connected run" in its menu
+INTO_THE_RUN = "1500,191"  # "Into the connected run" in its menu, below Start at
 TEST_BUTTON = "1440,48"  # "Test · connected run", left of its chevron
 
 

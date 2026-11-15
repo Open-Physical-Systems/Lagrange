@@ -20,7 +20,7 @@ them with its own (`ui-conventions.md` §1):
 | Undo, Redo | `.btn.ic` (Ctrl Z, Ctrl Shift Z / Ctrl Y) | redo is `.dis` when the stack top is reached |
 | Document readout | `.ro`: `doc`, mono file name, warn `● unsaved · N` (N edits since the last save) | the name is the robot name until first saved |
 | **Build** | `.btn.on` | the current mode |
-| **Test · empty world ▾** | `.btn.pri` with a menu | the primary action. Menu: Empty world · A sample world… · A world file… · *Into the connected run* (RFC 0016 §7.2: enabled when connected to a server that imports robots; the robot goes into that run as URDF text, passive when the run already has a robot, and Back removes it; greyed with "Connect to a server first" otherwise) |
+| **Test · empty world ▾** | `.btn.pri` with a menu | the primary action. Menu: Empty world · A sample world… · A world file… · *Start at…* (where the robot starts in the chosen world: x, y, z in m and the heading in °, as `.fld` fields with the unit inside; the row shows the pose in mono; remembered per world; greyed for the connected run, whose import carries no pose) · *Into the connected run* (RFC 0016 §7.2: enabled when connected to a server that imports robots; the robot goes into that run as URDF text, passive when the run already has a robot, and Back removes it; greyed with "Connect to a server first" otherwise) |
 | **Save** | `.btn` (Ctrl S) | Save, Save as…, Export USD… (runs `lagrange_import`), Check loads… |
 
 While testing, these become: **Back to Build** (`.btn`, Esc), the Scene workspace's Play/Pause,
