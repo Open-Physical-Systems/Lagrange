@@ -207,9 +207,17 @@ Status CarController::saveState(StateWriter& writer) const {
 }
 
 Status CarController::restoreState(StateReader& reader) {
-    if (!reader.get(integral_) || !reader.get(externalSeen_) || !reader.get(stalled_) ||
-        !reader.get(reversing_) || !reader.get(reverseSteer_) || !reader.get(yielding_) ||
-        !reader.get(tries_) || !reader.get(free_)) {
+    if (!reader.get(integral_) || !reader.get(externalSeen_)) {
+        return Status::error(StatusCode::Internal, "car controller: truncated state");
+    }
+    if (reader.remaining() == 0) {
+        // Saved by Lagrange 1.3 or earlier, before the demo backed away when held up: it was
+        // driving, never held up or backing away (RFC 0007, formats.md §11).
+        stalled_ = reversing_ = reverseSteer_ = yielding_ = tries_ = free_ = 0.0;
+        return {};
+    }
+    if (!reader.get(stalled_) || !reader.get(reversing_) || !reader.get(reverseSteer_) ||
+        !reader.get(yielding_) || !reader.get(tries_) || !reader.get(free_)) {
         return Status::error(StatusCode::Internal, "car controller: truncated state");
     }
     return {};

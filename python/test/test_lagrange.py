@@ -315,3 +315,41 @@ def test_the_loaders_notes_are_printed_and_kept(tmp_path, capfd) -> None:
     notes = sim.notes()
     assert any("lidar pattern 'spiral' is not known" in n for n in notes), notes
     assert "[import] x: lidar pattern 'spiral'" in capfd.readouterr().err
+
+
+def test_a_state_saved_by_lagrange_1_2_restores_and_runs_on() -> None:
+    # RFC 0007: 1.x reads the states earlier 1.x releases saved. The fixture was saved by the
+    # released 1.2.0 packages (saved-state format 1, docs/design/formats.md §11):
+    #   sim = lagrange.Simulation(lagrange.sample_quadcopter(), world=None,
+    #                             profile=lagrange.sample_profile("quad_x500_hover"), lidar="cpu")
+    #   sim.step_until(3.0); state = sim.save_state()
+    # where 1.2.0 read body/base_link/pose[2] = 2.122754697547752 (hovering).
+    from pathlib import Path
+
+    state = (Path(__file__).parent / "data" / "quad_x500_hover_1.2.0.state").read_bytes()
+
+    def run() -> lagrange.Simulation:
+        sim = lagrange.Simulation(
+            lagrange.sample_quadcopter(),
+            world=None,
+            profile=lagrange.sample_profile("quad_x500_hover"),
+            lidar="cpu",
+        )
+        sim.restore_state(state)
+        return sim
+
+    sim = run()
+    assert sim.time == pytest.approx(3.0)
+    assert sim.read("body/base_link/pose")[2] == 2.122754697547752
+    resaved = sim.save_state()  # format 2 from here on
+    sim.step_until(6.0)
+    first = sim.state_hash()
+    pose = sim.read("body/base_link/pose")
+    assert abs(pose[2] - 2.1) < 0.2 and math.hypot(pose[0], pose[1]) < 0.2, "still hovering"
+
+    again = run()
+    again.step_until(6.0)
+    assert again.state_hash() == first, "the restored run is deterministic"
+    sim.restore_state(resaved)
+    sim.step_until(6.0)
+    assert sim.state_hash() == first, "and resaved in format 2 continues the same"

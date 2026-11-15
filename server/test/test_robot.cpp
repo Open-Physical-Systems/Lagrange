@@ -3,7 +3,9 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/server/CarDrive.hpp"
 #include "lagrange/server/DiffDrive.hpp"
+#include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/RobotCheck.hpp"
 #include "lagrange/server/SwerveDrive.hpp"
@@ -995,6 +997,58 @@ TEST(AmrSimulation, TheSdfAndMjcfVersionsDriveLikeTheUrdf) {
             dot += pose[k] * urdf[k];
         }
         EXPECT_GT(std::abs(dot), std::cos(0.01)) << path;
+    }
+}
+
+// RFC 0007: 1.x reads the states earlier 1.x releases saved. The controllers whose state grew
+// read their older layouts (written here as those releases' saveState wrote them) and save the
+// current one; formats.md §11.
+TEST(OlderStates, ControllersReadTheLayoutsEarlierReleasesSaved) {
+    const auto resaved = [](const IModule& module) {
+        StateWriter writer;
+        EXPECT_TRUE(module.saveState(writer).ok());
+        return writer.bytes().size();
+    };
+    {  // DriveCommand, 1.1 to 1.3: whether an outside command was seen.
+        DriveCommand command(DriveCommand::Settings{}, nullptr);
+        StateWriter old;
+        old.put(true);
+        StateReader reader(old.bytes());
+        EXPECT_TRUE(command.restoreState(reader).ok());
+        EXPECT_EQ(resaved(command), 1 + 1 + 2 * 8 + 4 * 8U);
+    }
+    {  // CarController, 1.1 to 1.3: the speed loop's integral and whether a command was seen.
+        CarController car(nullptr, true);
+        StateWriter old;
+        old.put(0.25);
+        old.put(false);
+        StateReader reader(old.bytes());
+        EXPECT_TRUE(car.restoreState(reader).ok());
+        EXPECT_EQ(resaved(car), 8 + 1 + 6 * 8U);
+        StateWriter cut;  // shorter than the oldest layout: refused
+        cut.put(0.25);
+        StateReader short_(cut.bytes());
+        EXPECT_FALSE(car.restoreState(short_).ok());
+    }
+    {  // MulticopterController, 1.1: homed, home, set point, heading, airborne.
+        MulticopterController copter(MulticopterController::Settings{});
+        StateWriter old;
+        old.put(true);
+        for (const double v : {1.0, 2.0, 0.1, 1.0, 2.0, 2.1, 0.5}) {
+            old.put(v);
+        }
+        old.put(true);
+        StateReader reader(old.bytes());
+        EXPECT_TRUE(copter.restoreState(reader).ok());
+        StateWriter now;
+        ASSERT_TRUE(copter.saveState(now).ok());
+        EXPECT_EQ(now.bytes().size(), old.bytes().size() + 8 + 1 + 6 * 8 + 3U)
+            << "1.2's stand height, ramp and leash appended";
+        StateReader again(now.bytes());
+        EXPECT_TRUE(copter.restoreState(again).ok()) << "and read back as 1.2 and later save";
+        StateWriter twice;
+        ASSERT_TRUE(copter.saveState(twice).ok());
+        EXPECT_TRUE(std::ranges::equal(twice.bytes(), now.bytes()));
     }
 }
 

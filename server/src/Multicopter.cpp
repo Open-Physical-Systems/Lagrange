@@ -627,6 +627,17 @@ Status MulticopterController::restoreState(StateReader& reader) {
     }
     ok = ok && reader.get(heading_);
     ok = ok && reader.get(airborne_);
+    if (ok && reader.remaining() == 0) {
+        // Saved by Lagrange 1.1, before the controller knew the surface under it and ramped its
+        // set point: it stands at its start's height, and the ramp starts from rest (RFC 0007,
+        // formats.md §11).
+        standHeight_ = 0.0;
+        standKnown_ = false;
+        velocity_ = {};
+        accel_ = {};
+        held_ = {};
+        return {};
+    }
     ok = ok && reader.get(standHeight_);
     ok = ok && reader.get(standKnown_);
     for (double& v : velocity_) {
