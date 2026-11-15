@@ -1381,8 +1381,19 @@ struct Server::Impl {
     /// Changes the site in a running simulation. Same modules: the run's whole state carries
     /// over. Others (the first air density brings the rotors): time and poses do.
     Status setSite(const std::string& name, double value) {
+        const std::vector<Status> each = setSites({{name, value}});
+        return each.front();
+    }
+
+    /// Several site values at once (a weather preset): every value is stored, then the run is
+    /// rebuilt once, so it restarts at most once. One status per value: a value the server
+    /// refuses is left out; a rebuild that fails takes them all back.
+    std::vector<Status> setSites(const std::vector<std::pair<std::string, double>>& values) {
+        std::vector<Status> each(values.size());
         if (replay) {
-            return Status::error(StatusCode::Unsupported, "a replay shows what was recorded");
+            std::ranges::fill(
+                each, Status::error(StatusCode::Unsupported, "a replay shows what was recorded"));
+            return each;
         }
         // A change the run cannot take is taken back.
         const auto before =
@@ -1393,12 +1404,38 @@ struct Server::Impl {
                      appliedWeather, options.ambientTemperatureK, robot.world.gravityLocal) =
                 before;
         };
-        if (Status status = storeSite(name, value); !status.ok()) {
-            return status;
+        std::string name;  // what the log says
+        double value = 0.0;
+        bool stored = false;
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (Status status = storeSite(values[i].first, values[i].second); !status.ok()) {
+                each[i] = status;
+                continue;
+            }
+            if (values[i].first == "gravity") {
+                robot.world.gravityLocal = {0.0, 0.0, -values[i].second};
+            }
+            name += (name.empty() ? "" : ", ") + values[i].first;
+            value = values[i].second;
+            stored = true;
         }
-        if (name == "gravity") {
-            robot.world.gravityLocal = {0.0, 0.0, -value};
+        if (!stored) {
+            return each;
         }
+        const Status built = rebuildForSite(name, value, values.size() == 1, takeBack);
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (each[i].ok()) {
+                each[i] = built;
+            }
+        }
+        return each;
+    }
+
+    /// The run rebuilt on the site just stored, its state carried over when the modules are the
+    /// same; `takeBack` restores the site when the run cannot be built on it.
+    template <class TakeBack>
+    Status rebuildForSite(const std::string& name, double value, bool single,
+                          const TakeBack& takeBack) {
         const Carried carried = carry();
         StateWriter saved;
         const bool savedOk = scheduler->saveState(saved).ok();
@@ -1437,15 +1474,29 @@ struct Server::Impl {
                     session->sensors.clear();
                     session->send(catalog());
                     session->send(snapshot(*session));
-                    session->send(profileState({}));
+                    session->send(profileState());
                 }
             }
         }
         owedNs = 0;
         lastWall = Clock::now();
-        char line[96];
-        std::snprintf(line, sizeof line, "%s = %g", name.c_str(), value);
-        log(v1::LOG_LEVEL_INFO, "site", line);
+        if (single) {
+            char line[96];
+            std::snprintf(line, sizeof line, "%s = %g", name.c_str(), value);
+            log(v1::LOG_LEVEL_INFO, "site", line);
+        } else {
+            log(v1::LOG_LEVEL_INFO, "site", "set together: " + name);
+        }
+        // Wind with nothing to blow on: the aerodynamics domain does not run (M9).
+        if (name.find("wind_speed") != std::string::npos && !aeroRuns()) {
+            if (const auto it = appliedAerodynamics.find("wind_speed");
+                it != appliedAerodynamics.end() && std::holds_alternative<double>(it->second) &&
+                std::get<double>(it->second) > 0.0) {
+                log(v1::LOG_LEVEL_WARN, "site",
+                    "the wind is set but the aerodynamics domain does not run, so it pushes "
+                    "nothing: it needs AeroAPI_1 links or rotors and the site's air density");
+            }
+        }
         broadcast(environmentState());
         return {};
     }
@@ -1570,6 +1621,7 @@ struct Server::Impl {
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
+    bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
@@ -3183,6 +3235,13 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "humans" && hasHumans()) {
+                yaml += substituted("humans") ? "  humans: {enabled: false, substitute: zero}\n"
+                                              : "  humans: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "hydrodynamics" && hasWater()) {
+                yaml += substituted("hydrodynamics")
+                            ? "  hydrodynamics: {enabled: false, substitute: zero}\n"
+                            : "  hydrodynamics: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -3199,21 +3258,104 @@ struct Server::Impl {
         return yaml;
     }
 
-    v1::Envelope profileState(const std::vector<ModuleCost>& costs) const {
+    /// The domains whose rows profileState describes by hand; the rest are described from the
+    /// modules in the run (describeDomain).
+    static bool isCoreDomain(std::string_view domain) {
+        return domain == "rigid_body" || domain == "electrical" || domain == "thermal" ||
+               domain == "sensors";
+    }
+
+    /// A domain other than the core four, as the run has it: on when a module of it (not its
+    /// substitute) is in the run, switchable when the stage gives it something to do.
+    void describeDomain(const DomainRow& row, const ProfileContext& context,
+                        v1::DomainState& d) const {
+        const std::string_view domain = row.domain;
+        const ScheduledModule* real = nullptr;
+        const ScheduledModule* any = nullptr;
+        if (scheduler != nullptr) {
+            for (const ScheduledModule& m : scheduler->plan()) {
+                const ModuleInfo info = m.module->info();
+                if (info.domain != domain) {
+                    continue;
+                }
+                any = any != nullptr ? any : &m;
+                if (!info.isSubstitute && real == nullptr) {
+                    real = &m;
+                }
+            }
+        }
+        const bool off = substituted(domain);
+        const bool running = real != nullptr && !off;
+        // What switching it back on needs: the domain's prims, and for the air its density.
+        const bool density = appliedAirDensity.has_value() || options.airDensityKgM3.has_value() ||
+                             appliedAerodynamics.contains("air_density");
+        const bool switchable = context.modules.contains(std::string(domain)) &&
+                                (domain != "aerodynamics" || density) && domain != "weather";
+        const bool available = running || any != nullptr || (off && switchable);
+        d.set_enabled(running);
+        d.set_available(available);
+        d.set_substituted(!running);
+        d.set_active_module(running ? std::string(real->module->info().name)
+                                    : std::string(row.substitute));
+        if (running) {
+            // The domains it reads from, by the wires into its modules.
+            std::set<std::string> reads;
+            for (const Connection& c : scheduler->connections()) {
+                const std::string_view reader =
+                    std::string_view(c.reader).substr(0, std::string_view(c.reader).find('/'));
+                const std::string_view writer =
+                    std::string_view(c.writer).substr(0, std::string_view(c.writer).find('/'));
+                if (reader == domain && writer != domain &&
+                    std::ranges::any_of(
+                        kDomains, [writer](const DomainRow& r) { return writer == r.domain; })) {
+                    reads.emplace(writer);
+                }
+            }
+            for (const std::string& from : reads) {
+                d.add_depends_on(from);
+            }
+        }
+        v1::SubstituteOption& option = *d.add_substitutes();
+        option.set_token(row.substitute);
+        option.set_kind(row.substituteKind);
+        if (available) {
+            return;
+        }
+        const bool rotors = hasRotors();
+        d.set_unavailable_reason(
+            domain == "aerodynamics" &&
+                    (rotors || !WorldView(robot.world).instancesOf("AeroAPI_1").empty())
+                ? "needs the site's air density: --air-density or aerodynamics.air_density"
+            : domain == "aerodynamics" ? "no AeroAPI_1 links or rotors in the stage"
+            : domain == "weather"
+                ? "needs the site's temperature, pressure and humidity: --weather, a "
+                  "WeatherAPI_1 prim, the profile or an Environment preset"
+            : domain == "emi"     ? "no EMI sources or victims in the stage"
+            : domain == "comms"   ? "no radio links or CAN buses in the stage"
+            : domain == "traffic" ? "no traffic: the world has no RoadLaneAPI_1 lanes (--traffic)"
+            : domain == "humans"  ? "no people in the stage (HumanAPI_1, --humans N)"
+            : domain == "vehicle_dynamics" ? "not used by this robot (no VehicleAPI_1)"
+            : domain == "rotor_aero" && rotors
+                ? "needs the site's air density: --air-density or rotor_aero.air_density"
+            : domain == "rotor_aero"    ? "not used by this robot (no RotorAPI_1)"
+            : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
+            : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
+                                        : "no module in this build yet; the substitute stands in");
+    }
+
+    /// Measured CPU per simulated second of each domain (ms), from the last statistics report:
+    /// sendStats takes the scheduler's costs, so the profile reuses what it measured.
+    std::map<std::string, double> domainCostMs;
+
+    v1::Envelope profileState() const {
         v1::Envelope envelope;
         v1::ProfileState& p = *envelope.mutable_profile_state();
         p.set_yaml(profileYaml());
         p.set_schema_version(1);
         p.set_json_schema(schemaText);
         p.set_restart_required(pending.has_value());  // applied, waiting for the next reset
-        // Measured cost per simulated second, summed over each domain's modules.
-        std::map<std::string, double> cost;
-        for (const ModuleCost& c : costs) {
-            if (c.steps > 0) {
-                cost[c.domain] += static_cast<double>(c.totalNs) / 1e6 /
-                                  (static_cast<double>(c.steps) * c.dt.seconds());
-            }
-        }
+        std::map<std::string, double> cost = domainCostMs;
+        const ProfileContext context = profileContext();
         for (const DomainRow& row : kDomains) {
             v1::DomainState& d = *p.add_domains();
             d.set_domain(row.domain);
@@ -3231,6 +3373,11 @@ struct Server::Impl {
                 option.set_token(recorded ? "replay" : row.substitute);
                 option.set_kind(recorded ? "replay" : row.substituteKind);
                 d.set_unavailable_reason("a replay of " + replay->path + ": nothing is simulated");
+                continue;
+            }
+            if (!isCoreDomain(row.domain)) {
+                describeDomain(row, context, d);  // the rest, from the modules that run
+                d.set_cpu_ms_per_sim_s(cost[row.domain]);
                 continue;
             }
             const bool physics = std::string_view(row.domain) == "rigid_body";
@@ -3359,7 +3506,7 @@ struct Server::Impl {
             session.send(recordingInfo());
         }
 
-        session.send(profileState({}));
+        session.send(profileState());
         session.send(catalog());
         session.send(statusEnvelope());
         session.send(environmentState());
@@ -3504,7 +3651,7 @@ struct Server::Impl {
                 session.send(snapshot(session));
                 break;
             case v1::Command::kGetProfile:
-                session.send(profileState(scheduler->takeCosts()));
+                session.send(profileState());
                 break;
             case v1::Command::kGetAttributes:
                 attributes(command.get_attributes(), *r.mutable_attributes());
@@ -3631,7 +3778,7 @@ struct Server::Impl {
                 // Everyone sees the profile that is now in force (or pending).
                 for (auto& other : sessions) {
                     if (other->greeted) {
-                        other->send(profileState(scheduler->takeCosts()));
+                        other->send(profileState());
                     }
                 }
                 statusChanged = true;
@@ -3747,6 +3894,9 @@ struct Server::Impl {
             session->sensors.clear();
             session->send(catalog());
             session->send(recordingInfo());
+            // The domain strip follows: every domain now stands in by its replay.
+            session->send(profileState());
+            session->send(environmentState());
             session->send(snapshot(*session));
             session->send(statusEnvelope());
         }
@@ -4838,7 +4988,7 @@ struct Server::Impl {
             session->sensors.clear();
             session->send(catalog());
             session->send(snapshot(*session));
-            session->send(profileState({}));  // its stage and domains follow the robots
+            session->send(profileState());  // its stage and domains follow the robots
         }
         broadcast(statusEnvelope());
         return {};
@@ -5464,6 +5614,13 @@ struct Server::Impl {
             node.set_module(std::string(label.substr(0, slash)));
             node.set_domain(std::string(label.substr(0, slash)));
             node.set_detail(std::string(label.substr(slash + 1)));
+            // A substitute stands in for its domain (SPEC 03: a dashed node). A sensor's ground
+            // truth keeps the sensor's name, so say which substitute it is.
+            const ModuleInfo info = module.module->info();
+            node.set_substitute(info.isSubstitute);
+            if (info.isSubstitute && info.domain == "sensors") {
+                node.set_detail("ground_truth · " + std::string(label.substr(slash + 1)));
+            }
             node.set_dt_ns(module.dt.ns);
             smallest = smallest == 0 ? module.dt.ns : std::min(smallest, module.dt.ns);
         }
@@ -5622,6 +5779,10 @@ struct Server::Impl {
         };
         const bool weather = weatherRuns() && !substituted("weather");
         env.set_gravity_m_per_s2(-robot.world.gravityLocal[2]);
+        // The run has no time of day and no sun (the weather's irradiance is a constant): NaN
+        // says "not modelled", which the viewer shows as a dash rather than midnight.
+        env.set_local_time_hours(std::numeric_limits<double>::quiet_NaN());
+        env.set_sun_elevation_deg(std::numeric_limits<double>::quiet_NaN());
         if (const auto t = ambient() ? ambient() : number("temperature")) {
             env.set_ambient_temperature_k(*t);
         }
@@ -6210,6 +6371,7 @@ struct Server::Impl {
             agent.set_active_radius_m(
                 active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM));
         }
+        otherAgents(world, region);
         v1::WorldState::FloatingOrigin& origin = *world.mutable_floating_origin();
         origin.set_anchor(robot.name);
         origin.set_recenter_threshold_m(kRebaseDistanceM);
@@ -6220,6 +6382,73 @@ struct Server::Impl {
         origin.mutable_last_recenter()->set_ns(lastRebase.ns);
         return envelope;
     }
+
+    /// Everything else that moves on its own, for the World workspace: other robots (spawned,
+    /// --add-robot), traffic vehicles and pedestrians, scenario entities and people. One agent
+    /// per root body: a robot's root has joints below it, a person is their pelvis.
+    void otherAgents(v1::WorldState& world, const std::array<double, 3>& region) const {
+        const World& w = robot.world;
+        const SignalBus& bus = scheduler->bus();
+        std::vector<bool> hasChild(w.bodies.names.size(), false);
+        for (std::size_t j = 0; j < w.joints.parent.size(); ++j) {
+            const BodyId parent = w.joints.parent[j];
+            if (parent != kWorldBody && parent.index < hasChild.size()) {
+                hasChild[parent.index] = true;
+            }
+        }
+        for (std::size_t b = 1; b < w.bodies.names.size() && b < bodyPose.size(); ++b) {
+            if (w.bodies.parent[b] != kWorldBody || !bodyPose[b].valid()) {
+                continue;  // a link of a robot, or the fixed scenery
+            }
+            const std::string& name = w.bodies.names[b];
+            std::string label = name;
+            std::string kind;
+            if (name.starts_with("traffic_vehicle_") || name.starts_with("scenario_")) {
+                kind = "vehicle";
+            } else if (name.starts_with("traffic_pedestrian_")) {
+                kind = "pedestrian";
+            } else if (name.starts_with("human_") && name.ends_with("_pelvis")) {
+                kind = "pedestrian";
+                label = name.substr(6, name.size() - 6 - 7);  // human_<name>_pelvis
+            } else if (!w.bodies.kinematic[b] && hasChild[b]) {
+                kind = "robot";
+            } else {
+                continue;  // a loose box, a lamp, a person's other segments
+            }
+            v1::WorldState::Agent& agent = *world.add_agents();
+            agent.set_name(label);
+            agent.set_prim(b < robot.bodyPrim.size() ? robot.bodyPrim[b] : kNoIndex);
+            agent.set_kind(kind);
+            const std::span<const double> pose = bus.readN(bodyPose[b]);
+            agent.set_x(pose[0] + region[0]);
+            agent.set_y(pose[1] + region[1]);
+            if (const SignalId twist = bus.find("body/" + name + "/twist");
+                twist.valid() && !w.bodies.kinematic[b]) {
+                const std::span<const double> v = bus.readN(twist);
+                agent.set_speed_m_per_s(std::hypot(v[0], v[1]));
+            } else {
+                // A kinematic body is moved by its pose command, without a twist: its speed is
+                // how far it went since the last report.
+                const std::int64_t now = scheduler->now().ns;
+                auto& [at, x, y, speed] = agentTrack[b];
+                if (now < at) {
+                    speed = 0.0;  // the run went back (a reset): start again
+                } else if (now > at && at > 0) {
+                    speed = std::hypot(pose[0] - x, pose[1] - y) /
+                            (static_cast<double>(now - at) * 1e-9);
+                }
+                if (now != at) {
+                    at = now;
+                    x = pose[0];
+                    y = pose[1];
+                }
+                agent.set_speed_m_per_s(speed);
+            }
+            agent.set_status(w.bodies.kinematic[b] ? "kinematic" : "active");
+        }
+    }
+    /// Per kinematic agent body: when and where the last world report saw it, and its speed.
+    mutable std::map<std::size_t, std::tuple<std::int64_t, double, double, double>> agentTrack;
 
     /// The streamed tiles for the World workspace, on the grid of the finest tiles: loaded
     /// collision tiles are level of detail 0 (physics and sensors), loaded tiles without
@@ -6483,6 +6712,14 @@ struct Server::Impl {
     void sendStats(Clock::time_point now) {
         const double wallS = static_cast<double>(nanosSince(lastStats, now)) * 1e-9;
         const std::vector<ModuleCost> costs = scheduler->takeCosts();
+        // Each domain's cost per simulated second, for the Domains table (profileState).
+        domainCostMs.clear();
+        for (const ModuleCost& c : costs) {
+            if (c.steps > 0 && c.dt.ns > 0) {
+                domainCostMs[c.domain] += static_cast<double>(c.totalNs) / 1e6 /
+                                          (static_cast<double>(c.steps) * c.dt.seconds());
+            }
+        }
         v1::Envelope envelope;
         v1::ServerStats& stats = *envelope.mutable_server_stats();
         stats.mutable_sim_time()->set_ns(scheduler->now().ns);
@@ -6697,9 +6934,44 @@ struct Server::Impl {
         }
     }
 
+    /// A site value from the Environment panel: SetAttribute "site:<name>" on no prim.
+    static bool isSiteCommand(const v1::Envelope& envelope) {
+        return envelope.has_command() && envelope.command().has_set_attribute() &&
+               envelope.command().set_attribute().prim() == kNoIndex &&
+               envelope.command().set_attribute().attribute().name().starts_with("site:");
+    }
+
+    /// Site values that arrived together (a weather preset sends a whole weather) are set
+    /// together: the run is rebuilt once for all of them, not once per value. Empties `sites`.
+    void setSitesOf(Session& session, std::vector<v1::Command>& sites) {
+        if (sites.size() == 1) {
+            command(session, sites.front());
+        } else if (!sites.empty()) {
+            std::vector<std::pair<std::string, double>> values;
+            values.reserve(sites.size());
+            for (const v1::Command& c : sites) {
+                const v1::Attribute& site = c.set_attribute().attribute();
+                values.emplace_back(site.name().substr(5), site.real());
+            }
+            const std::vector<Status> each = setSites(values);
+            for (std::size_t i = 0; i < sites.size(); ++i) {
+                v1::Envelope result;
+                v1::CommandResult& r = *result.mutable_command_result();
+                r.set_request_id(sites[i].request_id());
+                r.set_ok(each[i].ok());
+                if (!each[i].ok()) {
+                    r.set_error(each[i].message);
+                }
+                session.send(result);
+            }
+        }
+        sites.clear();
+    }
+
     void serve(Session& session) {
         std::error_code ec;
         const proto::IoStatus received = session.connection.receive(ec);
+        std::vector<v1::Command> sites;  // site values received together
         for (;;) {
             const proto::FrameReader::Result frame = session.connection.next();
             if (frame.status == proto::FrameReader::Status::Error) {
@@ -6734,10 +7006,14 @@ struct Server::Impl {
                     session.connection.close();
                     return;
                 }
+            } else if (isSiteCommand(envelope)) {
+                sites.push_back(envelope.command());  // taken together below
             } else {
+                setSitesOf(session, sites);
                 dispatch(session, envelope);
             }
         }
+        setSitesOf(session, sites);
         if (received == proto::IoStatus::Closed || received == proto::IoStatus::Error) {
             session.connection.close();
         }

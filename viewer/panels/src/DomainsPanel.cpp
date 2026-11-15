@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <string>
 
 #include <imgui.h>
 
@@ -83,6 +85,7 @@ public:
         ProfileSession& session = *context.profileSession;
         const std::shared_ptr<const ProfileInfo>& profile = session.profile();
         const bool connected = context.connection.state == ConnectionState::Ready;
+        measure(context);
         if (!profile) {
             // Loading / disconnected with nothing to show yet: one line of guidance.
             widgets::Caption("%s", connected ? "Waiting for the server's profile ..."
@@ -130,7 +133,7 @@ public:
         // Footer: what the applied profile costs.
         double total = 0.0;
         for (const DomainInfo& info : profile->domains) {
-            total += info.enabled ? info.cpuMsPerSimS / 1000.0 : 0.0;
+            total += info.enabled ? costOf(info) : 0.0;
         }
         ImGui::AlignTextToFramePadding();
         widgets::Caption("est. %.2f ms CPU per 1 ms of sim  ·  %s%s", total,
@@ -193,6 +196,7 @@ private:
             centreInRow(top, height);
             ImGui::AlignTextToFramePadding();
             widgets::Caption("%s", info.unavailableReason.c_str());
+            ImGui::SetItemTooltip("%s", info.unavailableReason.c_str());  // when it is cut
             ImGui::PopID();
             return;
         }
@@ -218,7 +222,7 @@ private:
 
         ImGui::TableSetColumnIndex(5);
         centreInRow(top, height);
-        cost(info, *view);
+        cost(info, *view, costOf(info));
         ImGui::PopID();
     }
 
@@ -340,8 +344,32 @@ private:
         }
     }
 
-    static void cost(const DomainInfo& info, const DomainView& view) {
-        const double applied = info.enabled ? info.cpuMsPerSimS / 1000.0 : 0.0;
+    /// Each domain's CPU per simulated second (ms) from the server's latest statistics, which
+    /// it measures every report; the profile's own figure only until the first report.
+    void measure(const PanelContext& context) {
+        const std::shared_ptr<const ServerStatistics> stats = context.client.statistics();
+        if (!stats || stats->serial == statsSerial_) {
+            return;
+        }
+        statsSerial_ = stats->serial;
+        measured_.clear();
+        for (const ServerStatistics::Module& module : stats->modules) {
+            if (module.dtNs > 0) {
+                measured_[module.domain] +=
+                    module.cpuMsPerStep * 1e9 / static_cast<double>(module.dtNs);
+            }
+        }
+    }
+
+    /// ms of CPU per 1 ms of simulation.
+    [[nodiscard]] double costOf(const DomainInfo& info) const {
+        const auto it = measured_.find(info.name);
+        const double perSimSecond = it != measured_.end() ? it->second : info.cpuMsPerSimS;
+        return perSimSecond / 1000.0;
+    }
+
+    static void cost(const DomainInfo& info, const DomainView& view, double measured) {
+        const double applied = info.enabled ? measured : 0.0;
         char text[32];
         if (view.pending && !view.enabled && applied > 0.0) {
             // What switching it off saves.
@@ -449,6 +477,8 @@ private:
         ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
     }
 
+    std::map<std::string, double, std::less<>> measured_;  // ms per simulated second
+    std::uint64_t statsSerial_{0};
     char source_[256]{};
     std::string sourceFor_;
     bool sourceActive_{false};

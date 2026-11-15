@@ -82,6 +82,84 @@ void bytes(std::uint64_t value, char* out, std::size_t size) {
     }
 }
 
+// --- scenery --------------------------------------------------------------------------------
+
+std::array<double, 3> rotated(const std::array<float, 4>& q, const std::array<double, 3>& v) {
+    // q = (w, x, y, z): v + 2w(u × v) + 2u × (u × v), u the vector part.
+    const double w = q[0];
+    const std::array<double, 3> u{q[1], q[2], q[3]};
+    const std::array<double, 3> t{2.0 * (u[1] * v[2] - u[2] * v[1]),
+                                  2.0 * (u[2] * v[0] - u[0] * v[2]),
+                                  2.0 * (u[0] * v[1] - u[1] * v[0])};
+    return {v[0] + w * t[0] + (u[1] * t[2] - u[2] * t[1]),
+            v[1] + w * t[1] + (u[2] * t[0] - u[0] * t[2]),
+            v[2] + w * t[2] + (u[0] * t[1] - u[1] * t[0])};
+}
+
+/// The outlines of the scene's collision shapes seen from above, for the map of a world that
+/// streams no tiles (it would be empty otherwise): each shape's box at its prim's pose now.
+/// Rebuilt when the scene changes; only the moving prims' poses are read each frame.
+class Scenery {
+public:
+    struct Outline {
+        std::uint32_t prim{kNone};                      // kNone: fixed in the region-local frame
+        std::array<std::array<double, 3>, 4> corner{};  // in the prim's frame, m
+    };
+
+    /// Shapes larger than this across are the ground or terrain: left out.
+    static constexpr double kMaxExtentM = 200.0;
+
+    void update(const SceneFrame& frame) {
+        if (!frame.statics || frame.statics->generation == generation_) {
+            return;
+        }
+        generation_ = frame.statics->generation;
+        outlines_.clear();
+        const SceneStatics& statics = *frame.statics;
+        for (const ColliderData& collider : statics.colliders) {
+            if (collider.mesh >= statics.meshes.size()) {
+                continue;
+            }
+            const std::array<float, 6>& box = statics.meshes[collider.mesh].aabb;
+            if (box[3] - box[0] > kMaxExtentM || box[4] - box[1] > kMaxExtentM) {
+                continue;
+            }
+            Outline outline;
+            outline.prim = collider.prim;
+            const double z = 0.5 * (box[2] + box[5]);
+            const std::array<std::array<double, 2>, 4> xy{
+                {{box[0], box[1]}, {box[3], box[1]}, {box[3], box[4]}, {box[0], box[4]}}};
+            for (std::size_t k = 0; k < 4; ++k) {
+                const std::array<double, 3> local =
+                    rotated(collider.rotation, {xy[k][0], xy[k][1], z});
+                outline.corner[k] = {local[0] + collider.position[0],
+                                     local[1] + collider.position[1],
+                                     local[2] + collider.position[2]};
+            }
+            outlines_.push_back(outline);
+        }
+    }
+
+    [[nodiscard]] const std::vector<Outline>& outlines() const { return outlines_; }
+
+    /// A corner in world ENU (the map's frame): through its prim's pose now, then the region.
+    static std::array<double, 2> world(const SceneFrame& frame, const Outline& outline,
+                                       std::size_t k) {
+        std::array<double, 3> p = outline.corner[k];
+        if (outline.prim != kNone && outline.prim < frame.transforms.size()) {
+            const Transform& t = frame.transforms[outline.prim];
+            const std::array<double, 3> r = rotated(t.rotation, p);
+            p = {r[0] + t.position[0], r[1] + t.position[1], r[2] + t.position[2]};
+        }
+        const std::array<double, 3>& region = frame.statics->regionEnu;
+        return {p[0] + region[0], p[1] + region[1]};
+    }
+
+private:
+    std::uint64_t generation_{0};
+    std::vector<Outline> outlines_;
+};
+
 // --- agents -------------------------------------------------------------------------------
 
 class AgentsPanel final : public Panel {
@@ -192,8 +270,14 @@ public:
             "##map", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
         const ImGuiIO& io = ImGui::GetIO();
         const double tile = world->tileSizeM > 0.0 ? world->tileSizeM : 256.0;
+        // The scenery's outlines, where no tiles are streamed (a world in one piece).
+        const bool drawScenery = world->tiles.empty() && context.scene != nullptr;
+        if (drawScenery) {
+            scenery_.update(*context.scene);
+        }
 
-        // First view: centred on the focus agent, wide enough for the loaded tiles.
+        // First view: centred on the focus agent, wide enough for the loaded tiles (or, for a
+        // world in one piece, for its scenery and agents).
         if (!framed_) {
             for (const WorldInfo::Agent& agent : world->agents) {
                 if (agent.focus) {
@@ -201,10 +285,24 @@ public:
                     centreY_ = agent.y;
                 }
             }
-            double extent = tile * 4.0;
+            double extent = world->tiles.empty() ? kMinExtentM : tile * 4.0;
             for (const WorldInfo::Tile& loaded : world->tiles) {
                 extent = std::max({extent, std::abs((loaded.x + 0.5) * tile - centreX_),
                                    std::abs((loaded.y + 0.5) * tile - centreY_)});
+            }
+            if (drawScenery) {
+                for (const Scenery::Outline& outline : scenery_.outlines()) {
+                    for (std::size_t k = 0; k < 4; ++k) {
+                        const auto p = Scenery::world(*context.scene, outline, k);
+                        extent = std::max(
+                            {extent, std::abs(p[0] - centreX_), std::abs(p[1] - centreY_)});
+                    }
+                }
+                for (const WorldInfo::Agent& agent : world->agents) {
+                    extent = std::max(
+                        {extent, std::abs(agent.x - centreX_), std::abs(agent.y - centreY_)});
+                }
+                extent = std::min(extent, kMaxFrameM);
             }
             metresPerPixel_ = (extent * 2.2) / std::max(std::min(size.x, size.y), 1.0F);
             framed_ = !world->tiles.empty() || !world->agents.empty();
@@ -246,6 +344,27 @@ public:
             draw->AddRectFilled(ImVec2(min.x + 1.0F, min.y + 1.0F),
                                 ImVec2(min.x + tilePixels - 1.0F, min.y + tilePixels - 1.0F),
                                 u32(fill));
+        }
+        // Scenery: each collision shape's outline from above, under the agents.
+        if (drawScenery) {
+            for (const Scenery::Outline& outline : scenery_.outlines()) {
+                std::array<ImVec2, 4> corners{};
+                bool visible = false;
+                for (std::size_t k = 0; k < 4; ++k) {
+                    const auto p = Scenery::world(*context.scene, outline, k);
+                    corners.at(k) = toScreen(p[0], p[1]);
+                    visible =
+                        visible ||
+                        (corners.at(k).x >= origin.x && corners.at(k).x <= origin.x + size.x &&
+                         corners.at(k).y >= origin.y && corners.at(k).y <= origin.y + size.y);
+                }
+                if (!visible) {
+                    continue;
+                }
+                draw->AddConvexPolyFilled(corners.data(), 4, u32(theme::hex(0x3A4E6E, 0.35F)));
+                draw->AddPolyline(corners.data(), 4, u32(theme::hex(0x6E7F98, 0.8F)),
+                                  ImDrawFlags_Closed, px(1.0F));
+            }
         }
         // Regions: dashed outline with the name, ready for handoff between servers later.
         const theme::Fonts& fonts = theme::fonts();
@@ -363,6 +482,9 @@ public:
     }
 
 private:
+    static constexpr double kMinExtentM = 10.0;   // a small world still fills a sensible view
+    static constexpr double kMaxFrameM = 2000.0;  // the first view of a world in one piece
+    Scenery scenery_;
     double centreX_{0.0};  // world ENU of the middle of the view, metres
     double centreY_{0.0};
     double metresPerPixel_{4.0};

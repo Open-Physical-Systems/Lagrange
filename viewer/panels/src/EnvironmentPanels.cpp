@@ -168,6 +168,24 @@ std::optional<double> liveRow(const char* label, LiveField& field, const char* u
     return std::nullopt;
 }
 
+/// Whether a domain runs now, by the profile the server applied; true before it said.
+bool domainRuns(const PanelContext& context, std::string_view name) {
+    const std::shared_ptr<const ProfileInfo>& profile = context.profileSession->profile();
+    const DomainInfo* info = profile ? profile->find(name) : nullptr;
+    return info == nullptr || info->enabled;
+}
+
+/// Wind with the aerodynamics domain off moves nothing: say so where the wind is set.
+void windWarning() {
+    widgets::Pill("aerodynamics off", widgets::PillKind::Warn);
+    ImGui::SameLine(0.0F, px(6.0F));
+    ImGui::PushTextWrapPos(0.0F);
+    widgets::Caption(
+        "The wind pushes nothing: the aerodynamics domain does not run (it needs "
+        "AeroAPI_1 links or rotors and the site's air density).");
+    ImGui::PopTextWrapPos();
+}
+
 /// What this viewer sent of the site that the server does not report back (the air the weather
 /// needs), and the preset applied last; shared by the Environment and Presets tabs.
 struct SentSite {
@@ -208,10 +226,9 @@ public:
         }
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
         const float pad = px(8.0F);
-        const auto domainOn = [&](const char* name) {
-            const DomainView* view = context.profileSession->find(name);
-            return view == nullptr || view->enabled;
-        };
+        // Whether a domain runs now: the server's word on the applied profile, not the draft
+        // being edited in the Domains workspace.
+        const auto domainOn = [&](const char* name) { return domainRuns(context, name); };
 
         // Every field below with a number in it changes the site live (Server::setSite):
         // Enter or leaving the field sends it, and the run goes on with it.
@@ -223,11 +240,24 @@ public:
         const ImVec4 thermal = widgets::domainColor("thermal");
         if (widgets::SectionHeader("Time and sun", nullptr, true, &thermal)) {
             ImGui::Indent(pad);
-            char time[16];
-            const int minutes = static_cast<int>(std::lround(info.localTimeHours * 60.0)) % 1440;
-            std::snprintf(time, sizeof(time), "%02d:%02d", minutes / 60, minutes % 60);
-            widgets::PropertyRow("local time", time, nullptr);
-            row("sun elevation", "°", "%.1f", info.sunElevationDeg);
+            // A server without a time of day sends NaN (an older one, 0 and 0): a dash, not
+            // midnight with the sun on the horizon.
+            const bool modelled =
+                std::isfinite(info.localTimeHours) && std::isfinite(info.sunElevationDeg) &&
+                (info.synthetic || info.localTimeHours != 0.0 || info.sunElevationDeg != 0.0);
+            constexpr const char* kNoSun =
+                "not modelled: this run has no time of day and no sun position";
+            if (modelled) {
+                char time[16];
+                const int minutes =
+                    static_cast<int>(std::lround(info.localTimeHours * 60.0)) % 1440;
+                std::snprintf(time, sizeof(time), "%02d:%02d", minutes / 60, minutes % 60);
+                widgets::PropertyRow("local time", time, nullptr);
+                row("sun elevation", "°", "%.1f", info.sunElevationDeg);
+            } else {
+                widgets::PropertyRow("local time", "—", nullptr, false, kNoSun);
+                widgets::PropertyRow("sun elevation", "—", "°", false, kNoSun);
+            }
             ambient_.follow(
                 ambientKnown ? std::optional(info.ambientTemperatureK - 273.15) : std::nullopt,
                 "%.1f");
@@ -332,6 +362,9 @@ public:
                 if (const auto v = windFrom_.number()) {
                     sendSite(context, "wind_from", std::fmod(std::fmod(*v, 360.0) + 360.0, 360.0));
                 }
+            }
+            if (!domainOn("aerodynamics") && info.windSpeed > 0.0) {
+                windWarning();
             }
             row("gust intensity", nullptr, "%.2f", info.gustIntensity);
             widgets::PropertyRow(
@@ -560,6 +593,10 @@ public:
         }
         if (!sent_->preset.empty()) {
             widgets::Caption("Values typed in the Environment tab change it from there.");
+            const auto info = context.client.environment();
+            if (!domainRuns(context, "aerodynamics") && info && info->windSpeed > 0.0) {
+                windWarning();
+            }
         }
         ImGui::End();
     }
