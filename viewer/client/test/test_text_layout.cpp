@@ -233,5 +233,41 @@ TEST(Fuzzy, RanksWordStartsAndSubstringsFirst) {
     EXPECT_EQ(one.size(), 1U);
 }
 
+// The joint type's Segmented in a narrow Properties panel (QA: "prismatic" was cut off at the
+// panel's edge): the row fits by its padding first, then by cutting the longest labels alone.
+TEST(FitCells, ShrinksPaddingThenCutsTheLongestLabels) {
+    const std::vector<float> labels{5.0F, 8.0F, 10.0F,
+                                    9.0F};  // fixed revolute continuous prismatic
+    const auto sum = [](const std::vector<float>& cells) {
+        float total = 0.0F;
+        for (const float c : cells) {
+            total += c;
+        }
+        return total;
+    };
+    // Room for all: each label and 8 on both sides.
+    EXPECT_EQ(fitCells(labels, 100.0F, 8.0F, 3.0F),
+              (std::vector<float>{21.0F, 24.0F, 26.0F, 25.0F}));
+    // Not at 8, but at 5 each side: the row fills the room exactly, labels whole.
+    const std::vector<float> tighter = fitCells(labels, 72.0F, 8.0F, 3.0F);
+    EXPECT_FLOAT_EQ(sum(tighter), 72.0F);
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        EXPECT_GE(tighter[i], labels[i] + 6.0F);
+    }
+    // Not even at the least padding (32 + 24 = 56 > 50): the two longest share a cut width,
+    // the short ones stay whole, and the row is the room.
+    const std::vector<float> cut = fitCells(labels, 50.0F, 8.0F, 3.0F);
+    EXPECT_FLOAT_EQ(sum(cut), 50.0F);
+    EXPECT_FLOAT_EQ(cut[0], 5.0F + 6.0F);
+    EXPECT_FLOAT_EQ(cut[2], cut[3]);
+    EXPECT_LT(cut[2], 10.0F + 6.0F);
+    EXPECT_LE(cut[1], 8.0F + 6.0F);
+    // Nothing at all: the padding alone, never negative.
+    for (const float c : fitCells(labels, 0.0F, 8.0F, 3.0F)) {
+        EXPECT_GE(c, 6.0F);
+    }
+    EXPECT_TRUE(fitCells({}, 10.0F, 8.0F, 3.0F).empty());
+}
+
 }  // namespace
 }  // namespace lagrange::viewer

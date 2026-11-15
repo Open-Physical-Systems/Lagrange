@@ -155,3 +155,30 @@ def test_the_robot_goes_into_the_run_passive_and_back_removes_it(tmp_path, wareh
         text = log.read_text()
     assert text.count("deleted rover_mk1\n") == 2, "Back removed the second one"
     assert "rover_mk1_2" not in text, "no test robot was left behind to take the name"
+
+
+# View → Pause the run while building (12-builder SPEC "Cost in Build mode").
+VIEW_MENU = "197,13"
+PAUSE_WHILE_BUILDING = "265,234"
+
+
+def test_the_run_is_left_alone_unless_paused_while_building(tmp_path, warehouse):
+    endpoint, _ = warehouse
+    # Not ticked: the run plays on while the Builder is in front.
+    report = run(tmp_path, endpoint, "4:key:tab", 30)
+    assert report["builder"]["run_state"] == "running"
+    # Ticked: paused while building.
+    report = run(tmp_path, endpoint, f"4:click:{VIEW_MENU};8:click:{PAUSE_WHILE_BUILDING}", 40)
+    assert report["builder"]["run_state"] == "paused"
+    # That viewer closed while building: the run it paused plays on.
+    report = run(tmp_path, endpoint, "4:key:tab", 30)
+    assert report["builder"]["run_state"] == "running"
+    # Ticked, then the Scene workspace (Ctrl 1): it plays again.
+    report = run(
+        tmp_path,
+        endpoint,
+        f"4:click:{VIEW_MENU};8:click:{PAUSE_WHILE_BUILDING};20:key:ctrl+1",
+        45,
+    )
+    assert report["workspace"] == "Scene"
+    assert report["builder"]["run_state"] == "running"

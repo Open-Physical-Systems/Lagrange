@@ -69,6 +69,56 @@ void markRefused(float right, const std::string& why) {
     ImGui::SetItemTooltip("%s", why.c_str());
 }
 
+/// The last rename refused in a power form: the part it was for (its prim) and why. Shown as an
+/// err pill under that part's name until clicked or another rename is made.
+struct RenameRefusal {
+    std::string prim;
+    std::string why;
+};
+RenameRefusal& renameRefusal() {
+    static RenameRefusal refusal;
+    return refusal;
+}
+
+/// The part's name, editable (SPEC "Properties", Robot → Power: "prim"): the prim's last part,
+/// which names the run's signals (bus/<name>/voltage). A rename carries every relationship to it
+/// along (builder::renameEntry), one undo step. The unit slot says where the prim is.
+void nameRow(BuilderSession& session, const OverlayEntry& entry, const std::string& what,
+             const char* tooltip) {
+    const std::string prim = builder::entryPrim(entry);
+    const std::string name = builder::entryName(entry);
+    const std::size_t slash = prim.rfind('/');
+    const std::string where =
+        slash == std::string::npos ? std::string{} : "in " + prim.substr(0, slash + 1);
+    std::string typed = name;
+    const std::string help = prim + "\n" + tooltip + "\nRenaming it renames what connects to it";
+    if (widgets::CommitEdit("name", &typed, where.empty() ? nullptr : where.c_str(), false,
+                            help.c_str(), false, true)) {
+        Document next = session.document();
+        for (std::size_t i = 0; i < next.overlay.entries.size(); ++i) {
+            if (next.overlay.entries[i].sensor.empty() &&
+                builder::entryPrim(next.overlay.entries[i]) == prim) {
+                std::string why = builder::renameEntry(next, i, typed);
+                if (why.empty() && typed != name) {
+                    commit(session, std::move(next),
+                           "Rename " + what + " " + name + " to " + typed);
+                    renameRefusal() = {};
+                } else if (!why.empty()) {
+                    renameRefusal() = {prim, std::move(why)};
+                }
+                break;
+            }
+        }
+    }
+    if (const RenameRefusal& refusal = renameRefusal(); refusal.prim == prim) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(112.0F));
+        widgets::Pill(refusal.why.c_str(), widgets::PillKind::Error);
+        if (ImGui::IsItemClicked()) {
+            renameRefusal() = {};
+        }
+    }
+}
+
 /// The rows of one schema instance: each field of `fields` but the relationships, named with
 /// `prefix` (a port's "elec:port:dc_out:"). Returns how many differ from their defaults.
 /// `shown` (if given) leaves out the fields that do not apply (a branch's kind), unless set.
@@ -182,7 +232,8 @@ std::vector<std::string> busPrims(const Document& document) {
 
 /// A dropdown row choosing a bus for a relationship; returns the chosen prim when changed.
 std::optional<std::string> busRow(const char* label, const Document& document,
-                                  const std::string& current, const char* tooltip) {
+                                  const std::string& current, const char* tooltip,
+                                  const std::string& refused = {}) {
     const int bus = builder::busNamed(document, current);
     const std::string shown =
         bus >= 0 ? builder::entryName(document.overlay.entries[static_cast<std::size_t>(bus)])
@@ -196,6 +247,8 @@ std::optional<std::string> busRow(const char* label, const Document& document,
     if (bus < 0) {
         const float right = ImGui::GetItemRectMax().x;
         markRefused(right, "Pick a bus: Add bus in the robot's Power section");
+    } else if (!refused.empty()) {
+        markRefused(ImGui::GetItemRectMax().x, refused);  // a converter onto its own input bus
     }
     if (ImGui::BeginPopup("##bus")) {
         const std::vector<std::string> buses = busPrims(document);
@@ -314,8 +367,7 @@ void busSection(BuilderSession& session, const OverlayEntry& entry) {
     ImGui::PushID(prim.c_str());
     if (widgets::SectionHeader(title.c_str(), "ElectricalBusAPI_1", true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
-                             "Signals bus/<name>/voltage and brownout when tested");
+        nameRow(session, entry, "bus", "Signals bus/<name>/voltage and brownout when tested");
         widgets::PropertyRow("fed by", feeds.empty() ? "nothing" : feeds.c_str(), nullptr);
         widgets::PropertyRow("drawn by", draws.empty() ? "nothing" : draws.c_str(), nullptr, false,
                              "Motors, loads and converter inputs on this bus");
@@ -334,8 +386,8 @@ void batterySection(BuilderSession& session, const OverlayEntry& entry) {
     ImGui::PushID(prim.c_str());
     if (widgets::SectionHeader(title.c_str(), "BatteryAPI_1", true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
-                             "Signals battery/<name>/soc, terminal_voltage, current when tested");
+        nameRow(session, entry, "battery",
+                "Signals battery/<name>/soc, terminal_voltage, current when tested");
         const OverlaySchema* port = builder::portOf(entry);
         const std::string portName =
             port != nullptr ? port->name : std::string(builder::kBatteryPort);
@@ -371,7 +423,7 @@ void batterySection(BuilderSession& session, const OverlayEntry& entry) {
 
 /// A relationship row of a part: a bus dropdown that sets `attribute` of `schema`.
 void relationRow(BuilderSession& session, const OverlayEntry& entry, std::string_view schema,
-                 std::string_view attribute, const char* label) {
+                 std::string_view attribute, const char* label, const std::string& refused = {}) {
     const OverlaySchema* instance = builder::findSchema(entry, schema);
     const OverlayField* field = builder::overlayField(schema, attribute);
     if (instance == nullptr || field == nullptr) {
@@ -381,8 +433,9 @@ void relationRow(BuilderSession& session, const OverlayEntry& entry, std::string
     const std::string name(attribute);
     const std::string tooltip = name + ": " + std::string(field->meaning);
     ImGui::PushID(name.c_str());
-    if (const auto chosen = busRow(label, session.document(),
-                                   builder::attributeText(*instance, name), tooltip.c_str())) {
+    if (const auto chosen =
+            busRow(label, session.document(), builder::attributeText(*instance, name),
+                   tooltip.c_str(), refused)) {
         editEntry(session, prim,
                   "Connect " + builder::entryName(entry) + " " + label + " to " + *chosen, {},
                   [&](Document&, OverlayEntry& target) {
@@ -415,8 +468,8 @@ void loadSection(BuilderSession& session, const OverlayEntry& entry) {
     ImGui::PushID(prim.c_str());
     if (widgets::SectionHeader(title.c_str(), "ElectricalLoadAPI_1", true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
-                             "A computer, a sensor, a heater: what it draws from its bus");
+        nameRow(session, entry, "load",
+                "A computer, a sensor, a heater: what it draws from its bus");
         relationRow(session, entry, builder::kLoadSchema, "elec:powerPort", "bus");
         const OverlaySchema& load = *builder::findSchema(entry, builder::kLoadSchema);
         const bool resistive = builder::attributeText(load, "elec:load:model") == "resistive";
@@ -438,10 +491,15 @@ void converterSection(BuilderSession& session, const OverlayEntry& entry) {
     ImGui::PushID(prim.c_str());
     if (widgets::SectionHeader(title.c_str(), "ElectricalConverterAPI_1", true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
-                             "A DC-DC converter: an averaged regulator from one bus to another");
-        relationRow(session, entry, builder::kConverterSchema, "elec:conv:input", "input");
-        relationRow(session, entry, builder::kConverterSchema, "elec:conv:output", "output");
+        nameRow(session, entry, "converter",
+                "A DC-DC converter: an averaged regulator from one bus to another");
+        // Its output onto its own input is an error (checkOverlay): both dropdowns say so.
+        const std::string same =
+            builder::sameBusAtBothEnds(session.document(), entry)
+                ? "The input and the output are the same bus: pick another output"
+                : std::string{};
+        relationRow(session, entry, builder::kConverterSchema, "elec:conv:input", "input", same);
+        relationRow(session, entry, builder::kConverterSchema, "elec:conv:output", "output", same);
         (void)fieldRows(session, entry, *builder::findSchema(entry, builder::kConverterSchema),
                         builder::converterFields(), "");
         signalRows(entry);
@@ -462,15 +520,17 @@ void branchSection(BuilderSession& session, const OverlayEntry& entry) {
     ImGui::PushID(prim.c_str());
     if (widgets::SectionHeader(title.c_str(), "ElectricalBranchAPI_1", true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
-                             "A two-terminal part between two buses (RFC 0010)");
+        nameRow(session, entry, kind, "A two-terminal part between two buses (RFC 0010)");
         // Its kind first (it decides the rest), then its two ends, then the values.
         const std::span<const OverlayField> fields = builder::branchFields();
         (void)fieldRows(session, entry, branch, fields.first(1), "");
+        const std::string same = builder::sameBusAtBothEnds(session.document(), entry)
+                                     ? "Its two ends are the same bus: pick another"
+                                     : std::string{};
         relationRow(session, entry, builder::kBranchSchema, "elec:branch:input",
-                    kind == "diode" ? "anode" : "input");
+                    kind == "diode" ? "anode" : "input", same);
         relationRow(session, entry, builder::kBranchSchema, "elec:branch:output",
-                    kind == "diode" ? "cathode" : "output");
+                    kind == "diode" ? "cathode" : "output", same);
         (void)fieldRows(session, entry, branch, fields.subspan(1), "",
                         [&kind](const OverlayField& field) {
                             return builder::branchFieldApplies(kind, field.name);
@@ -583,12 +643,11 @@ void robotPowerSections(BuilderSession& session) {
     if (widgets::SectionHeader("Power", meta.c_str(), true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         if (batteries.empty() && buses.empty() && motors.empty()) {
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption(
+            widgets::ParagraphF(
+                theme::fonts().sans, theme::kCaptionSize, c::t3,
                 "No power system: a test runs the joints on ideal torque (the electrical "
                 "domain's substitute). Add a bus, then a battery to feed it, then a motor on "
                 "each driven joint (its Properties).");
-            ImGui::PopTextWrapPos();
         }
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
         if (widgets::Button("Add bus", widgets::ButtonKind::Default, widgets::Icon::Plus)) {
@@ -698,11 +757,10 @@ void jointMotorSection(BuilderSession& session, const std::string& jointName) {
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
     if (index < 0) {
         const bool fixed = joint.type == builder::Joint::Type::Fixed;
-        ImGui::PushTextWrapPos(0.0F);
-        widgets::Caption(fixed ? "A fixed joint does not turn: no motor."
-                               : "No motor: tested, this joint takes torque as it is commanded "
-                                 "(ideal). A motor draws its current from a bus.");
-        ImGui::PopTextWrapPos();
+        widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                            fixed ? "A fixed joint does not turn: no motor."
+                                  : "No motor: tested, this joint takes torque as it is commanded "
+                                    "(ideal). A motor draws its current from a bus.");
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
         ImGui::BeginDisabled(fixed);
         if (widgets::Button("Add a motor", widgets::ButtonKind::Default, widgets::Icon::Plus)) {
@@ -728,8 +786,8 @@ void jointMotorSection(BuilderSession& session, const std::string& jointName) {
     const OverlayEntry entry = document.overlay.entries[static_cast<std::size_t>(index)];
     const std::string prim = builder::entryPrim(entry);
     const std::string name = builder::entryName(entry);
-    widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
-                         "create_child of the joint's entry in the overlay");
+    nameRow(session, entry, "motor",
+            "create_child of the joint's entry in the overlay; signals motor/<name>/...");
     const OverlaySchema& motor = *builder::findSchema(entry, builder::kMotorSchema);
     if (const auto chosen =
             busRow("bus", session.document(), builder::attributeText(motor, "elec:powerPort"),

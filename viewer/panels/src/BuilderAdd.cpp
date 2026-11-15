@@ -69,15 +69,24 @@ public:
         }
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("A mesh link (STL, OBJ, DAE, glTF) on %s", target.c_str());
+        // The tree's Add → Link → Mesh…: once its menu has closed (opened while another
+        // popup is still up, ImGui closes this one with it).
+        if (session.meshPopupRequested &&
+            !ImGui::IsPopupOpen(nullptr,
+                                ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+            session.meshPopupRequested = false;
+            if (editable(session) && !target.empty()) {
+                ImGui::OpenPopup("##add-mesh");
+            }
+        }
         meshPopup(context, session, target);
 
         defaults();
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
-        ImGui::PushTextWrapPos(0.0F);
-        widgets::Caption(
+        widgets::ParagraphF(
+            theme::fonts().sans, theme::kCaptionSize, c::t3,
             "Or drag a tile onto a link in the tree or the viewport. A sensor comes "
             "from the catalog below the view.");
-        ImGui::PopTextWrapPos();
         ImGui::End();
     }
 

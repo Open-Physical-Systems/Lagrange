@@ -101,7 +101,13 @@ struct BuilderSession {
     std::filesystem::path meshFolder;
     double autosaveTime{0.0};  ///< ImGui::GetTime() of the last autosave, s; 0: none yet
     bool showDegrees{true};    ///< Joints panel's deg | rad (display only; files hold rad)
-    std::string testTarget;    ///< "Test · empty world ▾" readout: "empty world", a file name
+    /// View → Pause the run while building (SPEC "Cost in Build mode"): a connected run is
+    /// paused while the Builder is in front in Build mode, and played again after; off: left
+    /// alone.
+    bool pauseRunWhileBuilding{false};
+    /// Test's target (SPEC "Modes"): empty for the empty world, else a world file's absolute
+    /// path (a sample world or a file); the readout shows its name ("Test · warehouse_small").
+    std::string testTarget;
     /// The Test target is the run this viewer is connected to (RFC 0016 §7.2): the robot is
     /// imported into it as text and removed again by Back, instead of a test server's own run.
     bool testIntoRun{false};
@@ -136,6 +142,9 @@ struct BuilderSession {
     std::string jointDriveError;
     /// Properties' Focus: the Builder view looks at the selection (as F), then clears it.
     bool focusRequested{false};
+    /// F2 (SPEC "Robot (tree)"): the selection's row in the tree becomes its name field; the
+    /// tree clears it when it starts the edit.
+    bool renameRequested{false};
 
     // Out, read and cleared by BuilderHost::afterUi().
     bool testRequested{false};
@@ -195,6 +204,11 @@ struct BuilderSession {
     std::vector<std::string> recentMeshes;
     /// Add → Mesh… → Browse…: the windowed viewer's SDL file dialog for a mesh (App).
     bool meshDialogRequested{false};
+    /// The tree's Add → Link → Mesh…: the Add panel opens its Mesh… popup.
+    bool meshPopupRequested{false};
+    /// Test ▾ → A world file → Browse…: the windowed viewer's SDL file dialog for a world; the
+    /// chosen file becomes testTarget.
+    bool worldDialogRequested{false};
     /// A mesh to add as a link on `addMeshOn` (empty: the Add panel's target link): chosen in
     /// that dialog, or a mesh file dropped on the window while the Builder is shown.
     bool addMeshRequested{false};

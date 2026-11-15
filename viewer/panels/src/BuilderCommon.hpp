@@ -87,6 +87,12 @@ void addLinkOn(BuilderSession& session, const std::string& parent, builder::Shap
 /// Adds a sensor of `type` on `link`, commits it and selects it.
 void addSensorOn(BuilderSession& session, const std::string& link, const std::string& type);
 
+/// Renames a link, joint, sensor or the robot (builder::rename: every reference follows),
+/// commits it as one step "Rename <from> to <to>" and keeps the selection on it. Returns why
+/// not, or "" when done (or unchanged).
+std::string renameItem(BuilderSession& session, builder::ItemKind kind, const std::string& from,
+                       const std::string& to);
+
 /// Deletes the selected link (with its subtree), joint (with its child) or sensor: one step.
 void deleteSelection(BuilderSession& session);
 

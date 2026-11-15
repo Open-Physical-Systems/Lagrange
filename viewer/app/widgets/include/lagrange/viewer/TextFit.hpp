@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lagrange::viewer {
 
@@ -35,5 +36,15 @@ using TextWidth = std::function<float(std::string_view)>;
 /// when none does. `group` holds `text` too.
 [[nodiscard]] std::string fitDistinct(std::string_view text, std::span<const std::string> group,
                                       float width, const TextWidth& measure);
+
+/// The cells of a row of options that must fit `available` (the Segmented control at a narrow
+/// panel width, the joint type's "fixed revolute continuous prismatic"): each label's width plus
+/// `padding` on both sides when that fits; else the padding shrinks, down to `minPadding`, and the
+/// cells fill `available`; else the longest labels are cut to one common width (the shorter ones
+/// stay whole) so that the row is `available` wide. `labels` are the labels' widths; the result
+/// has one width per label. Labels whose cell is narrower than label + 2 × minPadding are cut
+/// (fitEnd) by the caller.
+[[nodiscard]] std::vector<float> fitCells(std::span<const float> labels, float available,
+                                          float padding, float minPadding);
 
 }  // namespace lagrange::viewer

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <imgui_internal.h>  // ItemSize/ItemAdd for custom-drawn widgets
 #include <string>
+#include <vector>
 
 namespace lagrange::viewer::widgets {
 
@@ -869,12 +870,25 @@ bool Segmented(const char* id, const char* const* options, int count, int* index
     const float rounding = px(3.0F);
     const ImVec2 first = ImGui::GetCursorScreenPos();
     float right = first.x;
+    // A narrow panel (the joint type in Properties at 350 px): the padding shrinks, then the
+    // longest labels are cut with an ellipsis and say themselves in a tooltip (fitCells).
+    std::vector<float> labels(static_cast<std::size_t>(std::max(count, 0)));
+    for (int i = 0; i < count; ++i) {
+        labels[static_cast<std::size_t>(i)] = ImGui::CalcTextSize(options[i]).x;
+    }
+    const float padding = px(8.0F);
+    const float minPadding = px(4.0F);
+    // A window that fits its content (a popup) grows to the row instead.
+    const bool fitsContent =
+        (ImGui::GetCurrentWindow()->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0;
+    const std::vector<float> cells = fitCells(
+        labels, fitsContent ? FLT_MAX : ImGui::GetContentRegionAvail().x, padding, minPadding);
     for (int i = 0; i < count; ++i) {
         if (i != 0) {
             ImGui::SameLine(0.0F, 0.0F);
         }
         const ImVec2 textSize = ImGui::CalcTextSize(options[i]);
-        const ImVec2 size(textSize.x + px(16.0F), height);
+        const ImVec2 size(cells[static_cast<std::size_t>(i)], height);
         const ImVec2 min = ImGui::GetCursorScreenPos();
         const ImVec2 max(min.x + size.x, min.y + size.y);
         ImGui::PushID(i);
@@ -883,6 +897,11 @@ bool Segmented(const char* id, const char* const* options, int count, int* index
             changed = true;
         }
         ImGui::PopID();
+        const float textRoom = size.x - 2.0F * minPadding;
+        const bool cut = textSize.x > textRoom + 0.5F;
+        if (cut) {
+            ImGui::SetItemTooltip("%s", options[i]);
+        }
         const bool selected = *index == i;
         const ImDrawFlags corners = i == 0 ? ImDrawFlags_RoundCornersLeft
                                            : (i == count - 1 ? ImDrawFlags_RoundCornersRight
@@ -894,8 +913,20 @@ bool Segmented(const char* id, const char* const* options, int count, int* index
         if (i != 0) {
             draw->AddLine(min, ImVec2(min.x, max.y), u32(c::lineStrong));
         }
-        draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F),
-                      u32(selected ? c::accent : c::t2), options[i]);
+        const ImU32 color = u32(selected ? c::accent : c::t2);
+        const float textY = min.y + (size.y - textSize.y) * 0.5F;
+        if (cut) {
+            ImFont* font = ImGui::GetFont();
+            const float fontSize = ImGui::GetFontSize();
+            const std::string shown = fitEnd(options[i], textRoom, [&](std::string_view t) {
+                return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, t.data(), t.data() + t.size())
+                    .x;
+            });
+            draw->AddText(ImVec2(min.x + minPadding, textY), color, shown.c_str());
+        } else {
+            // Centred: the padding is whatever the row left (fitCells).
+            draw->AddText(ImVec2(min.x + (size.x - textSize.x) * 0.5F, textY), color, options[i]);
+        }
         right = max.x;
     }
     draw->AddRect(first, ImVec2(right, first.y + height), u32(c::lineStrong), rounding);

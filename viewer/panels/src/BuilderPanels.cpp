@@ -108,6 +108,23 @@ std::string errorsAbout(const BuilderSession& session, std::string_view item) {
     return text;
 }
 
+std::string renameItem(BuilderSession& session, builder::ItemKind kind, const std::string& from,
+                       const std::string& to) {
+    if (from == to) {
+        return {};
+    }
+    Document next = session.document();
+    std::string error = builder::rename(next, kind, from, to);
+    if (!error.empty()) {
+        return error;
+    }
+    commit(session, std::move(next), "Rename " + from + " to " + to);
+    if (kind != builder::ItemKind::Robot && session.selection.name == from) {
+        session.selection.name = to;
+    }
+    return {};
+}
+
 bool selectByName(BuilderSession& session, std::string_view item) {
     const Document& document = session.document();
     if (item.empty()) {
@@ -203,11 +220,9 @@ void drawPrompt(BuilderSession& session) {
     ImGui::TextUnformatted(prompt.title.c_str());
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-    ImGui::PushTextWrapPos(0.0F);
     ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
-    ImGui::TextUnformatted(prompt.message.c_str());
+    widgets::Paragraph(prompt.message.c_str());
     ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0.0F, px(10.0F)));
 
     // Buttons on the right, the accent one last: Cancel · Discard · Save.
