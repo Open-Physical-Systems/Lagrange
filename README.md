@@ -285,10 +285,11 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (22)</summary>
+<details><summary>Plan and evaluation (23)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Robot builder: phase 1 and 1b work plan (RFC 0016)](docs/plan/builder-phase1-plan.md)
+- [Robot builder: phase 4 work plan, USD round trip and SDFormat (RFC 0016)](docs/plan/builder-phase4-plan.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
 - [EMI from motors, heat conduction, thermal sensors: work queue](docs/plan/emi-thermal-queue.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
