@@ -78,8 +78,8 @@ and console](../imgs/tutorial-scene.png)
 
 Things to try:
 
-- **Domains** (top bar) shows the profile: Rigid body and Sensors on, the rest substituted. The
-  wiring and the schedule show what runs when.
+- **Domains** (top bar) shows the profile: Rigid body, Electrical, Thermal and Sensors on, the
+  rest substituted. The wiring and the schedule show what runs when.
 - **Signals**: tick `base/command/linear_velocity` and `joint/left_wheel_joint/velocity` to plot
   them. The commanded speed ramps to 0.6 m/s. During the left loop (0.5 rad/s), the left wheel
   is the inner one: its rim moves at 0.6 − 0.5 × 0.23 = 0.485 m/s, so with a 0.1 m radius it
