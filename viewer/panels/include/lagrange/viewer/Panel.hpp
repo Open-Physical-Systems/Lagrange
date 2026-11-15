@@ -181,6 +181,17 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createReplayPanels();
 [[nodiscard]] std::unique_ptr<Panel> createReplayTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createReplayBookmarksPanel();
+/// Replay: Compare, Sim vs real, Validation and History (08-replay), sharing one comparison.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createReplayComparePanels();
+/// The Source strip that replaces the domain strip in the Replay workspace while a recording
+/// plays. Draws into the current window and returns true; false (nothing drawn) for a live run.
+bool drawReplaySourceStrip(PanelContext& context);
+/// Compares the replay with `realLog` (a recording on this machine) once the replay is known,
+/// with a suite file (empty: the signals both share). `blocking`: the first frame waits for
+/// the result (headless screenshots and tests).
+void setReplayCompare(const std::string& realLog, const std::string& suite, bool blocking);
+/// The comparison's state as JSON, for the headless report.
+[[nodiscard]] std::string replayCompareJson();
 /// The Environment, ROS 2 and World workspaces.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createEnvironmentPanels();
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createRos2Panels();

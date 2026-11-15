@@ -9,6 +9,8 @@ find_package(imgui_vendor REQUIRED)
 find_package(SDL3 REQUIRED)
 find_package(tinyxml2 REQUIRED)
 find_package(yaml-cpp REQUIRED)
+# Reading recordings to compare them (Replay: Compare, Sim vs real, Validation).
+find_package(mcap_vendor REQUIRED)
 # Mesh files for the builder (RFC 0016 open question 8, Addendum A): the server's own reader.
 find_package(lagrange_meshes REQUIRED)
 
@@ -25,6 +27,7 @@ add_library(
     client/src/ScopeSession.cpp
     client/src/ViewerClient.cpp
     client/src/Circuit.cpp
+    client/src/CompareLog.cpp
     client/src/FlowLegend.cpp
     client/src/RadarScale.cpp
     client/src/SchematicLayout.cpp
@@ -37,6 +40,7 @@ target_include_directories(lagrange_viewer_client PUBLIC client/include)
 target_link_libraries(
     lagrange_viewer_client
     PUBLIC lagrange_proto::lagrange_proto_transport
+    PRIVATE mcap_vendor::mcap yaml-cpp::yaml-cpp
 )
 
 # The robot builder's model (RFC 0016): document, mass, kinematics, validation, undo, URDF,
@@ -192,6 +196,7 @@ add_library(
     panels/src/PerformancePanels.cpp
     panels/src/ProfilePanel.cpp
     panels/src/ReplayPanels.cpp
+    panels/src/ReplayCompare.cpp
     panels/src/Ros2Panels.cpp
     panels/src/ScenePanel.cpp
     panels/src/ScheduleChart.cpp
@@ -296,6 +301,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_viewer_client
         client/test/test_circuit.cpp
+        client/test/test_compare_log.cpp
         client/test/test_flow_legend.cpp
         client/test/test_schematic_layout.cpp
         client/test/test_profile_draft.cpp
@@ -322,6 +328,7 @@ if(BUILD_TESTING)
         lagrange_viewer_client
         lagrange_viewer_render
         lagrange_viewer_widgets
+        mcap_vendor::mcap
         Threads::Threads
     )
     target_compile_definitions(
@@ -408,6 +415,14 @@ if(BUILD_TESTING)
         ENV
         LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
         ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    # Replay: two runs recorded by lagrange_server, replayed and compared.
+    ament_add_pytest_test(
+        test_replay_compare
+        test/test_replay_compare.py
+        TIMEOUT 300
+        ENV
+        LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
     )
 endif()
 
