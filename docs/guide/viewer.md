@@ -99,6 +99,11 @@ signals:
   - {sim: body/base_link/twist, component: 0, limit: 0.05}
 ```
 
+The limit is a fraction of the real signal's range (NRMSE). When the real signal is constant in
+the window the NRMSE says nothing, so the row reads *const ref* and is judged by its RMSE in the
+signal's unit: against `abs_limit` when the entry gives one, else against the limit times the
+larger of the constant's size and the range of the sim signal.
+
 Both files are read on the viewer's machine, so a replay served from another machine cannot be
 compared yet, and **Re-simulate from here…** is shown but disabled (both need protocol additions;
 `docs/design/viewer.md`, "Replay comparison").

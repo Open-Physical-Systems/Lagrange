@@ -257,8 +257,16 @@ public:
                     symbols += (symbols.empty() ? "" : ", ") + symbol;
                 }
                 ImGui::AlignTextToFramePadding();
-                widgets::Mono(pair.unitConflicts == 0 ? c::t2 : c::error, "%s", symbols.c_str());
-                ImGui::SetItemTooltip("%zu %s%s", pair.wires, pair.wires == 1 ? "wire" : "wires",
+                // Cut before the rates column with an ellipsis (QA2 F10); all in the tooltip.
+                ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                const std::string shown = fit::cut(ImGui::GetFont(), ImGui::GetFontSize(), symbols,
+                                                   ImGui::GetContentRegionAvail().x - px(10.0F));
+                ImGui::PushStyleColor(ImGuiCol_Text, pair.unitConflicts == 0 ? c::t2 : c::error);
+                ImGui::TextUnformatted(shown.c_str());
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
+                ImGui::SetItemTooltip("%s\n%zu %s%s", symbols.c_str(), pair.wires,
+                                      pair.wires == 1 ? "wire" : "wires",
                                       pair.unitConflicts == 0 ? "" : " · unit conflict");
 
                 ImGui::TableNextColumn();

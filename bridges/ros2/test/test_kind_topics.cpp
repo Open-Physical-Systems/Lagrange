@@ -13,6 +13,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -47,12 +48,30 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 /// A signal a fake kind writes, the same value every step.
 struct Fake {
+    // A constructor rather than an aggregate, so that leaving out the frame is not a
+    // -Wmissing-field-initializers warning at every list below.
+    Fake(std::string name_, SignalType type_, Unit unit_, std::vector<double> values_,
+         std::string frame_ = {})
+        : name(std::move(name_))
+        , type(type_)
+        , unit(unit_)
+        , values(std::move(values_))
+        , frame(std::move(frame_)) {}
+
     std::string name;
     SignalType type{SignalType::Scalar};
     Unit unit{units::one};
     std::vector<double> values;
     std::string frame;
 };
+
+/// A map entry that publishes `signal` on `topic`, the rest left as the file reader leaves it.
+TopicMap published(std::string signal, std::string topic) {
+    TopicMap map;
+    map.signal = std::move(signal);
+    map.topic = std::move(topic);
+    return map;
+}
 
 /// Writes the fake signals every 10 ms.
 class FakeKinds final : public IModule {
@@ -63,13 +82,12 @@ public:
     Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
         ids_.clear();
         for (const Fake& fake : fakes_) {
-            SignalSpec spec;
-            spec.name = fake.name;
-            spec.type = fake.type;
-            spec.unit = fake.unit;
-            spec.frame = fake.frame;
-            spec.arrayLength = static_cast<std::uint32_t>(fake.values.size());
-            ids_.push_back(d.output(spec));
+            // Designated, so that GCC sees every member set (no -Wmaybe-uninitialized).
+            ids_.push_back(d.output({.name = fake.name,
+                                     .type = fake.type,
+                                     .unit = fake.unit,
+                                     .arrayLength = static_cast<std::uint32_t>(fake.values.size()),
+                                     .frame = fake.frame}));
         }
         return {};
     }
@@ -185,10 +203,10 @@ TEST_F(KindTopicsTest, PlansTypedTopicsThenEveryOtherNumberAndGivesWayToAMap) {
     EXPECT_EQ(find(topics, "/safety/fault/dropped")->type, "std_msgs/msg/Int64");
 
     TopicMaps byTopic;
-    byTopic.publish.push_back({"sensor/safety/min_distance", "/safety/scan"});
+    byTopic.publish.push_back(published("sensor/safety/min_distance", "/safety/scan"));
     EXPECT_EQ(find(withoutMapped(topics, byTopic), "/safety/scan"), nullptr);
     TopicMaps bySignal;
-    bySignal.publish.push_back({"sensor/safety/ranges", "/my/scan"});
+    bySignal.publish.push_back(published("sensor/safety/ranges", "/my/scan"));
     const std::vector<KindTopic> left = withoutMapped(topics, bySignal);
     EXPECT_EQ(left.size(), 3U);
     EXPECT_EQ(find(left, "/safety/scan"), nullptr);

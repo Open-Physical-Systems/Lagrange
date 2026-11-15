@@ -75,6 +75,12 @@ std::string cut(ImFont* font, float size, std::string_view text, float width, bo
     return middle ? fitPath(text, width, measure) : fitEnd(text, width, measure);
 }
 
+std::string cutDistinct(ImFont* font, float size, std::string_view text,
+                        std::span<const std::string> group, float width) {
+    const TextWidth measure = [font, size](std::string_view s) { return widthOf(font, size, s); };
+    return fitDistinct(text, group, width, measure);
+}
+
 bool draw(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
           std::string_view text, float width, bool middle) {
     if (widthOf(font, size, text) <= width) {

@@ -190,12 +190,18 @@ public:
                     context.initialScopeSignals->push_back(channel.topic);
                     *context.workspace = Workspace::Signals;
                 }
-                ImGui::SameLine(px(6.0F));
-                widgets::Mono(c::t1, "%s", channel.topic.c_str());
                 char hz[24];
                 rate(channel.rateHz, hz, sizeof(hz));
                 ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
                 const float width = ImGui::CalcTextSize(hz).x;
+                ImGui::PopFont();
+                ImGui::SameLine(px(6.0F));
+                // The rate keeps its place on the right; a long topic is cut before it, its
+                // last part whole, and is whole in the tooltip (QA2 F10).
+                ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                ImGui::PushStyleColor(ImGuiCol_Text, c::t1);
+                fit::text(channel.topic, rowEnd - width - px(16.0F) - ImGui::GetCursorPosX(), true);
+                ImGui::PopStyleColor();
                 ImGui::PopFont();
                 ImGui::SameLine(rowEnd - width - px(6.0F));
                 widgets::Mono(c::t3, "%s", hz);

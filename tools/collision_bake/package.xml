@@ -10,10 +10,15 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <buildtool_depend>lagrange_cmake</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- bake_urdf runs lagrange_server's lagrange_mesh_to_obj -->
+  <exec_depend>lagrange_server</exec_depend>
   <exec_depend>openusd_vendor</exec_depend>
   <exec_depend>python3-coacd-pip</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <!-- test_bake_urdf drives the baked robot with lagrange.Simulation -->
+  <test_depend>lagrange_python</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

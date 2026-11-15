@@ -3,6 +3,7 @@
 #include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/ProfileExtras.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -11,8 +12,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <imgui.h>
 
@@ -29,7 +32,7 @@ constexpr float kRowHeight = 46.0F;  // two text lines, as in the reference
 constexpr float kModuleRowHeight = 32.0F;
 // A profile fits real time when one millisecond of simulation costs under one of CPU.
 constexpr double kRealTimeBudgetMs = 1.0;
-constexpr int kListedSignals = 3;  // consumer signals named under the substitute cards
+constexpr std::size_t kListedReaders = 6;  // consumers named under the substitute cards
 
 ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
@@ -200,8 +203,20 @@ private:
             ImGui::TableSetColumnIndex(3);
             centreInRow(top, height);
             ImGui::AlignTextToFramePadding();
-            widgets::Caption("%s", info.unavailableReason.c_str());
-            ImGui::SetItemTooltip("%s", info.unavailableReason.c_str());  // when it is cut
+            // The reason has the step and cost columns too (an unavailable domain has neither),
+            // cut with an ellipsis and whole in the tooltip (QA2 F10).
+            const float cell = ImGui::GetStyle().CellPadding.x;
+            const float span =
+                ImGui::GetContentRegionAvail().x + px(84.0F) + px(66.0F) + 4.0F * cell - px(8.0F);
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            ImGui::PushClipRect(ImVec2(at.x, at.y - height), ImVec2(at.x + span, at.y + height),
+                                false);
+            ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+            fit::text(info.unavailableReason, span);
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+            ImGui::PopClipRect();
             ImGui::PopID();
             return;
         }
@@ -432,23 +447,46 @@ private:
         const std::string_view label = widgets::domainLabel(info->name);
         widgets::Strong("%.*s substitute", static_cast<int>(label.size()), label.data());
 
-        // Who reads this domain's signals: they will read from the substitute instead.
-        char consumers[160] = "";
-        int used = 0;
-        int count = 0;
-        for (const DomainInfo& other : profile.domains) {
-            const bool reads =
-                std::ranges::find(other.dependsOn, info->name) != other.dependsOn.end();
-            if (reads && other.enabled && used < static_cast<int>(sizeof(consumers))) {
-                used += std::snprintf(consumers + used,
-                                      sizeof(consumers) - static_cast<std::size_t>(used), "%s%s",
-                                      count == 0 ? "" : ", ", other.name.c_str());
-                ++count;
+        // Who reads this domain's signals: they will read from the substitute instead. The
+        // modules of the wiring the server would build, as the Coupling tab lists them (a
+        // controller is a module of no domain); the profile's dependencies before it arrives.
+        struct Reader {
+            std::string module;
+            std::vector<std::string> signals;
+            std::string unit;  // of the first signal
+        };
+        std::vector<Reader> readers;
+        for (const Coupling& pair : couplings(session.wiring())) {
+            if (pair.fromDomain != info->name || pair.toDomain == info->name) {
+                continue;
+            }
+            auto reader = std::ranges::find(readers, pair.to, &Reader::module);
+            if (reader == readers.end()) {
+                readers.push_back({pair.to, {}, {}});
+                reader = std::prev(readers.end());
+            }
+            for (const WiringInfo::Wire& wire : session.wiring().wires) {
+                if (wire.from == pair.from && wire.to == pair.to &&
+                    std::ranges::find(reader->signals, wire.signal) == reader->signals.end()) {
+                    if (reader->signals.empty()) {
+                        reader->unit = wire.sinkUnit;
+                    }
+                    reader->signals.push_back(wire.signal);
+                }
             }
         }
+        if (session.wiring().empty()) {
+            for (const DomainInfo& other : profile.domains) {
+                if (other.enabled &&
+                    std::ranges::find(other.dependsOn, info->name) != other.dependsOn.end()) {
+                    readers.push_back({other.name, {}, {}});
+                }
+            }
+        }
+        const std::size_t count = readers.size();
         if (count != 0) {
             char pill[48];
-            std::snprintf(pill, sizeof(pill), "affects %d %s", count,
+            std::snprintf(pill, sizeof(pill), "affects %zu %s", count,
                           count == 1 ? "consumer" : "consumers");
             ImGui::SameLine(0.0F, px(10.0F));
             widgets::Pill(pill, widgets::PillKind::Warn);
@@ -505,36 +543,37 @@ private:
             sourceActive_ = ImGui::IsItemActive();
             ImGui::PopFont();
         }
-        // The signals the readers take from this domain, from the wiring the server would
-        // build: "→ link/base/ext_wrench [N·m] (rigid_body) will read from the substitute".
-        int listed = 0;
-        for (const WiringInfo::Wire& wire : session.wiring().wires) {
-            const WiringInfo::Node* writer = nullptr;
-            for (const WiringInfo::Node& node : session.wiring().nodes) {
-                if (node.module == wire.from) {
-                    writer = &node;
+        // Each reader with the first signal it takes from this domain:
+        // "→ sensors.body/base_link/pose +3 [m] will read from the substitute".
+        const char* reads = session.find(info->name)->enabled ? "would read from the substitute"
+                                                              : "will read from the substitute";
+        for (std::size_t i = 0; i < std::min(count, kListedReaders); ++i) {
+            const Reader& reader = readers[i];
+            widgets::Mono(c::info, "→");
+            ImGui::SameLine(0.0F, px(6.0F));
+            if (reader.signals.empty()) {
+                widgets::Mono(c::t1, "%s", reader.module.c_str());
+            } else {
+                widgets::Mono(c::t1, "%s.%s", reader.module.c_str(), reader.signals[0].c_str());
+                if (reader.signals.size() > 1) {
+                    ImGui::SameLine(0.0F, px(6.0F));
+                    widgets::Mono(c::t3, "+%zu", reader.signals.size() - 1);
+                    std::string all;
+                    for (const std::string& signal : reader.signals) {
+                        all += (all.empty() ? "" : "\n") + signal;
+                    }
+                    ImGui::SetItemTooltip("%s", all.c_str());
                 }
             }
-            if (writer == nullptr || writer->domain != info->name || listed >= kListedSignals) {
-                continue;
+            ImGui::SameLine(0.0F, px(6.0F));
+            if (reader.unit.empty()) {
+                widgets::Caption("%s", reads);
+            } else {
+                widgets::Caption("[%s] %s", reader.unit.c_str(), reads);
             }
-            ++listed;
-            widgets::Mono(c::info, "→");
-            ImGui::SameLine(0.0F, px(6.0F));
-            widgets::Mono(c::t1, "%s.%s", wire.to.c_str(), wire.signal.c_str());
-            ImGui::SameLine(0.0F, px(6.0F));
-            widgets::Caption("[%s] %s", wire.sinkUnit.c_str(),
-                             session.find(info->name)->enabled ? "would read from the substitute"
-                                                               : "will read from the substitute");
         }
-        if (count != 0 && listed == 0) {
-            widgets::Mono(c::info, "→");
-            ImGui::SameLine(0.0F, px(6.0F));
-            widgets::Mono(c::t1, "%s", consumers);
-            ImGui::SameLine(0.0F, px(6.0F));
-            widgets::Caption("%s", session.find(info->name)->enabled
-                                       ? "would read from the substitute"
-                                       : "will read from the substitute");
+        if (count > kListedReaders) {
+            widgets::Caption("+%zu more consumers (Coupling tab)", count - kListedReaders);
         }
         ImGui::Unindent(pad);
         ImGui::Dummy(ImVec2(0.0F, px(6.0F)));

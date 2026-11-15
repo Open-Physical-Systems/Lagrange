@@ -73,6 +73,9 @@ struct BuilderSession {
     Selection selection;
     builder::Preview preview;  ///< joint preview positions (rad or m); view state, not undoable
     Problems problems;
+    /// lagrange_server's lagrange_check is installed: Check loads… is offered (SPEC: hidden
+    /// otherwise). Set by the host.
+    bool canCheckLoads{false};
     /// The Builder view's own camera (R3): never the Scene viewport's.
     Camera camera;
     /// The Builder view's tool column (SPEC "Builder view"; Q W E A M). Added by WP-D.

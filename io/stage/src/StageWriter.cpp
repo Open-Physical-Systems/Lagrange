@@ -750,8 +750,9 @@ private:
                     table.mimic[j] != kNoMimic) {
                     UsdPrim prim = joint.GetPrim();
                     prim.ApplyAPI(TfToken("JointDynamicsAPI_1"));
-                    const auto real = [&prim](const char* name, double value) {
-                        prim.CreateAttribute(TfToken(name), SdfValueTypeNames->Double).Set(value);
+                    const auto real = [&prim](const char* attribute, double value) {
+                        prim.CreateAttribute(TfToken(attribute), SdfValueTypeNames->Double)
+                            .Set(value);
                     };
                     real("joint:damping", table.damping[j]);
                     real("joint:friction", table.friction[j]);

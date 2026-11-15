@@ -64,9 +64,12 @@ public:
     }
     /// True while a child process runs or a Test is stopping (headless `wait:idle`).
     [[nodiscard]] bool busy() const {
-        // A split in progress too, so that --input's wait:idle waits for its parts.
+        // A split in progress too, so that --input's wait:idle waits for its parts; and a
+        // request the UI made that afterUi has not acted on yet (Export USD, Check loads, a
+        // xacro to open), so that a wait right after the click waits for its process (QA2 F2).
         return !jobs_.empty() || test_.state() == builder::TestServer::State::Stopping ||
-               session_.split.running;
+               session_.split.running || session_.exportUsdRequested || session_.checkRequested ||
+               session_.openRequested || session_.saveRequested || session_.templateRequested;
     }
     /// Save to `target` now (atomic). False with the reason in Problems. Headless
     /// --builder-save, and Save / Save as.

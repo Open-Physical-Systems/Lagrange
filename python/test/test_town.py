@@ -4,6 +4,7 @@ Every invariant is sampled from a real run of assets/worlds/town/town.usda (docs
 traffic.md §8.2). The bounds on distances are from the shapes: a car's box is 4.5 m x 1.8 m.
 """
 
+import itertools
 import math
 from pathlib import Path
 
@@ -229,3 +230,39 @@ def test_spawning_and_removing_a_robot_keeps_the_town_running():
     sim.delete(name)
     sim.step_until(sim.time + 3.0)
     assert len(cars(sim)) == 6
+
+
+def longest_stay(track, radius=4.0):
+    """The longest span (s) of (t, x, y) samples that all stay within `radius` of its first."""
+    best, j = 0.0, 0
+    for i in range(len(track)):
+        j = max(j, i)
+        while j + 1 < len(track) and math.dist(track[i][1:], track[j + 1][1:]) < radius:
+            j += 1
+        best = max(best, track[j][0] - track[i][0])
+    return best
+
+
+@pytest.mark.parametrize(
+    "world, spawn", [(TOWN, None), (TOWN, [30.0, -1.75]), (str(lagrange.sample_city()), None)]
+)
+def test_the_sedans_demo_keeps_driving_among_the_traffic(world, spawn):
+    """QA2 F3: the demo circle round the junction, with traffic, never stuck for long.
+
+    Before: in the city block the car and a traffic vehicle waited on each other for 66 s of
+    300; from the town's drive spawn the demo drove away from the junction and was stuck 58 s.
+    Measured after (300 s): at most 33 s in one 4 m circle (a red light, a back-off and a wait).
+    """
+    sim = lagrange.Simulation(
+        lagrange.sample_sedan(), world=world, **({"spawn": spawn} if spawn else {})
+    )
+    track = []
+    while sim.time < 180.0:
+        sim.step_until(sim.time + 0.5)
+        p = sim.read("body/base_link/pose")
+        track.append((sim.time, p[0], p[1]))
+    driven = sum(math.dist(a[1:], b[1:]) for a, b in itertools.pairwise(track))
+    assert driven > 300.0, f"drove {driven:.0f} m in 180 s"
+    assert longest_stay(track) < 45.0, "held in one place"
+    # It reached the circle round the junction, also from a spawn 30 m away.
+    assert min(math.hypot(x, y) for _, x, y in track) < 6.0

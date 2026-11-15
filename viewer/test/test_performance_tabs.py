@@ -90,7 +90,7 @@ def server(request, tmp_path_factory):
 
 
 def run_performance(socket: str, tmp_path: Path, panel: str | None) -> tuple[dict, Path]:
-    image = tmp_path / f"performance_{(panel or 'default').strip('#')}.png"
+    image = tmp_path / f"performance_{(panel or 'default').strip('#').replace(' ', '_')}.png"
     extra = ["--panel", panel] if panel else []
     done = subprocess.run(
         [
@@ -154,14 +154,15 @@ def test_the_kpi_row_has_six_cards_and_the_default_tabs(server) -> None:
 
 def test_threads_tab_lists_the_viewers_threads(server) -> None:
     socket, tmp_path = server
-    report, _image = run_performance(socket, tmp_path, "###PerformanceThreads")
+    # --panel takes the tab's visible title as well as its ImGui id (###PerformanceThreads).
+    report, _image = run_performance(socket, tmp_path, "Threads")
     assert "Threads" in report["windows"]
     assert "Scheduler · last 10 ms" not in report["windows"]
 
 
 def test_gpu_passes_tab_times_the_viewers_own_passes(server) -> None:
     socket, tmp_path = server
-    report, _image = run_performance(socket, tmp_path, "###PerformanceGpuPasses")
+    report, _image = run_performance(socket, tmp_path, "GPU passes")
     assert "GPU passes" in report["windows"] and "Modules" not in report["windows"]
     gpu = report["viewer_gpu"]
     if not gpu["timed"]:

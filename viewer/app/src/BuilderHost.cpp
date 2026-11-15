@@ -371,6 +371,9 @@ BuilderHost::BuilderHost(BuilderSession& session, ViewerClient& client)
         session_.catalogError =
             error.file + ":" + std::to_string(error.line) + ": " + error.message;
     }
+    // Check loads… is offered when the program it runs is installed (QA2 F2: it was offered by
+    // `lagrange` on PATH, so a run without that on PATH hid the button though the check ran).
+    session_.canCheckLoads = !program("lagrange_check").empty();
 }
 
 void BuilderHost::afterUi() {

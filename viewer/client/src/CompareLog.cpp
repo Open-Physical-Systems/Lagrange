@@ -321,6 +321,9 @@ Suite loadSuite(const std::string& path) {
             if (entry["limit"]) {
                 mapping.limit = entry["limit"].as<double>();
             }
+            if (entry["abs_limit"]) {
+                mapping.absLimit = entry["abs_limit"].as<double>();
+            }
             suite.mappings.push_back(std::move(mapping));
         }
     } catch (const YAML::Exception& e) {
@@ -356,7 +359,7 @@ Suite sharedSuite(const LogFile& sim, const LogFile& real, double limit) {
         if (spread(s) == 0.0 && spread(*r) == 0.0) {
             continue;
         }
-        suite.mappings.push_back({s.name, r->name, 0, limit});
+        suite.mappings.push_back({s.name, r->name, 0, limit, 0.0});
     }
     return suite;
 }
@@ -529,6 +532,8 @@ Result compareSignals(const LogFile& sim, const LogFile& real, const Mapping& ma
 
     double lo = std::numeric_limits<double>::infinity();
     double hi = -lo;
+    double simLo = lo;
+    double simHi = -lo;
     double squares = 0.0;
     double phaseSquares[static_cast<int>(Phase::Count)]{};
     for (std::int64_t k = begin; k < end; ++k) {
@@ -540,6 +545,8 @@ Result compareSignals(const LogFile& sim, const LogFile& real, const Mapping& ma
         const double e = b - a;
         lo = std::min(lo, b);
         hi = std::max(hi, b);
+        simLo = std::min(simLo, a);
+        simHi = std::max(simHi, a);
         squares += e * e;
         if (std::abs(e) > result.maxAbs || result.samples == 0) {
             result.maxAbs = std::abs(e);
@@ -573,6 +580,16 @@ Result compareSignals(const LogFile& sim, const LogFile& real, const Mapping& ma
     };
     result.nrmse = normalise(result.rmse);
     result.pass = result.nrmse <= result.limit;
+    if (result.range <= kTiny) {
+        // A constant reference (a backend that writes a signal it does not model, a sensor
+        // stuck at one value): the NRMSE is 0 or infinite, so judge the RMSE in the unit, on
+        // the scale of the reference or of what the sim did.
+        result.constantReference = true;
+        const double scale = std::max(std::abs(lo), simHi - simLo);
+        result.absLimit =
+            mapping.absLimit > 0.0 ? mapping.absLimit : std::max(result.limit * scale, kTiny);
+        result.pass = result.rmse <= result.absLimit;
+    }
     for (int p = 0; p < static_cast<int>(Phase::Count); ++p) {
         if (result.phaseSamples[p] > 0) {
             result.phaseNrmse[p] =
@@ -621,6 +638,8 @@ std::string toJson(const Report& report, const Suite& suite) {
             << ", \"max_abs\": " << jsonNumber(r.maxAbs)
             << ", \"lag_s\": " << jsonNumber(static_cast<double>(r.lagNs) * 1e-9)
             << ", \"limit\": " << jsonNumber(r.limit)
+            << ", \"constant_reference\": " << (r.constantReference ? "true" : "false")
+            << ", \"abs_limit\": " << jsonNumber(r.absLimit)
             << ", \"pass\": " << (r.pass ? "true" : "false") << "}";
     }
     out << "\n  ]\n}\n";

@@ -6,6 +6,9 @@
 #include "lagrange/viewer/TextFit.hpp"
 
 #include <algorithm>
+#include <span>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -54,6 +57,28 @@ TEST(TextFit, APathKeepsItsLastPartWhole) {
     EXPECT_EQ(characters(middle), 24.0F);
     EXPECT_TRUE(middle.starts_with("joint/front"));
     EXPECT_TRUE(middle.ends_with("_torque"));
+}
+
+TEST(TextFit, NamesThatWouldReadTheSameAreCutApart) {
+    const std::vector<std::string> group{"joint/front_caster_swivel_joint/position",
+                                         "joint/front_caster_wheel_joint/position"};
+    // fitPath cuts both to the same text.
+    ASSERT_EQ(fitPath(group[0], 26.0F, characters), fitPath(group[1], 26.0F, characters));
+    const std::string swivel = fitDistinct(group[0], group, 26.0F, characters);
+    const std::string wheel = fitDistinct(group[1], group, 26.0F, characters);
+    EXPECT_NE(swivel, wheel);
+    EXPECT_LE(characters(swivel), 26.0F);
+    EXPECT_LE(characters(wheel), 26.0F);
+    EXPECT_TRUE(swivel.ends_with("/position"));
+    EXPECT_NE(swivel.find("swivel"), std::string::npos) << swivel;
+    // Names that differ only at the start keep their starts.
+    const std::vector<std::string> sides{"joint/left_wheel_joint/very_long_quantity_name",
+                                         "joint/right_wheel_joint/very_long_quantity_name"};
+    EXPECT_NE(fitDistinct(sides[0], sides, 30.0F, characters),
+              fitDistinct(sides[1], sides, 30.0F, characters));
+    // Alone, it is fitPath.
+    EXPECT_EQ(fitDistinct(group[0], std::span<const std::string>{}, 26.0F, characters),
+              fitPath(group[0], 26.0F, characters));
 }
 
 TEST(TextFit, NeverCutsInsideACharacter) {

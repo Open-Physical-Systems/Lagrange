@@ -58,6 +58,9 @@ private:
     double stalled_{0.0};       // s the demo has been held at a standstill
     double reversing_{0.0};     // s of backing away left
     double reverseSteer_{0.0};  // rad while backing away
+    double yielding_{0.0};      // s of standing still left after backing away
+    double tries_{0.0};         // backings away in a row, without driving freely between
+    double free_{0.0};          // s driven freely since the last backing away
     SignalId speed_, pose_, throttle_, brake_, steering_;
 };
 

@@ -1,5 +1,8 @@
 #include "lagrange/viewer/TextFit.hpp"
 
+#include <algorithm>
+#include <array>
+#include <set>
 #include <vector>
 
 namespace lagrange::viewer {
@@ -103,6 +106,71 @@ std::string fitPath(std::string_view text, float width, const TextWidth& measure
     std::string result = head;
     result += last;
     return result;
+}
+
+namespace {
+
+/// The path's last part whole and its start cut in the middle: "joint/fro…wheel_joint/position".
+std::string fitPathMiddle(std::string_view text, float width, const TextWidth& measure) {
+    if (measure(text) <= width) {
+        return std::string(text);
+    }
+    const std::size_t slash = text.rfind('/');
+    if (slash == std::string_view::npos || slash == 0) {
+        return fitMiddle(text, width, measure);
+    }
+    const std::string_view last = text.substr(slash);
+    std::string result = fitMiddle(text.substr(0, slash), width - measure(last), measure);
+    result += last;
+    return measure(result) <= width ? result : fitMiddle(text, width, measure);
+}
+
+/// "…" and the longest end of `text` that fits.
+std::string fitStart(std::string_view text, float width, const TextWidth& measure) {
+    if (measure(text) <= width) {
+        return std::string(text);
+    }
+    const std::vector<std::size_t> starts = characterStarts(text);
+    // The fewest dropped characters k whose ellipsis and the rest fit.
+    std::size_t low = 1;
+    std::size_t high = starts.size() - 1;
+    while (low < high) {
+        const std::size_t mid = (low + high) / 2;
+        std::string candidate(kEllipsis);
+        candidate += text.substr(starts[mid]);
+        if (measure(candidate) <= width) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    std::string result(kEllipsis);
+    result += text.substr(starts[low]);
+    return result;
+}
+
+}  // namespace
+
+std::string fitDistinct(std::string_view text, std::span<const std::string> group, float width,
+                        const TextWidth& measure) {
+    using Fit = std::string (*)(std::string_view, float, const TextWidth&);
+    constexpr std::array<Fit, 5> kFits{&fitPath, &fitPathMiddle, &fitStart, &fitMiddle, &fitEnd};
+    std::set<std::string_view> names(group.begin(), group.end());
+    names.insert(text);
+    for (const Fit fit : kFits) {
+        std::set<std::string> seen;
+        bool distinct = true;
+        for (const std::string_view name : names) {
+            distinct = seen.insert(fit(name, width, measure)).second;
+            if (!distinct) {
+                break;
+            }
+        }
+        if (distinct) {
+            return fit(text, width, measure);
+        }
+    }
+    return fitPath(text, width, measure);
 }
 
 }  // namespace lagrange::viewer
