@@ -5864,7 +5864,7 @@ struct Server::Impl {
             for (const emi::Source& s : emiSources()) {
                 v1::EnvironmentState::EmiSource& out = *env.add_emi_sources();
                 out.set_name(s.name);
-                out.set_prim(0xFFFF'FFFFU);
+                out.set_prim(emiSourcePrim(s));
                 out.set_frequency_hz(s.frequency);
                 out.set_current_a(emiState(s).current);
                 out.set_power_w(s.radiatedPower);
@@ -5886,6 +5886,18 @@ struct Server::Impl {
             emiSourcesRead = true;
         }
         return cachedEmiSources;
+    }
+
+    /// A source's scene prim, for the viewer to show it with its prim: the EmiSourceAPI_1
+    /// instance of the same name (emi::sourcesOf names each by its prim). kNoIndex if none.
+    [[nodiscard]] std::uint32_t emiSourcePrim(const emi::Source& s) const {
+        const WorldView world(robot.world);
+        for (const SchemaInstance* inst : world.instancesOf("EmiSourceAPI_1")) {
+            if (world.signalInstanceName(inst->prim) == s.name) {
+                return scenePrimOf(inst->prim);
+            }
+        }
+        return kNoIndex;
     }
 
     /// A source's pose and current now, from the bus (its body's pose, its motor's current).
@@ -6397,6 +6409,7 @@ struct Server::Impl {
                 active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM));
         }
         otherAgents(world, region);
+        runRegion(world, region);
         v1::WorldState::FloatingOrigin& origin = *world.mutable_floating_origin();
         origin.set_anchor(robot.name);
         origin.set_recenter_threshold_m(kRebaseDistanceM);
@@ -6472,6 +6485,62 @@ struct Server::Impl {
             agent.set_status(w.bodies.kinematic[b] ? "kinematic" : "active");
         }
     }
+    /// The run's one active region (huge-worlds.md §3; a served run is one region, RegionHost's
+    /// several are headless only), in world ENU: its loaded tiles, its fixed scenery and its
+    /// agents, so the viewer's Regions tab counts them all inside it.
+    void runRegion(v1::WorldState& world, const std::array<double, 3>& region) const {
+        std::array<double, 4> box{
+            std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+        const auto grow = [&box](double x0, double y0, double x1, double y1) {
+            box[0] = std::min(box[0], x0);
+            box[1] = std::min(box[1], y0);
+            box[2] = std::max(box[2], x1);
+            box[3] = std::max(box[3], y1);
+        };
+        if (tileSelector) {
+            const std::vector<streaming::TileInfo>& tiles = tileSelector->tiles();
+            for (const auto& [id, content] : tileContent) {
+                (void)content;
+                const streaming::TileInfo& t = tiles.at(id);
+                grow(t.boundsMin[0], t.boundsMin[1], t.boundsMax[0], t.boundsMax[1]);
+            }
+        }
+        const World& w = robot.world;
+        const std::vector<bool> moving = movingBodies(w);
+        for (std::size_t c = 0; c < w.colliders.body.size(); ++c) {
+            const BodyId owner = w.colliders.body[c];
+            if (owner != kWorldBody && moving[owner.index]) {
+                continue;  // a moving body's: its agent stands for it
+            }
+            const double r = sensors::boundingRadius(w.colliders.shape[c], w.colliders.size[c]);
+            if (!std::isfinite(r)) {
+                continue;  // the ground plane
+            }
+            const std::array<double, 3> p =
+                owner == kWorldBody
+                    ? w.colliders.poseInBody[c].position
+                    : compose(robot.bodyRestPose.at(owner.index), w.colliders.poseInBody[c])
+                          .position;
+            grow(p[0] + region[0] - r, p[1] + region[1] - r, p[0] + region[0] + r,
+                 p[1] + region[1] + r);
+        }
+        constexpr double kAgentMarginM = 1.0;  // an agent on the edge is still inside
+        for (const v1::WorldState::Agent& agent : world.agents()) {
+            grow(agent.x() - kAgentMarginM, agent.y() - kAgentMarginM, agent.x() + kAgentMarginM,
+                 agent.y() + kAgentMarginM);
+        }
+        if (!(box[0] <= box[2])) {
+            return;
+        }
+        v1::WorldState::Region& out = *world.add_regions();
+        out.set_name("R1");
+        out.set_min_x(box[0]);
+        out.set_min_y(box[1]);
+        out.set_max_x(box[2]);
+        out.set_max_y(box[3]);
+    }
+
     /// Per kinematic agent body: when and where the last world report saw it, and its speed.
     mutable std::map<std::size_t, std::tuple<std::int64_t, double, double, double>> agentTrack;
 
