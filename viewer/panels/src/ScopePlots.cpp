@@ -116,6 +116,20 @@ void ScopePlotter::legend(const ScopeSession& session, const std::string& unit) 
     float x = origin.x + size.x - px(10.0F);
     const float y = origin.y + px(8.0F);
     ImPlot::PushPlotClipRect();
+    // A backdrop under the legend, so that it stays readable over the newest samples (the
+    // traces end at the right edge, under it).
+    const char* shown = unit == "1" ? "ratio" : unit.c_str();
+    const float mono = px(theme::kMonoSize);
+    float total = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, shown).x;
+    for (const ScopeTrace& trace : session.traces()) {
+        if (trace.unit == unit) {
+            total += px(30.0F) +
+                     fonts.sans->CalcTextSizeA(text, FLT_MAX, 0.0F, shortName(trace.label)).x;
+        }
+    }
+    draw->AddRectFilled(ImVec2(x - total - px(6.0F), y - px(3.0F)),
+                        ImVec2(x + px(6.0F), y + text + px(4.0F)),
+                        u32(ImVec4(c::bg0.x, c::bg0.y, c::bg0.z, 0.82F)), px(3.0F));
     for (std::size_t i = session.traces().size(); i-- > 0;) {
         const ScopeTrace& trace = session.traces()[i];
         if (trace.unit != unit) {
@@ -130,8 +144,6 @@ void ScopePlotter::legend(const ScopeSession& session, const std::string& unit) 
                       u32(theme::kSeries[trace.color % ScopeSession::kColors]), px(2.0F));
         x -= px(12.0F);
     }
-    const char* shown = unit == "1" ? "ratio" : unit.c_str();
-    const float mono = px(theme::kMonoSize);
     const float width = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, shown).x;
     draw->AddText(fonts.mono, mono, ImVec2(x - width, y), u32(c::t3), shown);
     ImPlot::PopPlotClipRect();

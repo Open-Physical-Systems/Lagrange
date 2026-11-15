@@ -3,6 +3,7 @@
 //
 // Sensors are the stage's prims of a sensor type; their frames and signals are named after
 // those prims. Nothing here knows a particular robot.
+#include "PanelFormat.hpp"
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -30,7 +31,7 @@ namespace {
 namespace c = theme::c;
 using widgets::px;
 
-constexpr double kRateWindowSeconds = 1.0;  // frame rates are measured over this long
+constexpr double kRateWindowSeconds = 1.0;  // frame rates are measured over this much sim time
 // Returns weaker than this are drawn as "attenuated" (design: two tones of the sensor colour).
 constexpr float kStrongIntensity = 0.12F;
 
@@ -96,8 +97,14 @@ public:
         if (const int frame = ImGui::GetFrameCount(); frame != frame_) {
             frame_ = frame;
             scopes.update();
-            const double now = ImGui::GetTime();
+            // Frames per simulated second: what the sensor's rate means, whatever the real-time
+            // factor or the viewer's frame clock (a headless viewer ticks 1/60 s a frame) (L4).
+            const double now = static_cast<double>(context.status.simTimeNs) * 1e-9;
             for (Sensor& sensor : sensors) {
+                if (now < sensor.countedAt) {  // the run went back (reset, seek)
+                    sensor.countedAt = now;
+                    sensor.countedFrames = sensor.stream ? sensor.stream->frames() : 0;
+                }
                 if (sensor.stream && now - sensor.countedAt >= kRateWindowSeconds) {
                     const std::uint64_t frames = sensor.stream->frames();
                     sensor.rateHz = static_cast<double>(frames - sensor.countedFrames) /
@@ -164,7 +171,7 @@ private:
             sensor.prim = i;
             sensor.kind = kindOf(prims[i].typeName);
             sensor.custom = prims[i].typeName == "CustomSensor";
-            sensor.countedAt = ImGui::GetTime();
+            sensor.countedAt = static_cast<double>(context.status.simTimeNs) * 1e-9;
             if (context.catalog) {
                 // Its images, by name: what a custom sensor shows (sensors.md §9 "Images of
                 // kinds"), and a camera's other images. Not the delayed copies.
@@ -274,6 +281,19 @@ public:
             return;
         }
         const std::vector<PrimData>& prims = context.scene->statics->prims;
+        // With the sensors domain off (as the server runs it, not as the draft says) the
+        // frames that arrive are the substitute's, empty: not "ok" (L5).
+        std::string substitute;
+        bool sensorsOff = false;
+        for (const DomainView& view : context.profileSession->domains()) {
+            if (view.name == "sensors" && view.enabled == view.pending) {
+                sensorsOff = true;
+                substitute = view.pending ? std::string() : view.mode;
+            }
+        }
+        char offPill[48];
+        std::snprintf(offPill, sizeof(offPill), "off%s%s", substitute.empty() ? "" : " → ",
+                      substitute.c_str());
         for (std::size_t i = 0; i < state_->sensors.size(); ++i) {
             const Sensor& sensor = state_->sensors[i];
             const bool receiving = (sensor.stream && sensor.stream->frames() != 0) ||
@@ -295,8 +315,12 @@ public:
             } else {
                 std::snprintf(detail, sizeof(detail), "no data from this server");
             }
+            const widgets::PillKind kind = sensorsOff  ? widgets::PillKind::Neutral
+                                           : receiving ? widgets::PillKind::Ok
+                                                       : widgets::PillKind::Warn;
             if (row(static_cast<int>(i), prims[sensor.prim].name.c_str(), detail,
-                    receiving ? "ok" : "no data", receiving, state_->selected == i)) {
+                    sensorsOff ? offPill : (receiving ? "ok" : "no data"), kind,
+                    state_->selected == i)) {
                 state_->selected = i;
                 context.selectedPrim = sensor.prim;
             }
@@ -306,8 +330,8 @@ public:
 
 private:
     /// Design: status dot, name, a status pill, and a mono line with the configuration.
-    static bool row(int index, const char* name, const char* detail, const char* pill, bool ok,
-                    bool selected) {
+    static bool row(int index, const char* name, const char* detail, const char* pill,
+                    widgets::PillKind kind, bool selected) {
         const float width = ImGui::GetContentRegionAvail().x;
         const float height = px(52.0F);
         const ImVec2 min = ImGui::GetCursorScreenPos();
@@ -323,8 +347,10 @@ private:
             draw->AddRectFilled(min, max, u32(c::bg3));
         }
         draw->AddLine(ImVec2(min.x, max.y), max, u32(c::line));
-        draw->AddCircleFilled(ImVec2(min.x + px(14.0F), min.y + height * 0.5F), px(4.0F),
-                              u32(ok ? c::ok : c::warn));
+        const ImVec4 dot = kind == widgets::PillKind::Ok     ? c::ok
+                           : kind == widgets::PillKind::Warn ? c::warn
+                                                             : c::t3;
+        draw->AddCircleFilled(ImVec2(min.x + px(14.0F), min.y + height * 0.5F), px(4.0F), u32(dot));
         const theme::Fonts& fonts = theme::fonts();
         draw->AddText(fonts.sansMedium, px(theme::kBodySize),
                       ImVec2(min.x + px(28.0F), min.y + px(8.0F)), u32(c::t1), name);
@@ -333,7 +359,7 @@ private:
         const float pillWidth = widgets::PillWidth(pill);
         const ImVec2 after = ImGui::GetCursorScreenPos();
         ImGui::SetCursorScreenPos(ImVec2(max.x - pillWidth - px(10.0F), min.y + px(8.0F)));
-        widgets::Pill(pill, ok ? widgets::PillKind::Ok : widgets::PillKind::Warn);
+        widgets::Pill(pill, kind);
         ImGui::SetCursorScreenPos(after);
         ImGui::Dummy(ImVec2(0.0F, 0.0F));
         return clicked;
@@ -1045,8 +1071,9 @@ public:
             widgets::PropertyRow("mean SNR", text, "dB");
             std::snprintf(text, sizeof(text), "%.1f", sensor.rateHz);
             widgets::PropertyRow("frame rate", text, "Hz");
-            std::snprintf(text, sizeof(text), "%.3f", static_cast<double>(cloud->simTimeNs) * 1e-9);
-            widgets::PropertyRow("frame time", text, "s");
+            // When the frame was taken, in simulation time (a time of day, not a duration).
+            format::clock(cloud->simTimeNs, text, sizeof(text));
+            widgets::PropertyRow("taken at", text, "sim t");
             ImGui::Unindent(px(8.0F));
         } else if (cloud && widgets::SectionHeader("This frame", "measured")) {
             // Measured from the points themselves: what the frame holds, not a model of why.
@@ -1073,8 +1100,9 @@ public:
             widgets::PropertyRow("mean intensity", text, nullptr);
             std::snprintf(text, sizeof(text), "%.1f", sensor.rateHz);
             widgets::PropertyRow("frame rate", text, "Hz");
-            std::snprintf(text, sizeof(text), "%.3f", static_cast<double>(cloud->simTimeNs) * 1e-9);
-            widgets::PropertyRow("frame time", text, "s");
+            // When the frame was taken, in simulation time (a time of day, not a duration).
+            format::clock(cloud->simTimeNs, text, sizeof(text));
+            widgets::PropertyRow("taken at", text, "sim t");
             std::snprintf(text, sizeof(text), "%llu",
                           static_cast<unsigned long long>(sensor.stream->rejected()));
             widgets::PropertyRow("rejected frames", text, nullptr);

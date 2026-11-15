@@ -143,7 +143,8 @@ private:
         ImGui::SameLine(0.0F, px(8.0F));
         ImGui::TextColored(c::t2, "%s", entry.source.c_str());
         ImGui::SameLine(0.0F, px(8.0F));
-        ImGui::TextUnformatted(entry.text.c_str());
+        // A line longer than the panel ends in an ellipsis; hovering it shows all of it.
+        fit::text(entry.text, ImGui::GetContentRegionAvail().x);
     }
 
     bool problemsOnly_;
