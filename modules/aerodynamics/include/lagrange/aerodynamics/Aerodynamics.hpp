@@ -171,6 +171,14 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 /// stays. Without a hardware GPU the fitted model runs instead.
 class AeroDrag final : public IModule {
 public:
+    AeroDrag() = default;
+    /// With the config it will run with, so info() is right before init: a run that asks for
+    /// the live air box on the GPU is not deterministic (invariant 7) until init finds no GPU.
+    explicit AeroDrag(const ModuleConfig& config) : gpuAsked_(asksGpuAir(config)) {}
+    /// Whether `config` asks for the live air box on a hardware GPU (downwash on, model lbm,
+    /// not downwash_lbm_cpu).
+    [[nodiscard]] static bool asksGpuAir(const ModuleConfig& config);
+
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
     Status declare(const WorldView& world, const ModuleConfig& config,
@@ -225,6 +233,8 @@ private:
     bool lbmWanted_{false};
     double lbmCell_{0.04};
     bool lbmCpu_{false};
+    bool gpuAsked_{false};  // by the config given at construction (info() before init)
+    bool initialised_{false};
 };
 
 /// The aerodynamics domain's zero substitute (invariant 3; aerodynamics.md §5): still air. For

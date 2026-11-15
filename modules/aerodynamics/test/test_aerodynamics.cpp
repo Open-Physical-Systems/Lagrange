@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -396,6 +397,22 @@ TEST(ZeroAero, SavesAndRestoresItsNoState) {
     EXPECT_TRUE(zero.saveState(writer).ok());
     StateReader reader(writer.bytes());
     EXPECT_TRUE(zero.restoreState(reader).ok());
+}
+
+// Review L9: the scheduler asks a module whether it is deterministic before it declares, so
+// AeroDrag answers from the config it was made with: the live air box on the GPU is not.
+TEST(Aerodynamics, InfoBeforeInitSaysWhetherTheAirMayRunOnTheGpu) {
+    const auto made = [](const std::map<std::string, ConfigValue, std::less<>>& values) {
+        ModuleConfigData data;
+        data.values = values;
+        return AeroDrag(ModuleConfig(data)).info().deterministic;
+    };
+    EXPECT_TRUE(AeroDrag().info().deterministic);
+    EXPECT_TRUE(made({}));
+    EXPECT_TRUE(made({{"downwash_model", std::string("fitted")}}));
+    EXPECT_FALSE(made({{"downwash_model", std::string("lbm")}}));
+    EXPECT_TRUE(made({{"downwash_model", std::string("lbm")}, {"downwash_lbm_cpu", true}}));
+    EXPECT_TRUE(made({{"downwash_model", std::string("lbm")}, {"downwash", false}}));
 }
 
 }  // namespace
