@@ -388,5 +388,15 @@ TEST(Precipitation, TheDomainUsesTheWeathersAirAndRain) {
     EXPECT_LT(wet[2], 0.0);
 }
 
+// The zero substitute holds no state, so a run with the air off can be saved and restored
+// (lagrange determinism, Server::saveState): it says so rather than "not implemented".
+TEST(ZeroAero, SavesAndRestoresItsNoState) {
+    ZeroAero zero;
+    StateWriter writer;
+    EXPECT_TRUE(zero.saveState(writer).ok());
+    StateReader reader(writer.bytes());
+    EXPECT_TRUE(zero.restoreState(reader).ok());
+}
+
 }  // namespace
 }  // namespace lagrange::aerodynamics

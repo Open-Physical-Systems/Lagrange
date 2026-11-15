@@ -46,6 +46,7 @@
   <depend>ament_index_cpp</depend>
   <test_depend>sensor_msgs</test_depend>
   <test_depend>std_msgs</test_depend>
+  <test_depend>simulation_interfaces</test_depend>
   <depend>yaml-cpp</depend>
   <depend>libjsoncons-dev</depend>
   <depend>mcap_vendor</depend>

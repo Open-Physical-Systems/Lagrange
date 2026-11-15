@@ -227,4 +227,27 @@ private:
     bool lbmCpu_{false};
 };
 
+/// The aerodynamics domain's zero substitute (invariant 3; aerodynamics.md §5): still air. For
+/// the stage's AeroAPI_1 links no aerodynamic wrench and the airspeed the link's own speed; no
+/// gust and no wind. It stands in for AeroDrag in the run and in a profile's preview wiring.
+class ZeroAero final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override;
+    [[nodiscard]] Duration preferredStep() const override;
+    Status declare(const WorldView& world, const ModuleConfig& config,
+                   SignalDeclarer& declarer) override;
+    Status init(const WorldView& world, const ModuleConfig& config, SignalBus& bus) override;
+    Status step(const StepContext& context, SignalBus& bus) override;
+    // Stateless: its outputs are zero or the links' own speed, read again every step.
+    Status saveState(StateWriter& writer) const override;
+    Status restoreState(StateReader& reader) override;
+
+private:
+    struct Link {
+        SignalId twist, wrench, airspeed;
+    };
+    std::vector<Link> links_;
+    SignalId gust_, wind_;
+};
+
 }  // namespace lagrange::aerodynamics

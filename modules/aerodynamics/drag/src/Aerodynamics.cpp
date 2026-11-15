@@ -867,4 +867,64 @@ Status AeroDrag::restoreState(StateReader& reader) {
     return {};
 }
 
+ModuleInfo ZeroAero::info() const {
+    return {"aerodynamics", "zero", 0, 1, true, true, CapabilityTier::Tier0};
+}
+
+Duration ZeroAero::preferredStep() const {
+    return 1_ms;  // as AeroDrag's
+}
+
+Status ZeroAero::declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) {
+    links_.clear();
+    const World::Bodies& bodies = world.bodies();
+    const std::vector<bool> moving = movingBodies(world.raw());
+    for (const SchemaInstance* s : world.instancesOf("AeroAPI_1")) {
+        const auto b =
+            static_cast<std::size_t>(std::ranges::find(bodies.prim, s->prim) - bodies.prim.begin());
+        if (b >= bodies.prim.size() || !moving[b] ||
+            s->token("aero:model").value_or("drag_box") == "none") {
+            continue;
+        }
+        const std::string base = "body/" + std::string(world.signalInstanceName(s->prim)) + "/";
+        Link link;
+        SignalSpec twist = spec(base + "twist", SignalType::Wrench, units::m_per_s, "world_local");
+        twist.feedback = true;
+        link.twist = d.input(twist);
+        link.wrench =
+            d.output(spec(base + "wrench/aero", SignalType::Wrench, units::N, "world_local"));
+        link.airspeed = d.output(spec(base + "airspeed", SignalType::Scalar, units::m_per_s));
+        links_.push_back(link);
+    }
+    gust_ = d.output(spec("env/wind/gust", SignalType::Vec3, units::m_per_s, "world_local"));
+    wind_ = d.output(spec("env/wind/velocity", SignalType::Vec3, units::m_per_s, "world_local"));
+    return {};
+}
+
+Status ZeroAero::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
+    for (const Link& link : links_) {
+        bus.writeN(link.wrench, std::array<double, 6>{});
+        bus.write(link.airspeed, 0.0);
+    }
+    bus.writeN(gust_, Vec3{});
+    bus.writeN(wind_, Vec3{});
+    return {};
+}
+
+Status ZeroAero::step(const StepContext&, SignalBus& bus) {
+    for (const Link& link : links_) {
+        const std::span<const double> t = bus.readN(link.twist);
+        bus.write(link.airspeed, std::hypot(t[0], t[1], t[2]));  // still air: its own speed
+    }
+    return {};
+}
+
+Status ZeroAero::saveState(StateWriter&) const {
+    return {};
+}
+
+Status ZeroAero::restoreState(StateReader&) {
+    return {};
+}
+
 }  // namespace lagrange::aerodynamics
