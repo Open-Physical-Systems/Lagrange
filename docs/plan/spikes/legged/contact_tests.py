@@ -7,7 +7,8 @@
     source /opt/ros/lyrical/setup.bash; source <lagrange install>/setup.bash
     contact_tests.py MODEL_DIR OUT_DIR [TEST ...]     (MODEL_DIR from models.py)
 
-TEST is any of stance, leg2, drop, slope, box, rimless, rtf, determinism (default: all). Each
+TEST is any of stance, leg2, drop, slope, box, rigid, rigid_body_friction_1, rimless, rtf,
+determinism, ... (the keys of TESTS; default: all). Each
 runs on both backends at 0.5, 1 and 2 ms and writes OUT_DIR/<test>.json, plus time series
 (.npz) for the plots. Legs are held by an impedance law (kp, kd, gravity-free) evaluated in Python
 before every physics step and sent as joint efforts: what RFC 0019 §5's impedance mode would do
@@ -436,16 +437,18 @@ def test_slope(model_dir: Path, out: Path) -> dict:
     return results
 
 
-def test_rigid_slope(model_dir: Path, out: Path) -> dict:
+def test_rigid_slope(
+    model_dir: Path, out: Path, name: str = "rigid_quad_slope", slopes=M.RIGID_SLOPES
+) -> dict:
     """The rigid quadruped (models.rigid_quad_slope) on slopes below and above atan μ: creep
     along the slope over 1-3 s and 3-6 s, and the fitted acceleration over 1-3 s."""
     results = {}
-    for deg in M.RIGID_SLOPES:
+    for deg in slopes:
         th = math.radians(deg)
         down = np.array([math.cos(th), 0.0, -math.sin(th)])
         for backend in BACKENDS:
             for dt in STEPS:
-                sim = make(model_dir, out, f"rigid_quad_slope_{deg:g}.xml", backend, dt)
+                sim = make(model_dir, out, f"{name}_{deg:g}.xml", backend, dt)
                 ts, xs = [], []
 
                 def sample(t: float) -> None:
@@ -475,8 +478,8 @@ def test_rigid_slope(model_dir: Path, out: Path) -> dict:
                     "fit_acceleration": float(2 * fit[0]),
                     "upright": float(abs(2 * math.atan2(q[2], q[0]) - th)) < 0.05,
                 }
-                np.savez(out / f"rigid_{deg:g}_{backend}_{dt * 1e3:g}ms.npz", t=t, x=x)
-                print("rigid", key, json.dumps(results[key]))
+                np.savez(out / f"{name}_{deg:g}_{backend}_{dt * 1e3:g}ms.npz", t=t, x=x)
+                print(name, key, json.dumps(results[key]))
     return results
 
 
@@ -827,6 +830,11 @@ TESTS = {
     "slope": test_slope,
     "box": test_box,
     "rigid": test_rigid_slope,
+    # The body box at μ 1 on μ 0.5 feet: each collider's own friction (Jolt once took the body's
+    # largest for all), written to rigid_body_friction_1.json.
+    "rigid_body_friction_1": lambda d, o: test_rigid_slope(
+        d, o, "rigid_body1_quad_slope", M.BODY1_SLOPES
+    ),
     "rimless": test_rimless,
     "rtf": test_rtf,
     "determinism": test_determinism,

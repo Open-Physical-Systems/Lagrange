@@ -448,6 +448,99 @@ TEST(ImportMjcf, SeveralJointsOnABodyGetHelperFrames) {
     }
 }
 
+// The helper frames of a body with several joints take their 1 g from the body: the robot weighs
+// what the MJCF says, and each such body with its frames has the MJCF body's centre of mass and
+// inertia (the frames sit at the body's origin, on its joints' axes, so in every pose).
+TEST(ImportMjcf, HelperFramesAddNoMass) {
+    const auto path = writeText("legs.xml", R"(<mujoco model="legs">
+  <compiler angle="radian"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1"/>
+    <body name="trunk" pos="0 0 0.16">
+      <freejoint name="free"/>
+      <inertial pos="0 0 0" mass="4.0" diaginertia="0.01 0.03 0.035"/>
+      <geom type="box" size="0.22 0.08 0.03" mass="0"/>
+      <body name="upper_l" pos="0.18 0.1 0">
+        <joint name="swing_l" type="hinge" axis="0 0 1"/>
+        <joint name="lift_l" type="hinge" axis="1 0 0"/>
+        <inertial pos="0 0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="lower_l" pos="0 0.12 0">
+          <joint name="knee_l" type="hinge" axis="1 0 0"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom type="sphere" size="0.015" pos="0 0 -0.12" mass="0"/>
+        </body>
+      </body>
+      <body name="upper_r" pos="0.18 -0.1 0">
+        <joint name="swing_r" type="hinge" axis="0 0 1"/>
+        <joint name="tilt_r" type="hinge" axis="0 1 0"/>
+        <joint name="lift_r" type="hinge" axis="-1 0 0"/>
+        <inertial pos="0.01 -0.06 0.005" mass="0.15" fullinertia="0.0003 0.0003 0.0003 0.00001 0 0"/>
+        <geom type="sphere" size="0.015" pos="0 -0.12 0" mass="0"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>)");
+    auto model = importMjcf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World::Bodies& bodies = model->world.bodies;
+    double total = 0.0;
+    for (const double m : bodies.mass) {
+        total += m;
+    }
+    EXPECT_NEAR(total, 4.0 + 0.15 + 0.1 + 0.15, 1e-12) << "what the MJCF weighs";
+
+    // Each multi-joint body with its frames, about the body's origin: the frames sit there.
+    const auto check = [&](const std::string& name, std::size_t frames,
+                           const std::array<double, 3>& com, const std::array<double, 6>& inertia) {
+        const std::size_t b = body(*model, name);
+        std::vector<std::size_t> parts{b};
+        for (std::size_t p = bodies.parent[b].index; parts.size() <= frames;
+             p = bodies.parent[p].index) {
+            ASSERT_NE(bodies.names[p].find("_frame"), std::string::npos) << bodies.names[p];
+            EXPECT_DOUBLE_EQ(bodies.mass[p], 1e-3);
+            parts.push_back(p);
+        }
+        double mass = 0.0;
+        std::array<double, 3> moment{};
+        for (const std::size_t p : parts) {
+            // A frame sits at the body origin; the body's own centre of mass is in its frame.
+            const std::array<double, 3> c = p == b ? bodies.comLocal[b] : std::array<double, 3>{};
+            mass += bodies.mass[p];
+            for (std::size_t i = 0; i < 3; ++i) {
+                moment[i] += bodies.mass[p] * c[i];
+            }
+        }
+        EXPECT_NEAR(mass, 0.15, 1e-15) << name;
+        for (std::size_t i = 0; i < 3; ++i) {
+            EXPECT_NEAR(moment[i] / mass, com[i], 1e-12) << name << " centre of mass " << i;
+        }
+        // Inertia about the MJCF centre of mass: the body's moved there, plus each frame's.
+        const auto about = [&com](double m, const std::array<double, 3>& at) {
+            const std::array<double, 3> d{at[0] - com[0], at[1] - com[1], at[2] - com[2]};
+            const double d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            return std::array<double, 6>{m * (d2 - d[0] * d[0]), m * (d2 - d[1] * d[1]),
+                                         m * (d2 - d[2] * d[2]), -m * d[0] * d[1],
+                                         -m * d[0] * d[2],       -m * d[1] * d[2]};
+        };
+        std::array<double, 6> sum = bodies.inertiaLocal[b];
+        const std::array<double, 6> moved = about(bodies.mass[b], bodies.comLocal[b]);
+        for (std::size_t i = 0; i < 6; ++i) {
+            sum[i] += moved[i];
+        }
+        for (std::size_t k = 1; k < parts.size(); ++k) {
+            const std::array<double, 6> frame = about(bodies.mass[parts[k]], {});
+            for (std::size_t i = 0; i < 6; ++i) {
+                sum[i] += frame[i] + bodies.inertiaLocal[parts[k]][i];
+            }
+        }
+        for (std::size_t i = 0; i < 6; ++i) {
+            EXPECT_NEAR(sum[i], inertia[i], 1e-15) << name << " inertia " << i;
+        }
+    };
+    check("upper_l", 1, {0.0, 0.06, 0.0}, {0.0003, 0.0003, 0.0003, 0, 0, 0});
+    check("upper_r", 2, {0.01, -0.06, 0.005}, {0.0003, 0.0003, 0.0003, 0.00001, 0, 0});
+}
+
 TEST(ImportMjcf, MeshGeomsAreDrawnWithTheirTriangles) {
     const auto path = writeText("tetra.xml", R"(<mujoco model="tetra">
   <asset>
