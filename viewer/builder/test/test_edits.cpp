@@ -116,6 +116,22 @@ TEST(Edits, RenameFollowsEveryReference) {
     EXPECT_EQ(std::get<0>(*document.joints[1].mimic), "mast_joint");
 }
 
+TEST(Edits, NoLinkTakesTheGroundsNameExceptAShapelessRoot) {
+    // QA3 F3: a link renamed "world" saved a robot that failed to load ("repeated name 'world'
+    // in body"). Refused with the reason, for a child link and for a root with shapes.
+    Document document = rover();
+    const std::string why = rename(document, ItemKind::Link, "box_link", "world");
+    EXPECT_NE(why.find("ground"), std::string::npos) << why;
+    EXPECT_NE(findLink(document, "box_link"), nullptr);
+    EXPECT_NE(rename(document, ItemKind::Link, "base_link", "world"), "");
+    // A new link never gets it either (Add → Mesh… names a link after its file).
+    EXPECT_EQ(uniqueName(document, "world"), "world_2");
+    // The fixed-base convention stays: a shapeless, massless root may be named "world".
+    document.links[0].shapes.clear();
+    EXPECT_EQ(rename(document, ItemKind::Link, "base_link", "world"), "");
+    EXPECT_EQ(document.joints[0].parent, "world");
+}
+
 TEST(Edits, ReparentRefusesItsOwnSubtreeAndKeepsThePlace) {
     Document document = rover();
     EXPECT_NE(reparent(document, "cylinder_link", "box_link", {}), "");

@@ -610,6 +610,9 @@ std::vector<Problem> validate(const Document& document, const SensorCatalog* cat
         findings.error(finding.item, finding.message);
     }
     for (const Link& link : document.links) {
+        if (std::string why = reservedLinkProblem(document, link, link.name); !why.empty()) {
+            findings.error(link.name, "link " + why);
+        }
         checkShapes(findings, link);
         checkMass(findings, document, link);
         for (const Shape& shape : link.shapes) {
@@ -649,6 +652,23 @@ bool validName(std::string_view name) {
     const auto digit = [](char c) { return c >= '0' && c <= '9'; };
     return !name.empty() && letter(name.front()) &&
            std::ranges::all_of(name, [&](char c) { return letter(c) || digit(c); });
+}
+
+bool reservedLinkName(std::string_view name) {
+    return name == kWorldLink;
+}
+
+std::string reservedLinkProblem(const Document& document, const Link& link, std::string_view name) {
+    if (!reservedLinkName(name)) {
+        return {};
+    }
+    const bool root = parentJointOf(document, link.name) == nullptr;
+    if (root && link.shapes.empty() && !link.inertial.mass) {
+        return {};  // the fixed-base convention: a shapeless, massless root named "world"
+    }
+    return inQuotes(name) +
+           " is the ground's name in a run (only a shapeless, massless root may use it, for a "
+           "robot fixed to the ground); pick another name";
 }
 
 std::string_view toString(Level level) {

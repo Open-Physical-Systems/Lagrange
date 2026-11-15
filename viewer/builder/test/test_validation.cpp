@@ -559,6 +559,21 @@ TEST(Validation, AMasslessShapelessRootNamedWorldIsAFixedBase) {
     EXPECT_EQ(count(validate(document, nullptr, {}), Level::Error, "ground", "has no mass"), 1U);
 }
 
+TEST(Validation, ALinkNamedWorldIsAnErrorUnlessItIsTheShapelessRoot) {
+    // QA3 F3: MuJoCo's world body is "world"; such a link fails the load ("repeated name").
+    Document document = validRobot();
+    document.links.back().name = "world";  // the arm, a child with a shape
+    document.joints.back().child = "world";
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Error, "world", "ground's name"), 1U)
+        << dump(validate(document, nullptr, {}));
+    // As the root with a shape too.
+    Document root = validRobot();
+    root.links.front().name = "world";
+    root.joints.back().parent = "world";
+    root.sensors.back().link = "world";
+    EXPECT_EQ(count(validate(root, nullptr, {}), Level::Error, "world", "ground's name"), 1U);
+}
+
 TEST(Validation, EveryTemplateValidatesWithNoError) {
     // The builder's File > New from template (assets/robots/templates): each one opens clean,
     // its sensors checked against the real catalog (built-in and plugin kinds).

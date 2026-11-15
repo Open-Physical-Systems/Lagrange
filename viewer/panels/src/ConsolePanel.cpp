@@ -137,15 +137,31 @@ private:
             case LogLevel::Info:
                 break;
         }
+        // A narrow panel (1024 × 640, QA3 F7) left the message no width after the time, the
+        // level and the source: there every message goes on a line of its own under them (all
+        // rows alike, so the list clipper's rows keep one height).
+        const bool narrow = ImGui::GetContentRegionAvail().x < px(kNarrowConsole);
         ImGui::TextColored(c::t3, "%s", time);
         ImGui::SameLine(0.0F, px(8.0F));
         ImGui::TextColored(color, "%s", level);
         ImGui::SameLine(0.0F, px(8.0F));
-        ImGui::TextColored(c::t2, "%s", entry.source.c_str());
-        ImGui::SameLine(0.0F, px(8.0F));
+        ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+        fit::text(entry.source, ImGui::GetContentRegionAvail().x);
+        ImGui::PopStyleColor();
+        if (narrow) {
+            ImGui::Indent(px(16.0F));
+        } else {
+            ImGui::SameLine(0.0F, px(8.0F));
+        }
         // A line longer than the panel ends in an ellipsis; hovering it shows all of it.
         fit::text(entry.text, ImGui::GetContentRegionAvail().x);
+        if (narrow) {
+            ImGui::Unindent(px(16.0F));
+        }
     }
+
+    /// Below this width (px at scale 1) a message goes under its time, level and source.
+    static constexpr float kNarrowConsole = 420.0F;
 
     bool problemsOnly_;
     const char* window_;

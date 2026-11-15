@@ -194,6 +194,10 @@ public:
     bool methodEdited{false};
 
     std::shared_ptr<const Analysis> analysis;
+    /// The Validation rows' texts as drawn (fit::cutAll), for `rowsFor` at `rowsRoom` px.
+    std::shared_ptr<const Analysis> rowsFor;
+    float rowsRoom{-1.0F};
+    std::vector<std::string> rowTexts;
     std::size_t selected{0};
     std::vector<HistoryEntry> history;
     std::string exported;  ///< The last report written, or why it could not be.
@@ -973,7 +977,9 @@ public:
         }
         const float pad = px(10.0F);
         if (const char* why = blocker(context, state)) {
-            ImGui::SetCursorPos(ImVec2(pad, pad));
+            // Below the tab bar (the cursor's start): at (pad, pad) its first line was hidden
+            // under the tabs.
+            ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorStartPos().y + pad));
             ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
             widgets::Caption("%s", why);
             ImGui::PopTextWrapPos();
@@ -1057,6 +1063,9 @@ private:
             std::min(static_cast<float>(results.size()) * rowHeight, px(26.0F * 10.0F));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         ImGui::BeginChild("##rows", ImVec2(0.0F, listHeight));
+        const auto pairOf = [](const cmp::Result& r) {
+            return r.sim == r.real ? r.sim : r.sim + " ↔ " + r.real;
+        };
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(results.size()), rowHeight);
         while (clipper.Step()) {
@@ -1083,23 +1092,29 @@ private:
                 const float size = px(theme::kCaptionSize);
                 const float midY = min.y + rowHeight * 0.5F;
                 const float textY = midY - size * 0.55F;
-                // "sim ↔ real", cut with an ellipsis before the NRMSE column.
-                std::string pair = r.sim == r.real ? r.sim : r.sim + " ↔ " + r.real;
-                const float room = colNrmse - px(54.0F) - pad;
-                if (mono->CalcTextSizeA(size, FLT_MAX, 0.0F, pair.c_str()).x > room) {
-                    while (pair.size() > 4 &&
-                           mono->CalcTextSizeA(size, FLT_MAX, 0.0F, (pair + "…").c_str()).x >
-                               room) {
-                        pair.pop_back();
-                        while (!pair.empty() &&
-                               (static_cast<unsigned char>(pair.back()) & 0xC0U) == 0x80U) {
-                            pair.pop_back();  // never cut a UTF-8 character in half
-                        }
-                        if (!pair.empty() && static_cast<unsigned char>(pair.back()) >= 0xC0U) {
-                            pair.pop_back();
-                        }
+                // "sim ↔ real", cut before the NRMSE column's widest value ("const ref", QA3
+                // F7), its last part whole; rows that would read the same are cut where they
+                // differ (QA2 F10, as the Signals rows).
+                std::string pair = pairOf(r);
+                const float numberRoom = std::max(
+                    px(54.0F), mono->CalcTextSizeA(size, FLT_MAX, 0.0F, "const ref").x + px(10.0F));
+                // The NRMSE may move left of its column by up to numberShift for a wide limit
+                // (a constant reference's RMSE limit in its unit, "0.163 N·m").
+                const float numberShift = px(14.0F);
+                const float room = colNrmse - numberRoom - numberShift - pad;
+                if (state.rowsFor != state.analysis || state.rowsRoom != room) {
+                    // Every row cut once for this analysis and width, no two alike.
+                    std::vector<std::string> texts;
+                    texts.reserve(results.size());
+                    for (const cmp::Result& other : results) {
+                        texts.push_back(pairOf(other));
                     }
-                    pair += "…";
+                    state.rowTexts = fit::cutAll(mono, size, texts, room);
+                    state.rowsFor = state.analysis;
+                    state.rowsRoom = room;
+                }
+                if (index < state.rowTexts.size()) {
+                    pair = state.rowTexts[index];
                 }
                 draw->AddText(mono, size, ImVec2(min.x + pad, textY), u32(c::t1), pair.c_str());
                 if (ImGui::IsItemHovered()) {
@@ -1124,16 +1139,21 @@ private:
                 } else {
                     percent(r.nrmse, number, sizeof(number));
                 }
-                const float nw = mono->CalcTextSizeA(size, FLT_MAX, 0.0F, number).x;
-                draw->AddText(mono, size, ImVec2(min.x + colNrmse - nw, textY),
-                              u32(r.valid && !r.pass ? c::error : c::t1), number);
+                char limit[24];
                 if (r.valid && r.constantReference) {
-                    value(r.absLimit, r.unit, number, sizeof(number));  // an RMSE, in the unit
+                    value(r.absLimit, r.unit, limit, sizeof(limit));  // an RMSE, in the unit
                 } else {
-                    percent(r.limit, number, sizeof(number));
+                    percent(r.limit, limit, sizeof(limit));
                 }
-                const float lw = mono->CalcTextSizeA(size, FLT_MAX, 0.0F, number).x;
-                draw->AddText(mono, size, ImVec2(min.x + colLimit - lw, textY), u32(c::t3), number);
+                const float lw = mono->CalcTextSizeA(size, FLT_MAX, 0.0F, limit).x;
+                // Right-aligned on its column, or left of a limit that reaches into it (QA3 F7:
+                // "const ref" ran into "0.163 N·m").
+                const float numberRight =
+                    std::max(std::min(colNrmse, colLimit - lw - px(8.0F)), colNrmse - numberShift);
+                const float nw = mono->CalcTextSizeA(size, FLT_MAX, 0.0F, number).x;
+                draw->AddText(mono, size, ImVec2(min.x + numberRight - nw, textY),
+                              u32(r.valid && !r.pass ? c::error : c::t1), number);
+                draw->AddText(mono, size, ImVec2(min.x + colLimit - lw, textY), u32(c::t3), limit);
                 verdictPill(r.pass, min.x + colPill, midY);
                 ImGui::PopID();
             }

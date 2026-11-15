@@ -167,7 +167,8 @@ PartCounts countParts(const Document& document, const SensorCatalog* catalog) {
 
 std::string uniqueName(const Document& document, std::string_view base) {
     std::string name(base);
-    for (int n = 2; usedName(document, name); ++n) {
+    // Never a reserved link name (QA3 F3): a mesh named world.stl gives world_2.
+    for (int n = 2; usedName(document, name) || reservedLinkName(name); ++n) {
         name = std::string(base) + "_" + std::to_string(n);
     }
     return name;
@@ -441,6 +442,9 @@ std::string rename(Document& document, ItemKind kind, std::string_view from, std
             }
             if (findLink(document, name) != nullptr) {
                 return "a link is already named " + name;
+            }
+            if (std::string why = reservedLinkProblem(document, *link, name); !why.empty()) {
+                return why;
             }
             link->name = name;
             renameInOverlay(document, old, name);

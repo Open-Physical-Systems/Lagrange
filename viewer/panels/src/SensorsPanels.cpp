@@ -951,7 +951,15 @@ public:
         ImGui::AlignTextToFramePadding();
         char hz[24];
         rate(scopes.traces().front().buffer->dtNs(), hz, sizeof(hz));
-        widgets::Caption("%zu signals at %s  ·  one plot per unit", scopes.traces().size(), hz);
+        char caption[96];
+        std::snprintf(caption, sizeof(caption), "%zu signals at %s  ·  one plot per unit",
+                      scopes.traces().size(), hz);
+        // Cut with an ellipsis in a narrow panel, whole in a tooltip (QA3 F6).
+        ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+        ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+        fit::text(caption, ImGui::GetContentRegionAvail().x);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
         state_->plotter.draw(scopes);
         ImGui::End();
     }
@@ -1125,7 +1133,12 @@ public:
         ImGui::PopFont();
         ImGui::SameLine(0.0F, px(8.0F));
         ImGui::TextDisabled("%s", prim.typeName.c_str());
-        widgets::Mono(c::t3, "%s", prim.path.c_str());
+        // A long path is cut in the middle (QA3 F6), whole in a tooltip.
+        ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+        ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+        fit::text(prim.path, ImGui::GetContentRegionAvail().x, true);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
 
         const std::shared_ptr<const PointCloud> cloud =

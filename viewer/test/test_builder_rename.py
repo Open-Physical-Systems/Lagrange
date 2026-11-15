@@ -223,6 +223,22 @@ def test_a_name_in_use_is_refused_and_said(tmp_path):
     ]
 
 
+def test_world_is_refused_as_a_link_name_with_the_reason(tmp_path):
+    # QA3 F3: a link renamed "world" saved a robot that failed to load ("repeated name 'world'
+    # in body", MuJoCo's world body).
+    builder = run(
+        tmp_path,
+        "--builder-open",
+        str(rover(tmp_path)),
+        "--input",
+        "3:select:mast;5:key:f2;8:text:world;10:key:enter",
+    )
+    assert builder["history"]["labels"] == ["Open rover_mk1.urdf"]
+    assert any("not renamed" in p and "ground's name" in p for p in builder["problems"]), builder[
+        "problems"
+    ]
+
+
 def test_f2_on_a_joint_renames_its_mimic_and_ros2_control_references(tmp_path):
     urdf = tmp_path / "head.urdf"
     urdf.write_text(CONTROLLED)

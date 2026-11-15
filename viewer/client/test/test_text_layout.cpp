@@ -6,6 +6,7 @@
 #include "lagrange/viewer/TextFit.hpp"
 
 #include <algorithm>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -79,6 +80,18 @@ TEST(TextFit, NamesThatWouldReadTheSameAreCutApart) {
     // Alone, it is fitPath.
     EXPECT_EQ(fitDistinct(group[0], std::span<const std::string>{}, 26.0F, characters),
               fitPath(group[0], 26.0F, characters));
+    // QA3: front and rear, swivel and axle, at 20 characters: no fit of the whole names tells
+    // all four apart; without their common "joint/" one does.
+    const std::vector<std::string> casters{
+        "joint/front_caster_swivel/position", "joint/front_caster_axle/position",
+        "joint/rear_caster_swivel/position", "joint/rear_caster_axle/position"};
+    std::set<std::string> shown;
+    for (const std::string& name : casters) {
+        const std::string fitted = fitDistinct(name, casters, 20.0F, characters);
+        EXPECT_LE(characters(fitted), 20.0F) << fitted;
+        shown.insert(fitted);
+    }
+    EXPECT_EQ(shown.size(), casters.size());
 }
 
 TEST(TextFit, NeverCutsInsideACharacter) {

@@ -1,5 +1,6 @@
 // Domains workspace, right panel: the profile as YAML with the pending changes marked, the
 // server's verdict on it, and Apply (docs/design/ui/03-domains/SPEC.md).
+#include "PanelFormat.hpp"
 #include "YamlText.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -155,7 +156,9 @@ public:
         widgets::Dot(c::warn, false);
         ImGui::SameLine(0.0F, px(6.0F));
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Applying rebuilds the wiring and restarts the run at t = 0.");
+        // Cut with an ellipsis in a narrow panel, whole in a tooltip (QA3 F6).
+        fit::text("Applying rebuilds the wiring and restarts the run at t = 0.",
+                  ImGui::GetContentRegionAvail().x);
         ImGui::BeginDisabled(!draft.dirty());
         if (widgets::Button("Revert")) {
             session.revert();
@@ -197,14 +200,22 @@ public:
             }
         }
         ImGui::SameLine();
-        const float width = widgets::ButtonWidth("Apply and restart");
-        widgets::AlignRight(width);
+        // A narrow panel (1024 px wide) has no room for "Apply and restart": the button says
+        // "Apply" and its tooltip the rest (QA3 F6), never a word cut in half.
+        const bool roomy =
+            ImGui::GetContentRegionAvail().x >= widgets::ButtonWidth("Apply and restart");
+        const char* applyLabel = roomy ? "Apply and restart" : "Apply##restart";
+        widgets::AlignRight(widgets::ButtonWidth(applyLabel));
         ImGui::BeginDisabled(!connected || !session.canApply());
-        if (widgets::PrimaryButton("Apply and restart")) {
+        if (widgets::PrimaryButton(applyLabel)) {
             session.apply(context.client);
             editing_ = false;
         }
         ImGui::EndDisabled();
+        if (!roomy && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                "Apply and restart: rebuilds the wiring and restarts the run at t = 0");
+        }
         if (savingAs_) {
             // Save as: the file on this machine (the viewer's, not the server's).
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -

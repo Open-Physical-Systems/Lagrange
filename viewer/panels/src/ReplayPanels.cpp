@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -170,6 +172,8 @@ public:
         widgets::Mono(c::t3, "%s", count);
 
         const float footer = ImGui::GetTextLineHeightWithSpacing() + px(2.0F);
+        std::swap(cutLast_, cutNow_);
+        cutNow_.clear();
         ImGui::BeginChild("##channels", ImVec2(0.0F, -footer));
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(visible_.size()), px(22.0F));
@@ -194,10 +198,30 @@ public:
                 ImGui::PopFont();
                 ImGui::SameLine(px(6.0F));
                 // The rate keeps its place on the right; a long topic is cut before it, its
-                // last part whole, and is whole in the tooltip (QA2 F10).
+                // last part whole, and is whole in the tooltip (QA2 F10). Topics that would
+                // read the same ("joint/front_caste…/position" for the swivel and the wheel)
+                // are cut where they differ, as the Signals rows are.
                 ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
                 ImGui::PushStyleColor(ImGuiCol_Text, c::t1);
-                fit::text(channel.topic, rowEnd - width - px(16.0F) - ImGui::GetCursorPosX(), true);
+                const float room = rowEnd - width - px(16.0F) - ImGui::GetCursorPosX();
+                std::string fitted = fit::cut(ImGui::GetFont(), ImGui::GetFontSize(), channel.topic,
+                                              std::max(room, 0.0F), true);
+                if (fitted != channel.topic) {
+                    std::vector<std::string>& alike = cutNow_[fitted];
+                    if (std::ranges::find(alike, channel.topic) == alike.end()) {
+                        alike.push_back(channel.topic);
+                    }
+                    if (const auto last = cutLast_.find(fitted);
+                        last != cutLast_.end() && last->second.size() > 1) {
+                        fitted =
+                            fit::cutDistinct(ImGui::GetFont(), ImGui::GetFontSize(), channel.topic,
+                                             last->second, std::max(room, 0.0F));
+                    }
+                }
+                ImGui::TextUnformatted(fitted.c_str());
+                if (fitted != channel.topic && ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", channel.topic.c_str());
+                }
                 ImGui::PopStyleColor();
                 ImGui::PopFont();
                 ImGui::SameLine(rowEnd - width - px(6.0F));
@@ -213,6 +237,9 @@ public:
 private:
     std::shared_ptr<const RecordingFacts> shown_;
     std::vector<std::uint32_t> visible_;
+    /// Topics cut alike, this frame and the last (cut text → the topics it stands for).
+    std::map<std::string, std::vector<std::string>, std::less<>> cutLast_;
+    std::map<std::string, std::vector<std::string>, std::less<>> cutNow_;
     char filter_[96]{};
     bool dirty_{true};
 };

@@ -74,6 +74,15 @@ struct Problem {
 /// so that a robot that saves also spawns.
 [[nodiscard]] bool validName(std::string_view name);
 
+/// A link name the simulation keeps for itself (QA3 F3): "world", the ground (MuJoCo's world
+/// body), which a saved robot with such a link fails to load with ("repeated name 'world'").
+[[nodiscard]] bool reservedLinkName(std::string_view name);
+/// Why `link` of `document` may not be named `name`, or "" when it may: a reserved name is
+/// refused except for the URDF fixed-base convention, a shapeless, massless root named "world"
+/// (the fixed base's parent). Renames (F2, Properties) and validate() use it.
+[[nodiscard]] std::string reservedLinkProblem(const Document& document, const Link& link,
+                                              std::string_view name);
+
 [[nodiscard]] std::string_view toString(Level level);  // "error", "warning", "hint"
 
 }  // namespace lagrange::viewer::builder
