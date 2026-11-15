@@ -1387,6 +1387,9 @@ void BuilderHost::startTest(double now) {
     // The client follows the test server; Back puts it where it was (R3).
     previousEndpoint_ = client_.endpoint();
     previousRunning_ = client_.running();
+    if (beforeLeavingRun_) {
+        beforeLeavingRun_();
+    }
     client_.stop();
     client_.setEndpoint(*endpoint);
     client_.start();
