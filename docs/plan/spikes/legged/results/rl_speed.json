@@ -1,0 +1,172 @@
+{
+  "cpus": 20,
+  "cpu": "13th Gen Intel(R) Core(TM) i9-13900H",
+  "quadruped (example URDF)": [
+    {
+      "processes": 1,
+      "joints": 12,
+      "policy_steps_per_s": 2659.0236023776433,
+      "physics_steps_per_s": 53180.47204755287,
+      "rtf": 53.18047204755286,
+      "rtf_step_until_only": 76.68910201308407,
+      "load": 4.35
+    },
+    {
+      "processes": 2,
+      "policy_steps_per_s": 1887.6055612288847,
+      "physics_steps_per_s": 37752.11122457769,
+      "per_process": 943.8027806144423,
+      "load": 4.35
+    },
+    {
+      "processes": 4,
+      "policy_steps_per_s": 3360.095852783891,
+      "physics_steps_per_s": 67201.91705567783,
+      "per_process": 840.0239631959728,
+      "load": 4.35
+    },
+    {
+      "processes": 8,
+      "policy_steps_per_s": 5255.076762055501,
+      "physics_steps_per_s": 105101.53524111,
+      "per_process": 656.8845952569376,
+      "load": 4.35
+    },
+    {
+      "processes": 12,
+      "policy_steps_per_s": 5024.677094689283,
+      "physics_steps_per_s": 100493.54189378566,
+      "per_process": 418.7230912241069,
+      "load": 10.33
+    },
+    {
+      "processes": 1,
+      "independent": true,
+      "policy_steps_per_s": 2510.017708203846,
+      "physics_steps_per_s": 50200.35416407692,
+      "slowest_process": 2510.017708203846,
+      "fastest_process": 2510.017708203846,
+      "load": 10.33
+    },
+    {
+      "processes": 2,
+      "independent": true,
+      "policy_steps_per_s": 4655.828566356613,
+      "physics_steps_per_s": 93116.57132713226,
+      "slowest_process": 2200.391284581763,
+      "fastest_process": 2455.4372817748504,
+      "load": 10.33
+    },
+    {
+      "processes": 4,
+      "independent": true,
+      "policy_steps_per_s": 9163.898888729307,
+      "physics_steps_per_s": 183277.97777458612,
+      "slowest_process": 2179.768321780272,
+      "fastest_process": 2473.2881021682992,
+      "load": 10.33
+    },
+    {
+      "processes": 8,
+      "independent": true,
+      "policy_steps_per_s": 16184.178133620851,
+      "physics_steps_per_s": 323683.562672417,
+      "slowest_process": 1610.6776718859767,
+      "fastest_process": 2504.273174525683,
+      "load": 10.33
+    },
+    {
+      "processes": 12,
+      "independent": true,
+      "policy_steps_per_s": 24378.837302339078,
+      "physics_steps_per_s": 487576.7460467816,
+      "slowest_process": 1476.0028132097561,
+      "fastest_process": 2512.1663114621706,
+      "load": 10.434999999999999
+    }
+  ],
+  "hexapod (spike MJCF)": [
+    {
+      "processes": 1,
+      "joints": 18,
+      "policy_steps_per_s": 1517.7758246715282,
+      "physics_steps_per_s": 30355.516493430565,
+      "rtf": 30.355516493430564,
+      "rtf_step_until_only": 54.054650701891305,
+      "load": 10.54
+    },
+    {
+      "processes": 2,
+      "policy_steps_per_s": 1688.952186644426,
+      "physics_steps_per_s": 33779.043732888524,
+      "per_process": 844.476093322213,
+      "load": 10.54
+    },
+    {
+      "processes": 4,
+      "policy_steps_per_s": 2238.5606963034566,
+      "physics_steps_per_s": 44771.213926069126,
+      "per_process": 559.6401740758641,
+      "load": 10.54
+    },
+    {
+      "processes": 8,
+      "policy_steps_per_s": 3156.7586349744106,
+      "physics_steps_per_s": 63135.172699488205,
+      "per_process": 394.5948293718013,
+      "load": 10.239999999999998
+    },
+    {
+      "processes": 12,
+      "policy_steps_per_s": 4829.729409002317,
+      "physics_steps_per_s": 96594.58818004634,
+      "per_process": 402.4774507501931,
+      "load": 9.94
+    },
+    {
+      "processes": 1,
+      "independent": true,
+      "policy_steps_per_s": 1499.9827380019467,
+      "physics_steps_per_s": 29999.654760038935,
+      "slowest_process": 1499.9827380019467,
+      "fastest_process": 1499.9827380019467,
+      "load": 9.94
+    },
+    {
+      "processes": 2,
+      "independent": true,
+      "policy_steps_per_s": 2960.957802602391,
+      "physics_steps_per_s": 59219.15605204782,
+      "slowest_process": 1307.9968886053568,
+      "fastest_process": 1652.960913997034,
+      "load": 9.94
+    },
+    {
+      "processes": 4,
+      "independent": true,
+      "policy_steps_per_s": 4979.454624674552,
+      "physics_steps_per_s": 99589.09249349104,
+      "slowest_process": 851.8807580390678,
+      "fastest_process": 1476.2689263008479,
+      "load": 9.94
+    },
+    {
+      "processes": 8,
+      "independent": true,
+      "policy_steps_per_s": 8687.525479114609,
+      "physics_steps_per_s": 173750.50958229217,
+      "slowest_process": 828.184660272143,
+      "fastest_process": 1399.904611949053,
+      "load": 13.305
+    },
+    {
+      "processes": 12,
+      "independent": true,
+      "policy_steps_per_s": 11803.079358590252,
+      "physics_steps_per_s": 236061.58717180506,
+      "slowest_process": 810.3468234568865,
+      "fastest_process": 1210.1019132364954,
+      "load": 16.67
+    }
+  ]
+}

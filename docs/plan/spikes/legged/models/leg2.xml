@@ -1,0 +1,20 @@
+<mujoco model="leg2">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1" friction="0"/>
+    <body name="hip" pos="0 0 0.5172013689458069">
+      <joint name="rail" type="slide" axis="0 0 1"/>
+      <inertial pos="0 0 0" mass="5.0" diaginertia="0.02 0.02 0.02"/>
+      <body name="thigh" pos="0 0 0" euler="0 0.6 0">
+        <joint name="hip_pitch" type="hinge" axis="0 1 0" range="-2 2" damping="0.05"/>
+        <inertial pos="0 0 -0.15" mass="0.4" diaginertia="0.0029999999999999996 0.0029999999999999996 0.0001"/>
+        <body name="shin" pos="0 0 -0.3" euler="0 -1.2 0">
+          <joint name="knee" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="0.05"/>
+          <inertial pos="0 0 -0.15" mass="0.2" diaginertia="0.0014999999999999998 0.0014999999999999998 0.0001"/>
+          <geom name="foot" type="sphere" size="0.02" pos="0 0 -0.3" friction="0" mass="0"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

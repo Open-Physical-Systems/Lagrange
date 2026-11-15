@@ -1,0 +1,20 @@
+<mujoco model="rigid_quad_slope_32">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="slab" type="box" size="6.0 3.0 0.05" pos="0 0 5.0" euler="0 0.5585053606381855 0" friction="0.5"/>
+    <body name="base_link" pos="0.18838629843490437 0.0 5.30148109818361" euler="0 0.5585053606381855 0">
+      <freejoint name="base_free"/>
+      <inertial pos="0 0 -0.05" mass="15.4" diaginertia="0.2 0.4 0.4"/>
+      <geom name="base" type="box" size="0.25 0.11 0.05" friction="0.5" mass="0"/>
+      <geom type="capsule" fromto="0.22 0.13 0 0.22 0.13 -0.28" size="0.015" contype="0" conaffinity="0" mass="0"/>
+      <geom name="front_left_foot" type="sphere" size="0.025" pos="0.22 0.13 -0.28" friction="0.5" mass="0"/>
+      <geom type="capsule" fromto="0.22 -0.13 0 0.22 -0.13 -0.28" size="0.015" contype="0" conaffinity="0" mass="0"/>
+      <geom name="front_right_foot" type="sphere" size="0.025" pos="0.22 -0.13 -0.28" friction="0.5" mass="0"/>
+      <geom type="capsule" fromto="-0.22 0.13 0 -0.22 0.13 -0.28" size="0.015" contype="0" conaffinity="0" mass="0"/>
+      <geom name="rear_left_foot" type="sphere" size="0.025" pos="-0.22 0.13 -0.28" friction="0.5" mass="0"/>
+      <geom type="capsule" fromto="-0.22 -0.13 0 -0.22 -0.13 -0.28" size="0.015" contype="0" conaffinity="0" mass="0"/>
+      <geom name="rear_right_foot" type="sphere" size="0.025" pos="-0.22 -0.13 -0.28" friction="0.5" mass="0"/>
+    </body>
+  </worldbody>
+</mujoco>
