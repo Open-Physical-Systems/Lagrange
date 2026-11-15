@@ -181,19 +181,25 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
                                 static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
         }
     } else if (workspace == Workspace::Replay) {
-        // Design: Recording over Channels and Bookmarks, 280 px left; the timeline (400 px)
-        // over the events. (Sim vs real and Validation are not built: they need a second log.)
+        // Design: Recording | Compare over Channels and Bookmarks, 280 px left; Validation |
+        // History, 340 px right; between them the timeline (400 px) | Events over Sim vs real.
         ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, fraction(280.0F, size.x),
                                                    nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(340.0F, size.x - px(280.0F)), nullptr, &centre);
         const ImGuiID channels =
             ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.66F, nullptr, &left);
-        const ImGuiID events =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.52F, nullptr, &centre);
+        const ImGuiID compare = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Down, 1.0F - fraction(400.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Recording", left);
+        ImGui::DockBuilderDockWindow("Compare", left);
         ImGui::DockBuilderDockWindow("Channels", channels);
         ImGui::DockBuilderDockWindow("###ReplayBookmarks", channels);
         ImGui::DockBuilderDockWindow("###ReplayTimeline", centre);
-        ImGui::DockBuilderDockWindow("###ReplayEvents", events);
+        ImGui::DockBuilderDockWindow("###ReplayEvents", centre);
+        ImGui::DockBuilderDockWindow("Sim vs real", compare);
+        ImGui::DockBuilderDockWindow("Validation", right);
+        ImGui::DockBuilderDockWindow("###ReplayHistory", right);
     } else if (workspace == Workspace::Environment) {
         // Design: Environment 320 px left, Overlays 300 px right, the field view between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -1142,6 +1148,12 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
             ImGui::End();
             return;
         }
+        // Replay (08-replay SPEC): the Source strip while a recording plays.
+        if (*context.workspace == Workspace::Replay && drawReplaySourceStrip(context)) {
+            bottomRule();
+            ImGui::End();
+            return;
+        }
         ProfileSession& session = *context.profileSession;
 
         // On the right: what the profile's state is, and the way to edit it. These keep their
@@ -1565,11 +1577,14 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     for (std::unique_ptr<Panel>& panel : createPerformancePanels()) {
         panels.push_back(std::move(panel));
     }
+    panels.push_back(createReplayTimelinePanel());  // first: its tab before Events (design)
     for (std::unique_ptr<Panel>& panel : createReplayPanels()) {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createReplayBookmarksPanel());
-    panels.push_back(createReplayTimelinePanel());
+    for (std::unique_ptr<Panel>& panel : createReplayComparePanels()) {
+        panels.push_back(std::move(panel));
+    }
     for (auto* create : {createEnvironmentPanels, createRos2Panels, createWorldPanels}) {
         for (std::unique_ptr<Panel>& panel : create()) {
             panels.push_back(std::move(panel));
@@ -1659,6 +1674,13 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     }
     if (built && shown == Workspace::Domains) {
         ImGui::SetWindowFocus("Wiring");
+    }
+    if (built && shown == Workspace::Replay) {
+        // Design: Recording, Timeline, Sim vs real and Validation in front of their groups.
+        for (const char* window :
+             {"Recording", "Timeline###ReplayTimeline", "Sim vs real", "Validation"}) {
+            ImGui::SetWindowFocus(window);
+        }
     }
     if (built && shown == Workspace::Electrical) {
         ImGui::SetWindowFocus("Schematic");

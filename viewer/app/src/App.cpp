@@ -2352,7 +2352,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
             "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
             "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s, "
-            "\"radar_detections\": %zu, \"viewer_gpu\": %s}\n",
+            "\"radar_detections\": %zu, \"viewer_gpu\": %s, \"replay_compare\": %s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -2384,7 +2384,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             static_cast<int>(ui.shading()), toString(ui.workspace()),
             ui.launcherActive() ? "true" : "false", visibleWindowsJson().c_str(),
             ui.builderReport().c_str(), ui.radarDetectionsDrawn(),
-            viewerGpuJson(gpuTimer.timings()).c_str());
+            viewerGpuJson(gpuTimer.timings()).c_str(), replayCompareJson().c_str());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }

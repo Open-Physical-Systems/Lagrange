@@ -412,6 +412,44 @@ into a scope. When `has_ros_graph` is false the panel says so.
 inspector), "Navigation" (viewport + ROS topics + console), "Replay review" (viewport + timeline
 + scopes).
 
+**Replay comparison** (design `08-replay`: Compare, Sim vs real, Validation, History,
+`viewer/panels/src/ReplayCompare.cpp`, `viewer/client/src/CompareLog.cpp`). The "real" log is
+any second Lagrange recording: a real robot's log converted into one, or another simulated run
+(another engine, profile or parameter; the project has no hardware logs). Both files are read on
+the viewer's machine as an open format (MCAP, formats.md §7), as Foxglove or Python would; the
+viewer links no simulation module. Each signal is averaged into bins of the resample rate
+(default 100 Hz), aligned by the lag (±0.5 s) that maximises the normalised cross-correlation,
+and scored by NRMSE over the real series' range against a per-signal limit. Without a suite file
+every scalar signal both logs share (except the recorder's poses and signals constant in both)
+is compared with a 5 % limit; a suite file names signals, components, limits and the method:
+
+```yaml
+suite: amr_drive
+method: {alignment: cross-correlation, resample_hz: 100, max_lag_s: 0.5, window: [0, 10]}
+signals:
+  - {sim: motor/left_drive_motor/current_q, real: motor/left_drive_motor/current_q, limit: 0.05}
+  - {sim: body/base_link/twist, component: 0, limit: 0.05}
+```
+
+Driving phases (stopped, accelerate, cruise, brake) come from the replay's first body twist.
+`lagrange_viewer --compare OTHER.mcap [--suite FILE.yaml]` starts a comparison; Export report
+writes JSON to `<config>/validation/`. Not built yet, and why:
+
+- A replay served from another machine cannot be compared: the viewer would need the server to
+  read the second file. Proposed additive protocol fields (owner approval, 1.x additive rule):
+  `OpenRecording.compare_path = 2` (string: open a second recording read-only beside the
+  replay), `RecordingInfo.compare = 11` (RecordingInfo: its facts), and the compare log's signals
+  in the normal `SignalCatalog` under a `compare/` name prefix with `SignalInfo.compare = 11`
+  (bool), so the panels subscribe to both through the protocol.
+- **Re-simulate from here…** (Source strip) is shown disabled: a live run seeded from a
+  recorded time needs the server to start from that state, which a recording does not hold in
+  full (it holds signals, not module states). Proposed: `Command.resimulate = 35` with
+  `message Resimulate { SimTime from = 1; string profile_yaml = 2; }`, the server starting a
+  live run of the recording's stage with root poses and joint positions from the recorded
+  signals at `from` (as spawning carries state over), answered by `CommandResult`.
+- "Overlay in 3D" (the sim and real robots drawn together) and probable-cause text in the
+  failure card; the card states the largest error, its time and the two values instead.
+
 ### 6.3 Robot builder (RFC 0016)
 
 RFC 0016 (`rfcs/0016-robot-builder.md`, accepted, with Addendum A) is the **Builder** workspace:

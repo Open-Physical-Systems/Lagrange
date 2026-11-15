@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "lagrange/viewer/Panel.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,6 +55,8 @@ void usage() {
         "                         builder Test is connected, back in Build, or no tool runs\n"
         "                         FRAME:select:NAME selects a builder link, joint or sensor\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
+        "  --compare <file.mcap>  Replay: compare the replayed recording with this one\n"
+        "  --suite <file.yaml>    Replay: the validation suite for --compare\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
         "  --apply-profile        apply the edited profile once the server calls it valid\n"
@@ -73,6 +76,8 @@ void usage() {
 
 int main(int argc, char** argv) {
     lagrange::viewer::Options options;
+    std::string compareLog;
+    std::string compareSuite;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto value = [&]() -> const char* {
@@ -158,6 +163,10 @@ int main(int argc, char** argv) {
             options.exportNetlist = value();
         } else if (arg == "--input") {
             options.input = value();
+        } else if (arg == "--compare") {
+            compareLog = value();
+        } else if (arg == "--suite") {
+            compareSuite = value();
         } else if (arg == "--panel") {
             options.focusPanel = value();
         } else if (arg == "--select") {
@@ -204,6 +213,10 @@ int main(int argc, char** argv) {
             usage();
             return 2;
         }
+    }
+    if (!compareLog.empty()) {
+        // Headless: the first frames wait for the comparison, so the screenshot shows it.
+        lagrange::viewer::setReplayCompare(compareLog, compareSuite, options.headless);
     }
     return lagrange::viewer::runViewer(options);
 }
