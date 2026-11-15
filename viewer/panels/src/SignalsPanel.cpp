@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -58,6 +59,8 @@ public:
     [[nodiscard]] Workspace workspace() const override { return Workspace::Signals; }
 
     void draw(PanelContext& context) override {
+        std::swap(cutLast_, cutNow_);
+        cutNow_.clear();
         if (!ImGui::Begin(title())) {
             ImGui::End();
             return;
@@ -337,8 +340,21 @@ private:
         const float sizeWidth = *size != '\0' ? ImGui::CalcTextSize(size).x : 0.0F;
         const float nameWidth =
             std::max(unitX - ImGui::GetCursorPosX() - px(8.0F) - sizeWidth, px(40.0F));
-        const std::string fitted =
+        std::string fitted =
             fit::cut(ImGui::GetFont(), ImGui::GetFontSize(), shown, nameWidth, true);
+        if (fitted != shown) {
+            std::vector<std::string>& alike = cutNow_[fitted];
+            if (std::ranges::find(alike, shown) == alike.end()) {
+                alike.push_back(shown);
+            }
+            // Rows that differ but would read the same ("joint/front_cas…/position" for the
+            // caster's swivel and its axle) are cut where they differ.
+            if (const auto last = cutLast_.find(fitted);
+                last != cutLast_.end() && last->second.size() > 1) {
+                fitted = fit::cutDistinct(ImGui::GetFont(), ImGui::GetFontSize(), shown,
+                                          last->second, nameWidth);
+            }
+        }
         ImGui::TextUnformatted(fitted.c_str());
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s%s", path.c_str(), size);
@@ -406,6 +422,10 @@ private:
     std::string unit_;                // the unit filter; empty: any
     bool fastOnly_{false};
     bool dirty_{true};
+    // Names cut alike (fitPath) by the rows drawn last frame and this one, by the cut text: two
+    // names behind one cut text are cut apart (fitDistinct) from the next frame on.
+    std::map<std::string, std::vector<std::string>, std::less<>> cutLast_;
+    std::map<std::string, std::vector<std::string>, std::less<>> cutNow_;
 };
 
 // --- cursors ------------------------------------------------------------------------------

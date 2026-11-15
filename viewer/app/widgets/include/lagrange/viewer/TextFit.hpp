@@ -5,6 +5,7 @@
 // caller (the font), so this has no ImGui in it.
 
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -25,5 +26,14 @@ using TextWidth = std::function<float(std::string_view)>;
 /// stays whole and the rest is cut at its end ("joint/front_caster…/position"); when even the
 /// last part does not fit, fitMiddle.
 [[nodiscard]] std::string fitPath(std::string_view text, float width, const TextWidth& measure);
+
+/// `text` cut to `width` so that it reads differently from every other name of `group` (texts
+/// cut the same way by fitPath, such as "joint/front_caster_swivel_joint/position" and
+/// "joint/front_caster_wheel_joint/position", both "joint/front_cas…/position"): the first of
+/// fitPath, fitPath with its start cut in the middle ("joint/fro…wheel_joint/position"), the end
+/// alone ("…wheel_joint/position"), fitMiddle and fitEnd that tells all of `group` apart; fitPath
+/// when none does. `group` holds `text` too.
+[[nodiscard]] std::string fitDistinct(std::string_view text, std::span<const std::string> group,
+                                      float width, const TextWidth& measure);
 
 }  // namespace lagrange::viewer

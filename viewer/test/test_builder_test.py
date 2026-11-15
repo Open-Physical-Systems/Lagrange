@@ -280,7 +280,8 @@ def test_export_usd_and_check_loads_run_as_child_processes(tmp_path):
     usda = tmp_path / "rover_mk1.usda"
     assert usda.exists() and usda.stat().st_size > 0
     assert any(f"Exported USD to {usda}" in line for line in builder["files"]), builder["files"]
-    assert builder["check_exit"] == 0
+    # -1: the check never ran (the button was not there, QA2 F2) or did not end by itself.
+    assert builder["check_exit"] == 0, builder["files"]
 
 
 def test_autosave_writes_to_the_state_folder(tmp_path):

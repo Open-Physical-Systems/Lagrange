@@ -83,6 +83,12 @@ struct Result {
     double rmse{0.0};
     double range{0.0};  ///< max − min of the real series in the window.
     double nrmse{0.0};  ///< rmse / range (0 when both are constant and equal).
+    /// The real series is constant in the window (range 0), so the NRMSE says nothing: the
+    /// result is judged by its RMSE against `absLimit` instead.
+    bool constantReference{false};
+    /// With a constant reference: the RMSE allowed, in the unit. The suite's `abs_limit`, else
+    /// `limit` times the larger of |reference| and the sim series' range.
+    double absLimit{0.0};
     double maxAbs{0.0};
     std::int64_t lagNs{0};  ///< real(t + lag) best matches sim(t).
     bool pass{false};
@@ -103,6 +109,7 @@ struct Mapping {
     std::string real;
     std::uint32_t component{0};
     double limit{0.05};
+    double absLimit{0.0};  ///< RMSE allowed when the reference is constant; 0: from `limit`.
 };
 
 /// A validation suite: what to compare and how (validation/<suite>.yaml).
@@ -121,7 +128,7 @@ struct Suite {
 ///            window: [begin_s, end_s]}
 ///   signals:
 ///     - {sim: motor/left_drive_motor/current_q, real: motor/left_drive_motor/current_q,
-///        component: 0, limit: 0.05}
+///        component: 0, limit: 0.05, abs_limit: 0.1}   # abs_limit: for a constant reference
 [[nodiscard]] Suite loadSuite(const std::string& path);
 
 /// The suite of every scalar signal both logs have under the same name, except the

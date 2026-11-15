@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace lagrange::server {
 
@@ -25,6 +26,10 @@ constexpr double kStallSpeed = 0.3;     // m/s: slower than this while the demo 
 constexpr double kStallTime = 2.0;      // s held before the demo backs away (it starts in 0.5 s)
 constexpr double kBackSpeed = 1.5;      // m/s backing away
 constexpr double kBackTime = 3.0;       // s backing away: about 4 m
+constexpr double kMaxTries = 2.0;       // a second try in a row backs twice as far
+constexpr double kYieldTime = 3.0;      // s standing still after backing away: the other goes
+constexpr double kStraight = 0.02;      // rad: a pursuit steering less goes straight on
+constexpr double kFreeTime = 10.0;      // s of free driving after which a stall is a new one
 
 SignalSpec scalar(std::string name, Unit unit) {
     SignalSpec s;
@@ -73,6 +78,9 @@ Status CarController::init(const WorldView&, const ModuleConfig&, SignalBus& bus
     stalled_ = 0.0;
     reversing_ = 0.0;
     reverseSteer_ = 0.0;
+    yielding_ = 0.0;
+    tries_ = 0.0;
+    free_ = 0.0;
     bus.write(throttle_, 0.0);
     bus.write(brake_, kHoldBrake);
     bus.write(steering_, 0.0);
@@ -102,11 +110,22 @@ Status CarController::step(const StepContext& context, SignalBus& bus) {
         const double yaw =
             std::atan2(2.0 * (p[3] * p[6] + p[4] * p[5]), 1.0 - 2.0 * (p[5] * p[5] + p[6] * p[6]));
         const double angle = std::atan2(p[1], p[0]) + kLookahead / kDemoRadius;
-        const double gx = kDemoRadius * std::cos(angle) - p[0];
-        const double gy = kDemoRadius * std::sin(angle) - p[1];
-        const double alpha = std::atan2(gy, gx) - yaw;
+        double gx = kDemoRadius * std::cos(angle) - p[0];
+        double gy = kDemoRadius * std::sin(angle) - p[1];
+        if (std::hypot(p[0], p[1]) > kDemoRadius + kLookahead) {
+            // Far from the circle (a spawn elsewhere): head for its middle, the junction, down
+            // the road rather than along a line to the circle's edge that hugs a kerb (QA2 F3).
+            gx = -p[0];
+            gy = -p[1];
+        }
+        const double alpha = std::remainder(std::atan2(gy, gx) - yaw, 2.0 * std::numbers::pi);
         const double distance = std::max(std::hypot(gx, gy), 1.0);
-        pursuit = std::atan(2.0 * wheelbase_ * std::sin(alpha) / distance);
+        // A point behind (a start away from the circle, or after backing away): full lock
+        // towards it. Pure pursuit's sin(alpha) is about 0 there and would drive straight on,
+        // away from the circle (QA2 F3: from the town's drive spawn to a wall 28 m on).
+        pursuit = std::abs(alpha) > std::numbers::pi / 2.0
+                      ? std::copysign(maxSteer_, alpha)
+                      : std::atan(2.0 * wheelbase_ * std::sin(alpha) / distance);
         target = kDemoSpeed;
         if (reversing_ > 0.0) {
             // Backing away from what held it, the steering the other way round: the nose turns
@@ -114,16 +133,38 @@ Status CarController::step(const StepContext& context, SignalBus& bus) {
             reversing_ = std::max(reversing_ - dt, 0.0);
             pursuit = reverseSteer_;
             target = -kBackSpeed;
+            if (reversing_ == 0.0) {
+                yielding_ = kYieldTime;
+            }
+        } else if (yielding_ > 0.0) {
+            // Then stand still a while: a traffic vehicle that waited for the car (it was in
+            // its lane ahead) goes first, instead of both waiting on each other (QA2 F3).
+            yielding_ = std::max(yielding_ - dt, 0.0);
+            target = 0.0;
+            stalled_ = 0.0;
         } else if (std::abs(speed) < kStallSpeed) {
             stalled_ += dt;
             if (stalled_ >= kStallTime) {
+                // Held again soon after the last try: back further each time.
+                tries_ = std::min(tries_ + 1.0, kMaxTries);
                 stalled_ = 0.0;
-                reversing_ = kBackTime;
+                free_ = 0.0;
+                reversing_ = kBackTime * tries_;
+                // Back away steering the other way from the pursuit (full lock when the goal
+                // is behind: a three-point turn). Held going straight (a pole, a car across):
+                // half lock, the other side on each try, so the next line passes beside it.
                 reverseSteer_ = -std::clamp(*pursuit, -maxSteer_, maxSteer_);
+                if (std::abs(*pursuit) < kStraight) {
+                    reverseSteer_ = (std::fmod(tries_, 2.0) == 1.0 ? 0.5 : -0.5) * maxSteer_;
+                }
                 integral_ = 0.0;
             }
         } else {
             stalled_ = 0.0;
+            free_ += dt;
+            if (free_ >= kFreeTime) {
+                tries_ = 0.0;
+            }
         }
     }
     double throttle = 0.0;
@@ -159,12 +200,16 @@ Status CarController::saveState(StateWriter& writer) const {
     writer.put(stalled_);
     writer.put(reversing_);
     writer.put(reverseSteer_);
+    writer.put(yielding_);
+    writer.put(tries_);
+    writer.put(free_);
     return {};
 }
 
 Status CarController::restoreState(StateReader& reader) {
     if (!reader.get(integral_) || !reader.get(externalSeen_) || !reader.get(stalled_) ||
-        !reader.get(reversing_) || !reader.get(reverseSteer_)) {
+        !reader.get(reversing_) || !reader.get(reverseSteer_) || !reader.get(yielding_) ||
+        !reader.get(tries_) || !reader.get(free_)) {
         return Status::error(StatusCode::Internal, "car controller: truncated state");
     }
     return {};

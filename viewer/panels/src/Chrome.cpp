@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <imgui_internal.h>  // DockBuilder and BeginViewportSideBar
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <imgui.h>
@@ -597,31 +598,6 @@ void drawMenuBar(PanelContext& context) {
 
 // --- the Builder's chrome (12-builder SPEC "Modes", "Strip under the workspace bar") ---------
 
-/// True when `program` is an executable in a $PATH folder. Looked up once per program.
-bool onPath(const char* program) {
-    const char* path = std::getenv("PATH");
-    if (path == nullptr) {
-        return false;
-    }
-    std::string_view rest(path);
-    while (!rest.empty()) {
-        const std::size_t colon = rest.find(':');
-        const std::filesystem::path folder(std::string(rest.substr(0, colon)));
-        std::error_code ec;
-        if (!folder.empty() && std::filesystem::is_regular_file(folder / program, ec)) {
-            return true;
-        }
-        rest = colon == std::string_view::npos ? std::string_view{} : rest.substr(colon + 1);
-    }
-    return false;
-}
-
-/// `lagrange check` runs on this machine (SPEC: Check loads… is hidden otherwise).
-bool canCheckLoads() {
-    static const bool found = onPath("lagrange");
-    return found;
-}
-
 /// The document's file name as the readout shows it: the robot name until first saved.
 std::string documentName(const BuilderSession& session) {
     if (!session.path.empty()) {
@@ -769,7 +745,7 @@ void drawBuildControls(PanelContext& context) {
         if (ImGui::MenuItem("Export USD…")) {
             session.exportUsdRequested = true;
         }
-        if (ImGui::MenuItem("Check loads…", nullptr, false, canCheckLoads())) {
+        if (ImGui::MenuItem("Check loads…", nullptr, false, session.canCheckLoads)) {
             session.checkRequested = true;
         }
         if (errors > 0) {
@@ -942,7 +918,7 @@ void drawRobotStrip(PanelContext& context) {
         }
         std::snprintf(validity, sizeof(validity), "%s", text.c_str());
     }
-    const bool check = canCheckLoads() && session.mode == BuilderSession::Mode::Build;
+    const bool check = session.canCheckLoads && session.mode == BuilderSession::Mode::Build;
     ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
     const float button = check ? ImGui::CalcTextSize("Check loads…").x + px(16.0F) : 0.0F;
     ImGui::PopFont();
@@ -1551,6 +1527,30 @@ bool drawDockSpaces(Workspace shown, ImGuiViewport* viewport, bool reset) {
     return built;
 }
 
+/// The window a user means by `name`, among those drawn this frame or the last (so not another
+/// workspace's): its full ImGui name ("Threads###PerformanceThreads") or its id
+/// ("###PerformanceThreads"), else its visible title,
+/// the name before "##" ("Threads"), so that --panel takes the tab titles the user reads.
+ImGuiWindow* windowTitled(std::string_view name) {
+    ImGuiWindow* titled = nullptr;
+    for (ImGuiWindow* window : GImGui->Windows) {
+        if (!window->Active && !window->WasActive) {
+            continue;
+        }
+        const std::string_view windowName(window->Name);
+        // An id alone ("###PerformanceMemory") names the window whose name ends in it.
+        const std::size_t id = windowName.find("###");
+        if (windowName == name || (name.starts_with("###") && id != std::string_view::npos &&
+                                   windowName.substr(id) == name)) {
+            return window;
+        }
+        if (titled == nullptr && windowName.substr(0, windowName.find("##")) == name) {
+            titled = window;
+        }
+    }
+    return titled;
+}
+
 }  // namespace
 
 const char* toString(Workspace workspace) {
@@ -1739,17 +1739,20 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
             ImGui::SetWindowFocus(window);
         }
     }
-    // A panel asked for on the command line, in front once it exists, and again after a
-    // default layout is built (which puts the first tabs in front).
+    // A panel asked for on the command line (its full name, its ###id or its tab title), in
+    // front once it exists, and again after a default layout is built (which puts the first
+    // tabs in front).
     static std::string askedPanel;
-    if (context.focusPanel != nullptr && !context.focusPanel->empty() &&
-        ImGui::FindWindowByName(context.focusPanel->c_str()) != nullptr) {
-        ImGui::SetWindowFocus(context.focusPanel->c_str());
-        askedPanel = *context.focusPanel;
-        context.focusPanel->clear();
-    } else if (built && !askedPanel.empty() &&
-               ImGui::FindWindowByName(askedPanel.c_str()) != nullptr) {
-        ImGui::SetWindowFocus(askedPanel.c_str());
+    if (context.focusPanel != nullptr && !context.focusPanel->empty()) {
+        if (ImGuiWindow* window = windowTitled(*context.focusPanel); window != nullptr) {
+            ImGui::FocusWindow(window);
+            askedPanel = *context.focusPanel;
+            context.focusPanel->clear();
+        }
+    } else if (built && !askedPanel.empty()) {
+        if (ImGuiWindow* window = windowTitled(askedPanel); window != nullptr) {
+            ImGui::FocusWindow(window);
+        }
     }
 }
 

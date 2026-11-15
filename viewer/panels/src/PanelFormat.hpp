@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -31,6 +32,11 @@ namespace lagrange::viewer::fit {
 /// `text` cut to `width` in `font` at `size` (pixels).
 [[nodiscard]] std::string cut(ImFont* font, float size, std::string_view text, float width,
                               bool middle = false);
+
+/// `text` cut to `width` so that it reads differently from the other names of `group`
+/// (lagrange/viewer/TextFit.hpp fitDistinct).
+[[nodiscard]] std::string cutDistinct(ImFont* font, float size, std::string_view text,
+                                      std::span<const std::string> group, float width);
 
 /// Draws `text` at `at`, cut to `width`. Returns true when it was cut.
 bool draw(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,

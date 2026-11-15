@@ -729,6 +729,11 @@ void legend(const ImVec2& boxMin, float boxWidth, const char* name, const std::s
     }
     float x = boxMin.x + boxWidth - px(12.0F) - width;
     const float y = boxMin.y + px(6.0F);
+    // On the plot's own background, so that a curve passing under it does not run through the
+    // text (QA2 F10).
+    draw->AddRectFilled(ImVec2(x - px(6.0F), y - px(2.0F)),
+                        ImVec2(x + width + px(6.0F), y + size + px(3.0F)), u32(c::bg0, 0.9F),
+                        px(3.0F));
     draw->AddText(bold, size, ImVec2(x, y), u32(c::t1), name);
     x += bold->CalcTextSizeA(size, FLT_MAX, 0.0F, name).x + gap;
     draw->AddText(sans, size, ImVec2(x, y), u32(c::t3), unit.c_str());
@@ -837,7 +842,8 @@ public:
         legend(boxMin, boxWidth, r->sim.c_str(), r->unit,
                {{simColor, false, false, "sim"}, {c::t2, true, false, realLabel}});
         // The error, real − sim, with the tolerance band (the limit, as a share of the range).
-        const double band = r->limit * r->range;
+        // A constant reference has no range: its band is the RMSE allowed instead.
+        const double band = r->constantReference ? r->absLimit : r->limit * r->range;
         boxMin = ImGui::GetCursorScreenPos();
         const double clickedError = plotBox("##error", px(64.0F), r->t,
                                             {Line{&r->error, c::accent, 1.1F, false}}, band, nowS);
@@ -860,8 +866,13 @@ public:
         value(r->rmse, r->unit, cardText, sizeof(cardText));
         metricCard("RMSE", cardText, c::t1, card);
         ImGui::SameLine(0.0F, gap);
-        percent(r->nrmse, cardText, sizeof(cardText));
-        metricCard("NRMSE (range)", cardText, verdictColor(r->nrmse, r->limit), card);
+        if (r->constantReference) {
+            metricCard("NRMSE (range)", "const ref", r->pass ? c::t2 : c::error, card);
+            ImGui::SetItemTooltip("The real signal is constant: no range to divide by.");
+        } else {
+            percent(r->nrmse, cardText, sizeof(cardText));
+            metricCard("NRMSE (range)", cardText, verdictColor(r->nrmse, r->limit), card);
+        }
         ImGui::SameLine(0.0F, gap);
         value(r->maxAbs, r->unit, cardText, sizeof(cardText));
         metricCard("max |error|", cardText, c::t1, card);
@@ -874,8 +885,13 @@ public:
                    atLimit ? c::warn : c::t1, card);
         ImGui::SameLine(0.0F, gap);
         char caption[96];
-        percent(r->limit, cardText, sizeof(cardText));
-        std::snprintf(caption, sizeof(caption), "vs tolerance %s", cardText);
+        if (r->constantReference) {
+            value(r->absLimit, r->unit, cardText, sizeof(cardText));
+            std::snprintf(caption, sizeof(caption), "RMSE vs %s", cardText);
+        } else {
+            percent(r->limit, cardText, sizeof(cardText));
+            std::snprintf(caption, sizeof(caption), "vs tolerance %s", cardText);
+        }
         metricCard(caption, r->pass ? "pass" : "fail", r->pass ? c::ok : c::error, card);
 
         // Error by driving phase.
@@ -889,7 +905,7 @@ public:
         widgets::AlignRight(monoWidth(caption));
         widgets::Mono(c::t3, "%s", caption);
         bool anyPhase = false;
-        for (int p = 0; p < static_cast<int>(cmp::Phase::Count); ++p) {
+        for (int p = 0; p < static_cast<int>(cmp::Phase::Count) && !r->constantReference; ++p) {
             if (r->phaseSamples[p] == 0) {
                 continue;
             }
@@ -909,7 +925,11 @@ public:
             widgets::AlignRight(monoWidth(cardText));
             widgets::Mono(c::t1, "%s", cardText);
         }
-        if (!anyPhase) {
+        if (r->constantReference) {
+            widgets::Caption(
+                "The real signal is constant: there is no range to give an NRMSE "
+                "by phase.");
+        } else if (!anyPhase) {
             widgets::Caption("The replay has no body twist to tell the driving phases from.");
         }
         ImGui::End();
@@ -1089,18 +1109,35 @@ private:
                 }
                 draw->AddText(mono, size, ImVec2(min.x + pad, textY), u32(c::t1), pair.c_str());
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s ↔ %s", r.sim.c_str(), r.real.c_str());
+                    if (r.valid && r.constantReference) {
+                        char rmse[40];
+                        char allowed[40];
+                        value(r.rmse, r.unit, rmse, sizeof(rmse));
+                        value(r.absLimit, r.unit, allowed, sizeof(allowed));
+                        ImGui::SetTooltip(
+                            "%s ↔ %s\nThe real signal is constant here, so the NRMSE (error over "
+                            "its range) is undefined:\njudged by the RMSE, %s, against %s.",
+                            r.sim.c_str(), r.real.c_str(), rmse, allowed);
+                    } else {
+                        ImGui::SetTooltip("%s ↔ %s", r.sim.c_str(), r.real.c_str());
+                    }
                 }
                 char number[24];
-                if (r.valid) {
-                    percent(r.nrmse, number, sizeof(number));
-                } else {
+                if (!r.valid) {
                     std::snprintf(number, sizeof(number), "no data");
+                } else if (r.constantReference) {
+                    std::snprintf(number, sizeof(number), "const ref");
+                } else {
+                    percent(r.nrmse, number, sizeof(number));
                 }
                 const float nw = mono->CalcTextSizeA(size, FLT_MAX, 0.0F, number).x;
                 draw->AddText(mono, size, ImVec2(min.x + colNrmse - nw, textY),
                               u32(r.valid && !r.pass ? c::error : c::t1), number);
-                percent(r.limit, number, sizeof(number));
+                if (r.valid && r.constantReference) {
+                    value(r.absLimit, r.unit, number, sizeof(number));  // an RMSE, in the unit
+                } else {
+                    percent(r.limit, number, sizeof(number));
+                }
                 const float lw = mono->CalcTextSizeA(size, FLT_MAX, 0.0F, number).x;
                 draw->AddText(mono, size, ImVec2(min.x + colLimit - lw, textY), u32(c::t3), number);
                 verdictPill(r.pass, min.x + colPill, midY);
@@ -1118,8 +1155,12 @@ private:
             widgets::IconItem(widgets::Icon::Warning, 14.0F, c::error);
             ImGui::SameLine(0.0F, px(6.0F));
             ImGui::PushFont(theme::fonts().sansMedium, theme::kBodySize);
-            char nrmse[24];
-            percent(r->nrmse, nrmse, sizeof(nrmse));
+            char nrmse[40];
+            if (r->constantReference) {
+                value(r->rmse, r->unit, nrmse, sizeof(nrmse));  // RMSE: no range to divide by
+            } else {
+                percent(r->nrmse, nrmse, sizeof(nrmse));
+            }
             ImGui::Text("%s off by %s", r->sim.c_str(), nrmse);
             ImGui::PopFont();
             char when[24];
@@ -1128,15 +1169,25 @@ private:
             char realValue[40];
             value(r->simAtWorst, r->unit, simValue, sizeof(simValue));
             value(r->realAtWorst, r->unit, realValue, sizeof(realValue));
-            char limit[24];
-            percent(r->limit, limit, sizeof(limit));
+            char limit[40];
             ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x - pad);
             ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
-            ImGui::TextColored(c::t2,
-                               "Largest error at %s: sim %s, real %s (lag %.1f ms). The limit is "
-                               "%s of the real range.",
-                               when, simValue, realValue, static_cast<double>(r->lagNs) * 1e-6,
-                               limit);
+            if (r->constantReference) {
+                value(r->absLimit, r->unit, limit, sizeof(limit));
+                ImGui::TextColored(c::t2,
+                                   "Largest error at %s: sim %s, real %s (lag %.1f ms). The real "
+                                   "signal is constant, so the RMSE is held to %s instead of a "
+                                   "share of its range.",
+                                   when, simValue, realValue, static_cast<double>(r->lagNs) * 1e-6,
+                                   limit);
+            } else {
+                percent(r->limit, limit, sizeof(limit));
+                ImGui::TextColored(
+                    c::t2,
+                    "Largest error at %s: sim %s, real %s (lag %.1f ms). The limit is %s of the "
+                    "real range.",
+                    when, simValue, realValue, static_cast<double>(r->lagNs) * 1e-6, limit);
+            }
             ImGui::PopFont();
             ImGui::PopTextWrapPos();
             const SignalInfo* info = context.catalog

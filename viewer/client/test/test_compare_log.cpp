@@ -157,7 +157,8 @@ TEST_F(CompareLogTest, FindsTheLagAndTheErrorOfAShiftedCopy) {
     const auto real = cmp::loadLog((dir_ / "real.mcap").string(), 10 * kMs).log;
     ASSERT_TRUE(sim && real);
     cmp::Method method;
-    const cmp::Result r = cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.05}, method, {});
+    const cmp::Result r =
+        cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.05, 0.0}, method, {});
     ASSERT_TRUE(r.valid);
     EXPECT_EQ(r.lagNs, 40 * kMs);
     EXPECT_NEAR(r.rmse, 0.2, 1e-9);  // only the offset remains once aligned
@@ -168,7 +169,8 @@ TEST_F(CompareLogTest, FindsTheLagAndTheErrorOfAShiftedCopy) {
 
     // Without alignment the 40 ms shift is error too.
     method.align = false;
-    const cmp::Result raw = cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.01}, method, {});
+    const cmp::Result raw =
+        cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.01, 0.0}, method, {});
     EXPECT_EQ(raw.lagNs, 0);
     EXPECT_GT(raw.rmse, 2.0);
     EXPECT_FALSE(raw.pass);
@@ -177,8 +179,47 @@ TEST_F(CompareLogTest, FindsTheLagAndTheErrorOfAShiftedCopy) {
     method.windowBeginNs = 500 * kMs;
     method.windowEndNs = 1000 * kMs;
     const cmp::Result window =
-        cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.05}, method, {});
+        cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.05, 0.0}, method, {});
     EXPECT_EQ(window.samples, 50U);
+}
+
+// QA2 F6: a constant real series has no range, so the NRMSE is undefined: the result says so
+// and is judged by its RMSE in the unit.
+TEST_F(CompareLogTest, AConstantReferenceIsJudgedByItsAbsoluteError) {
+    writeRecording(dir_ / "sim.mcap", sine, "extra");
+    writeRecording(dir_ / "real.mcap", [](double) { return 0.0; }, "extra");
+    writeRecording(dir_ / "flat.mcap", [](double) { return 0.0; }, "extra");
+    const auto sim = cmp::loadLog((dir_ / "sim.mcap").string(), 10 * kMs).log;
+    const auto real = cmp::loadLog((dir_ / "real.mcap").string(), 10 * kMs).log;
+    const auto flat = cmp::loadLog((dir_ / "flat.mcap").string(), 10 * kMs).log;
+    ASSERT_TRUE(sim && real && flat);
+    cmp::Method method;
+    method.align = false;
+    const cmp::Result r =
+        cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.05, 0.0}, method, {});
+    ASSERT_TRUE(r.valid);
+    EXPECT_TRUE(r.constantReference);
+    EXPECT_FALSE(std::isfinite(r.nrmse));
+    // The limit times the sim's range (the reference is 0): about 0.05 × 20.
+    EXPECT_GT(r.absLimit, 0.9);
+    EXPECT_LT(r.absLimit, 1.1);
+    EXPECT_GT(r.rmse, r.absLimit);
+    EXPECT_FALSE(r.pass);
+    // A suite's abs_limit replaces it.
+    const cmp::Result loose =
+        cmp::compareSignals(*sim, *real, {"wave", "wave", 0, 0.05, 100.0}, method, {});
+    EXPECT_DOUBLE_EQ(loose.absLimit, 100.0);
+    EXPECT_TRUE(loose.pass);
+    // Both constant and equal: passes.
+    const cmp::Result same =
+        cmp::compareSignals(*flat, *real, {"wave", "wave", 0, 0.05, 0.0}, method, {});
+    EXPECT_TRUE(same.constantReference);
+    EXPECT_TRUE(same.pass);
+    // A real series that moves is judged by its NRMSE as before.
+    const cmp::Result moving =
+        cmp::compareSignals(*sim, *sim, {"wave", "wave", 0, 0.05, 0.0}, method, {});
+    EXPECT_FALSE(moving.constantReference);
+    EXPECT_TRUE(moving.pass);
 }
 
 TEST_F(CompareLogTest, SuitesSharedAndFromAFile) {

@@ -319,9 +319,12 @@ public:
             if (const char* region = regionOfAgent(*world, agent)) {
                 std::snprintf(line, sizeof(line), "region %s · %s · %.1f m/s", region,
                               agent.kind.c_str(), agent.speed);
-            } else {
+            } else if (agent.activeRadiusM > 0.0) {
                 std::snprintf(line, sizeof(line), "%s · %.1f m/s · %.0f m active",
                               agent.kind.c_str(), agent.speed, agent.activeRadiusM);
+            } else {
+                // 0: no active region of its own (session.proto), not one of no size.
+                std::snprintf(line, sizeof(line), "%s · %.1f m/s", agent.kind.c_str(), agent.speed);
             }
             draw->AddText(fonts.mono, px(theme::kCaptionSize),
                           ImVec2(min.x + px(28.0F), min.y + px(30.0F)), u32(c::t3), line);
