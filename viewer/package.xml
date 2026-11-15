@@ -26,6 +26,11 @@
   <test_depend>lagrange_mock_server</test_depend>
   <test_depend>lagrange_server</test_depend>
   <test_depend>mesa-vulkan-drivers</test_depend>
+  <!-- test_ros2_tabs: a user stack beside the server (actions, robot_state_publisher). -->
+  <test_depend>control_msgs</test_depend>
+  <test_depend>example_interfaces</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>robot_state_publisher</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

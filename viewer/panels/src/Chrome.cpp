@@ -59,7 +59,7 @@ constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
      "lagrange-dock-environment-1", ImGuiKey_6, "Ctrl+6", "07-environment"},
     {Workspace::Replay, "Replay", widgets::Icon::Replay, "lagrange-dock-replay-1", ImGuiKey_7,
      "Ctrl+7", "08-replay"},
-    {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-1", ImGuiKey_8, "Ctrl+8",
+    {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-2", ImGuiKey_8, "Ctrl+8",
      "09-ros2"},
     {Workspace::World, "World", widgets::Icon::World, "lagrange-dock-world-1", ImGuiKey_9, "Ctrl+9",
      "10-world"},
@@ -210,8 +210,13 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Right, fraction(340.0F, size.x - px(440.0F)), nullptr, &centre);
         const ImGuiID console = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Down, fraction(300.0F, size.y), nullptr, &centre);
+        // Tabs in the design's order: Topics | Services | Actions | Params, Node graph | TF tree.
         ImGui::DockBuilderDockWindow("Topics", left);
+        ImGui::DockBuilderDockWindow("Services", left);
+        ImGui::DockBuilderDockWindow("Actions", left);
+        ImGui::DockBuilderDockWindow("Params", left);
         ImGui::DockBuilderDockWindow("Node graph", centre);
+        ImGui::DockBuilderDockWindow("TF tree", centre);
         ImGui::DockBuilderDockWindow("###RosConsole", console);
         ImGui::DockBuilderDockWindow("ros2_control", right);
     } else if (workspace == Workspace::World) {
