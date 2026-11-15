@@ -83,11 +83,10 @@ public:
 
         defaults();
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
-        ImGui::PushTextWrapPos(0.0F);
-        widgets::Caption(
+        widgets::ParagraphF(
+            theme::fonts().sans, theme::kCaptionSize, c::t3,
             "Or drag a tile onto a link in the tree or the viewport. A sensor comes "
             "from the catalog below the view.");
-        ImGui::PopTextWrapPos();
         ImGui::End();
     }
 

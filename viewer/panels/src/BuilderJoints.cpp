@@ -85,11 +85,9 @@ public:
         }
         if (moving == 0) {
             ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption(
-                "No moving joints yet: add a link with a revolute, continuous or "
-                "prismatic joint");
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                                "No moving joints yet: add a link with a revolute, continuous or "
+                                "prismatic joint");
         } else {
             grid(session);
         }
@@ -321,9 +319,8 @@ public:
         ImGui::EndDisabled();
         if (poses_.empty()) {
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption("No poses yet: set the joints, type a name and save the pose.");
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                                "No poses yet: set the joints, type a name and save the pose.");
         }
         for (std::size_t i = 0; i < poses_.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
@@ -345,11 +342,9 @@ public:
             ImGui::PopID();
         }
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-        ImGui::PushTextWrapPos(0.0F);
-        widgets::Caption(
-            "Kept for this session: the document has no poses yet (RFC 0016 open "
-            "question 10).");
-        ImGui::PopTextWrapPos();
+        widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                            "Kept for this session: the document has no poses yet (RFC 0016 open "
+                            "question 10).");
         ImGui::End();
     }
 

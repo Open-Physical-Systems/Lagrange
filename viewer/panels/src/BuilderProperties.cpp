@@ -554,9 +554,8 @@ private:
             "parts", status, nullptr, false,
             mine && !session.split.message.empty() ? session.split.message.c_str() : nullptr);
         if (mine && session.split.failed) {
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Mono(c::t2, "%s", session.split.message.c_str());
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().mono, theme::kMonoSize, c::t2, "%s",
+                                session.split.message.c_str());
         }
         if (session.path.empty()) {
             widgets::Caption("  Save the robot first: the parts go beside its file.");
@@ -630,11 +629,9 @@ private:
                      });
             }
         }
-        ImGui::PushTextWrapPos(0.0F);
-        widgets::Caption(
-            "  Place each over the mesh in the view: Move (W), Rotate (E) and the "
-            "size handles. Several per link.");
-        ImGui::PopTextWrapPos();
+        widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                            "  Place each over the mesh in the view: Move (W), Rotate (E) and the "
+                            "size handles. Several per link.");
         collisionCount(link);
     }
 
@@ -1086,12 +1083,10 @@ private:
             }
             if (overlay) {
                 // RFC 0016 phase 3: an overlay's create_child has no pose (formats.md §9).
-                ImGui::PushTextWrapPos(0.0F);
-                widgets::Caption(
-                    "At the link's origin: the overlay file, where %s is written, "
-                    "has no mount pose. Put it on a link placed where it sits.",
-                    sensor.type.c_str());
-                ImGui::PopTextWrapPos();
+                widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                                    "At the link's origin: the overlay file, where %s is written, "
+                                    "has no mount pose. Put it on a link placed where it sits.",
+                                    sensor.type.c_str());
             } else {
                 builder::Pose origin = sensor.origin;
                 if (poseRows(origin, true)) {
@@ -1331,9 +1326,8 @@ private:
         }
         if (!entry.summary.empty()) {
             ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption("%s", entry.summary.c_str());
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3, "%s",
+                                entry.summary.c_str());
         }
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
     }

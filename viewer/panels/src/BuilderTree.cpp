@@ -549,9 +549,8 @@ public:
                 ImGui::SameLine();
                 widgets::Pill(note, widgets::PillKind::Neutral);
             }
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Mono(path.empty() ? c::t3 : c::t1, "%s", path.empty() ? "—" : path.c_str());
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().mono, theme::kMonoSize, path.empty() ? c::t3 : c::t1,
+                                "%s", path.empty() ? "—" : path.c_str());
         };
         // SPEC state 6: a file that could not be read or written; the whole message is in
         // Problems.
@@ -559,9 +558,8 @@ public:
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
             widgets::Pill("file error", widgets::PillKind::Error);
             ImGui::SameLine();
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption("%s", session.fileError.c_str());
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3, "%s",
+                                session.fileError.c_str());
         }
         if (!session.busy.empty()) {
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));

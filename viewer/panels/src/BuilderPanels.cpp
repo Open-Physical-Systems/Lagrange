@@ -220,11 +220,9 @@ void drawPrompt(BuilderSession& session) {
     ImGui::TextUnformatted(prompt.title.c_str());
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-    ImGui::PushTextWrapPos(0.0F);
     ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
-    ImGui::TextUnformatted(prompt.message.c_str());
+    widgets::Paragraph(prompt.message.c_str());
     ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0.0F, px(10.0F)));
 
     // Buttons on the right, the accent one last: Cancel · Discard · Save.

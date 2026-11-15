@@ -81,17 +81,15 @@ public:
         if (!session.catalogError.empty()) {
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
             widgets::Pill("catalog not read", widgets::PillKind::Error);
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Mono(c::t2, "%s", session.catalogError.c_str());
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().mono, theme::kMonoSize, c::t2, "%s",
+                                session.catalogError.c_str());
         } else if (entries.empty()) {
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption(
+            widgets::ParagraphF(
+                theme::fonts().sans, theme::kCaptionSize, c::t3,
                 "No sensor catalog is installed on this machine "
                 "(share/lagrange_viewer/catalog): sensors take a free key and value "
                 "form below.");
-            ImGui::PopTextWrapPos();
         }
         const std::string target = targetLink(session);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));

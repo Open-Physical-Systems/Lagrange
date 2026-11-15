@@ -643,12 +643,11 @@ void robotPowerSections(BuilderSession& session) {
     if (widgets::SectionHeader("Power", meta.c_str(), true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         if (batteries.empty() && buses.empty() && motors.empty()) {
-            ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption(
+            widgets::ParagraphF(
+                theme::fonts().sans, theme::kCaptionSize, c::t3,
                 "No power system: a test runs the joints on ideal torque (the electrical "
                 "domain's substitute). Add a bus, then a battery to feed it, then a motor on "
                 "each driven joint (its Properties).");
-            ImGui::PopTextWrapPos();
         }
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
         if (widgets::Button("Add bus", widgets::ButtonKind::Default, widgets::Icon::Plus)) {
@@ -758,11 +757,10 @@ void jointMotorSection(BuilderSession& session, const std::string& jointName) {
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
     if (index < 0) {
         const bool fixed = joint.type == builder::Joint::Type::Fixed;
-        ImGui::PushTextWrapPos(0.0F);
-        widgets::Caption(fixed ? "A fixed joint does not turn: no motor."
-                               : "No motor: tested, this joint takes torque as it is commanded "
-                                 "(ideal). A motor draws its current from a bus.");
-        ImGui::PopTextWrapPos();
+        widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3,
+                            fixed ? "A fixed joint does not turn: no motor."
+                                  : "No motor: tested, this joint takes torque as it is commanded "
+                                    "(ideal). A motor draws its current from a bus.");
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
         ImGui::BeginDisabled(fixed);
         if (widgets::Button("Add a motor", widgets::ButtonKind::Default, widgets::Icon::Plus)) {

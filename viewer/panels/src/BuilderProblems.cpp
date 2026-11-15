@@ -124,11 +124,9 @@ private:
             (void)selectByName(session, problem.item);
         }
         ImGui::SameLine();
-        ImGui::PushTextWrapPos(0.0F);
         ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
-        ImGui::TextUnformatted(problem.message.c_str());
+        widgets::Paragraph(problem.message.c_str());
         ImGui::PopStyleColor();
-        ImGui::PopTextWrapPos();
     }
 
     std::string title_ = "Problems###BuilderProblems";
