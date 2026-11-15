@@ -166,6 +166,169 @@ TEST(CityBlock, LanesMeetTheirSuccessorsEndToStart) {
     EXPECT_FALSE(m->scene.meshes.empty());
 }
 
+// Superelevation and lane heights (ASAM OpenDRIVE 1.8 §10.5.2, §11.6.3) against closed forms, on
+// the roads of test/data/banked.xodr.
+class Banked : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto n = read(LAGRANGE_TEST_BANKED_XODR);
+        ASSERT_TRUE(n) << n.error();
+        network_ = std::move(*n);
+    }
+    const Road& road(int id) const { return *network_.road(id); }
+    const SchemaInstance* lane(const Model& m, int road, int id) const {
+        for (const SchemaInstance& s : m.world.schemaInstances) {
+            if (s.integer("lane:road") == road && s.integer("lane:lane") == id) {
+                return &s;
+            }
+        }
+        return nullptr;
+    }
+    static const TriMesh* mesh(const Model& m, const std::string& name) {
+        for (const ScenePrim& p : m.scene.prims) {
+            if (p.name == name && p.mesh != kNoIndex) {
+                return &m.scene.meshes.at(p.mesh);
+            }
+        }
+        return nullptr;
+    }
+    Network network_;
+};
+
+constexpr double kBank = 0.0872664626;  // rad, 5°
+
+TEST_F(Banked, AConstantBankRollsTheCrossSectionAboutTheReferenceLine) {
+    const Road& r = road(1);
+    EXPECT_NEAR(superelevationAt(r, 13.0), kBank, 1e-15);
+    // t is measured along the banked t axis: t·cos φ to the side, t·sin φ up; positive
+    // superelevation falls to the right (t < 0).
+    for (const double t : {3.5, -3.5, -1.2}) {
+        const auto p = pointAt(r, 10.0, t);
+        EXPECT_NEAR(p[0], 10.0, 1e-12);
+        EXPECT_NEAR(p[1], t * std::cos(kBank), 1e-12);
+        EXPECT_NEAR(p[2], 2.0 + t * std::sin(kBank), 1e-12);
+    }
+    EXPECT_LT(pointAt(r, 10.0, -3.5)[2], pointAt(r, 10.0, 3.5)[2]);
+    // The lanes' centre lines lie on the banked surface: lane -1 at t = -1.75, lane 1 at 1.75
+    // (its points against s).
+    const auto m = toModel(network_);
+    ASSERT_TRUE(m) << m.error();
+    const auto right = points(*lane(*m, 1, -1));
+    const auto left = points(*lane(*m, 1, 1));
+    for (const auto& p : right) {
+        EXPECT_NEAR(p[1], -1.75 * std::cos(kBank), 1e-12);
+        EXPECT_NEAR(p[2], 2.0 - 1.75 * std::sin(kBank), 1e-12);
+    }
+    EXPECT_NEAR(left.front()[0], 40.0, 1e-12);
+    EXPECT_NEAR(left.front()[2], 2.0 + 1.75 * std::sin(kBank), 1e-12);
+    // The asphalt's normals are the banked plane's: (0, -sin φ, cos φ).
+    const TriMesh* asphalt = mesh(*m, "road_1_asphalt");
+    ASSERT_NE(asphalt, nullptr);
+    for (std::size_t i = 0; i < asphalt->normals.size(); i += 3) {
+        EXPECT_NEAR(asphalt->normals[i], 0.0, 1e-6);
+        EXPECT_NEAR(asphalt->normals[i + 1], -std::sin(kBank), 1e-6);
+        EXPECT_NEAR(asphalt->normals[i + 2], std::cos(kBank), 1e-6);
+    }
+    // Every triangle is wound counter-clockwise seen from its normal's side.
+    for (std::size_t t = 0; t < asphalt->indices.size(); t += 3) {
+        const auto v = [&](std::size_t k, std::size_t c) {
+            return static_cast<double>(asphalt->positions[3 * asphalt->indices[t + k] + c]);
+        };
+        const double ux = v(1, 0) - v(0, 0);
+        const double uy = v(1, 1) - v(0, 1);
+        const double uz = v(1, 2) - v(0, 2);
+        const double wx = v(2, 0) - v(0, 0);
+        const double wy = v(2, 1) - v(0, 1);
+        const double wz = v(2, 2) - v(0, 2);
+        const double ny = uz * wx - ux * wz;
+        const double nz = ux * wy - uy * wx;
+        EXPECT_GT(ny * -std::sin(kBank) + nz * std::cos(kBank), 0.0);
+    }
+}
+
+TEST_F(Banked, ALinearRampOfSuperelevation) {
+    const Road& r = road(2);
+    // 0.01 rad/m from 0 for 20 m, then 0.2 rad.
+    for (const double s : {0.0, 5.0, 12.5, 19.9}) {
+        EXPECT_NEAR(superelevationAt(r, s), 0.01 * s, 1e-12);
+        const auto p = pointAt(r, s, -3.5);
+        EXPECT_NEAR(p[1], 50.0 - 3.5 * std::cos(0.01 * s), 1e-12);
+        EXPECT_NEAR(p[2], -3.5 * std::sin(0.01 * s), 1e-12);
+    }
+    EXPECT_NEAR(superelevationAt(r, 30.0), 0.2, 1e-15);
+    EXPECT_NEAR(pointAt(r, 30.0, -3.5)[2], -3.5 * std::sin(0.2), 1e-12);
+}
+
+TEST_F(Banked, ALevelLaneStaysAtTheHeightOfItsInnerBorder) {
+    // Road 2's shoulder (@level="true") outside lane -1 at s = 30 (φ = 0.2): level from the
+    // border at t = -3.5, reaching 1 m further out horizontally.
+    const Road& r = road(2);
+    const LaneSection& sec = r.sections.front();
+    const auto border = pointAt(r, 30.0, -3.5);
+    const auto outer = lanePoint(r, sec, -2, 30.0, -4.5);
+    EXPECT_NEAR(outer[2], border[2], 1e-12);
+    EXPECT_NEAR(outer[1], border[1] - 1.0, 1e-12);
+    EXPECT_NEAR(lanePoint(r, sec, -1, 30.0, -2.0)[2], -2.0 * std::sin(0.2), 1e-12);
+}
+
+TEST_F(Banked, AKerbLaneIsRaisedAlongTheBankedNormal) {
+    // Road 1's sidewalk (lane -2, t from -3.5 to -5.5) is 0.15 m up along h, the normal of the
+    // banked cross section: (−h sin φ) to the side, h cos φ up.
+    const Road& r = road(1);
+    const LaneSection& sec = r.sections.front();
+    constexpr double h = 0.15;
+    for (const double t : {-3.5, -4.5, -5.5}) {
+        const auto p = lanePoint(r, sec, -2, 20.0, t);
+        EXPECT_NEAR(p[1], t * std::cos(kBank) - h * std::sin(kBank), 1e-12);
+        EXPECT_NEAR(p[2], 2.0 + t * std::sin(kBank) + h * std::cos(kBank), 1e-12);
+    }
+    const auto m = toModel(network_);
+    ASSERT_TRUE(m) << m.error();
+    // The sidewalk's centre line carries the kerb in its height.
+    for (const auto& p : points(*lane(*m, 1, -2))) {
+        EXPECT_NEAR(p[2], 2.0 - 4.5 * std::sin(kBank) + h * std::cos(kBank), 1e-12);
+    }
+    // The kerb's face is drawn: pavement normals that point across the road, towards lane -1.
+    const TriMesh* pavement = mesh(*m, "road_1_pavement");
+    ASSERT_NE(pavement, nullptr);
+    int facing = 0;
+    for (std::size_t i = 0; i < pavement->normals.size(); i += 3) {
+        if (std::abs(pavement->normals[i + 2]) < 0.2F) {
+            EXPECT_GT(pavement->normals[i + 1], 0.9F);  // +y: towards the road's centre
+            ++facing;
+        }
+    }
+    EXPECT_GT(facing, 0);
+}
+
+TEST_F(Banked, RaisedRoadsCollideFlatOnesDoNot) {
+    EXPECT_TRUE(raised(road(1)));
+    EXPECT_TRUE(raised(road(2)));
+    EXPECT_FALSE(raised(road(3)));
+    ConvertOptions options;
+    const auto m = toModel(network_, options);
+    ASSERT_TRUE(m) << m.error();
+    const World::Colliders& c = m->world.colliders;
+    // Road 1: three drawn lanes, road 2: two, each in 40 m / 2 m = 20 slabs; road 3 none.
+    ASSERT_EQ(c.body.size(), (3U + 2U) * 20U);
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        EXPECT_EQ(c.body[i], kWorldBody);
+        EXPECT_EQ(c.shape[i], ShapeType::ConvexHull);
+        EXPECT_LT(c.poseInBody[i].position[1], 60.0);  // none on road 3 (y = 100)
+    }
+    // The first slab (road 1, lane 1, s from 0 to 2): its top is the drawn surface.
+    const ConvexHull& hull = m->world.hulls.at(c.hull[0]);
+    const auto& at = c.poseInBody[0].position;
+    double top = -INFINITY;
+    double bottom = INFINITY;
+    for (const auto& p : hull.points) {
+        top = std::max(top, p[2] + at[2]);
+        bottom = std::min(bottom, p[2] + at[2]);
+    }
+    EXPECT_NEAR(top, 2.0 + 3.5 * std::sin(kBank) + options.surfaceHeight, 1e-5);
+    EXPECT_NEAR(bottom, 2.0 + options.surfaceHeight - options.colliderDepth, 1e-5);
+}
+
 TEST(Parse, NamesWhatIsWrong) {
     EXPECT_FALSE(parse("<notodr/>"));
     const auto bad = parse(R"(<OpenDRIVE><road id="3" length="1"><planView>

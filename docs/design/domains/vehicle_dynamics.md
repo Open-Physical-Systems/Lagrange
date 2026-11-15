@@ -104,7 +104,12 @@ is settled for now: the model is our own, with no PhysX vehicle SDK.
   act along it.
   - The model's wheel positions are the ride height: each spring is preloaded with its static
     share of the weight, by the centre of mass between the axles.
-  - The ground is taken as level at the contact, since a ray gives no normal.
+  - The ground is taken as level at the contact, since a ray gives no normal: the tyre forces
+    lie in the level plane. The rays stand on whatever collides, so a car drives on raised and
+    banked OpenDRIVE roads, whose lanes become convex slabs (formats.md §3.11). On the sample
+    `assets/worlds/banked_ring` (a 5 m ring 1.5 m up, 5° of bank) the sedan's demo circle keeps
+    its base within 2.3 cm of its ride height above the banked surface and its roll within
+    0.018 rad of the bank over 14 s at 3 m/s (`test_server` BankedRing).
   - Anti-roll bars move load across an axle in proportion to the travel difference.
 - **Tyres** (`Tyre.hpp`).
   - `pacejka` (default): MF-Tyre 5.2 pure slip with load dependence and its combined-slip
@@ -136,5 +141,5 @@ is settled for now: the model is our own, with no PhysX vehicle SDK.
   - a comparison with a published MF parameter set (no openly licensed `.tir` was found; the
     sample `assets/tyres/generic_205_55R16.tir` is illustrative);
   - the ISO manoeuvres as scenarios;
-  - sloped ground;
+  - sloped ground with the tyre forces in the road plane (a contact normal from the scene query);
   - the kinematic suspension.

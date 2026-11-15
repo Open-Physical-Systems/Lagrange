@@ -323,8 +323,10 @@ fallback documented if Autoware is not available for Lyrical.
 5. `io/opendrive`: road network to USD meshes and lane tables (own reader) (**done** 2026-10-25:
    `lagrange_opendrive` and `lagrange_opendrive_import`, `RoadLaneAPI_1` (new `road` schema
    library), formats.md §3.11; the city block's roads from `city_block.xodr`, lanes checked to
-   meet end to start. Owed: superelevation, lane heights, objects and signals; driving on
-   elevated roads)
+   meet end to start. Superelevation, lane heights and `@level`, and driving on raised roads
+   (convex slabs per lane, traffic pitched and rolled with their lanes) **done** 2026-11-15:
+   formats.md §3.11, `assets/worlds/banked_ring`, `test_opendrive` Banked, `test_traffic`
+   BankedRoad, `test_server` BankedRing. Owed: objects and signals)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
    traffic lights, as kinematic bodies (**done** 2026-10-25: `lagrange_traffic`, traffic.md §8;
    kinematic bodies in MuJoCo and Jolt; `--traffic`; the city block runs 8 vehicles and 6

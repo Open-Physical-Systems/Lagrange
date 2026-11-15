@@ -39,6 +39,7 @@ if(BUILD_TESTING)
         test_traffic
         PRIVATE
             LAGRANGE_TEST_CITY_XODR="${CMAKE_CURRENT_SOURCE_DIR}/../../assets/worlds/city_block/city_block.xodr"
+            LAGRANGE_TEST_BANKED_XODR="${CMAKE_CURRENT_SOURCE_DIR}/../../io/opendrive/test/data/banked.xodr"
     )
     lagrange_target_defaults(test_traffic)
 endif()

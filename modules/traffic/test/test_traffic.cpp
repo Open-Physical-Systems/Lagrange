@@ -221,5 +221,53 @@ TEST(CityBlock, TheZeroSubstituteHidesTheAgents) {
     EXPECT_LT(bus.readN(bus.find("body/traffic_vehicle_0/pose"))[2], -50.0);
 }
 
+// A banked road (io/opendrive/test/data/banked.xodr, road 1: 5° falling to the right of s, 2 m
+// up): the lanes' heights give each vehicle its roll, the road's bank seen along its way.
+TEST(BankedRoad, VehiclesLieOnTheBank) {
+    constexpr double kBank = 0.0872664626;  // rad
+    auto network = opendrive::read(LAGRANGE_TEST_BANKED_XODR);
+    ASSERT_TRUE(network) << network.error();
+    auto model = opendrive::toModel(*network);
+    ASSERT_TRUE(model) << model.error();
+    model->world.addCollider(kWorldBody, ShapeType::Plane, {100.0, 100.0, 1.0}, Pose{}, 1.0);
+    const LaneGraph g = lanesOf(WorldView(model->world));
+    ASSERT_TRUE(g.sloped);
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        const Lane& lane = g.lanes[i];
+        if (lane.road != 1 || lane.sidewalk) {
+            continue;
+        }
+        ASSERT_TRUE(g.beside[i]);
+        const Tilt tilt = tiltAt(g, i, 0.5 * lane.length());
+        // Along s (lane -1) the left is up: +5°; against it (lane 1), -5°.
+        EXPECT_NEAR(tilt.roll, lane.lane < 0 ? kBank : -kBank, 1e-9) << lane.name;
+        EXPECT_NEAR(tilt.pitch, 0.0, 1e-12);
+    }
+    const auto made = addAgents(*model, {6, 0, 2}, {});
+    ASSERT_GT(made[0], 0);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    scheduler.add(std::make_unique<Traffic>());
+    ASSERT_TRUE(scheduler.wire(WorldView(model->world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    int onBank = 0;
+    for (int i = 0; i < made[0]; ++i) {
+        const auto q = bus.readN(bus.find("body/traffic_vehicle_" + std::to_string(i) + "/pose"));
+        const double y = q[1];
+        if (std::abs(y) > 5.0) {
+            continue;  // road 2
+        }
+        const double roll =
+            std::atan2(2.0 * (q[3] * q[4] + q[5] * q[6]), 1.0 - 2.0 * (q[4] * q[4] + q[5] * q[5]));
+        const double expected = y < 0.0 ? kBank : -kBank;  // lane -1 is on the right of s
+        EXPECT_NEAR(roll, expected, 1e-6);
+        // Its centre above the lane's centre line, which lies on the bank 2 m up.
+        EXPECT_GT(q[2], 2.0 + std::abs(y) * std::tan(kBank) * (y < 0.0 ? -1.0 : 1.0));
+        ++onBank;
+    }
+    EXPECT_GT(onBank, 0);
+}
+
 }  // namespace
 }  // namespace lagrange::traffic

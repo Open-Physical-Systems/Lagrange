@@ -298,6 +298,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_SEDAN_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/sedan/sedan.usda"
             LAGRANGE_TEST_CUT_IN="${CMAKE_CURRENT_SOURCE_DIR}/../assets/scenarios/cut_in.xosc"
             LAGRANGE_TEST_CITY_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/city_block/city_block.usda"
+            LAGRANGE_TEST_BANKED_RING_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/banked_ring/banked_ring.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
