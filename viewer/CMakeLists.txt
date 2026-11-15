@@ -374,6 +374,17 @@ if(BUILD_TESTING)
     )
     lagrange_target_defaults(test_viewer_client)
 
+    # The Geodesy tab's WGS84 <-> ENU, a header of the viewer's own, against the core's
+    # coords that the server uses. lagrange_core in this test only: the client and panels do not.
+    find_package(lagrange_core REQUIRED)
+    ament_add_gtest(test_geodesy client/test/test_geodesy.cpp TIMEOUT 60)
+    target_link_libraries(
+        test_geodesy
+        lagrange_viewer_client
+        lagrange_core::lagrange_core
+    )
+    lagrange_target_defaults(test_geodesy)
+
     # The robot builder's model (RFC 0016): each work package adds its test files here.
     ament_add_gtest(
         test_viewer_builder
@@ -423,6 +434,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_profile_editor test/test_profile_editor.py TIMEOUT 180)
     ament_add_pytest_test(test_performance_tabs test/test_performance_tabs.py TIMEOUT 900)
     ament_add_pytest_test(test_domains_tabs test/test_domains_tabs.py TIMEOUT 300)
+    ament_add_pytest_test(test_world_tabs test/test_world_tabs.py TIMEOUT 600)
     ament_add_pytest_test(test_radar_view test/test_radar_view.py TIMEOUT 600)
     ament_add_pytest_test(test_scene_tabs test/test_scene_tabs.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)

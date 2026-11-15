@@ -62,7 +62,7 @@ constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
      "Ctrl+7", "08-replay"},
     {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-2", ImGuiKey_8, "Ctrl+8",
      "09-ros2"},
-    {Workspace::World, "World", widgets::Icon::World, "lagrange-dock-world-1", ImGuiKey_9, "Ctrl+9",
+    {Workspace::World, "World", widgets::Icon::World, "lagrange-dock-world-2", ImGuiKey_9, "Ctrl+9",
      "10-world"},
     {Workspace::Performance, "Performance", widgets::Icon::Performance,
      "lagrange-dock-performance-1", ImGuiKey_0, "Ctrl+0", "11-performance"},
@@ -238,14 +238,17 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###RosConsole", console);
         ImGui::DockBuilderDockWindow("ros2_control", right);
     } else if (workspace == Workspace::World) {
-        // Design: Agents 300 px left, Streaming 320 px right, the map between.
+        // Design: Agents | Regions 300 px left, Streaming | Geodesy 320 px right, the map
+        // between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
         const ImGuiID right = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Right, fraction(320.0F, size.x - px(300.0F)), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Agents", left);
+        ImGui::DockBuilderDockWindow("Regions", left);
         ImGui::DockBuilderDockWindow("Map", centre);
         ImGui::DockBuilderDockWindow("Streaming", right);
+        ImGui::DockBuilderDockWindow("Geodesy", right);
     } else if (workspace == Workspace::Sensors) {
         // Design: sensor list 260 px left, Degradation 320 px right, sensor views between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
