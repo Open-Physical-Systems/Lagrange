@@ -1,8 +1,13 @@
 // Joint control: any robot, joint by joint, with no controller.
+#include "lagrange/server/JointControl.hpp"
 #include "lagrange/server/Server.hpp"
 
+#include <atomic>
 #include <cmath>
+#include <cstdint>
+#include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -23,6 +28,40 @@ ServerOptions arm(const std::string& physics = "mujoco") {
 
 double value(const Server& s, const std::string& name) {
     return s.read(name).at(0);
+}
+
+// Review 2 L3: a rebuild keeps the targets of the joints still in the run in one locked filter,
+// so a target set by another thread (ROS's /joint_commands) at the same time is never lost.
+TEST(JointControl, KeepingTargetsLosesNoneSetMeanwhile) {
+    JointTargets targets;
+    targets.set("kept", {JointTarget::Mode::Position, 1.0});
+    targets.set("gone", {JointTarget::Mode::Velocity, 2.0});
+    std::uint64_t seen = 0;
+    std::map<std::string, JointTarget> copy;
+    targets.refresh(seen, copy);
+    targets.keepIf([](const std::string& joint) { return joint != "gone"; });
+    const std::map<std::string, JointTarget> after = targets.all();
+    ASSERT_EQ(after.size(), 1U);
+    EXPECT_EQ(after.at("kept").value, 1.0);
+    const std::uint64_t before = seen;
+    targets.refresh(seen, copy);
+    EXPECT_NE(seen, before) << "the module sees the change";
+    EXPECT_EQ(copy.size(), 1U);
+
+    // A writer setting fresh joints while filters run: every one it set survives.
+    std::atomic<bool> done{false};
+    std::thread writer([&] {
+        for (int i = 0; i < 2000; ++i) {
+            targets.set("w" + std::to_string(i),
+                        {JointTarget::Mode::Effort, static_cast<double>(i)});
+        }
+        done = true;
+    });
+    while (!done) {
+        targets.keepIf([](const std::string& joint) { return joint != "gone"; });
+    }
+    writer.join();
+    EXPECT_EQ(targets.all().size(), 2001U);
 }
 
 // A robot fixed to the ground stays up with nothing told to it, as servos hold.

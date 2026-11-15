@@ -88,6 +88,23 @@ def test_command_joint_says_why_and_what_it_clamped() -> None:
     assert "joint control is off" in off.command_joint("left_wheel_joint", "velocity", 1.0).reason
 
 
+def test_command_joint_still_compares_equal_to_a_bool() -> None:
+    # Review 2 L7: command_joint returned a bool in 1.3.0; `== True` and `== False` still work,
+    # though `is True` no longer does (CHANGELOG, behaviour changes).
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None, joint_control=True)
+    taken = sim.command_joint("left_wheel_joint", "velocity", 1.0)
+    refused = sim.command_joint("no_such_joint", "velocity", 1.0)
+    assert taken == True  # noqa: E712
+    assert taken != False  # noqa: E712
+    assert refused == False  # noqa: E712
+    assert refused != True  # noqa: E712
+    assert taken is not True
+    assert bool(taken) is True and bool(refused) is False
+    assert taken != 1.5 and taken != "yes"
+    assert taken == taken and taken != refused
+    assert hash(taken) == hash(True) and hash(refused) == hash(False)
+
+
 def test_world_queries() -> None:
     sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
     assert "base_link" in sim.bodies()

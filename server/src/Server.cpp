@@ -794,8 +794,8 @@ struct Server::Impl {
         // lbm without downwash_lbm_cpu; rotor_aero.md §8).
         ModuleConfigData asked;
         asked.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
-        const bool gpuAir = !off("aerodynamics") && hasRotors() &&
-                            aerodynamics::AeroDrag::asksGpuAir(ModuleConfig(asked));
+        const bool gpuAir = !off("aerodynamics") &&
+                            aerodynamics::AeroDrag::asksGpuAir(ModuleConfig(asked), hasRotors());
         auto next = std::make_unique<Scheduler>(
             SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering && !gpuAir &&
                                               !options.px4Port && !options.ardupilotPort});
@@ -1161,7 +1161,7 @@ struct Server::Impl {
             } else {
                 downwashInRun =
                     hasRotors() && ModuleConfig(aero).get<bool>("downwash").value_or(true);
-                next->add(std::make_unique<aerodynamics::AeroDrag>(ModuleConfig(aero)),
+                next->add(std::make_unique<aerodynamics::AeroDrag>(ModuleConfig(aero), hasRotors()),
                           ModuleConfig(aero));
                 windInRun = true;
             }
@@ -5055,15 +5055,13 @@ struct Server::Impl {
     /// uncommanded instead of jumping to its predecessor's target.
     void keepTargetsOf(const std::map<std::string, std::string>& before) {
         const std::map<std::string, std::string> now = jointOwners();
-        std::map<std::string, JointTarget> kept;
-        for (auto& [joint, target] : jointTargets->all()) {
+        // One locked filter: a /joint_commands target set meanwhile is kept or dropped by the
+        // same rule, never lost between a read and a replace (review 2 L3).
+        jointTargets->keepIf([&](const std::string& joint) {
             const auto was = before.find(joint);
             const auto is = now.find(joint);
-            if (was != before.end() && is != now.end() && was->second == is->second) {
-                kept.emplace(joint, target);
-            }
-        }
-        jointTargets->replace(std::move(kept));
+            return was != before.end() && is != now.end() && was->second == is->second;
+        });
     }
 
     Status recompose(const std::function<void()>& undo) {
@@ -5252,7 +5250,8 @@ struct Server::Impl {
 
     /// `value` is held within the joint's limits (a velocity within its velocity limit, a
     /// position within its range, an effort within its effort limit, when the robot file gives
-    /// them); `limit`, when given, says which limit held it.
+    /// them; a voltage motor's effort is volts, held by its drive); `limit`, when given, says
+    /// which limit held it.
     std::string commandJoint(const std::string& joint, const std::string& mode, double& value,
                              std::string* limit = nullptr) {
         // A joint that copies another takes no commands, and a motor only what its mode follows.
@@ -5316,8 +5315,10 @@ struct Server::Impl {
             joints.velocityLimit[index] > 0.0) {
             const double v = joints.velocityLimit[index];
             hold(-v, v, "its velocity limit, " + number(v) + (slide ? " m/s" : " rad/s"));
-        } else if (mode == "effort" && std::isfinite(joints.effortLimit[index]) &&
-                   joints.effortLimit[index] > 0.0) {
+        } else if (mode == "effort" && driveMode != "voltage" &&
+                   std::isfinite(joints.effortLimit[index]) && joints.effortLimit[index] > 0.0) {
+            // (On a voltage motor the effort field carries volts, not a torque: the drive holds
+            // them within its bus voltage, so the effort limit does not apply.)
             const double e = joints.effortLimit[index];
             hold(-e, e, "its effort limit, " + number(e) + (slide ? " N" : " N·m"));
         } else if (mode == "position" && (joints.type[index] == JointType::Revolute || slide) &&

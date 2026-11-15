@@ -559,6 +559,15 @@ TEST(Ground, RealFloorsAreStillTheFloor) {
     EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
                          ShapeType::Plane),
               0);
+    // Review 2 L2: a wall beside the slab sunk 0.3 m below z = 0 (its footprint off the
+    // slab's) does not unmake the floor; only scenery over or under the slab counts.
+    Robot sunk = amr();
+    ASSERT_TRUE(addModel(
+        sunk, writeBoxWorld("sunk_wall.sdf", {"0 0 -0.1 40 40 0.2", "21 0 1.2 0.4 40 3"})));
+    EXPECT_FALSE(sunk.groundPlane);
+    EXPECT_EQ(std::count(sunk.world.colliders.shape.begin(), sunk.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              0);
     // The AMR_FMS warehouse: its 0.1 m floor with walls on it, the robot at its spawn.
     LoadOptions options;
     options.spawn.position = {26.0, 8.0, 0.0};

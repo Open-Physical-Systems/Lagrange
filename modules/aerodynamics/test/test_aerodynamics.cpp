@@ -402,10 +402,11 @@ TEST(ZeroAero, SavesAndRestoresItsNoState) {
 // Review L9: the scheduler asks a module whether it is deterministic before it declares, so
 // AeroDrag answers from the config it was made with: the live air box on the GPU is not.
 TEST(Aerodynamics, InfoBeforeInitSaysWhetherTheAirMayRunOnTheGpu) {
-    const auto made = [](const std::map<std::string, ConfigValue, std::less<>>& values) {
+    const auto made = [](const std::map<std::string, ConfigValue, std::less<>>& values,
+                         bool rotors = true) {
         ModuleConfigData data;
         data.values = values;
-        return AeroDrag(ModuleConfig(data)).info().deterministic;
+        return AeroDrag(ModuleConfig(data), rotors).info().deterministic;
     };
     EXPECT_TRUE(AeroDrag().info().deterministic);
     EXPECT_TRUE(made({}));
@@ -413,6 +414,13 @@ TEST(Aerodynamics, InfoBeforeInitSaysWhetherTheAirMayRunOnTheGpu) {
     EXPECT_FALSE(made({{"downwash_model", std::string("lbm")}}));
     EXPECT_TRUE(made({{"downwash_model", std::string("lbm")}, {"downwash_lbm_cpu", true}}));
     EXPECT_TRUE(made({{"downwash_model", std::string("lbm")}, {"downwash", false}}));
+    // Review 2 M3: without rotors there is no live box (it follows a multirotor), so the air
+    // stays deterministic whatever the model; asksGpuAir is the server's rule too.
+    EXPECT_TRUE(made({{"downwash_model", std::string("lbm")}}, false));
+    ModuleConfigData lbm;
+    lbm.values = {{"downwash_model", std::string("lbm")}};
+    EXPECT_TRUE(AeroDrag::asksGpuAir(ModuleConfig(lbm), true));
+    EXPECT_FALSE(AeroDrag::asksGpuAir(ModuleConfig(lbm), false));
 }
 
 }  // namespace

@@ -281,7 +281,8 @@ public:
     /// that is not finite.
     bool commandJoint(const std::string& joint, const std::string& mode, double value);
     /// commandJoint's outcome in full: why it was refused, or the value taken, held within the
-    /// joint's velocity limit, effort limit or range from the robot file.
+    /// joint's velocity limit, effort limit or range from the robot file (not the effort limit
+    /// on a voltage motor, whose effort carries volts that its drive holds to the bus voltage).
     struct JointCommandResult {
         std::string refused;  // empty when the joint took the command
         double value{0.0};    // the value taken (rad, m, rad/s, m/s, N·m, N or V)

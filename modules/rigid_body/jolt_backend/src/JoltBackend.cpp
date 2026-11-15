@@ -811,8 +811,13 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
     s.jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
     s.system = std::make_unique<JPH::PhysicsSystem>();
     s.system->Init(4096, 0, 8192, 8192, s.broadPhase, s.objectVsBroadPhase, s.objectPairs);
-    s.substepListener = std::make_unique<Impl::SubstepListener>(s);
-    s.system->AddStepListener(s.substepListener.get());
+    // Only with sub-steps: a registered step listener turns off Jolt's early exit when every
+    // body sleeps (PhysicsSystem::Update), so a run of one sub-step would never skip a step.
+    s.substepListener.reset();
+    if (s.substeps > 1) {
+        s.substepListener = std::make_unique<Impl::SubstepListener>(s);
+        s.system->AddStepListener(s.substepListener.get());
+    }
     s.system->SetGravity(jv(world.gravityLocal));
     // Contact friction is the larger of the two colliders' (each a sub-shape of its body), as
     // MuJoCo combines its geoms' (Jolt's default is the geometric mean of the bodies').
@@ -1266,8 +1271,9 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         return Status::error(StatusCode::Diverged, "jolt: physics update error " +
                                                        std::to_string(static_cast<int>(error)));
     }
-    // The last sub-step's impulses, then the mean over the sub-steps the listener saw (all of
-    // them while a body moves; Jolt skips the listener when every body sleeps).
+    // The last sub-step's impulses, then the mean over the sub-steps: the listener (registered
+    // only with more than one sub-step) adds each earlier one. With one sub-step there is no
+    // listener, so Jolt skips the step when every body sleeps and the impulses stay the last.
     s.sumLambdas();
     for (Impl::Joint& j : s.joints) {
         for (std::size_t k = 0; k < kLambdas; ++k) {

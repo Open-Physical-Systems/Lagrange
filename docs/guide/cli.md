@@ -341,7 +341,8 @@ The viewer's robot builder does the same for one link (Properties, Collision, *S
   narrower side, on the world or on a body fixed to it (an MJCF `worldbody` geom, an SDFormat
   static model, a URDF world's links), whose top is the lowest ground there is: within 0.1 m of
   z = 0 or below, not above the robots' lowest point, and not above the foot of any other
-  static scenery. A building's roof, a mezzanine or a bridge deck is never the floor, so a robot
+  static scenery over or under it (a wall or pit sunk into the ground beside the slab does not
+  count). A building's roof, a mezzanine or a bridge deck is never the floor, so a robot
   beside or under it keeps Lagrange's plane. A file with such a floor, as the robot or as the
   world, keeps its own and gets no plane at its top (1.3.0 and earlier added the plane there
   too); a file's own planes are never taken away.

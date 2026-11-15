@@ -302,8 +302,8 @@ ModuleInfo AeroDrag::info() const {
     return {"aerodynamics", "drag", 0, 1, false, !gpuAir, CapabilityTier::Tier0};
 }
 
-bool AeroDrag::asksGpuAir(const ModuleConfig& config) {
-    return config.get<bool>("downwash").value_or(true) &&
+bool AeroDrag::asksGpuAir(const ModuleConfig& config, bool rotors) {
+    return rotors && config.get<bool>("downwash").value_or(true) &&
            config.get<std::string>("downwash_model").value_or("fitted") == "lbm" &&
            !config.get<bool>("downwash_lbm_cpu").value_or(false);
 }

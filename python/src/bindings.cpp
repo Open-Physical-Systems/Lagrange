@@ -347,6 +347,16 @@ NB_MODULE(_lagrange, m) {
                              "limit says by which limit) when the value asked was beyond the "
                              "joint's velocity limit, effort limit or range.")
         .def("__bool__", &JointCommand::taken)
+        // command_joint returned a bool in 1.3.0 and before: `== True` and `== False` still
+        // compare by whether the joint took it (`is True` no longer holds; CHANGELOG). Anything
+        // else gets NotImplemented (is_operator), so Python compares by identity.
+        .def(
+            "__eq__", [](const JointCommand& c, bool b) { return c.taken() == b; },
+            nb::is_operator())
+        .def(
+            "__ne__", [](const JointCommand& c, bool b) { return c.taken() != b; },
+            nb::is_operator())
+        .def("__hash__", [](const JointCommand& c) { return c.taken() ? 1 : 0; })
         .def_prop_ro("taken", &JointCommand::taken, "Whether the joint took the command.")
         .def_ro("reason", &JointCommand::refused, "Why it was refused; empty when taken.")
         .def_ro("value", &JointCommand::value,
