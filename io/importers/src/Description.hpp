@@ -84,6 +84,7 @@ struct JointDesc {
     bool actuated{false};
     double damping{0.0};   // N·m·s/rad or N·s/m
     double friction{0.0};  // N·m or N
+    double armature{0.0};  // kg·m² or kg: rotor inertia the joint drives (MJCF armature)
     std::string mimic;     // the joint this one copies, or empty; takes no commands
     double mimicMultiplier{1.0}, mimicOffset{0.0};
 };

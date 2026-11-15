@@ -780,6 +780,9 @@ struct Server::Impl {
             if (settings.rigidBodySubsteps) {  // Jolt's (rigid_body.md §8.1); MuJoCo has none
                 physics.values["substeps"] = *settings.rigidBodySubsteps;
             }
+            if (settings.rigidBodyNoslip) {  // MuJoCo's (rigid_body.md §8.1); others ignore it
+                physics.values["noslip_iterations"] = *settings.rigidBodyNoslip;
+            }
             if (physics.backend == "jolt") {
                 next->add(std::make_unique<rigid_body::JoltBackend>(), ModuleConfig(physics));
             } else if (physics.backend == "mujoco") {
@@ -1294,6 +1297,7 @@ struct Server::Impl {
         settings.rigidBodyDtNs = rigidBodyDtNs;
         settings.rigidBodyBackend = rigidBodyBackend;
         settings.rigidBodySubsteps = rigidBodySubsteps;
+        settings.rigidBodyNoslip = rigidBodyNoslip;
         settings.electricalDtNs = electricalDtNs;
         settings.thermalDtNs = thermalDtNs;
         settings.speedPrediction = speedPrediction;
@@ -1743,6 +1747,7 @@ struct Server::Impl {
     std::optional<std::int64_t> rigidBodyDtNs;                   // from an applied profile
     std::optional<std::string> rigidBodyBackend;                 // from an applied profile
     std::optional<std::int64_t> rigidBodySubsteps;               // from an applied profile
+    std::optional<std::int64_t> rigidBodyNoslip;                 // from an applied profile
     std::optional<std::string> appliedTireModel;                 // vehicle_dynamics.tire_model
     std::optional<openscenario::Scenario> scenario;              // --scenario
     std::vector<PluginModule> plugins;                           // --plugin (RFC 0008)
@@ -5568,6 +5573,7 @@ struct Server::Impl {
         rigidBodyDtNs = settings.rigidBodyDtNs;
         rigidBodyBackend = settings.rigidBodyBackend;
         rigidBodySubsteps = settings.rigidBodySubsteps;
+        rigidBodyNoslip = settings.rigidBodyNoslip;
         appliedTireModel = settings.tireModel;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
@@ -5612,6 +5618,7 @@ struct Server::Impl {
             rigidBodyDtNs = previous.rigidBodyDtNs;
             rigidBodyBackend = previous.rigidBodyBackend;
             rigidBodySubsteps = previous.rigidBodySubsteps;
+            rigidBodyNoslip = previous.rigidBodyNoslip;
             electricalDtNs = previous.electricalDtNs;
             thermalDtNs = previous.thermalDtNs;
             speedPrediction = previous.speedPrediction;

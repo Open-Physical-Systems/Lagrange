@@ -25,6 +25,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_envs test/test_envs.py TIMEOUT 180)
     ament_add_pytest_test(test_images test/test_images.py TIMEOUT 120)
     ament_add_pytest_test(test_electrical_check test/test_electrical_check.py TIMEOUT 120)
+    ament_add_pytest_test(test_contact_options test/test_contact_options.py TIMEOUT 120)
 endif()
 
 ament_package()

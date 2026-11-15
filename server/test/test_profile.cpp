@@ -88,6 +88,31 @@ TEST(Profile, RigidBodySubstepsReachTheSettings) {
             .valid);
 }
 
+// MuJoCo's noslip iterations (legged-contact spike §6): a whole count from 0 to 100, off by
+// default; another backend is warned that it ignores them.
+TEST(Profile, RigidBodyNoslipIterationsReachTheSettings) {
+    const ProfileCheck check = checkProfile(
+        profile("{enabled: true, backend: mujoco, noslip_iterations: 5}"), schema(), context());
+    EXPECT_TRUE(check.valid) << issues(check);
+    ASSERT_TRUE(check.settings);
+    EXPECT_EQ(check.settings->rigidBodyNoslip, 5);
+    EXPECT_TRUE(check.issues.empty()) << issues(check);
+    const ProfileCheck none = checkProfile(profile(), schema(), context());
+    ASSERT_TRUE(none.settings);
+    EXPECT_FALSE(none.settings->rigidBodyNoslip);
+    for (const char* bad :
+         {"{enabled: true, noslip_iterations: -1}", "{enabled: true, noslip_iterations: 101}",
+          "{enabled: true, noslip_iterations: 2.5}"}) {
+        EXPECT_FALSE(checkProfile(profile(bad), schema(), context()).valid) << bad;
+    }
+    const ProfileCheck jolt = checkProfile(
+        profile("{enabled: true, backend: jolt, noslip_iterations: 5}"), schema(), context());
+    EXPECT_TRUE(jolt.valid) << issues(jolt);
+    ASSERT_EQ(jolt.issues.size(), 1U) << issues(jolt);
+    EXPECT_FALSE(jolt.issues.front().error);
+    EXPECT_EQ(jolt.issues.front().pointer, "/domains/rigid_body/noslip_iterations");
+}
+
 TEST(Profile, DisablingADomainWithAModuleSubstitutesIt) {
     const ProfileCheck check = checkProfile(profile("{enabled: false, substitute: fixed}",
                                                     "{enabled: false, substitute: ground_truth}"),

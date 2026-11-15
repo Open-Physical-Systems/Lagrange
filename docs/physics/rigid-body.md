@@ -48,6 +48,14 @@ $$
 with the dry part holding the joint still while $|\tau| < f$. Under a constant effort the joint
 speed follows $\dot q(t) = \tfrac{\tau}{d}\,(1 - e^{-d t / I})$.
 
+**Armature and slope creep.** A joint's armature is its motor's rotor inertia through the
+gearbox, $J_{rotor} N^2$ (from `ElectricalMotorAPI_1`), or MJCF's `armature` (with an actuator's
+`armature` times its gear squared). MuJoCo's contacts are soft: a body friction should hold on a
+slope creeps slowly (0.44 mm/s for a box on 10°, about ten times more for a foot on a light leg),
+less the heavier the joint behind the foot. A profile's `rigid_body: {noslip_iterations: 5}` runs
+MuJoCo's noslip solver, which stops the creep at more cost per step and lets feet slip less
+while a robot moves (docs/plan/spikes/legged-contact.md §6.1). Jolt's contacts do not creep.
+
 **Mimic joints.** A `<mimic joint multiplier offset>` joint follows $q = m\,q_{leader} + o$ and
 takes no commands of its own. MuJoCo couples the two both ways (a joint equality); Jolt moves
 only the copy, by a stiff motor (100 Hz) on it.

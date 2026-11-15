@@ -260,6 +260,17 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 domain["substeps"].is_int64()) {
                 settings.rigidBodySubsteps = domain["substeps"].as<std::int64_t>();
             }
+            if (name == "rigid_body" && domain.contains("noslip_iterations") &&
+                domain["noslip_iterations"].is_int64()) {
+                settings.rigidBodyNoslip = domain["noslip_iterations"].as<std::int64_t>();
+                const bool mujoco = !domain.contains("backend") ||
+                                    (domain["backend"].is_string() &&
+                                     domain["backend"].as<std::string>() == "mujoco");
+                if (*settings.rigidBodyNoslip > 0 && !mujoco) {
+                    warning(check, at + "/noslip_iterations",
+                            "MuJoCo's noslip iterations; other backends ignore them");
+                }
+            }
             if (domain.contains("dt") && domain["dt"].is_number()) {
                 const double ns = domain["dt"].as<double>() * kNsPerS;
                 if (std::abs(ns - std::round(ns)) > 1e-6) {

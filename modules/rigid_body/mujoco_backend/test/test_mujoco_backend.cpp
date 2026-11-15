@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -202,6 +203,64 @@ TEST(MujocoBackend, FrictionScaleMakesTheBoxSlide) {
         } else {
             EXPECT_GT(moved, 0.1) << "slides at half friction";
         }
+    }
+}
+
+/// How far the box of boxOnGround(10°, μ 0.3) creeps down the slope from 2 to 4 s (m/s), with
+/// `noslip` noslip iterations, or MuJoCo's default when it is negative.
+double creepRate(std::int64_t noslip) {
+    const World world = boxOnGround(10.0, 0.3);
+    Scheduler scheduler;
+    ModuleConfigData config;
+    if (noslip >= 0) {
+        config.values["noslip_iterations"] = noslip;
+    }
+    scheduler.add(std::make_unique<MujocoBackend>(), ModuleConfig(config));
+    auto result = scheduler.wire(WorldView(world));
+    EXPECT_TRUE(result);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    const double x0 = read(scheduler, "body/box/pose", 0);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{4'000'000'000}).ok());
+    return (read(scheduler, "body/box/pose", 0) - x0) / 2.0;
+}
+
+// tan 10° = 0.176 < μ 0.3: the box should hold. MuJoCo's soft contact lets it creep (the legged
+// contact spike measured 0.45 mm/s for this box); its noslip post-solver stops that.
+TEST(MujocoBackend, NoslipIterationsStopTheCreepOnASlope) {
+    const double soft = creepRate(-1);
+    const double noslip = creepRate(5);
+    EXPECT_GT(soft, 1e-4) << "creeps over 0.1 mm/s without noslip";
+    EXPECT_LT(std::abs(noslip), 1e-5) << "holds within 10 µm/s with noslip";
+    EXPECT_EQ(creepRate(0), soft) << "0 iterations is MuJoCo's default, off";
+}
+
+TEST(MujocoBackend, NoslipIterationsOutOfRangeAreRefused) {
+    for (const std::int64_t bad : {std::int64_t{-1}, std::int64_t{101}}) {
+        const World world = fallingBall();
+        Scheduler scheduler;
+        ModuleConfigData config;
+        config.values["noslip_iterations"] = bad;
+        scheduler.add(std::make_unique<MujocoBackend>(), ModuleConfig(config));
+        auto result = scheduler.wire(WorldView(world));
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().front().detail.find("noslip_iterations"), std::string::npos);
+    }
+}
+
+// A joint's armature (a motor's reflected rotor inertia, J·N²) is on the diagonal of MuJoCo's
+// joint-space inertia, which `effective_inertia` reads.
+TEST(MujocoBackend, ArmatureAddsToTheJointsEffectiveInertia) {
+    for (const double armature : {0.0, 0.048}) {
+        World world = flywheel(0.02);
+        world.joints.armature.back() = armature;
+        Scheduler scheduler;
+        scheduler.add(std::make_unique<MujocoBackend>());
+        scheduler.add(std::make_unique<Constant>("joint/axle/torque", units::N_m, 0.1));
+        wire(scheduler, world);
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+        EXPECT_NEAR(read(scheduler, "joint/axle/effective_inertia"), 0.02 + armature, 1e-12);
+        // Spun up at torque over the whole inertia.
+        EXPECT_NEAR(read(scheduler, "joint/axle/velocity"), 0.1 * 0.1 / (0.02 + armature), 1e-9);
     }
 }
 

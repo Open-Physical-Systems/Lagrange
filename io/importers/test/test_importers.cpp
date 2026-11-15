@@ -541,6 +541,35 @@ TEST(ImportMjcf, HelperFramesAddNoMass) {
     check("upper_r", 2, {0.01, -0.06, 0.005}, {0.0003, 0.0003, 0.0003, 0.00001, 0, 0});
 }
 
+// A joint's armature (rotor inertia reflected through its gear) reaches World::Joints::armature:
+// the joint's own `armature` plus an actuator's `armature` times its gear squared, as MuJoCo's
+// mass matrix adds them (3.12).
+TEST(ImportMjcf, JointAndActuatorArmatureReachTheWorld) {
+    const auto path = writeText("armature.xml", R"(<mujoco model="armature">
+  <worldbody>
+    <body name="a" pos="0 0 1">
+      <joint name="plain" type="hinge" axis="0 1 0"/>
+      <geom type="sphere" size="0.05" mass="1"/>
+      <body name="b" pos="0.2 0 0">
+        <joint name="own" type="hinge" axis="0 1 0" armature="0.02"/>
+        <geom type="sphere" size="0.05" mass="1"/>
+        <body name="c" pos="0.2 0 0">
+          <joint name="geared" type="hinge" axis="0 1 0" armature="0.001"/>
+          <geom type="sphere" size="0.05" mass="1"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator><motor joint="geared" gear="20" armature="0.00012"/></actuator>
+</mujoco>)");
+    auto model = importMjcf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World::Joints& joints = model->world.joints;
+    EXPECT_EQ(joints.armature[joint(*model, "plain")], 0.0);
+    EXPECT_DOUBLE_EQ(joints.armature[joint(*model, "own")], 0.02);
+    EXPECT_DOUBLE_EQ(joints.armature[joint(*model, "geared")], 0.001 + 0.00012 * 20.0 * 20.0);
+}
+
 TEST(ImportMjcf, MeshGeomsAreDrawnWithTheirTriangles) {
     const auto path = writeText("tetra.xml", R"(<mujoco model="tetra">
   <asset>

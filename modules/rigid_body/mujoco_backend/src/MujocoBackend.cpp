@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -29,6 +30,11 @@ constexpr double kCullFastestMPerS = 200.0;
 using namespace literals;
 
 constexpr std::uint32_t kStateVersion = 1;
+
+// The most noslip iterations a profile may ask (domains.rigid_body.noslip_iterations). The legged
+// contact spike (docs/plan/spikes/legged-contact.md §6) measured 5 and 20 to give the same
+// numbers; the bound only keeps a typo from costing a run its speed.
+constexpr std::int64_t kMaxNoslipIterations = 100;
 
 bool isActuatable(JointType type) {
     return type == JointType::Revolute || type == JointType::Continuous ||
@@ -239,6 +245,18 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     std::copy(gravity.begin(), gravity.end(), spec->option.gravity);
     spec->option.cone = mjCONE_ELLIPTIC;           // spike 0.2-C1: pyramidal slips 1.5° early
     spec->option.integrator = mjINT_IMPLICITFAST;  // stable with joint damping; split stepping
+    // MuJoCo's noslip post-solver (mjOption::noslip_iterations), off unless the profile asks:
+    // it stops the slow creep of soft contacts on slopes (legged-contact spike §6, 10° to under
+    // 1 µm/s) at more cost per step, and changes transients where feet must slip.
+    if (const auto noslip = config.get<std::int64_t>("noslip_iterations")) {
+        if (*noslip < 0 || *noslip > kMaxNoslipIterations) {
+            mj_deleteSpec(spec);
+            return Status::error(StatusCode::InvalidConfig,
+                                 "mujoco: noslip_iterations must be from 0 to " +
+                                     std::to_string(kMaxNoslipIterations));
+        }
+        spec->option.noslip_iterations = static_cast<int>(*noslip);
+    }
 
     // Bodies, parents first.
     const World::Bodies& bodies = world.bodies();

@@ -1,0 +1,91 @@
+{
+  "rigid 10 deg noslip 0": {
+    "creep_rate_3_6s_mm_s": 0.4436955456911991,
+    "us_per_step": 4.915058671031147
+  },
+  "rigid 10 deg noslip 5": {
+    "creep_rate_3_6s_mm_s": -0.0006664195587591237,
+    "us_per_step": 6.360563662989686
+  },
+  "rigid 10 deg noslip 20": {
+    "creep_rate_3_6s_mm_s": -0.0006664195587591237,
+    "us_per_step": 6.21157333565255
+  },
+  "rigid 25 deg noslip 0": {
+    "creep_rate_3_6s_mm_s": 1.6090092921063892,
+    "us_per_step": 5.904738335326935
+  },
+  "rigid 25 deg noslip 5": {
+    "creep_rate_3_6s_mm_s": 0.9346323797871925,
+    "us_per_step": 9.349335673808431
+  },
+  "rigid 25 deg noslip 20": {
+    "creep_rate_3_6s_mm_s": 0.9346323797871925,
+    "us_per_step": 9.54945599854303
+  },
+  "legged 10 deg noslip 0": {
+    "feet_creep_mm_1_to_3s": 10.361427841928172,
+    "feet_creep_rate_3_6s_mm_s": 5.680262506525165,
+    "base_z": 5.336610446914597,
+    "wall_s": 0.13553961302386597
+  },
+  "legged 10 deg noslip 5": {
+    "feet_creep_mm_1_to_3s": -1.176270908414656,
+    "feet_creep_rate_3_6s_mm_s": -0.02174915582864312,
+    "base_z": 5.342892280497713,
+    "wall_s": 0.14837055999669246
+  },
+  "legged 10 deg noslip 20": {
+    "feet_creep_mm_1_to_3s": -1.176270908414656,
+    "feet_creep_rate_3_6s_mm_s": -0.02174915582864312,
+    "base_z": 5.342892280497713,
+    "wall_s": 0.14684872099314816
+  },
+  "legged 10 deg armature 0.005": {
+    "feet_creep_mm_1_to_3s": 8.797961035960755,
+    "feet_creep_rate_3_6s_mm_s": 4.866928365082586,
+    "base_z": 5.337816385827284,
+    "wall_s": 0.1357215489842929
+  },
+  "legged 10 deg armature 0.02": {
+    "feet_creep_mm_1_to_3s": 6.931033140460396,
+    "feet_creep_rate_3_6s_mm_s": 3.8401764981602633,
+    "base_z": 5.340608273406993,
+    "wall_s": 0.14022060600109398
+  },
+  "legged 20 deg noslip 0": {
+    "feet_creep_mm_1_to_3s": 54.81992193611429,
+    "feet_creep_rate_3_6s_mm_s": 11.604181765171676,
+    "base_z": 5.277355236755744,
+    "wall_s": 0.13714916398748755
+  },
+  "legged 20 deg noslip 5": {
+    "feet_creep_mm_1_to_3s": 915.8672709914648,
+    "feet_creep_rate_3_6s_mm_s": -1.793676318584403e-09,
+    "base_z": 4.762451414258272,
+    "wall_s": 0.14475112801301293
+  },
+  "legged 20 deg noslip 20": {
+    "feet_creep_mm_1_to_3s": 915.9190076213226,
+    "feet_creep_rate_3_6s_mm_s": -1.7789103523568883e-09,
+    "base_z": 4.762433719289931,
+    "wall_s": 0.15555148699786514
+  },
+  "legged 20 deg armature 0.005": {
+    "feet_creep_mm_1_to_3s": 47.9089780823847,
+    "feet_creep_rate_3_6s_mm_s": 10.181859015681988,
+    "base_z": 5.2847547290077435,
+    "wall_s": 0.13520304500707425
+  },
+  "legged 20 deg armature 0.02": {
+    "feet_creep_mm_1_to_3s": 38.31028080310661,
+    "feet_creep_rate_3_6s_mm_s": 8.038430826013965,
+    "base_z": 5.283044960813043,
+    "wall_s": 0.13465766102308407
+  },
+  "_meta": {
+    "load_start": 9.55,
+    "load_end": 9.55,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-noslip/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}
