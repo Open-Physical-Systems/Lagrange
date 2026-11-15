@@ -265,8 +265,8 @@ recorded to MCAP and replayed.
 - [10 · World (huge worlds): SPEC](docs/design/ui/10-world/SPEC.md)
 - [Lagrange UI · 11 · Performance](docs/design/ui/11-performance/README.md)
 - [11 · Performance: SPEC](docs/design/ui/11-performance/SPEC.md)
-- [Lagrange UI · 12 · Builder workspace (draft)](docs/design/ui/12-builder/README.md)
-- [12 · Builder workspace: SPEC (draft, RFC 0016)](docs/design/ui/12-builder/SPEC.md)
+- [Lagrange UI · 12 · Builder workspace](docs/design/ui/12-builder/README.md)
+- [12 · Builder workspace: SPEC (RFC 0016)](docs/design/ui/12-builder/SPEC.md)
 - [Lagrange viewer UI design](docs/design/ui/README.md)
 - [Lagrange viewer: shared UI conventions](docs/design/ui/shared/ui-conventions.md)
 

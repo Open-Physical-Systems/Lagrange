@@ -1,8 +1,9 @@
-# 12 · Builder workspace: SPEC (draft, RFC 0016)
+# 12 · Builder workspace: SPEC (RFC 0016)
 
-Status: **draft for the owner**, with `rfcs/0016-robot-builder.md` (Draft). Nothing here is
-built yet. Where this screen needs something the design system does not have, it says so under
-"New in this screen" instead of improvising silently.
+Status: with `rfcs/0016-robot-builder.md`, **accepted by the owner on 2026-11-14** with every
+proposed answer; built in phase 1, Addendum A and phase 3 (#340–#368, `docs/guide/builder.md`).
+Where this screen needs something the design system does not have, it says so under "New in
+this screen" instead of improvising silently.
 
 ## Purpose
 Build a robot inside the viewer: links with simple shapes, joints between them, sensors from the
