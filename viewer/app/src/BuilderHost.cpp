@@ -3,6 +3,7 @@
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/Edits.hpp"
+#include "lagrange/viewer/builder/Files.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/Overlay.hpp"
@@ -401,6 +402,19 @@ void BuilderHost::afterUi() {
         session_.mode != BuilderSession::Mode::Build) {
         endTest({});
     }
+    // Code review M3: a xacro expansion or a split changes the document when it ends; Test
+    // waits for it (the button is disabled), and its result waits for Back.
+    session_.documentJobRunning =
+        jobRunning(Job::Kind::Xacro) || split_.state() == builder::CollisionSplit::State::Running;
+    if (session_.testRequested && session_.mode == BuilderSession::Mode::Build &&
+        session_.documentJobRunning) {
+        session_.testRequested = false;
+        session_.problems.loader.push_back(
+            {builder::Level::Warning, "",
+             std::string("Test: wait until ") +
+                 (jobRunning(Job::Kind::Xacro) ? "the xacro expansion" : "the split") +
+                 " is done"});
+    }
     if (session_.testRequested && session_.mode == BuilderSession::Mode::Build) {
         const builder::TestServer::State last = test_.state();
         if (!session_.testIntoRun && (last == builder::TestServer::State::Running ||
@@ -421,17 +435,31 @@ void BuilderHost::afterUi() {
         session_.exportUsdRequested = session_.checkRequested = false;
         return;
     }
+    answerPrompt();
     if (std::exchange(session_.saveRequested, false)) {
         const std::filesystem::path target =
             session_.savePath.empty() ? session_.path : session_.savePath;
         session_.savePath.clear();
-        (void)save(target);
+        const bool saved = save(target);
+        if (pending_.waitingForSave) {
+            // "Save as…" in the unsaved-changes prompt: the new document once it is saved.
+            if (saved) {
+                replacePending();
+            } else {
+                pending_ = {};
+            }
+        }
     }
+    // Code review M2: a new document over unsaved edits asks first (Save, Discard, Cancel).
     if (std::exchange(session_.openRequested, false)) {
-        open(std::exchange(session_.openPath, {}));
+        requestReplace({PendingReplace::What::Open, std::exchange(session_.openPath, {}), {}});
     }
     if (std::exchange(session_.templateRequested, false)) {
-        openTemplate(std::exchange(session_.templateName, {}));
+        requestReplace(
+            {PendingReplace::What::Template, {}, std::exchange(session_.templateName, {})});
+    }
+    if (!std::exchange(autosavesChecked_, true)) {
+        offerAutosave();  // a new robot's autosave left by a viewer that did not close
     }
     if (std::exchange(session_.exportUsdRequested, false)) {
         exportUsd();
@@ -564,13 +592,11 @@ std::string testRosDomain() {
 
 }  // namespace
 
-std::filesystem::path BuilderHost::autosavePath(const std::string& robot) {
-    const std::string state = environment("XDG_STATE_HOME");
-    const std::filesystem::path base =
-        !state.empty() ? std::filesystem::path(state)
-                       : std::filesystem::path(environment("HOME")) / ".local/state";
-    // QA F16: the name comes from the file; never a path of its own.
-    return base / "lagrange" / "builder" / (builder::safeFileName(robot) + ".autosave.urdf");
+std::filesystem::path BuilderHost::autosavePath() const {
+    // QA F16: the robot's name is made a safe file name; code review L6: one per document
+    // file and per viewer (the pid), so two viewers never write or restore each other's.
+    return builder::autosaveFile(builder::autosaveFolder(), session_.document().robot,
+                                 session_.path, ::getpid());
 }
 
 std::filesystem::path BuilderHost::meshFolder() const {
@@ -581,19 +607,29 @@ std::filesystem::path BuilderHost::meshFolder() const {
     return std::filesystem::current_path(ec);
 }
 
-std::filesystem::path BuilderHost::runtimeDirectory() {
-    if (runtime_.empty()) {
-        const std::string xdg = environment("XDG_RUNTIME_DIR");
-        const std::filesystem::path base = !xdg.empty()
-                                               ? std::filesystem::path(xdg) / "lagrange"
-                                               : std::filesystem::temp_directory_path() /
-                                                     ("lagrange-" + std::to_string(::getuid()));
-        runtime_ = base / "builder" / std::to_string(::getpid());
-        std::error_code ec;
-        std::filesystem::create_directories(runtime_, ec);
-        std::filesystem::permissions(runtime_, std::filesystem::perms::owner_all,
-                                     std::filesystem::perm_options::replace, ec);
+std::filesystem::path BuilderHost::runtimeDirectory(std::string& error) {
+    if (!runtime_.empty()) {
+        return runtime_;
     }
+    // Each level made 0700 if missing and refused if it is a link or another user's (code
+    // review L2): /tmp/lagrange-<uid> is a name anyone can make first. The levels under
+    // $XDG_RUNTIME_DIR (the user's own, 0700) are shared with the server's sockets, so only
+    // their write bits for others go; the fallback's own folder and this viewer's are 0700.
+    const std::string xdg = environment("XDG_RUNTIME_DIR");
+    std::error_code ec;
+    const std::filesystem::path top = !xdg.empty() ? std::filesystem::path(xdg) / "lagrange"
+                                                   : std::filesystem::temp_directory_path(ec) /
+                                                         ("lagrange-" + std::to_string(::getuid()));
+    const std::filesystem::path folder = top / "builder" / std::to_string(::getpid());
+    for (const auto& [level, exclusive] :
+         {std::pair{top, xdg.empty()}, std::pair{top / "builder", xdg.empty()},
+          std::pair{folder, true}}) {
+        if (std::string failed = builder::makePrivateDirectory(level, exclusive); !failed.empty()) {
+            error = "no private runtime folder: " + failed;
+            return {};
+        }
+    }
+    runtime_ = folder;
     return runtime_;
 }
 
@@ -623,7 +659,11 @@ std::filesystem::path BuilderHost::writeCopy(const std::string& name, std::strin
     options.savedAt = meshFolder() / "robot.urdf";
     options.meshFolder = meshFolder();
     options.absoluteMeshes = true;
-    const std::filesystem::path copy = runtimeDirectory() / builder::safeFileName(name);
+    const std::filesystem::path folder = runtimeDirectory(error);
+    if (folder.empty()) {
+        return {};
+    }
+    const std::filesystem::path copy = folder / builder::safeFileName(name);
     error = builder::saveAtomically(copy, builder::writeUrdf(session_.document(), options));
     return error.empty() ? copy : std::filesystem::path{};
 }
@@ -634,7 +674,11 @@ std::filesystem::path BuilderHost::writeOverlayCopy(const std::string& name, std
     }
     builder::OverlayWriteOptions options;
     options.absoluteAssets = true;
-    const std::filesystem::path copy = builder::overlayPathFor(runtimeDirectory() / name);
+    const std::filesystem::path folder = runtimeDirectory(error);
+    if (folder.empty()) {
+        return {};
+    }
+    const std::filesystem::path copy = builder::overlayPathFor(folder / name);
     error = builder::saveAtomically(copy, builder::writeOverlay(session_.document(), options));
     return error.empty() ? copy : std::filesystem::path{};
 }
@@ -682,17 +726,26 @@ bool BuilderHost::save(const std::filesystem::path& target) {
                     "Save: " + overlay.filename().string() +
                         " did not read when opened, so it was left as it is");
     }
+    // The autosave is behind the file now (the one of the document's old name or file too).
+    removeAutosave(std::exchange(autosaveWritten_, {}));
+    removeAutosave(autosavePath());
     session_.path = path.lexically_normal();
     session_.history.markSaved();
     session_.fileError.clear();
-    // The autosave is behind the file now.
-    std::filesystem::remove(autosavePath(session_.document().robot), ec);
+    removeAutosave(autosavePath());
     autosavedRevision_ = session_.history.revision();
     return true;
 }
 
 void BuilderHost::replaceDocument(builder::Document document, const std::filesystem::path& path,
                                   const std::string& label) {
+    // The document that goes was saved or its edits discarded (asked first, M2): its autosave
+    // has nothing to give back.
+    removeAutosave(std::exchange(autosaveWritten_, {}));
+    if (session_.prompt.kind == BuilderSession::Prompt::Kind::Restore) {
+        session_.prompt = {};  // it offered the old document's autosave
+        restoreFrom_.clear();
+    }
     session_.history = builder::History(std::move(document), label);
     session_.path = path;
     session_.selection = {};
@@ -773,13 +826,24 @@ void BuilderHost::open(const std::filesystem::path& requested) {
                             ": xacro is not installed (ros-lyrical-xacro)");
             return;
         }
+        std::string error;
+        const std::filesystem::path folder = runtimeDirectory(error);
+        if (folder.empty()) {
+            fileProblem(builder::Level::Error, "",
+                        "Open " + path.filename().string() + ": " + error);
+            return;
+        }
         auto job = std::make_unique<Job>();
         job->kind = Job::Kind::Xacro;
         job->source = path;
-        job->output = runtimeDirectory() / (path.stem().string() + ".expanded.urdf");
-        const std::string error =
-            job->process.start({xacro.string(), path.string(), "-o", job->output.string()},
-                               runtimeDirectory() / "xacro.log");
+        job->opened = session_.opened;
+        // Each expansion's own output and log (code review M3): two of the same stem, or one
+        // started while another runs, never share a file.
+        const std::string serial = "xacro-" + std::to_string(++jobSerial_);
+        job->output = folder / (serial + "-" + builder::safeFileName(path.stem().string()) +
+                                ".expanded.urdf");
+        error = job->process.start({xacro.string(), path.string(), "-o", job->output.string()},
+                                   folder / (serial + ".log"));
         if (!error.empty()) {
             fileProblem(builder::Level::Error, "",
                         "Open " + path.filename().string() + ": " + error);
@@ -794,7 +858,9 @@ void BuilderHost::open(const std::filesystem::path& requested) {
         fileProblem(builder::Level::Error, "", "Open: " + error);
         return;
     }
-    (void)openText(text, path, path, "Open " + path.filename().string());
+    if (openText(text, path, path, "Open " + path.filename().string())) {
+        offerAutosave();
+    }
 }
 
 void BuilderHost::openTemplate(const std::string& name) {
@@ -829,9 +895,17 @@ void BuilderHost::autosave(double now) {
     }
     session_.autosaveTime = now;
     autosavedRevision_ = session_.history.revision();
-    const std::filesystem::path path = autosavePath(session_.document().robot);
+    const std::filesystem::path path = autosavePath();
+    if (autosaveWritten_ != path) {
+        removeAutosave(std::exchange(autosaveWritten_, {}));  // the robot was renamed
+    }
     std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
+    std::filesystem::create_directories(path.parent_path().parent_path(), ec);
+    if (const std::string error = builder::makePrivateDirectory(path.parent_path(), true);
+        !error.empty()) {
+        fileProblem(builder::Level::Warning, "", "Autosave: " + error);
+        return;
+    }
     builder::WriteOptions options;
     options.savedAt = path;
     options.meshFolder = meshFolder();
@@ -841,6 +915,7 @@ void BuilderHost::autosave(double now) {
         !error.empty()) {
         fileProblem(builder::Level::Warning, "", "Autosave: " + error);
     }
+    autosaveWritten_ = path;
     if (builder::hasOverlay(session_.document())) {
         builder::OverlayWriteOptions overlayOptions;
         overlayOptions.absoluteAssets = true;
@@ -850,6 +925,204 @@ void BuilderHost::autosave(double now) {
             !error.empty()) {
             fileProblem(builder::Level::Warning, "", "Autosave: " + error);
         }
+    } else {
+        // Code review L6: an overlay written by an earlier autosave would come back with it.
+        std::filesystem::remove(builder::overlayPathFor(path), ec);
+    }
+}
+
+void BuilderHost::removeAutosave(const std::filesystem::path& file) {
+    if (file.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+    std::filesystem::remove(builder::overlayPathFor(file), ec);
+}
+
+void BuilderHost::offerAutosave() {
+    if (session_.prompt.kind != BuilderSession::Prompt::Kind::None) {
+        return;  // one question at a time; asked again when this document is opened again
+    }
+    const builder::LeftAutosaves left =
+        builder::findLeftAutosaves(builder::autosaveFolder(), session_.document().robot,
+                                   session_.path, ::getpid(), builder::processAlive);
+    for (const std::filesystem::path& file : left.stale) {
+        removeAutosave(file);  // the file was saved after it: it holds nothing newer
+    }
+    if (left.recoverable.empty()) {
+        return;
+    }
+    restoreFrom_ = left.recoverable.front();
+    std::error_code ec;
+    const auto age = std::filesystem::file_time_type::clock::now() -
+                     std::filesystem::last_write_time(restoreFrom_, ec);
+    const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(age).count();
+    const std::string when = ec              ? std::string("earlier")
+                             : minutes < 1   ? std::string("less than a minute ago")
+                             : minutes < 120 ? std::to_string(minutes) + " min ago"
+                                             : std::to_string(minutes / 60) + " h ago";
+    BuilderSession::Prompt& prompt = session_.prompt;
+    prompt = {};
+    prompt.kind = BuilderSession::Prompt::Kind::Restore;
+    prompt.title = "Restore the autosave?";
+    prompt.message =
+        "A viewer that did not close left an autosave of " + session_.document().robot + " (" +
+        when + ")" +
+        (session_.path.empty() ? std::string(", a robot not saved yet.")
+                               : ", newer than " + session_.path.filename().string() + ".") +
+        " Restore makes it the robot here, one undo step after the file.";
+    prompt.primary = "Restore";
+    prompt.secondary = "Discard";
+    prompt.cancel = "Not now";
+}
+
+void BuilderHost::restoreAutosave(const std::filesystem::path& file) {
+    std::string error;
+    const std::string text = readFile(file, error);
+    builder::ReadResult read;
+    if (error.empty()) {
+        read = builder::readUrdf(text);
+        if (!read.document) {
+            error = read.error;
+        }
+    }
+    if (error.empty()) {
+        std::error_code ec;
+        if (const std::filesystem::path overlay = builder::overlayPathFor(file);
+            std::filesystem::exists(overlay, ec)) {
+            const std::string yaml = readFile(overlay, error);
+            if (error.empty()) {
+                error = builder::readOverlay(yaml, *read.document, file.parent_path()).error;
+            }
+        }
+    }
+    if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Restore the autosave: " + error);
+        return;
+    }
+    session_.history.commit(std::move(*read.document), "Restore the autosave", {},
+                            ImGui::GetTime());
+    removeAutosave(file);  // this viewer autosaves it again, under its own name
+    fileProblem(
+        builder::Level::Hint, "",
+        "Restored the autosave" +
+            (session_.path.empty() ? std::string("; Save as… writes it to a file")
+                                   : "; Save writes it to " + session_.path.filename().string()));
+}
+
+void BuilderHost::requestReplace(PendingReplace request) {
+    if (session_.history.editsSinceSave() == 0) {
+        pending_ = std::move(request);
+        replacePending();
+        return;
+    }
+    pending_ = std::move(request);  // a newer request replaces one that waited
+    askUnsaved();
+}
+
+void BuilderHost::askUnsaved() {
+    const int edits = session_.history.editsSinceSave();
+    const std::string what = pending_.what == PendingReplace::What::Template
+                                 ? "the template " + pending_.name
+                                 : pending_.path.filename().string();
+    BuilderSession::Prompt& prompt = session_.prompt;
+    prompt = {};
+    prompt.kind = BuilderSession::Prompt::Kind::Unsaved;
+    prompt.title = "Unsaved changes";
+    prompt.message = session_.document().robot + " has " + std::to_string(edits) + " unsaved edit" +
+                     (edits == 1 ? "" : "s") + ". Save " + (edits == 1 ? "it" : "them") +
+                     " before opening " + what + "? Discard throws " +
+                     (edits == 1 ? "it" : "them") + " and the undo history away.";
+    prompt.primary = session_.path.empty() ? "Save as…" : "Save";
+    prompt.primaryEnabled = !session_.path.empty() || canOpenFiles_;
+    prompt.primaryHint = "Needs the windowed viewer's file dialog";
+    prompt.secondary = "Discard";
+    prompt.cancel = "Cancel";
+}
+
+void BuilderHost::replacePending() {
+    const PendingReplace request = std::exchange(pending_, {});
+    if (request.what == PendingReplace::What::Open) {
+        open(request.path);
+    } else if (request.what == PendingReplace::What::Template) {
+        openTemplate(request.name);
+    }
+}
+
+void BuilderHost::answerPrompt() {
+    using Prompt = BuilderSession::Prompt;
+    if (session_.prompt.kind == Prompt::Kind::None ||
+        session_.prompt.choice == Prompt::Choice::None) {
+        return;
+    }
+    const Prompt::Kind kind = session_.prompt.kind;
+    const Prompt::Choice choice = session_.prompt.choice;
+    session_.prompt = {};
+    switch (kind) {
+        case Prompt::Kind::Unsaved:
+            if (choice == Prompt::Choice::Secondary) {
+                removeAutosave(std::exchange(autosaveWritten_, {}));  // discarded
+                replacePending();
+            } else if (choice == Prompt::Choice::Primary && !session_.path.empty()) {
+                if (save(session_.path)) {
+                    replacePending();
+                } else {
+                    pending_ = {};  // not saved: the document stays (Problems says why)
+                }
+            } else if (choice == Prompt::Choice::Primary) {
+                pending_.waitingForSave = true;  // replaced once Save as… has saved
+                session_.saveAsDialogRequested = true;
+            } else {
+                pending_ = {};  // Cancel: the document and its history stay
+            }
+            break;
+        case Prompt::Kind::Overwrite:
+            if (choice == Prompt::Choice::Primary) {
+                session_.saveRequested = true;
+                session_.savePath = overwriteTarget_;
+            } else {
+                pending_ = {};  // the save did not happen: neither does what waited for it
+            }
+            overwriteTarget_.clear();
+            break;
+        case Prompt::Kind::Restore:
+            if (choice == Prompt::Choice::Primary) {
+                restoreAutosave(restoreFrom_);
+            } else if (choice == Prompt::Choice::Secondary) {
+                removeAutosave(restoreFrom_);
+            }  // Not now: it stays, offered again the next time
+            restoreFrom_.clear();
+            break;
+        case Prompt::Kind::None:
+            break;
+    }
+}
+
+void BuilderHost::saveAsChosen(const std::filesystem::path& path) {
+    const builder::SaveAsTarget target = builder::saveAsTarget(path);
+    if (!target.confirm) {
+        session_.saveRequested = true;
+        session_.savePath = target.path;
+        return;
+    }
+    overwriteTarget_ = target.path;
+    BuilderSession::Prompt& prompt = session_.prompt;
+    prompt = {};
+    prompt.kind = BuilderSession::Prompt::Kind::Overwrite;
+    const std::string name = target.path.filename().string();
+    prompt.title = "Replace " + name + "?";
+    prompt.message = name + " already exists in that folder. Save as… adds .urdf to the name, " +
+                     "so the file dialog did not ask about it. Replace it (and " +
+                     builder::overlayPathFor(target.path).filename().string() +
+                     " when the robot has an overlay)?";
+    prompt.primary = "Replace";
+    prompt.cancel = "Cancel";
+}
+
+void BuilderHost::saveAsCancelled() {
+    if (pending_.waitingForSave) {
+        pending_ = {};
     }
 }
 
@@ -898,7 +1171,7 @@ void BuilderHost::exportUsd() {
         fileProblem(builder::Level::Error, "", "Export USD: " + error);
         return;
     }
-    error = job->process.start(argv, runtimeDirectory() / "export.log");
+    error = job->process.start(argv, runtime_ / "export.log");  // writeCopy made runtime_
     if (!error.empty()) {
         fileProblem(builder::Level::Error, "", "Export USD: " + error);
         return;
@@ -937,7 +1210,7 @@ void BuilderHost::checkLoads() {
         fileProblem(builder::Level::Error, "", "Check loads: " + error);
         return;
     }
-    error = job->process.start(argv, runtimeDirectory() / "check.log");
+    error = job->process.start(argv, runtime_ / "check.log");  // writeCopy made runtime_
     if (!error.empty()) {
         fileProblem(builder::Level::Error, "", "Check loads: " + error);
         return;
@@ -952,7 +1225,7 @@ void BuilderHost::readCheck(const builder::ChildProcess& process) {
     BuilderSession::Problems& problems = session_.problems;
     std::string table = process.logTail(64 * 1024);
     // The copy's temporary path means nothing to the user: name the robot instead.
-    const std::string copy = (runtimeDirectory() / "check.urdf").string();
+    const std::string copy = (runtime_ / "check.urdf").string();
     for (std::size_t at = table.find(copy); at != std::string::npos; at = table.find(copy)) {
         table.replace(at, copy.size(), session_.document().robot);
     }
@@ -993,7 +1266,16 @@ void BuilderHost::pollJobs() {
     std::string busy;
     for (auto it = jobs_.begin(); it != jobs_.end();) {
         Job& job = **it;
-        if (job.process.poll() != builder::ChildProcess::State::Exited) {
+        const bool exited = job.process.poll() == builder::ChildProcess::State::Exited;
+        if (exited && job.kind == Job::Kind::Xacro &&
+            session_.mode != BuilderSession::Mode::Build) {
+            // Code review M3: never replace the document under a running Test; it opens
+            // after Back.
+            busy = "Expanded " + job.source.filename().string() + ": opens after Back";
+            ++it;
+            continue;
+        }
+        if (!exited) {
             busy = job.kind == Job::Kind::Export  ? "Exporting USD…"
                    : job.kind == Job::Kind::Check ? "Checking loads…"
                                                   : "Expanding xacro…";
@@ -1018,7 +1300,12 @@ void BuilderHost::pollJobs() {
                 ImGui::SetWindowFocus(builder_windows::kProblems);
                 break;
             case Job::Kind::Xacro:
-                if (job.process.succeeded()) {
+                if (job.opened != session_.opened) {
+                    // Another robot was opened while this one expanded: that one stays.
+                    fileProblem(builder::Level::Hint, "",
+                                "Expanded " + job.source.filename().string() +
+                                    ", but another robot was opened meanwhile; not opened");
+                } else if (job.process.succeeded()) {
                     std::string error;
                     const std::string text = readFile(job.output, error);
                     if (!error.empty()) {
@@ -1081,7 +1368,7 @@ void BuilderHost::startTest(double now) {
     // Plan decision 4: a socket named by the viewer's pid, never by the robot (sun_path).
     request.endpoint =
         "unix:" + proto::defaultUnixSocketPath("builder-" + std::to_string(::getpid()));
-    request.log = runtimeDirectory() / "server.log";
+    request.log = runtime_ / "server.log";  // writeCopy made runtime_
     request.rosDomain = testRosDomain();
     const auto endpoint = proto::parseEndpoint(request.endpoint);
     if (!endpoint) {
@@ -1439,16 +1726,32 @@ void BuilderHost::runSplit() {
             request.threshold = session_.splitThreshold;
             request.seed = session_.splitSeed;
             split_.reset();
+            splitOpened_ = session_.opened;
             const std::string error = split_.start(request);
             session_.split.running = error.empty();
             session_.split.failed = !error.empty();
             session_.split.message = error;
+            if (!error.empty()) {
+                fileProblem(builder::Level::Error, link->name,
+                            "Split " + link->name + ": " + error);
+                split_.reset();  // reported here, not again by poll()
+            }
         }
     }
     const builder::CollisionSplit::State state = split_.poll();
     if (state == builder::CollisionSplit::State::Running) {
         session_.split.running = true;
         session_.split.seconds = split_.seconds();
+    } else if (state == builder::CollisionSplit::State::Done &&
+               session_.mode != BuilderSession::Mode::Build) {
+        // Code review M3: the document is read-only while testing; the parts wait for Back.
+        session_.split.running = false;
+        session_.split.message = "Split: the parts apply after Back";
+    } else if (state == builder::CollisionSplit::State::Done && session_.opened != splitOpened_) {
+        session_.split.running = false;
+        session_.split.failed = true;
+        session_.split.message = "another robot was opened while splitting; parts not applied";
+        split_.reset();
     } else if (state == builder::CollisionSplit::State::Done) {
         const std::string name = split_.link();
         const std::vector<std::string> parts = split_.parts();
@@ -1463,13 +1766,18 @@ void BuilderHost::runSplit() {
         session_.split.running = false;
         session_.split.failed = false;
         session_.split.message = std::to_string(parts.size()) + " convex parts in " +
-                                 session_.document().robot + "_collision/";
+                                 builder::splitFolderName(session_.document().robot) + "/";
         session_.view.collision = true;
         split_.reset();
     } else if (state == builder::CollisionSplit::State::Failed) {
         session_.split.running = false;
         session_.split.failed = true;
         session_.split.message = split_.error();
+        if (session_.split.message != "cancelled") {
+            // Code review L3: the reason in Problems too, not only under the link.
+            fileProblem(builder::Level::Error, split_.link(),
+                        "Split " + split_.link() + ": " + session_.split.message);
+        }
         split_.reset();
     }
 }

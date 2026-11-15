@@ -3,6 +3,7 @@
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Files.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
 #include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/builder/Urdf.hpp"
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <set>
 #include <string>
+#include <unistd.h>
 
 #include <imgui.h>
 
@@ -434,23 +436,13 @@ public:
         if (!meshes) {
             entry("meshes", {}, "none");
         }
-        const std::filesystem::path autosave = autosavePath(document.robot);
+        // Code review L6: one per document file and viewer (Files.hpp).
+        const std::filesystem::path autosave = builder::autosaveFile(
+            builder::autosaveFolder(), document.robot, session.path, ::getpid());
         std::error_code ec;
         entry("autosave", autosave.string(),
               std::filesystem::exists(autosave, ec) ? nullptr : "none yet");
         ImGui::End();
-    }
-
-private:
-    /// RFC 0016 §10 (plan WP-F): $XDG_STATE_HOME/lagrange/builder/<robot>.autosave.urdf.
-    static std::filesystem::path autosavePath(const std::string& robot) {
-        const char* state = std::getenv("XDG_STATE_HOME");
-        const char* home = std::getenv("HOME");
-        std::filesystem::path base =
-            state != nullptr && *state != '\0'
-                ? std::filesystem::path(state)
-                : std::filesystem::path(home != nullptr ? home : "") / ".local/state";
-        return base / "lagrange" / "builder" / (builder::safeFileName(robot) + ".autosave.urdf");
     }
 };
 

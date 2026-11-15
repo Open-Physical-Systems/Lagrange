@@ -61,6 +61,7 @@ add_library(
     builder/src/CollisionSplit.cpp
     builder/src/Document.cpp
     builder/src/Edits.cpp
+    builder/src/Files.cpp
     builder/src/Gizmo.cpp
     builder/src/History.cpp
     builder/src/Kinematics.cpp
@@ -405,6 +406,7 @@ if(BUILD_TESTING)
         builder/test/test_scene_adapter.cpp
         builder/test/test_urdf.cpp
         builder/test/test_edits.cpp
+        builder/test/test_files.cpp
         builder/test/test_sensor_catalog_loader.cpp
         builder/test/test_gizmo.cpp
         builder/test/test_test_server.cpp
@@ -456,6 +458,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_builder_joint_drive test/test_builder_joint_drive.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_power test/test_builder_power.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_files test/test_builder_files.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_prompts test/test_builder_prompts.py TIMEOUT 600)
     ament_add_pytest_test(
         test_builder_roundtrip
         test/test_builder_roundtrip.py

@@ -1588,7 +1588,10 @@ public:
     [[nodiscard]] std::size_t radarDetectionsDrawn() const { return radarDrawnCount_; }
     /// How many times the 3D view was drawn (it is not when nothing in it changed).
     [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
-    void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
+    void setCanOpenFiles(bool value) {
+        canOpenFiles_ = value;
+        builderHost_.setCanOpenFiles(value);
+    }
     /// Links open in the system's browser (a window); headless runs only print them.
     void setOpensPages(bool value) { opensPages_ = value; }
     void setWorkspace(Workspace workspace) {
@@ -1640,9 +1643,15 @@ public:
             builderSession_.selection = {SelectionKind::Sensor, name};
         }
     }
-    void builderSaveRequest(const std::string& path) {
-        builderSession_.saveRequested = true;
-        builderSession_.savePath = path;
+    /// The Save as… dialog's choice (or headless `--input N:saveas:PATH`): ".urdf" added when
+    /// it lacks it, and asked first when that name exists (code review L7).
+    void builderSaveAsChosen(const std::string& path) { builderHost_.saveAsChosen(path); }
+    /// The Save as… dialog closed without a choice.
+    void builderSaveAsCancelled() { builderHost_.saveAsCancelled(); }
+    /// Headless `--input N:template:NAME`: a click on that template card.
+    void builderTemplateRequest(const std::string& name) {
+        builderSession_.templateRequested = true;
+        builderSession_.templateName = name;
     }
     /// The undo stack in the headless report: its labels (oldest first) and where it is.
     [[nodiscard]] static std::string historyJson(const builder::History& history) {
@@ -1652,6 +1661,13 @@ public:
         }
         return "{\"position\": " + std::to_string(history.position()) + ", \"labels\": [" + labels +
                "]}";
+    }
+    [[nodiscard]] static const char* promptName(BuilderSession::Prompt::Kind kind) {
+        using K = BuilderSession::Prompt::Kind;
+        return kind == K::Unsaved     ? "unsaved"
+               : kind == K::Restore   ? "restore"
+               : kind == K::Overwrite ? "overwrite"
+                                      : "";
     }
     /// The Builder's document in the headless report (RFC 0016 WP-E's input tests): counts,
     /// the selection, the edits since the last save.
@@ -1736,6 +1752,8 @@ public:
                 : mode == BuilderSession::Mode::Starting ? "starting"
                                                          : "testing") +
                "\", \"path\": \"" + jsonEscape(builderSession_.path.string()) +
+               "\", \"prompt\": \"" + promptName(builderSession_.prompt.kind) +
+               "\", \"prompt_title\": \"" + jsonEscape(builderSession_.prompt.title) +
                "\", \"test_into_run\": " + (builderSession_.testIntoRun ? "true" : "false") +
                ", \"test_robot\": \"" + jsonEscape(builderSession_.testRobotName) +
                "\", \"test_passive\": " + (builderSession_.testPassive ? "true" : "false") +
@@ -2299,6 +2317,16 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     if (event.frame == rendered && event.kind == "select") {
                         ui.builderSelect(event.text);
                     }
+                    // What a dropped file, the Save as… dialog and a template card do.
+                    if (event.frame == rendered && event.kind == "open") {
+                        ui.builderOpenRequest(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "saveas") {
+                        ui.builderSaveAsChosen(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "template") {
+                        ui.builderTemplateRequest(event.text);
+                    }
                 }
             }
             io.DeltaTime = 1.0F / 60.0F;
@@ -2438,7 +2466,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
             "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
             "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s, "
-            "\"radar_detections\": %zu, \"viewer_gpu\": %s, \"replay_compare\": %s, \"signals\": %s}\n",
+            "\"radar_detections\": %zu, \"viewer_gpu\": %s, \"replay_compare\": %s, \"signals\": "
+            "%s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -2808,10 +2837,10 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                 SDL_ShowSaveFileDialog(
                     [](void* user, const char* const* files, int /*filter*/) {
                         auto* result = static_cast<Chosen*>(user);
-                        if (files != nullptr && files[0] != nullptr) {
-                            const std::lock_guard lock(result->mutex);
-                            result->builderSave.emplace_back(files[0]);
-                        }
+                        const std::lock_guard lock(result->mutex);
+                        // Closed without a choice (or an error): an empty entry says so.
+                        result->builderSave.emplace_back(
+                            files != nullptr && files[0] != nullptr ? files[0] : "");
                     },
                     &chosen, window, kUrdf, 1, nullptr);
             }
@@ -2825,11 +2854,12 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     ui.builderAddMesh(path);
                 }
                 chosen.builderMesh.clear();
-                for (std::string path : chosen.builderSave) {
-                    if (!path.ends_with(".urdf")) {
-                        path += ".urdf";
+                for (const std::string& path : chosen.builderSave) {
+                    if (path.empty()) {
+                        ui.builderSaveAsCancelled();
+                    } else {
+                        ui.builderSaveAsChosen(path);  // ".urdf" added before asking (L7)
                     }
-                    ui.builderSaveRequest(path);
                 }
                 chosen.builderSave.clear();
                 for (const std::string& path : chosen.paths) {

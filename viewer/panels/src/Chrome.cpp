@@ -673,7 +673,9 @@ void drawBuildControls(PanelContext& context) {
         session.testIntoRun = true;  // SPEC state 5: then the only target
     }
     const bool installed = session.testIntoRun ? intoRun : !context.launcher->localServer.empty();
-    ImGui::BeginDisabled(errors > 0 || !installed);
+    // Code review M3: not while a xacro expansion or a split is about to change the document.
+    const bool waiting = session.documentJobRunning;
+    ImGui::BeginDisabled(errors > 0 || !installed || waiting);
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const float testWidth = widgets::ButtonWidth(test.c_str(), widgets::Icon::Play, true);
     if (widgets::Button(test.c_str(), widgets::ButtonKind::Primary, widgets::Icon::Play, true)) {
@@ -685,15 +687,19 @@ void drawBuildControls(PanelContext& context) {
         }
     }
     const float chevron = px(10.0F);
-    widgets::DrawIcon(ImGui::GetWindowDrawList(), widgets::Icon::ChevronDown,
-                      ImVec2(at.x + testWidth - px(10.0F) - chevron, at.y + px(8.0F)), chevron,
-                      ImGui::ColorConvertFloat4ToU32(ImVec4(
-                          c::onAccent.x, c::onAccent.y, c::onAccent.z,
-                          errors > 0 || !installed ? ImGui::GetStyle().DisabledAlpha : 1.0F)),
-                      ImGui::ColorConvertFloat4ToU32(c::accent));
+    widgets::DrawIcon(
+        ImGui::GetWindowDrawList(), widgets::Icon::ChevronDown,
+        ImVec2(at.x + testWidth - px(10.0F) - chevron, at.y + px(8.0F)), chevron,
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(c::onAccent.x, c::onAccent.y, c::onAccent.z,
+                   errors > 0 || !installed || waiting ? ImGui::GetStyle().DisabledAlpha : 1.0F)),
+        ImGui::ColorConvertFloat4ToU32(c::accent));
     ImGui::EndDisabled();
     if (errors > 0) {
         ImGui::SetItemTooltip("Fix %d problem%s first", errors, errors == 1 ? "" : "s");
+    } else if (waiting) {
+        ImGui::SetItemTooltip("Wait until %s is done",
+                              session.busy.empty() ? "the split" : session.busy.c_str());
     } else if (!installed) {
         ImGui::SetItemTooltip(session.testIntoRun ? "Not connected to a server that imports robots"
                                                   : "lagrange_server is not installed");
@@ -1690,8 +1696,9 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
         context.selectedPrim = kNone;
     }
-    if (*context.workspace == Workspace::Builder) {
-        builderShortcuts(context);
+    if (*context.workspace == Workspace::Builder &&
+        context.builder->prompt.kind == BuilderSession::Prompt::Kind::None) {
+        builderShortcuts(context);  // not under a question (its Esc is Cancel)
     }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1759,6 +1766,9 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
         if (ImGuiWindow* window = windowTitled(askedPanel); window != nullptr) {
             ImGui::FocusWindow(window);
         }
+    }
+    if (shown == Workspace::Builder) {
+        builder_ui::drawPrompt(*context.builder);  // last: over every panel
     }
 }
 

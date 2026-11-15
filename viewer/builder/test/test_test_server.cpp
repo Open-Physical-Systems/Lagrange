@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <signal.h>
 #include <sys/wait.h>
 #include <thread>
@@ -177,4 +179,33 @@ TEST(ChildProcess, AMissingProgramIsReported) {
     } else {
         EXPECT_NE(error.find("/nonexistent/lagrange_server"), std::string::npos);
     }
+}
+
+TEST(ChildProcess, ALogLinkIsNotWrittenThrough) {
+    // Code review L2: a link planted at the log's name is not followed (O_NOFOLLOW), so the
+    // file it points to is never truncated or written; the log is the user's own (0600).
+    Scratch scratch;
+    const auto victim = scratch / "victim.txt";
+    {
+        std::ofstream(victim) << "keep me\n";
+    }
+    std::filesystem::create_symlink(victim, scratch / "server.log");
+    ChildProcess child;
+    const std::string error =
+        child.start({"/bin/sh", "-c", "echo written"}, scratch / "server.log");
+    if (error.empty()) {
+        (void)pollUntil(child, State::Exited, 5s);
+        EXPECT_FALSE(child.succeeded());
+    }
+    std::ifstream in(victim);
+    const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    EXPECT_EQ(text, "keep me\n");
+
+    ChildProcess plain;
+    ASSERT_EQ(plain.start({"/bin/sh", "-c", "echo ok"}, scratch / "plain.log"), "");
+    (void)pollUntil(plain, State::Exited, 5s);
+    EXPECT_TRUE(plain.succeeded());
+    EXPECT_EQ(
+        std::filesystem::status(scratch / "plain.log").permissions() & std::filesystem::perms::all,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
 }

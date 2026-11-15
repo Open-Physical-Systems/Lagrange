@@ -54,6 +54,8 @@ void usage() {
         "                         FRAME:wait:connected|build|idle holds the frame count until a\n"
         "                         builder Test is connected, back in Build, or no tool runs\n"
         "                         FRAME:select:NAME selects a builder link, joint or sensor\n"
+        "                         FRAME:open:FILE, FRAME:saveas:FILE, FRAME:template:NAME do\n"
+        "                         what a dropped robot, Save as… and a template card do\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --compare <file.mcap>  Replay: compare the replayed recording with this one\n"
         "  --suite <file.yaml>    Replay: the validation suite for --compare\n"

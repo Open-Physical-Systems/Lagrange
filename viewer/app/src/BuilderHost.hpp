@@ -76,8 +76,18 @@ public:
     bool save(const std::filesystem::path& target);
     /// Open a .urdf now, or start expanding a .xacro (it opens when xacro is done).
     void open(const std::filesystem::path& path);
-    /// $XDG_STATE_HOME/lagrange/builder/<robot>.autosave.urdf (RFC 0016 §10).
-    [[nodiscard]] static std::filesystem::path autosavePath(const std::string& robot);
+    /// This viewer's autosave of the document (RFC 0016 §10; code review L6):
+    /// builder::autosaveFile in $XDG_STATE_HOME/lagrange/builder, keyed by the document's file
+    /// and robot name, with this viewer's pid.
+    [[nodiscard]] std::filesystem::path autosavePath() const;
+    /// The windowed viewer's Save as… dialog chose `path`: saved there, with ".urdf" added when
+    /// it lacks it; when that added name exists, asked first (code review L7).
+    void saveAsChosen(const std::filesystem::path& path);
+    /// The Save as… dialog was closed without a choice: what waited for that save (an Open
+    /// after "Save" in the unsaved-changes prompt) does not happen.
+    void saveAsCancelled();
+    /// The windowed viewer has file dialogs (the unsaved-changes prompt's Save as…).
+    void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     /// The folder the document's relative meshes resolve against (BuilderSession::meshFolder,
     /// else the working directory).
     [[nodiscard]] std::filesystem::path meshFolder() const;
@@ -89,6 +99,15 @@ private:
         builder::ChildProcess process;
         std::filesystem::path source;  ///< xacro: the file asked for
         std::filesystem::path output;  ///< export: the .usda; xacro: the expanded URDF
+        std::uint64_t opened{0};       ///< xacro: session.opened when it started
+    };
+    /// A new document asked for while the current one had unsaved edits (code review M2):
+    /// what to open once the prompt is answered (Save, Discard).
+    struct PendingReplace {
+        enum class What : std::uint8_t { None, Open, Template } what{What::None};
+        std::filesystem::path path;  ///< Open: the file
+        std::string name;            ///< Template: its name
+        bool waitingForSave{false};  ///< "Save as…" was chosen: replaced once that save is done
     };
     /// Seconds a test server may take to answer before the Test gives up.
     static constexpr double kStartTimeoutS = 60.0;
@@ -119,6 +138,17 @@ private:
     void replaceDocument(builder::Document document, const std::filesystem::path& path,
                          const std::string& label);
     void autosave(double now);
+    /// Open, a dropped file or a template: now, or after the unsaved-changes prompt.
+    void requestReplace(PendingReplace request);
+    void askUnsaved();
+    /// Carries out the answer to session.prompt, once given.
+    void answerPrompt();
+    void replacePending();
+    /// Offers back an autosave a viewer that did not close left of this document (newer than
+    /// its file); removes those the file is newer than (code review L6).
+    void offerAutosave();
+    void restoreAutosave(const std::filesystem::path& file);
+    static void removeAutosave(const std::filesystem::path& file);
     void fileProblem(builder::Level level, std::string item, std::string message);
     [[nodiscard]] bool jobRunning(Job::Kind kind) const;
     /// The document written for a tool (absolute meshes) in the runtime folder; empty and
@@ -127,8 +157,10 @@ private:
     /// The overlay written for a tool beside such a copy (absolute assets; RFC 0016 phase 3):
     /// `<stem of name>.overlay.yaml`; empty when the document needs none or it failed (`error`).
     std::filesystem::path writeOverlayCopy(const std::string& name, std::string& error);
-    /// $XDG_RUNTIME_DIR/lagrange/builder/<pid>/ (plan decision 4), made on first use.
-    std::filesystem::path runtimeDirectory();
+    /// $XDG_RUNTIME_DIR/lagrange/builder/<pid>/ (plan decision 4), made on first use, 0700 and
+    /// checked to be this user's own (code review L2: the /tmp/lagrange-<uid> fallback could
+    /// have been made by someone else). Empty, and the reason in `error`, when it cannot be.
+    std::filesystem::path runtimeDirectory(std::string& error);
     [[nodiscard]] std::filesystem::path program(std::string_view name) const;
 
     std::string serverProgram_;
@@ -157,6 +189,14 @@ private:
     double startedAt_{0.0};
     double logReadAt_{0.0};
     std::uint64_t autosavedRevision_{0};
+    std::filesystem::path autosaveWritten_;  ///< the autosave this viewer wrote last
+    bool autosavesChecked_{false};           ///< the first frame looked for left autosaves
+    std::filesystem::path restoreFrom_;      ///< with the Restore prompt: the autosave offered
+    std::filesystem::path overwriteTarget_;  ///< with the Overwrite prompt: Save as… target
+    PendingReplace pending_;
+    bool canOpenFiles_{false};
+    std::uint64_t jobSerial_{0};    ///< names each xacro's output and log apart
+    std::uint64_t splitOpened_{0};  ///< session.opened when the split started
     /// An overlay beside the opened URDF that did not read: Save leaves it as it is, rather
     /// than writing the document's (empty) overlay over it.
     std::filesystem::path unreadOverlay_;
