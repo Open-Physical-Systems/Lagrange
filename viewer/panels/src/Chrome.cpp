@@ -46,7 +46,7 @@ struct WorkspaceEntry {
 // The dock space names carry a layout version: change it when a default layout changes, so
 // that a layout saved by an older build is not applied to the new panels.
 constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
-    {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-4", ImGuiKey_1, "Ctrl+1",
+    {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-5", ImGuiKey_1, "Ctrl+1",
      "02-scene"},
     {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-4", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
@@ -105,8 +105,16 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         const ImGuiID console =
             ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.38F, nullptr, &bottom);
         ImGui::DockBuilderDockWindow("Viewport", centre);
+        // Sensor views as extra tabs beside the viewport; Layers and History beside the tree
+        // and the Inspector (SPEC "Dock layout").
+        for (const char* view : {scene_view_windows::kCamera, scene_view_windows::kLidar,
+                                 scene_view_windows::kRadar}) {
+            ImGui::DockBuilderDockWindow((std::string("###") + view).c_str(), centre);
+        }
         ImGui::DockBuilderDockWindow("Scene", left);
+        ImGui::DockBuilderDockWindow("Layers", left);
         ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("History", right);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
         ImGui::DockBuilderDockWindow("###Bookmarks", bottom);
         ImGui::DockBuilderDockWindow("Console", console);
@@ -1571,6 +1579,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createViewportPanel());
     panels.push_back(createScenePanel());
     panels.push_back(createInspectorPanel());
+    for (std::unique_ptr<Panel>& panel : createSceneTabsPanels()) {
+        panels.push_back(std::move(panel));
+    }
     panels.push_back(createTimelinePanel());
     panels.push_back(createBookmarksPanel());
     panels.push_back(createConsolePanel());
@@ -1687,6 +1698,8 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
         // In a fresh layout the first tab of a group is the one in front.
         ImGui::SetWindowFocus("Console");
         ImGui::SetWindowFocus("Timeline");
+        ImGui::SetWindowFocus("Scene");
+        ImGui::SetWindowFocus("Inspector");
         ImGui::SetWindowFocus("Viewport");
     }
     if (built && shown == Workspace::Domains) {
