@@ -92,6 +92,17 @@ public:
     /// Number of validation errors reported so far (0 when validation is off).
     [[nodiscard]] std::uint32_t validationErrorCount() const;
 
+    /// Bytes of memory this device's allocator holds now: the VkDeviceMemory blocks it has
+    /// allocated (VmaStatistics::blockBytes summed over every heap: device-local images and
+    /// buffers, and the host-visible buffers the GPU reads and writes, e.g. --lidar gpu's rays).
+    /// Exact for what Lagrange allocates through the HAL (every buffer and image does); not the
+    /// driver's own overhead, pipelines and descriptor pools, nor other processes' use.
+    [[nodiscard]] std::uint64_t allocatedBytes() const;
+    /// allocatedBytes() summed over every live Device of this process on a hardware GPU
+    /// (software devices such as llvmpipe left out: their "device" memory is host memory).
+    /// 0 when the process has no hardware device open. Thread-safe.
+    [[nodiscard]] static std::uint64_t hardwareMemoryInUse();
+
     /// Records commands with `record`, submits them and waits for completion. For uploads,
     /// readbacks and tests; not for per-frame rendering.
     void submitAndWait(const std::function<void(VkCommandBuffer)>& record) const;

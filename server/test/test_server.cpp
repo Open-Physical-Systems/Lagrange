@@ -1,4 +1,5 @@
 // The server end to end over a real Unix socket, as the viewer sees it.
+#include "lagrange/gpu/Device.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/server/Server.hpp"
 #include "lagrange/stage/Stage.hpp"
@@ -927,6 +928,45 @@ TEST_F(ArmServerTest, CameraFramesCarryTheWristCameraImage) {
     EXPECT_EQ(frame.image().height(), 480U);
     EXPECT_EQ(frame.image().encoding(), "rgba8");
     EXPECT_EQ(frame.image().data().inline_().size(), 640U * 480U * 4U);
+}
+
+// ServerStats (Performance workspace): a rendered camera's module runs on the GPU and the GPU
+// memory the HAL's allocator holds is reported, both only on a hardware device; on a software
+// device (Tier 0, llvmpipe) the camera is not on the GPU and the GPU memory is 0.
+TEST_F(ArmServerTest, StatsMarkTheRenderedCameraOnTheGpuAndCountItsMemory) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope step = command(5);
+    step.mutable_command()->mutable_step()->set_duration_ns(100'000'000);
+    send(step);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_server_stats(); }));
+    const v1::ServerStats stats = received_.back().server_stats();
+    const v1::ServerStats::Module* camera = nullptr;
+    for (const v1::ServerStats::Module& m : stats.modules()) {
+        if (m.module() == "sensors/camera_wrist_camera") {
+            camera = &m;
+        }
+        if (m.module().starts_with("rigid_body/") || m.module().starts_with("electrical/")) {
+            EXPECT_FALSE(m.on_gpu()) << m.module();
+        }
+    }
+    ASSERT_NE(camera, nullptr) << "no camera module in the stats";
+    // The device the server's cameras take: the same automatic choice (LAGRANGE_GPU, else
+    // discrete > integrated > software).
+    std::string error;
+    const std::unique_ptr<lagrange::gpu::Device> device = lagrange::gpu::Device::create({}, error);
+    if (!device) {
+        EXPECT_FALSE(camera->on_gpu());
+        EXPECT_EQ(stats.gpu_memory_bytes(), 0U);
+        GTEST_SKIP() << "no Vulkan device: " << error;
+    }
+    if (device->info().isSoftware) {
+        EXPECT_FALSE(camera->on_gpu()) << device->info().name;
+        EXPECT_EQ(stats.gpu_memory_bytes(), 0U) << device->info().name;
+        GTEST_SKIP() << "only a software device (Tier 0): " << device->info().name;
+    }
+    EXPECT_TRUE(camera->on_gpu()) << device->info().name;
+    // The camera's 640 x 480 targets alone are over a megabyte.
+    EXPECT_GT(stats.gpu_memory_bytes(), 1'000'000U) << device->info().name;
 }
 
 // Any image signal by its name (sensors.md §9 "Images of kinds"): here the camera's depth, r32f.

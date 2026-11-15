@@ -293,7 +293,11 @@ Expected<Wind, std::string> AeroDrag::windOf(const ModuleConfig& config) {
 }
 
 ModuleInfo AeroDrag::info() const {
-    return {"aerodynamics", "drag", 0, 1, false, true, CapabilityTier::Tier0};
+    // With the live air box running on the GPU (LiveAir, rotor_aero.md §8) the step is a GPU
+    // path and not bit-reproducible (invariant 7); the server reports it as on the GPU. Before
+    // init, and with the fitted downwash or the CPU reference box, it is deterministic.
+    const bool gpuAir = live_ != nullptr && !lbmCpu_;
+    return {"aerodynamics", "drag", 0, 1, false, !gpuAir, CapabilityTier::Tier0};
 }
 
 Duration AeroDrag::preferredStep() const {

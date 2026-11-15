@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <vector>
 
 #include <vk_mem_alloc.h>
 
@@ -14,6 +16,13 @@ namespace lagrange::gpu {
 namespace {
 
 std::atomic<std::uint32_t> gValidationErrors{0};
+
+// Every Device with an allocator, for Device::hardwareMemoryInUse().
+std::mutex gLiveMutex;
+std::vector<const Device*>& liveDevices() {
+    static std::vector<const Device*> devices;
+    return devices;
+}
 
 VKAPI_ATTR VkBool32 VKAPI_CALL onDebugMessage(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                               VkDebugUtilsMessageTypeFlagsEXT /*types*/,
@@ -391,10 +400,44 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
         error = "cannot create the memory allocator";
         return nullptr;
     }
+    {
+        const std::lock_guard lock(gLiveMutex);
+        liveDevices().push_back(self.get());
+    }
     return self;
 }
 
+std::uint64_t Device::allocatedBytes() const {
+    if (allocator_ == nullptr) {
+        return 0;
+    }
+    const VkPhysicalDeviceMemoryProperties* memory = nullptr;
+    vmaGetMemoryProperties(allocator_, &memory);
+    std::vector<VmaBudget> budgets(memory->memoryHeapCount);
+    vmaGetHeapBudgets(allocator_, budgets.data());
+    std::uint64_t bytes = 0;
+    for (std::uint32_t h = 0; h < memory->memoryHeapCount; ++h) {
+        bytes += budgets[h].statistics.blockBytes;
+    }
+    return bytes;
+}
+
+std::uint64_t Device::hardwareMemoryInUse() {
+    const std::lock_guard lock(gLiveMutex);
+    std::uint64_t bytes = 0;
+    for (const Device* device : liveDevices()) {
+        if (!device->info_.isSoftware) {
+            bytes += device->allocatedBytes();
+        }
+    }
+    return bytes;
+}
+
 Device::~Device() {
+    {
+        const std::lock_guard lock(gLiveMutex);
+        std::erase(liveDevices(), this);
+    }
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
     }

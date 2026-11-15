@@ -656,6 +656,19 @@ Rules that go with them:
   whole list with `complete = true`.
 - `ServerStats.estimated` says whether module costs are measured or estimated. The mock server
   sets it: it replays, so its module costs are the profile's estimates.
+- `ServerStats.Module.on_gpu` (and `Wiring.Node.on_gpu`) is true for a module whose step runs
+  on a hardware GPU: a sensor casting on `--lidar gpu`'s ray context (lidar, radar), a sensor
+  rendering on the cameras' device when that device is not a software one (cameras, thermal
+  cameras, event and stereo cameras, detections), and the aerodynamics with the live air box on
+  the GPU. Plugin modules are never marked. `cpu_ms_per_step` of such a module is the wall time
+  of its step, waiting for the GPU included; the HAL has no timestamp queries yet, so there is
+  no separate GPU time per module (that would need a new field, e.g. `gpu_ms_per_step`).
+- `ServerStats.gpu_memory_bytes` is the memory the server's hardware Vulkan devices hold
+  through the HAL's allocator (VMA's `blockBytes` over every heap,
+  `gpu::Device::hardwareMemoryInUse`): device-local images and buffers, and the host-visible
+  buffers the GPU reads and writes (the GPU lidar's rays live there). Exact for Lagrange's
+  allocations; the driver's own overhead (pipelines, descriptor pools) and other processes are
+  not in it. 0 when the server has only a software device (Tier 0) or none.
 - `Wiring` is sent whenever the profile text could be parsed, also when a unit check fails:
   a wire with `unit_ok = false` is what the user has to see (invariant 2).
 - `QuantityKind` gained `LinearAcceleration`, appended to the list (architecture §2).

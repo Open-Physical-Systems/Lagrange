@@ -3,6 +3,7 @@
 #include "shaders/kTriangleFragment.hpp"
 #include "shaders/kTriangleVertex.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -79,6 +80,25 @@ TEST(Device, CreatesOnTheDefaultDeviceAndReportsItsTier) {
     EXPECT_LE(device->tier(), device->info().tier);
     EXPECT_FALSE(device->allDevices().empty());
     std::printf("device: %s, %s\n", device->info().name.c_str(), toString(device->tier()));
+}
+
+// ServerStats.gpu_memory_bytes: what the allocator holds, on hardware devices only.
+TEST(Device, CountsItsAllocations) {
+    const auto device = makeDevice();
+    ASSERT_NE(device, nullptr);
+    const std::uint64_t before = device->allocatedBytes();
+    const std::uint64_t processBefore = Device::hardwareMemoryInUse();
+    constexpr VkDeviceSize kSize = 4 * 1024 * 1024;
+    Buffer buffer = createBuffer(*device, kSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+    ASSERT_NE(buffer.buffer, VK_NULL_HANDLE);
+    // A new block or one VMA already had; either way at least the buffer is held now.
+    EXPECT_GE(device->allocatedBytes(), std::max<std::uint64_t>(before, kSize));
+    if (device->info().isSoftware) {
+        EXPECT_EQ(Device::hardwareMemoryInUse(), processBefore);  // llvmpipe is host memory
+    } else {
+        EXPECT_GE(Device::hardwareMemoryInUse(), kSize);
+    }
+    destroy(*device, buffer);
 }
 
 TEST(Device, UnknownDeviceNameFailsWithAMessage) {

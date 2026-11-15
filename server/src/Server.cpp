@@ -5,6 +5,7 @@
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/gpu/Device.hpp"
 #include "lagrange/humans/Body.hpp"
 #include "lagrange/humans/Humans.hpp"
 #include "lagrange/hydrodynamics/Water.hpp"
@@ -5645,6 +5646,7 @@ struct Server::Impl {
                 node.set_detail("ground_truth · " + std::string(label.substr(slash + 1)));
             }
             node.set_dt_ns(module.dt.ns);
+            node.set_on_gpu(runsOnGpu(module));
             smallest = smallest == 0 ? module.dt.ns : std::min(smallest, module.dt.ns);
         }
         // One wire per (writer, reader, signal pattern): "joint/left_wheel_joint/torque" and
@@ -6732,6 +6734,36 @@ struct Server::Impl {
         }
     }
 
+    /// Whether `module`'s step runs on a hardware GPU (ServerStats.Module.on_gpu, Wiring.Node):
+    /// a sensor that casts on --lidar gpu's ray context (lidar, radar) or renders on the
+    /// cameras' raster device (cameras, thermal cameras, event and stereo cameras, detections)
+    /// when that device is not a software one, and the aerodynamics' live air box on the GPU.
+    /// Every such module says so by not being deterministic (invariant 7); plugins' modules are
+    /// never counted, since a plugin may be non-deterministic for other reasons.
+    [[nodiscard]] bool runsOnGpu(const ScheduledModule& module) const {
+        const ModuleInfo info = module.module->info();
+        if (info.deterministic || info.isSubstitute) {
+            return false;
+        }
+        if (std::ranges::any_of(plugins, [&](const PluginModule& plugin) {
+                return plugin.domain == info.domain && plugin.name == info.name;
+            })) {
+            return false;
+        }
+        if (info.domain == "aerodynamics") {
+            return true;  // AeroDrag: the live air box, which starts only on a hardware GPU
+        }
+        if (info.domain != "sensors") {
+            return false;
+        }
+        const std::string_view name = info.name;
+        if (name.starts_with("lidar_") || name.starts_with("radar_") ||
+            name.starts_with("imaging_radar_")) {
+            return rayContext != nullptr && rayContext->tier() >= 1;
+        }
+        return cameraScene != nullptr && !cameraScene->raster->isSoftware();
+    }
+
     void sendStats(Clock::time_point now) {
         const double wallS = static_cast<double>(nanosSince(lastStats, now)) * 1e-9;
         const std::vector<ModuleCost> costs = scheduler->takeCosts();
@@ -6760,6 +6792,18 @@ struct Server::Impl {
             stats.set_tick_ms_max(static_cast<double>(most) / 1e6);
         }
         stats.set_memory_bytes(residentBytes());
+        // What this process's hardware Vulkan devices (cameras, --lidar gpu, the live air box)
+        // hold, as the HAL's allocator counts it (Device::hardwareMemoryInUse): device-local
+        // images and buffers and the host-visible buffers the GPU works in; exact for Lagrange's
+        // allocations, without the driver's own overhead. 0 when only a software device (Tier 0)
+        // or none is open.
+        stats.set_gpu_memory_bytes(gpu::Device::hardwareMemoryInUse());
+        std::set<std::string> onGpu;
+        for (const ScheduledModule& module : scheduler->plan()) {
+            if (runsOnGpu(module)) {
+                onGpu.insert(module.label);
+            }
+        }
         // Viewers that have been greeted (RFC 0014, open question 4): connections still waiting
         // for their handshake are not viewers yet.
         stats.set_viewers(static_cast<std::uint32_t>(
@@ -6774,6 +6818,7 @@ struct Server::Impl {
             m.set_domain(cost.domain);
             m.set_dt_ns(cost.dt.ns);
             m.set_steps_per_second(wallS > 0.0 ? static_cast<double>(cost.steps) / wallS : 0.0);
+            m.set_on_gpu(onGpu.contains(cost.label));
             if (cost.steps > 0) {
                 m.set_cpu_ms_per_step(static_cast<double>(cost.totalNs) / 1e6 /
                                       static_cast<double>(cost.steps));
