@@ -471,6 +471,20 @@ TEST_F(EmiServerTest, ThePowerLineDisturbsTheMagnetometerAndReachesTheViewer) {
     ASSERT_EQ(env.emi_sources_size(), 1);
     EXPECT_EQ(env.emi_sources(0).name(), "power_line_01");
     EXPECT_EQ(env.emi_sources(0).frequency_hz(), 60.0);
+    // Its scene prim, so the viewer shows it with the power line's prim, not by its name.
+    v1::Envelope snap = command(90);
+    snap.mutable_command()->mutable_request_snapshot();
+    send(snap);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
+    std::uint32_t line = 0xFFFF'FFFFU;
+    const v1::SceneSnapshot& scene = received_.back().snapshot();
+    for (int i = 0; i < scene.prims_size(); ++i) {
+        if (scene.prims(i).name() == "power_line_01") {
+            line = static_cast<std::uint32_t>(i);
+        }
+    }
+    ASSERT_NE(line, 0xFFFF'FFFFU);
+    EXPECT_EQ(env.emi_sources(0).prim(), line);
     bool flux = false;
     for (const auto& f : env.fields()) {
         flux = flux || (f.name() == "emi/flux_density" && f.available());
@@ -733,6 +747,65 @@ TEST_F(SedanServerTest, TheWorldListsTheTrafficAgents) {
     EXPECT_EQ(kinds["robot"], 1);
     EXPECT_GT(kinds["vehicle"], 0);
     EXPECT_GT(kinds["pedestrian"], 0);
+}
+
+// A served run is one region: the World message carries it with real bounds, around the
+// warehouse's scenery and the robot, not left for the viewer to make up.
+TEST_F(ServerTest, TheWorldReportsTheRunsRegion) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope want = command(3);
+    want.mutable_command()->mutable_set_world()->set_enabled(true);
+    send(want);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_world(); }));
+    const v1::WorldState& world = received_.back().world();
+    ASSERT_EQ(world.regions_size(), 1);
+    const v1::WorldState::Region& region = world.regions(0);
+    EXPECT_EQ(region.name(), "R1");
+    EXPECT_GT(region.max_x() - region.min_x(), 5.0);  // m: the warehouse's walls and racks
+    EXPECT_GT(region.max_y() - region.min_y(), 5.0);
+    for (const v1::WorldState::Agent& agent : world.agents()) {
+        EXPECT_GT(agent.x(), region.min_x());
+        EXPECT_LT(agent.x(), region.max_x());
+        EXPECT_GT(agent.y(), region.min_y());
+        EXPECT_LT(agent.y(), region.max_y());
+    }
+}
+
+/// The AMR in a street of the streamed tiled town (huge-worlds.md §6).
+class TiledTownServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.worldPath = LAGRANGE_TEST_TILED_TOWN;
+        options.spawn.position = {1036.0, 1036.0, 0.0};
+    }
+};
+
+// The region of a streamed run covers every tile it has loaded, in world ENU, and its robot.
+TEST_F(TiledTownServerTest, TheRegionCoversTheLoadedTiles) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope want = command(3);
+    want.mutable_command()->mutable_set_world()->set_enabled(true);
+    send(want);
+    ASSERT_TRUE(pumpUntil(
+        [](const v1::Envelope& e) { return e.has_world() && e.world().tile_x_size() > 0; }));
+    const v1::WorldState& world = received_.back().world();
+    ASSERT_EQ(world.regions_size(), 1);
+    const v1::WorldState::Region& region = world.regions(0);
+    const double tile = world.tile_size_m();
+    ASSERT_GT(tile, 0.0);
+    for (int i = 0; i < world.tile_x_size(); ++i) {
+        const double x = (world.tile_x(i) + 0.5) * tile;
+        const double y = (world.tile_y(i) + 0.5) * tile;
+        EXPECT_GE(x, region.min_x());
+        EXPECT_LE(x, region.max_x());
+        EXPECT_GE(y, region.min_y());
+        EXPECT_LE(y, region.max_y());
+    }
+    EXPECT_LT(region.min_x(), 1036.0);
+    EXPECT_GT(region.max_x(), 1036.0);
+    EXPECT_LT(region.min_y(), 1036.0);
+    EXPECT_GT(region.max_y(), 1036.0);
+    EXPECT_GT(region.max_x() - region.min_x(), 300.0);  // m: the collision radius each way
 }
 
 TEST_F(SedanServerTest, RadarFramesCarryDetectionsWithVelocity) {
