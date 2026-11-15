@@ -881,7 +881,7 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
         pass(commands, labels, depthAttachment(impl_->labelDepth), scene.labels);
 
         // With the model or the thermal image, the images go to their device-local input.
-        const VkBuffer images = frame != nullptr          ? impl_->effectsIn.buffer
+        const VkBuffer images = frame != nullptr         ? impl_->effectsIn.buffer
                                 : impl_->inFlightThermal ? impl_->thermalIn.buffer
                                                          : impl_->readback.buffer;
         VkDeviceSize offset = 0;
