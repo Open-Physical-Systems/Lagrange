@@ -62,6 +62,10 @@ public:
     /// Writes a domain's settings. Returns false when the profile has no `domains:` block.
     bool setDomain(std::string_view name, const std::vector<ProfileEntry>& entries);
 
+    /// Replaces the whole text (the Profile panel's editor). Lines are matched to the applied
+    /// profile's by a line diff, so the changed lines are marked as after a domain edit.
+    void setText(std::string_view text);
+
 private:
     static constexpr std::size_t kAdded = static_cast<std::size_t>(-1);
 

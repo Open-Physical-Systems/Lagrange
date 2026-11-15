@@ -324,4 +324,61 @@ bool ProfileDraft::setDomain(std::string_view name, const std::vector<ProfileEnt
     return true;
 }
 
+void ProfileDraft::setText(std::string_view text) {
+    std::vector<std::string> lines = splitLines(text);
+    if (lines == lines_) {
+        return;
+    }
+    // Longest common subsequence of lines: those keep their applied origin, the rest are new.
+    const std::size_t n = applied_.size();
+    const std::size_t m = lines.size();
+    std::vector<std::uint32_t> table((n + 1) * (m + 1), 0);
+    const auto at = [&](std::size_t i, std::size_t j) -> std::uint32_t& {
+        return table[i * (m + 1) + j];
+    };
+    for (std::size_t i = n; i-- > 0;) {
+        for (std::size_t j = m; j-- > 0;) {
+            at(i, j) = applied_[i] == lines[j] ? at(i + 1, j + 1) + 1
+                                               : std::max(at(i + 1, j), at(i, j + 1));
+        }
+    }
+    std::vector<std::size_t> origin(m, kAdded);
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < n && j < m) {
+        if (applied_[i] == lines[j]) {
+            origin[j] = i;
+            ++i;
+            ++j;
+        } else if (at(i + 1, j) >= at(i, j + 1)) {
+            ++i;
+        } else {
+            ++j;
+        }
+    }
+    // A line edited in place (one removed where one was added) shows as a change of that
+    // line, as setDomain's edits do: pair each run of added lines with the applied lines
+    // between the same matched neighbours.
+    std::size_t previous = 0;  // applied index after the last matched line
+    for (std::size_t k = 0; k < m;) {
+        if (origin[k] != kAdded) {
+            previous = origin[k] + 1;
+            ++k;
+            continue;
+        }
+        std::size_t end = k;
+        while (end < m && origin[end] == kAdded) {
+            ++end;
+        }
+        const std::size_t next = end < m ? origin[end] : n;
+        for (std::size_t a = previous; a < next && k < end; ++a, ++k) {
+            origin[k] = a;
+        }
+        k = end;
+    }
+    lines_ = std::move(lines);
+    origin_ = std::move(origin);
+    ++revision_;
+}
+
 }  // namespace lagrange::viewer

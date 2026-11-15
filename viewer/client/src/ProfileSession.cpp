@@ -266,6 +266,11 @@ bool ProfileSession::setSource(std::string_view name, std::string_view path) {
     return write(name, *entries);
 }
 
+void ProfileSession::setText(std::string_view text) {
+    draft_.setText(text);
+    rebuildViews();
+}
+
 void ProfileSession::revert() {
     draft_.revert();
     rebuildViews();
