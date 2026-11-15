@@ -38,11 +38,19 @@ public:
                const std::optional<std::string>& profile, const std::string& lidar,
                const std::optional<std::vector<double>>& spawn,
                const std::optional<std::array<int, 3>>& traffic, bool jointControl,
-               const std::vector<std::string>& sensorFaults) {
+               const std::vector<std::string>& sensorFaults,
+               const std::optional<std::string>& overlay) {
         lagrange::server::ServerOptions options;
         options.jointControl = jointControl;
         options.sensorFaults = sensorFaults;     // checked by load(), as --sensor-fault
         options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
+        // An overlay YAML or SPICE netlist on the robot (formats.md section 9), as --overlay.
+        if (overlay) {
+            if (!robot) {
+                throw std::invalid_argument("an overlay needs a robot to apply to");
+            }
+            options.overlayPath = *overlay;
+        }
         if (spawn) {
             options.spawn = poseOf(*spawn, "spawn");
         }
@@ -327,15 +335,17 @@ NB_MODULE(_lagrange, m) {
     m.doc() = "Lagrange simulator, headless (roadmap 0.2-H5)";
     nb::class_<Simulation>(m, "Simulation",
                            "A run without ROS or viewers, stepped from Python. The robot and "
-                           "world are URDF, SDFormat, MJCF or USD files.")
+                           "world are URDF, SDFormat, MJCF or USD files; overlay= adds a power "
+                           "system to the robot (an overlay YAML or a SPICE netlist, as "
+                           "--overlay).")
         .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&,
                       const std::optional<std::array<int, 3>>&, bool,
-                      const std::vector<std::string>&>(),
+                      const std::vector<std::string>&, const std::optional<std::string>&>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
              "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false,
-             "sensor_faults"_a = std::vector<std::string>{})
+             "sensor_faults"_a = std::vector<std::string>{}, "overlay"_a = nb::none())
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "

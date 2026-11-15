@@ -74,7 +74,7 @@ Models ([`legged/models.py`](legged/models.py) writes them to `legged/models/`):
 
 | Model | What |
 |---|---|
-| `quad.xml` | The example quadruped (`examples/lagrange_example_quadruped/robot/quadruped.urdf`) in MJCF: same links, masses, inertias, axes, limits, 15.4 kg, sphere feet r 25 mm, μ 0.6; stands at hip-to-foot 0.28 m, feet under the hips |
+| `quad.xml` | The example quadruped (`assets/robots/quadruped/quadruped.urdf`) in MJCF: same links, masses, inertias, axes, limits, 15.4 kg, sphere feet r 25 mm, μ 0.6; stands at hip-to-foot 0.28 m, feet under the hips |
 | `quad_drop.xml` | The same, feet 0.1 m above the floor, legs held straight |
 | `quad_slope_<deg>.xml` | The same on a slab tilted 0°, 10°, 20° |
 | `rigid_quad_slope_<deg>.xml` | The quadruped as one rigid body in its stance (legs welded), μ 0.5, on 10–32° |

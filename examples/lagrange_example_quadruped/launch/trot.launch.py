@@ -16,7 +16,8 @@ ENDPOINT = "unix:/tmp/lagrange_example_quadruped.sock"
 
 
 def setup(context):
-    share = get_package_share_directory("lagrange_example_quadruped")
+    # The robot is Lagrange's sample quadruped, which profiles/examples/quadruped_trot.yaml names.
+    robot = get_package_share_directory("lagrange_assets") + "/robots/quadruped/quadruped.urdf"
 
     actions = [
         # Lagrange itself: a plain ROS 2 executable with command-line options.
@@ -25,7 +26,7 @@ def setup(context):
             executable="lagrange_server",
             arguments=[
                 "--robot",
-                f"{share}/robot/quadruped.urdf",
+                robot,
                 "--world",
                 "none",
                 "--no-demo",

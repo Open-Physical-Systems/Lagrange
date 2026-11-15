@@ -26,7 +26,7 @@ from pathlib import Path
 
 G = 9.81
 
-# The example quadruped (examples/lagrange_example_quadruped/robot/quadruped.urdf).
+# The example quadruped (assets/robots/quadruped/quadruped.urdf).
 BASE_M, BASE_SIZE, BASE_I = 9.0, (0.5, 0.22, 0.1), (0.06, 0.2, 0.24)
 HIP_M, HIP_I = 0.5, (0.001, 0.001, 0.001)
 THIGH_M, THIGH_I, THIGH_L = 0.8, (0.003, 0.003, 0.0005), 0.2

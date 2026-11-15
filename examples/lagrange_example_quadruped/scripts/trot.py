@@ -14,7 +14,7 @@ from sensor_msgs.msg import JointState
 
 LEGS = ["front_left", "front_right", "rear_left", "rear_right"]
 PHASE = {"front_left": 0.0, "rear_right": 0.0, "front_right": 0.5, "rear_left": 0.5}
-THIGH = 0.2  # m, as in robot/quadruped.urdf
+THIGH = 0.2  # m, as in assets/robots/quadruped/quadruped.urdf
 SHIN = 0.2
 HEIGHT = 0.28  # m from hip to foot
 STRIDE = 0.05  # m, half of it each way

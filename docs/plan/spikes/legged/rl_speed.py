@@ -4,7 +4,7 @@
 
     rl_speed.py MODEL_DIR OUT.json [PROCESSES ...]      (default 1 2 4 8)
 
-Robots: the example quadruped (examples/lagrange_example_quadruped/robot/quadruped.urdf, 12
+Robots: the example quadruped (assets/robots/quadruped/quadruped.urdf, 12
 joints) and the spike's hexapod (models.py, 18 joints), each on flat ground with the default
 profile (MuJoCo, 1 ms). Actions: uniform random in -1..1, position mode, action_scale 0.5 rad,
 a policy step of 20 ms (20 physics steps), episodes of 10 s. Reported: policy steps per second
@@ -25,7 +25,7 @@ from lagrange.envs import LagrangeEnv, ParallelEnvs
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[3]
-QUAD = str(REPO / "examples/lagrange_example_quadruped/robot/quadruped.urdf")
+QUAD = str(REPO / "assets/robots/quadruped/quadruped.urdf")
 HEX = str(HERE / "models/hexapod.xml")
 STEP = 0.02
 

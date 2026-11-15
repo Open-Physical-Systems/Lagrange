@@ -7,10 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+import lagrange
 import numpy as np
 import pytest
 from ament_index_python.packages import get_package_share_directory
-from lagrange.envs import Box, LagrangeEnv, ParallelEnvs, VectorEnv, WorkerError
+from lagrange.envs import Box, LagrangeEnv, ParallelEnvs, VectorEnv, WorkerError, profile_path
 
 
 def arm() -> str:
@@ -327,3 +328,149 @@ def test_read_many_and_command_joints_are_read_and_command_joint_in_one_call() -
         sim.read_many(["no/such/signal"])
     with pytest.raises(ValueError, match="one value per joint"):
         sim.command_joints(env.joint_names, "position", [0.1])
+
+
+# --- Profile, overlay and world: what LagrangeEnv passes to Simulation --------------------------
+
+POWER = ["bus/dc_48v/voltage", "battery/battery/soc", "battery/battery/current"]
+
+
+def make_powered_quadruped() -> LagrangeEnv:
+    return LagrangeEnv(
+        lagrange.sample_quadruped(),
+        profile="quadruped_trot_powered",
+        overlay=lagrange.sample_quadruped_overlay(),
+        mode="position",
+        action_scale=0.5,
+        signals=POWER,
+        episode_seconds=0.2,
+    )
+
+
+def test_an_overlay_gives_the_quadruped_its_power_system() -> None:
+    env = make_powered_quadruped()
+    assert env.profile == lagrange.sample_profile("quadruped_trot_powered")
+    assert env.overlay == lagrange.sample_quadruped_overlay()
+    assert len(env.joint_names) == 12
+    names = {signal["name"] for signal in env.sim.signals()}
+    assert set(POWER) <= names
+    assert {
+        f"motor/{joint[: -len('_joint')]}_motor/current_q" for joint in env.joint_names
+    } <= names
+    observation, _ = env.reset(seed=0)
+    assert observation.shape == (2 * 12 + len(POWER),)
+    for _ in range(5):
+        observation, *_ = env.step(env.action_space.sample())
+    volts, soc, amps = observation[-3:]
+    assert 44.8 < volts < 60.0  # between the battery's cutoff and the bus's overvoltage trip
+    assert 0.0 < soc <= 1.0
+    assert amps > 0.0  # the computer's 45 W at least
+    # Without the overlay the robot has no power system to observe.
+    bare = LagrangeEnv(lagrange.sample_quadruped(), profile="quadruped_trot")
+    assert bare.overlay is None
+    assert not set(POWER) & {signal["name"] for signal in bare.sim.signals()}
+    with pytest.raises(KeyError):
+        LagrangeEnv(lagrange.sample_quadruped(), signals=POWER)
+
+
+def test_the_environment_steps_as_the_simulation_it_describes() -> None:
+    """LagrangeEnv(profile=, overlay=) is Simulation(profile=, overlay=) with joint commands."""
+    env = make_powered_quadruped()
+    sim = lagrange.Simulation(
+        lagrange.sample_quadruped(),
+        profile=lagrange.sample_profile("quadruped_trot_powered"),
+        overlay=lagrange.sample_quadruped_overlay(),
+        joint_control=True,
+    )
+    env.reset(seed=0)
+    rng = np.random.default_rng(3)
+    for _ in range(5):
+        action = rng.uniform(-1.0, 1.0, 12)
+        observation, *_ = env.step(action)
+        sim.command_joints(env.joint_names, "position", (action * 0.5).tolist())
+        sim.step_until(sim.time + env.step_seconds)
+        np.testing.assert_array_equal(observation, sim.read_many(env._observed))
+    assert env.sim.state_hash() == sim.state_hash()
+
+
+def test_a_profile_is_a_path_or_an_example_name(tmp_path: Path) -> None:
+    assert profile_path(None) is None
+    assert profile_path("quadruped_trot") == lagrange.sample_profile("quadruped_trot")
+    own = tmp_path / "mine.yaml"
+    own.write_text(Path(lagrange.sample_profile("quadruped_trot")).read_text())
+    assert profile_path(own) == str(own)
+    with pytest.raises(FileNotFoundError, match="no_such_profile"):
+        profile_path("no_such_profile")
+    with pytest.raises(FileNotFoundError):
+        LagrangeEnv(arm(), profile=tmp_path / "missing.yaml")
+
+
+def test_the_profile_turns_the_electrical_domain_off() -> None:
+    """The same robot and overlay with electrical substituted by the ideal source: no bus."""
+    env = LagrangeEnv(
+        lagrange.sample_quadruped(),
+        profile="quadruped_trot",
+        overlay=lagrange.sample_quadruped_overlay(),
+    )
+    names = {signal["name"] for signal in env.sim.signals()}
+    assert "bus/dc_48v/voltage" not in names
+    env.reset(seed=0)
+    env.step(np.zeros(12))
+
+
+def test_parallel_environments_take_a_robot_file_with_its_options() -> None:
+    """ParallelEnvs(robot, profile=, overlay=, env_options=) steps as LagrangeEnv does alone."""
+    options: dict[str, Any] = {
+        "mode": "position",
+        "action_scale": 0.5,
+        "signals": POWER,
+        "episode_seconds": 0.2,
+    }
+    env = make_powered_quadruped()
+    actions = actions_for(2, 12)[:6]
+    expected = []
+    for i in range(2):
+        env.reset(seed=20 + i)
+        expected.append([env.step(actions[t, i])[0] for t in range(len(actions))])
+    with ParallelEnvs(
+        lagrange.sample_quadruped(),
+        2,
+        profile="quadruped_trot_powered",
+        overlay=lagrange.sample_quadruped_overlay(),
+        env_options=options,
+    ) as envs:
+        assert envs.observation_space.shape == (2 * 12 + len(POWER),)
+        envs.reset(seed=20)
+        for t in range(len(actions)):
+            observations, _, _ = envs.step(actions[t])
+            for i in range(2):
+                np.testing.assert_array_equal(observations[i], expected[i][t])
+    vector = VectorEnv(
+        lagrange.sample_quadruped(),
+        1,
+        world=lagrange.sample_world(),
+        profile="quadruped_trot",
+        env_options={"episode_seconds": 0.2},
+    )
+    try:
+        assert vector.single_action_space.shape == (12,)
+        vector.reset(seed=0)
+        vector.step(np.zeros((1, 12)))
+    finally:
+        vector.close()
+
+
+def test_options_for_a_robot_file_are_refused_with_make() -> None:
+    with pytest.raises(ValueError, match="robot file"):
+        ParallelEnvs(make_arm, 2, profile="quadruped_trot")
+    with pytest.raises(ValueError, match="robot file"):
+        VectorEnv(make_arm, 2, env_options={"mode": "position"})
+    # A misspelt profile fails here, before any worker starts.
+    with pytest.raises(FileNotFoundError, match="quadruped_trto"):
+        ParallelEnvs(lagrange.sample_quadruped(), 2, profile="quadruped_trto")
+
+
+def test_a_world_goes_to_the_simulation() -> None:
+    bare = LagrangeEnv(lagrange.sample_quadruped())
+    with_world = LagrangeEnv(lagrange.sample_quadruped(), lagrange.sample_world())
+    assert with_world.sim.colliders() > bare.sim.colliders()
