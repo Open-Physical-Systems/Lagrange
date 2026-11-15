@@ -50,7 +50,8 @@ public:
     [[nodiscard]] services::RayHit castHit(const std::array<double, 3>& origin,
                                            const std::array<double, 3>& dir) const;
 
-    // SceneQuery, over the shapes of the last update().
+    // SceneQuery, over the shapes of the last update(); ray() also gives the surface normal at
+    // the hit (surfaceNormal()), which castHit() leaves out.
     [[nodiscard]] services::RayHit ray(const std::array<double, 3>& origin,
                                        const std::array<double, 3>& dir,
                                        double maxDistance) const override;

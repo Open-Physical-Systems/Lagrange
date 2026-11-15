@@ -238,6 +238,34 @@ TEST(SceneQuery, RayHitsNameTheShapeBruteForceFinds) {
     EXPECT_GT(hits, 10'000);
 }
 
+TEST(SceneQuery, RayGivesTheSurfaceNormalAtTheHit) {
+    // A plane sloped 10° about y and a box: straight down onto each, the outward normal.
+    const double slope = 10.0 * std::numbers::pi / 180.0;
+    std::vector<ShapeCaster::Shape> shapes(2);
+    shapes[0].type = ShapeType::Plane;
+    shapes[0].size = {50.0, 50.0, 1.0};
+    shapes[0].pose.orientation = {std::cos(slope / 2.0), 0.0, std::sin(slope / 2.0), 0.0};
+    shapes[1].type = ShapeType::Box;
+    shapes[1].size = {1.0, 1.0, 1.0};
+    shapes[1].pose.position = {10.0, 0.0, 3.0};
+    ShapeCaster caster;
+    caster.update(shapes);
+    const services::SceneQuery& query = caster;
+    const services::RayHit plane = query.ray({0.0, 0.0, 5.0}, {0.0, 0.0, -1.0}, 10.0);
+    ASSERT_EQ(plane.shape, 0U);
+    EXPECT_NEAR(plane.normal[0], std::sin(slope), 1e-12);
+    EXPECT_NEAR(plane.normal[1], 0.0, 1e-12);
+    EXPECT_NEAR(plane.normal[2], std::cos(slope), 1e-12);
+    const services::RayHit box = query.ray({10.2, 0.3, 8.0}, {0.0, 0.0, -1.0}, 10.0);
+    ASSERT_EQ(box.shape, 1U);
+    EXPECT_NEAR(box.distance, 4.0, 1e-12);
+    EXPECT_NEAR(box.normal[2], 1.0, 1e-12);
+    // Without a hit there is no normal.
+    const services::RayHit none = query.ray({0.0, 0.0, 5.0}, {0.0, 0.0, 1.0}, 10.0);
+    EXPECT_FALSE(none.hit());
+    EXPECT_EQ(none.normal[2], 0.0);
+}
+
 TEST(SceneQuery, DistanceToEachShapeKind) {
     const Pose at{{1.0, 2.0, 3.0}, {1, 0, 0, 0}};
     // Turned 90 degrees about z: local x is world y.

@@ -14,6 +14,9 @@ using namespace literals;
 namespace {
 
 constexpr Vec3 kUp{0.0, 0.0, 1.0};
+// Below this cosine between the surface normal and the chassis's up (about 84°) a ray has met a
+// wall, not a road: its contact is taken as level, as when the scene query gives no normal.
+constexpr double kMinNormalUp = 0.1;
 constexpr double kBumpStopFactor = 10.0;   // bump stop rate over the spring rate
 constexpr double kMaxSlipRatio = 1.5;      // the relaxation states' limits: a locked or
 constexpr double kMaxSlipAngle = 1.2;      // spinning wheel, a sideways slide (rad)
@@ -27,7 +30,6 @@ constexpr double kIdealTimeConstant = 0.05;  // s, the ideal substitute's tracki
 // none at it; damping ratio of that mode.
 constexpr double kLowSpeed = 3.0;  // m/s
 constexpr double kLowSpeedDamping = 0.7;
-constexpr double kBrakeSpeed = 0.5;  // rad/s, over which the brake torque reaches its full value
 
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
     SignalSpec s;
@@ -486,6 +488,7 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
     const std::size_t n = v.wheels.size();
     std::vector<double> fz(n, 0.0), mu(n, 1.0), steer(n, 0.0);
     std::vector<Vec3> contact(n);
+    std::vector<Vec3> normal(n, kUp);  // the road's outward normal at each contact
     std::vector<bool> grounded(n, false);
     for (std::size_t i = 0; i < n; ++i) {
         const Wheel& w = v.wheels[i];
@@ -502,6 +505,9 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
         }
         grounded[i] = true;
         contact[i] = sub(mount, mul(up, hit.distance));
+        if (dot(hit.normal, up) > kMinNormalUp) {
+            normal[i] = hit.normal;
+        }
         const double x = w.restLength - (hit.distance - w.radius);
         const Vec3 pointVelocity = add(lin, cross(ang, sub(mount, com)));
         const double rate = -dot(pointVelocity, up);
@@ -592,13 +598,19 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
         const Wheel& w = v.wheels[i];
         WheelState& ws = s.wheels[i];
         const double omega = bus.read(ws.velocity);
-        // Heading of the wheel on the level ground.
+        // The contact frame (TYDEX W axes, ISO 8855 with z up; Pacejka, Tire and Vehicle
+        // Dynamics, TODO(verify) the section): z the road's normal, x where the wheel plane meets
+        // the road plane, y = z × x in the road plane.
         const double c = std::cos(steer[i]);
         const double sn = std::sin(steer[i]);
         const Vec3 left = rotate(pose.orientation, {0.0, 1.0, 0.0});
+        const Vec3 axle = sub(mul(left, c), mul(forward, sn));  // the wheel's spin axis
+        const Vec3 along = cross(axle, normal[i]);
         const Vec3 heading =
-            normalized({forward[0] * c + left[0] * sn, forward[1] * c + left[1] * sn, 0.0});
-        const Vec3 lateral = cross(kUp, heading);
+            dot(along, along) > 1e-12
+                ? normalized(along)
+                : normalized({forward[0] * c + left[0] * sn, forward[1] * c + left[1] * sn, 0.0});
+        const Vec3 lateral = cross(normal[i], heading);
         double fx = 0.0;
         double fy = 0.0;
         double kappa = 0.0;
@@ -648,7 +660,8 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
         } else {
             ws.longDeflection = ws.latDeflection = 0.0;
         }
-        const Vec3 force = add(add(mul(heading, fx), mul(lateral, fy)), mul(up, fz[i]));
+        // The normal load along the road's normal, the tyre forces in the road plane.
+        const Vec3 force = add(add(mul(heading, fx), mul(lateral, fy)), mul(normal[i], fz[i]));
         if (grounded[i]) {
             const Vec3 torque = cross(sub(contact[i], com), force);
             for (std::size_t k = 0; k < 3; ++k) {
@@ -663,9 +676,12 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
         if (v.abs && brake > 0.0 && kappa < -kAbsSlip) {
             brakeTorque *= std::clamp(1.0 - (-kappa - kAbsSlip) / kAbsBand, 0.0, 1.0);
         }
-        // The brake never reverses the wheel: at most what stops it within the step.
-        brakeTorque = std::min(brakeTorque, std::max(w.spinInertia, 1e-3) * std::abs(omega) / dt);
-        double load = -w.spin * fx * w.radius - brakeTorque * std::tanh(omega / kBrakeSpeed);
+        // The brake as stick-slip friction (Karnopp): the torque that stops the wheel within the
+        // step against the tyre's, up to what the brake gives. It holds a car on a slope and never
+        // reverses the wheel.
+        const double tyreTorque = -w.spin * fx * w.radius;
+        const double stop = tyreTorque + std::max(w.spinInertia, 1e-3) * omega / dt;
+        double load = tyreTorque - std::clamp(stop, -brakeTorque, brakeTorque);
         if (ideal_) {
             // The wheels roll with the ideal speed.
             load = (w.spin * s.idealSpeed / w.radius - omega) * idealGain * 0.5;
