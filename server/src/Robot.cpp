@@ -1261,6 +1261,7 @@ Robot emptyModel(const LoadOptions& options) {
     Robot robot;
     robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
                             options.groundFriction);
+    robot.lagrangePlane = true;
     addGroundPrim(robot);
     return robot;
 }
@@ -1357,6 +1358,7 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     robot.sourcePath = path;
     robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
                             options.groundFriction);
+    robot.lagrangePlane = true;
     if (auto added = addUrdf(robot, path, options); !added) {
         return Unexpected{added.error()};
     }

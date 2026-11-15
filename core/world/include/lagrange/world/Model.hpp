@@ -30,7 +30,8 @@ struct TriMesh {
 /// outward, a sphere (V - E + F = 2), and convex to within 1e-6 of its size (a point that near a
 /// face counts as on it; rarely, for a nearly flat set, a few times that), the same bits for the
 /// same vertices. Empty when the vertices are flat or fewer than four: no volume to collide
-/// with (or, never seen, when no hull closes round them).
+/// with; when a vertex (or the scale) is NaN or infinite; or, never seen, when no hull closes
+/// round them within a bounded amount of work (about a second).
 inline constexpr std::size_t kMaxHullPoints = 256;
 [[nodiscard]] std::optional<ConvexHull> convexHullOf(const TriMesh& mesh,
                                                      const std::array<double, 3>& scale = {1.0, 1.0,
@@ -118,6 +119,10 @@ struct Model {
     /// model it joins is taken away (appendModel). From the layer's customLayerData
     /// `lagrangeGroundPlane`.
     bool groundPlane{true};
+    /// True while the first collider is Lagrange's own ground plane (addGroundPlane, the URDF
+    /// loader's and the empty model's): the only plane removeGroundPlane takes away. A file's own
+    /// planes stay.
+    bool lagrangePlane{false};
 };
 
 /// The visible ground: a 50 m slab in the floor colour of the mock server, as the last root prim
@@ -128,20 +133,37 @@ void addGroundPrim(Model& model);
 /// The narrowest a level box may be, in x and in y (m), to count as a file's own floor.
 inline constexpr double kFloorMinWidthM = 10.0;
 
+/// How far (m) a level slab's top may be above what stands on it, or above the lowest other
+/// static geometry, and still count as the floor (a robot's wheels just touching it, a wall's
+/// foot just sunk into it).
+inline constexpr double kFloorTopToleranceM = 0.1;
+
 /// Whether the model has a floor of its own (one ground per run, docs/guide/cli.md): static
 /// geometry that is a plane facing up, a height field, or a level box (turned about z only) at
 /// least kFloorMinWidthM wide in x and in y and no thicker than a quarter of its narrower width
-/// (a slab, not a building). Static: on the world, or on a body welded to the world by fixed
-/// joints (an MJCF worldbody geom, an SDFormat static model, a URDF world's links). With
-/// `countPlanes` false, planes are left out (Lagrange's own ground is a plane on the world).
-[[nodiscard]] bool hasOwnFloor(const Model& model, bool countPlanes = true);
+/// (a slab, not a building) whose top is the lowest ground there is: at most
+/// kFloorTopToleranceM above z = 0 (where Lagrange's ground is and robots spawn), above
+/// `standing` (the lowest point of what must stand on it; by default the lowest point of the
+/// model's moving bodies) and above the bottom of every other static collider that is not such
+/// a slab. So a building's roof, a mezzanine or a bridge deck is never taken for the floor, even
+/// with a robot spawned on it (it would fall forever off its edge). Static: on the
+/// world, or on a body welded to the world by fixed joints (an MJCF worldbody geom, an
+/// SDFormat static model, a URDF world's links). With `countPlanes` false, planes are left out
+/// (Lagrange's own ground is a plane on the world).
+[[nodiscard]] bool hasOwnFloor(const Model& model, bool countPlanes = true,
+                               std::optional<double> standing = std::nullopt);
+
+/// The lowest point (world z, m) of the model's moving bodies at rest: their colliders' bottoms,
+/// or their origins when they have no colliders; nothing when every body is static.
+[[nodiscard]] std::optional<double> lowestMovingPoint(const Model& model);
 
 /// Lagrange's ground: the infinite plane facing up at z = 0 as the first collider, and the slab
 /// (addGroundPrim). The loaders call it for a file that has no floor of its own (hasOwnFloor).
 void addGroundPlane(Model& model, double friction);
 
-/// Takes Lagrange's ground away: the plane colliders on the world and the root prim "ground"
-/// without a body (the slab), renumbering the scene prims after it.
+/// Takes Lagrange's ground away: its plane (the first collider while `lagrangePlane`; a file's
+/// own planes stay) and the root prim "ground" without a body (the slab), renumbering the scene
+/// prims after it.
 void removeGroundPlane(Model& model);
 
 /// Adds `other` to `model`: a second robot, or a world's scenery loaded separately. Indices are

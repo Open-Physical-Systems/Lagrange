@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -392,6 +394,37 @@ TEST(ConvexHull, FlatOrTooFewPointsHaveNone) {
     EXPECT_FALSE(convexHullOf(meshOf({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}})));
     EXPECT_FALSE(convexHullOf(meshOf({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 0}})));
     EXPECT_FALSE(convexHullOf(meshOf({{0, 0, 0}, {1, 0, 0}, {2, 0, 0}, {3, 0, 0}})));
+}
+
+// Review L10: a NaN or infinite vertex, or scale, gives no hull (and reads nothing past the
+// end); a nearly flat set of the most points there may be ends in bounded time.
+TEST(ConvexHull, NotFiniteVerticesHaveNone) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const std::vector<std::array<float, 3>> cube{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0},
+                                                 {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}};
+    ASSERT_TRUE(convexHullOf(meshOf(cube)));
+    for (const float bad : {nan, inf, -inf}) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            auto points = cube;
+            points[3].at(k) = bad;
+            EXPECT_FALSE(convexHullOf(meshOf(points))) << bad << " in " << k;
+        }
+    }
+    EXPECT_FALSE(convexHullOf(meshOf(cube), {1.0, std::numeric_limits<double>::infinity(), 1.0}));
+    EXPECT_FALSE(convexHullOf(meshOf(cube), {1.0, 1.0, std::numeric_limits<double>::quiet_NaN()}));
+}
+
+TEST(ConvexHull, ANearlyFlatSetEndsInBoundedTime) {
+    for (std::uint64_t seed = 1; seed <= 5; ++seed) {
+        Random random(seed);
+        const Cloud cloud = slab(random, 2000, 1e-6, 1e-9);
+        const auto start = std::chrono::steady_clock::now();
+        (void)convexHullOf(meshOf(cloud));
+        const double seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        EXPECT_LT(seconds, 10.0) << "seed " << seed;
+    }
 }
 
 }  // namespace

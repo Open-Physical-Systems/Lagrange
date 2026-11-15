@@ -335,8 +335,12 @@ The viewer's robot builder does the same for one link (Properties, Collision, *S
   see) only when neither the robot's file nor the world's has a floor of its own: a plane facing
   up, a height field, or a level box at least 10 m by 10 m and no thicker than a quarter of its
   narrower side, on the world or on a body fixed to it (an MJCF `worldbody` geom, an SDFormat
-  static model, a URDF world's links). A file with such a floor, as the robot or as the world,
-  keeps its own and gets no plane at its top (1.3.0 and earlier added the plane there too).
+  static model, a URDF world's links), whose top is the lowest ground there is: within 0.1 m of
+  z = 0 or below, not above the robots' lowest point, and not above the foot of any other
+  static scenery. A building's roof, a mezzanine or a bridge deck is never the floor, so a robot
+  beside or under it keeps Lagrange's plane. A file with such a floor, as the robot or as the
+  world, keeps its own and gets no plane at its top (1.3.0 and earlier added the plane there
+  too); a file's own planes are never taken away.
 - On a robot fixed to the ground, a joint with no command yet holds its start position, up to its
   URDF effort limit; a joint stopped at that limit away from its target is logged, because the file's
   limit is kept, not raised.

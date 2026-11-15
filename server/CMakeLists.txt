@@ -278,6 +278,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_ADULT_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/humans/adult.usda"
             LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
             LAGRANGE_TEST_AMR_FMS_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_fms/amr_fms.urdf"
+            LAGRANGE_TEST_AMR_FMS_WAREHOUSE="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/amr_fms_warehouse/warehouse.sdf"
             LAGRANGE_TEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
             LAGRANGE_TEST_PROFILES="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples"
             LAGRANGE_TEST_WAREHOUSE_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.urdf"

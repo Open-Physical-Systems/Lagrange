@@ -49,6 +49,26 @@ struct HullFace {
     double offset;
 };
 
+/// The work the careful hull may do over all its tries, in face × point visits (each round of
+/// settleSeen and each search for the farthest point costs about one face count times one point
+/// count): about a second. A nearly flat set of kMaxHullPoints points could otherwise cost tens
+/// of billions (review L10, 2026-11-15); past it no hull is made.
+constexpr std::uint64_t kHullWorkBudget = 1'000'000'000;
+
+struct HullBudget {
+    std::uint64_t left{kHullWorkBudget};
+    /// Spends `n`; false once spent out.
+    bool spend(std::uint64_t n) {
+        if (n > left) {
+            left = 0;
+            return false;
+        }
+        left -= n;
+        return true;
+    }
+    [[nodiscard]] bool out() const { return left == 0; }
+};
+
 /// An edge of the rim of the faces a new point sees, wound as in the seen face, and the face
 /// beyond it that stays.
 struct RimEdge {
@@ -67,7 +87,7 @@ struct RimEdge {
 /// then left out.
 bool settleSeen(const std::vector<HullFace>& faces, const std::vector<Point>& points,
                 std::uint32_t p, double tolerance, std::vector<char>& seen,
-                std::vector<RimEdge>& rim) {
+                std::vector<RimEdge>& rim, HullBudget& budget) {
     // Each directed edge and its face, to find the face beyond an edge.
     std::vector<std::array<std::size_t, 3>> owners;
     owners.reserve(3 * faces.size());
@@ -153,6 +173,9 @@ bool settleSeen(const std::vector<HullFace>& faces, const std::vector<Point>& po
     constexpr double kFoldSlack = 2.0;
     std::vector<char> onHull(points.size(), 0);
     for (std::size_t round = 0; round <= faces.size(); ++round) {
+        if (!budget.spend(static_cast<std::uint64_t>(faces.size()) * points.size())) {
+            return false;
+        }
         rim.clear();
         for (std::size_t i = 0; i < faces.size(); ++i) {
             if (seen[i] == 0) {
@@ -321,7 +344,8 @@ std::vector<HullFace> growInOrder(const std::vector<Point>& points,
 /// the hull closed and convex, until no point is more than the tolerance above a face. A point
 /// no region fits is left out.
 std::vector<HullFace> growFarthestFirst(const std::vector<Point>& points,
-                                        const std::vector<HullFace>& start, double tolerance) {
+                                        const std::vector<HullFace>& start, double tolerance,
+                                        HullBudget& budget) {
     std::vector<HullFace> faces = start;
     std::vector<char> done(points.size(), 0);
     for (const HullFace& f : faces) {
@@ -331,6 +355,9 @@ std::vector<HullFace> growFarthestFirst(const std::vector<Point>& points,
     }
     std::vector<RimEdge> rim;
     for (;;) {
+        if (!budget.spend(static_cast<std::uint64_t>(faces.size()) * points.size())) {
+            return {};
+        }
         std::uint32_t farthest = 0;
         double most = tolerance;
         for (std::uint32_t q = 0; q < points.size(); ++q) {
@@ -354,7 +381,10 @@ std::vector<HullFace> growFarthestFirst(const std::vector<Point>& points,
         for (std::size_t i = 0; i < faces.size(); ++i) {
             sees[i] = dotOf(faces[i].normal, points[p]) - faces[i].offset > tolerance ? 1 : 0;
         }
-        if (!settleSeen(faces, points, p, tolerance, sees, rim)) {
+        if (!settleSeen(faces, points, p, tolerance, sees, rim, budget)) {
+            if (budget.out()) {
+                return {};
+            }
             continue;
         }
         std::vector<HullFace> kept;
@@ -474,8 +504,14 @@ std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<dou
     std::vector<Point> points;
     points.reserve(mesh.positions.size() / 3);
     for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
-        points.push_back({mesh.positions[i] * scale[0], mesh.positions[i + 1] * scale[1],
-                          mesh.positions[i + 2] * scale[2]});
+        const Point p{mesh.positions[i] * scale[0], mesh.positions[i + 1] * scale[1],
+                      mesh.positions[i + 2] * scale[2]};
+        // A NaN or infinite vertex (or scale) has no place in a hull, and a NaN would make the
+        // sort and the searches below meaningless (out-of-range indices): no hull at all.
+        if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+            return std::nullopt;
+        }
+        points.push_back(p);
     }
     // A mesh repeats its vertices per face: once each, keeping the first's place.
     std::vector<Point> sorted = points;
@@ -582,10 +618,11 @@ std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<dou
     if (!isClosedConvexHull(faces, points, tolerance)) {
         constexpr std::array<double, 4> kCoarser{1.0, 4.0, 16.0, 64.0};
         bool closed = false;
+        HullBudget budget;
         for (const double coarser : kCoarser) {
-            faces = growFarthestFirst(points, start, coarser * tolerance);
+            faces = growFarthestFirst(points, start, coarser * tolerance, budget);
             closed = isClosedConvexHull(faces, points, coarser * tolerance);
-            if (closed) {
+            if (closed || budget.out()) {
                 break;
             }
         }
@@ -830,37 +867,154 @@ std::vector<bool> staticBodies(const World& world) {
 
 }  // namespace
 
-bool hasOwnFloor(const Model& model, bool countPlanes) {
+namespace {
+
+/// A collider's pose in the world at rest.
+Pose colliderPose(const Model& model, std::size_t i) {
+    const World::Colliders& c = model.world.colliders;
+    const BodyId body = c.body[i];
+    return body == kWorldBody || body.index >= model.bodyRestPose.size()
+               ? c.poseInBody[i]
+               : compose(model.bodyRestPose[body.index], c.poseInBody[i]);
+}
+
+/// How far a collider reaches below and above its pose's origin along world z (m), or nothing
+/// for the unbounded shapes (planes, height fields).
+std::optional<std::array<double, 2>> zReach(const Model& model, std::size_t i, const Pose& pose) {
+    const World::Colliders& c = model.world.colliders;
+    const std::array<double, 3>& size = c.size[i];
+    const auto zOf = [&](const std::array<double, 3>& local) {
+        return rotate(pose.orientation, local)[2];
+    };
+    switch (c.shape[i]) {
+        case ShapeType::Sphere:
+            return std::array<double, 2>{size[0], size[0]};
+        case ShapeType::Box: {
+            const double r = std::abs(zOf({size[0], 0, 0})) + std::abs(zOf({0, size[1], 0})) +
+                             std::abs(zOf({0, 0, size[2]}));
+            return std::array<double, 2>{r, r};
+        }
+        case ShapeType::Capsule:
+        case ShapeType::Cylinder: {
+            // Radius size[0], half length size[1] along the shape's z.
+            const double along = std::abs(zOf({0, 0, 1}));
+            const double across = c.shape[i] == ShapeType::Capsule
+                                      ? size[0]
+                                      : size[0] * std::sqrt(std::max(0.0, 1.0 - along * along));
+            const double r = along * size[1] + across;
+            return std::array<double, 2>{r, r};
+        }
+        case ShapeType::ConvexHull: {
+            if (c.hull[i] >= model.world.hulls.size() ||
+                model.world.hulls[c.hull[i]].points.empty()) {
+                return std::nullopt;
+            }
+            double low = 0.0;
+            double high = 0.0;
+            bool first = true;
+            for (const std::array<double, 3>& point : model.world.hulls[c.hull[i]].points) {
+                const double z = zOf(point);
+                low = first ? z : std::min(low, z);
+                high = first ? z : std::max(high, z);
+                first = false;
+            }
+            return std::array<double, 2>{-low, high};
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
+}  // namespace
+
+std::optional<double> lowestMovingPoint(const Model& model) {
     const World& w = model.world;
     const World::Colliders& c = w.colliders;
     const std::vector<bool> isStatic = staticBodies(w);
+    std::optional<double> lowest;
+    const auto take = [&lowest](double z) {
+        if (std::isfinite(z)) {
+            lowest = lowest ? std::min(*lowest, z) : z;
+        }
+    };
+    std::vector<bool> hasCollider(isStatic.size(), false);
     for (std::size_t i = 0; i < c.body.size(); ++i) {
         const BodyId body = c.body[i];
-        if (body != kWorldBody && (body.index >= isStatic.size() || !isStatic[body.index])) {
+        if (body == kWorldBody || body.index >= isStatic.size() || isStatic[body.index]) {
             continue;
         }
-        const Pose pose = body == kWorldBody || body.index >= model.bodyRestPose.size()
-                              ? c.poseInBody[i]
-                              : compose(model.bodyRestPose[body.index], c.poseInBody[i]);
+        hasCollider[body.index] = true;
+        const Pose pose = colliderPose(model, i);
+        if (const auto reach = zReach(model, i, pose)) {
+            take(pose.position[2] - (*reach)[0]);
+        }
+    }
+    for (std::size_t b = 0; b < isStatic.size() && b < model.bodyRestPose.size(); ++b) {
+        if (!isStatic[b] && !hasCollider[b]) {
+            take(model.bodyRestPose[b].position[2]);
+        }
+    }
+    return lowest;
+}
+
+bool hasOwnFloor(const Model& model, bool countPlanes, std::optional<double> standing) {
+    const World& w = model.world;
+    const World::Colliders& c = w.colliders;
+    const std::vector<bool> isStatic = staticBodies(w);
+    constexpr double kLevel = 1e-6;  // |z axis . world z| this close to 1 counts as level
+    const auto isStaticCollider = [&](std::size_t i) {
+        const BodyId body = c.body[i];
+        return body == kWorldBody || (body.index < isStatic.size() && isStatic[body.index]);
+    };
+    // A level slab wide enough for a floor: its top (world z), or nothing.
+    const auto slabTop = [&](std::size_t i, const Pose& pose) -> std::optional<double> {
+        if (c.shape[i] != ShapeType::Box) {
+            return std::nullopt;
+        }
         const std::array<double, 3> up = rotate(pose.orientation, {0.0, 0.0, 1.0});
-        constexpr double kLevel = 1e-6;  // |z axis . world z| this close to 1 counts as level
+        const double narrower = 2.0 * std::min(c.size[i][0], c.size[i][1]);
+        const double thickness = 2.0 * c.size[i][2];
+        if (std::abs(up[2]) > 1.0 - kLevel && narrower >= kFloorMinWidthM &&
+            thickness <= narrower / 4.0) {
+            return pose.position[2] + c.size[i][2];
+        }
+        return std::nullopt;
+    };
+    // What a floor must not be above: z = 0 (Lagrange's ground, where robots spawn), what
+    // stands on it, and the other static geometry.
+    double ceiling = std::min(0.0, standing ? *standing : lowestMovingPoint(model).value_or(0.0));
+    std::vector<std::optional<double>> tops(c.body.size());
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        if (!isStaticCollider(i)) {
+            continue;
+        }
+        const Pose pose = colliderPose(model, i);
+        tops[i] = slabTop(i, pose);
+        if (tops[i]) {
+            continue;  // another slab: a floor tile beside this one, or a floor of its own
+        }
+        if (const auto reach = zReach(model, i, pose)) {
+            ceiling = std::min(ceiling, pose.position[2] - (*reach)[0]);
+        }
+    }
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        if (!isStaticCollider(i)) {
+            continue;
+        }
         switch (c.shape[i]) {
             case ShapeType::Plane:
-                if (countPlanes && up[2] > 1.0 - kLevel) {
+                if (countPlanes &&
+                    rotate(colliderPose(model, i).orientation, {0.0, 0.0, 1.0})[2] > 1.0 - kLevel) {
                     return true;
                 }
                 break;
             case ShapeType::HeightField:
                 return true;
-            case ShapeType::Box: {
-                const double narrower = 2.0 * std::min(c.size[i][0], c.size[i][1]);
-                const double thickness = 2.0 * c.size[i][2];
-                if (std::abs(up[2]) > 1.0 - kLevel && narrower >= kFloorMinWidthM &&
-                    thickness <= narrower / 4.0) {
+            case ShapeType::Box:
+                if (tops[i] && *tops[i] <= ceiling + kFloorTopToleranceM) {
                     return true;
                 }
                 break;
-            }
             default:
                 break;
         }
@@ -878,23 +1032,23 @@ void addGroundPlane(Model& model, double friction) {
     c.friction.insert(c.friction.begin(), friction);
     c.hull.insert(c.hull.begin(), kNoHull);
     c.material.insert(c.material.begin(), kNoMaterial);
+    model.lagrangePlane = true;
     addGroundPrim(model);
 }
 
 void removeGroundPlane(Model& model) {
     World::Colliders& c = model.world.colliders;
-    for (std::size_t i = c.body.size(); i-- > 0;) {
-        if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane) {
-            const auto at = static_cast<std::ptrdiff_t>(i);
-            c.body.erase(c.body.begin() + at);
-            c.shape.erase(c.shape.begin() + at);
-            c.size.erase(c.size.begin() + at);
-            c.poseInBody.erase(c.poseInBody.begin() + at);
-            c.friction.erase(c.friction.begin() + at);
-            c.material.erase(c.material.begin() + at);
-            c.hull.erase(c.hull.begin() + at);
-        }
+    if (model.lagrangePlane && !c.body.empty() && c.body.front() == kWorldBody &&
+        c.shape.front() == ShapeType::Plane) {
+        c.body.erase(c.body.begin());
+        c.shape.erase(c.shape.begin());
+        c.size.erase(c.size.begin());
+        c.poseInBody.erase(c.poseInBody.begin());
+        c.friction.erase(c.friction.begin());
+        c.material.erase(c.material.begin());
+        c.hull.erase(c.hull.begin());
     }
+    model.lagrangePlane = false;
     std::vector<ScenePrim>& prims = model.scene.prims;
     for (std::size_t p = prims.size(); p-- > 0;) {
         if (prims[p].name != "ground" || prims[p].parent != kNoIndex || prims[p].body != kNoIndex) {
@@ -1081,7 +1235,12 @@ void appendModel(Model& model, const Model& other) {
     }
     // The joining file brings its own ground (terrain tiles, a floor slab, a height field): no
     // infinite plane under it, a second floor at the top of its slab.
-    const bool ownFloor = !other.groundPlane || hasOwnFloor(other, false);
+    // What stands on the joining file's floor: the moving bodies of both.
+    std::optional<double> standing = lowestMovingPoint(model);
+    if (const std::optional<double> others = lowestMovingPoint(other)) {
+        standing = standing ? std::min(*standing, *others) : *others;
+    }
+    const bool ownFloor = !other.groundPlane || hasOwnFloor(other, false, standing.value_or(0.0));
     if (ground && !ownFloor) {
         prims.push_back(std::move(*ground));
     }
