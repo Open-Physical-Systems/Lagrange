@@ -1250,11 +1250,33 @@ TEST_F(ReplayServerTest, TheRecordingReplaysSampleForSampleAndSeeks) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
     EXPECT_GT(received_.back().snapshot().prims_size(), 20);
     EXPECT_EQ(received_.back().snapshot().nets_size(), 1);
+    const std::string start = received_.back().snapshot().transforms().inline_();
 
     v1::Envelope step = command(2);
     step.mutable_command()->mutable_step()->set_duration_ns(1'500'000'000);
     ASSERT_TRUE(run(step).ok());
     expectPose(at15_);
+    // QA 2026-11-14 (L10): the scene sent to viewers moves with the recorded poses, so the robot
+    // drives in the viewer as it did in the run (it stood still, at 0.00 m/s).
+    const auto late = [](const v1::Envelope& e) {
+        return e.has_delta() && e.delta().sim_time().ns() >= 1'000'000'000;
+    };
+    if (std::ranges::none_of(received_, late)) {
+        ASSERT_TRUE(pumpUntil(late));
+    }
+    const v1::SceneDelta moved = std::find_if(received_.rbegin(), received_.rend(), late)->delta();
+    ASSERT_GT(moved.transform_prims_size(), 0);
+    double farthest = 0.0;
+    for (int k = 0; k < moved.transform_prims_size(); ++k) {
+        constexpr std::size_t kSnapshotPose = 52;  // position, orientation, scale
+        constexpr std::size_t kDeltaPose = 40;     // position, orientation
+        std::array<double, 3> was{};
+        std::array<double, 3> now{};
+        std::memcpy(was.data(), start.data() + moved.transform_prims(k) * kSnapshotPose, 24);
+        std::memcpy(now.data(), moved.transform_data().data() + k * kDeltaPose, 24);
+        farthest = std::max(farthest, std::hypot(now[0] - was[0], now[1] - was[1]));
+    }
+    EXPECT_GT(farthest, 0.3);  // m: the sample AMR's demo drive in 1 s or more
     // Back, then forward again past a checkpoint: the same samples.
     ASSERT_TRUE(seekTo(500'000'000, 3).ok());
     EXPECT_EQ(server_->simTime().ns, 500'000'000);
@@ -1295,6 +1317,65 @@ TEST_F(OpenRecordingTest, OpeningARecordingTurnsTheServerIntoItsReplay) {
     EXPECT_FALSE(run(bad).ok());
     ASSERT_TRUE(seekTo(500'000'000, 8).ok());
     expectPose(at05_);
+}
+
+// QA 2026-11-14: the sample AMR's open-loop figure-eight wandered and, after a minute, stood
+// against the warehouse's north rack. Closed-loop, it keeps to its two 1.2 m loops round the
+// start (the racks' faces are 3 m to each side).
+TEST(DemoDrive, TheSampleAmrKeepsToItsFigureEightInTheWarehouse) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+    options.ros = false;
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    double farthestX = 0.0;
+    double farthestY = 0.0;
+    double travelled = 0.0;
+    std::vector<double> last = server.read("body/base_link/pose");
+    for (std::int64_t t = 1; t <= 120; ++t) {
+        ASSERT_TRUE(server.stepUntil(SimTime{t * 1'000'000'000}).ok());
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        farthestX = std::max(farthestX, std::abs(pose[0]));
+        farthestY = std::max(farthestY, std::abs(pose[1]));
+        travelled += std::hypot(pose[0] - last[0], pose[1] - last[1]);
+        last = pose;
+    }
+    EXPECT_LT(farthestX, 1.35);  // m: the loops' radius, 1.2 m, and a little
+    EXPECT_LT(farthestY, 2.55);  // m: their two diameters, 2.4 m, and a little
+    EXPECT_GT(farthestY, 2.2);
+    EXPECT_GT(travelled, 60.0);  // m: about 0.6 m/s for two minutes, never held
+}
+
+// QA 2026-11-14: the sedan's demo in the town ran onto a crossing's post at a corner of the
+// junction after 6 s and stood there with its throttle open. It backs away and drives on.
+TEST(DemoDrive, TheSedanBacksAwayFromWhatHoldsItAndDrivesOn) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+    options.worldPath = (std::filesystem::path(LAGRANGE_TEST_CITY_USDA).parent_path().parent_path() /
+                         "town" / "town.usda")
+                            .string();
+    options.ros = false;
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    double longestHeld = 0.0;
+    double held = 0.0;
+    double travelledLate = 0.0;
+    std::vector<double> last;
+    for (std::int64_t k = 1; k <= 60; ++k) {  // 30 s by half seconds
+        ASSERT_TRUE(server.stepUntil(SimTime{k * 500'000'000}).ok());
+        const double speed = server.read("vehicle/sedan/speed")[0];
+        held = std::abs(speed) < 0.1 ? held + 0.5 : 0.0;
+        longestHeld = std::max(longestHeld, held);
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        if (k > 40) {
+            travelledLate += std::hypot(pose[0] - last[0], pose[1] - last[1]);
+        }
+        last = pose;
+    }
+    EXPECT_LE(longestHeld, 2.5);     // s: held 2 s, then it backs away
+    EXPECT_GT(travelledLate, 20.0);  // m in the last 10 s: on its circle at 3 m/s
 }
 
 TEST_F(ServerTest, SeekingASimulationIsRefused) {

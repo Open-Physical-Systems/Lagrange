@@ -69,7 +69,8 @@ viewer:
 ros2 run lagrange_viewer lagrange_viewer --connect unix:$XDG_RUNTIME_DIR/lagrange/default.sock
 ```
 
-The robot drives a figure-eight (a demo that plays until a velocity command arrives). The
+The robot drives a figure-eight (a demo that plays until a velocity command arrives: two
+1.2 m loops that touch where it starts, followed closed-loop, so it keeps to the aisle). The
 **Scene** workspace shows it with the lidar returns, the prim tree on the left and the console:
 
 ![The Scene workspace: the AMR in the warehouse with its lidar points, the prim tree, timeline

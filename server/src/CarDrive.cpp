@@ -21,6 +21,10 @@ constexpr double kMinSteerSpeed = 1.0;  // m/s, the speed the steering angle ass
 constexpr double kDemoRadius = 5.0;     // m, the demo circle round the origin
 constexpr double kDemoSpeed = 3.0;      // m/s
 constexpr double kLookahead = 4.0;      // m, pure pursuit
+constexpr double kStallSpeed = 0.3;     // m/s: slower than this while the demo drives is held
+constexpr double kStallTime = 2.0;      // s held before the demo backs away (it starts in 0.5 s)
+constexpr double kBackSpeed = 1.5;      // m/s backing away
+constexpr double kBackTime = 3.0;       // s backing away: about 4 m
 
 SignalSpec scalar(std::string name, Unit unit) {
     SignalSpec s;
@@ -66,6 +70,9 @@ Status CarController::declare(const WorldView& world, const ModuleConfig&, Signa
 
 Status CarController::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     integral_ = 0.0;
+    stalled_ = 0.0;
+    reversing_ = 0.0;
+    reverseSteer_ = 0.0;
     bus.write(throttle_, 0.0);
     bus.write(brake_, kHoldBrake);
     bus.write(steering_, 0.0);
@@ -101,6 +108,23 @@ Status CarController::step(const StepContext& context, SignalBus& bus) {
         const double distance = std::max(std::hypot(gx, gy), 1.0);
         pursuit = std::atan(2.0 * wheelbase_ * std::sin(alpha) / distance);
         target = kDemoSpeed;
+        if (reversing_ > 0.0) {
+            // Backing away from what held it, the steering the other way round: the nose turns
+            // towards where the pursuit wanted it, so the next try clears what stopped it.
+            reversing_ = std::max(reversing_ - dt, 0.0);
+            pursuit = reverseSteer_;
+            target = -kBackSpeed;
+        } else if (std::abs(speed) < kStallSpeed) {
+            stalled_ += dt;
+            if (stalled_ >= kStallTime) {
+                stalled_ = 0.0;
+                reversing_ = kBackTime;
+                reverseSteer_ = -std::clamp(*pursuit, -maxSteer_, maxSteer_);
+                integral_ = 0.0;
+            }
+        } else {
+            stalled_ = 0.0;
+        }
     }
     double throttle = 0.0;
     double brake = 0.0;
@@ -132,11 +156,15 @@ Status CarController::step(const StepContext& context, SignalBus& bus) {
 Status CarController::saveState(StateWriter& writer) const {
     writer.put(integral_);
     writer.put(externalSeen_);
+    writer.put(stalled_);
+    writer.put(reversing_);
+    writer.put(reverseSteer_);
     return {};
 }
 
 Status CarController::restoreState(StateReader& reader) {
-    if (!reader.get(integral_) || !reader.get(externalSeen_)) {
+    if (!reader.get(integral_) || !reader.get(externalSeen_) || !reader.get(stalled_) ||
+        !reader.get(reversing_) || !reader.get(reverseSteer_)) {
         return Status::error(StatusCode::Internal, "car controller: truncated state");
     }
     return {};

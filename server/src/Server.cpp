@@ -814,6 +814,7 @@ struct Server::Impl {
             }
             DriveCommand::Settings demo;
             demo.demo = options.demoDrive;
+            demo.basePose = drivenBasePose();  // the figure-eight keeps to its own floor
             auto drive = std::make_unique<DriveCommand>(demo, external);
             if (driveOut != nullptr) {
                 *driveOut = drive.get();
@@ -1816,6 +1817,18 @@ struct Server::Impl {
     }
 
     /// Wheel radius and track of a two-wheel robot, from its wheel colliders and positions.
+    /// The pose signal of the body the two driven wheels hang from, or "" without one.
+    std::string drivenBasePose() const {
+        const World& world = robot.world;
+        for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+            if (world.joints.names[j] == robot.actuatedJoints[0] &&
+                world.joints.parent[j] != kWorldBody) {
+                return "body/" + world.bodies.names[world.joints.parent[j].index] + "/pose";
+            }
+        }
+        return {};
+    }
+
     DiffDriveController::Settings driveSettings() const {
         DiffDriveController::Settings settings;
         settings.leftJoint = robot.actuatedJoints[0];
@@ -2511,7 +2524,9 @@ struct Server::Impl {
         std::string data;
         for (std::uint32_t i = 0; i < robot.scene.prims.size(); ++i) {
             const ScenePrim& prim = robot.scene.prims[i];
-            if (prim.body == kNoIndex || !bodyPose[prim.body].valid()) {
+            // A replay has no bodies: its prims move by their recorded pose signals.
+            const bool replayed = i < replayPose.size() && replayPose[i].valid();
+            if (!replayed && (prim.body == kNoIndex || !bodyPose[prim.body].valid())) {
                 continue;  // static: never changes
             }
             d.add_transform_prims(i);
@@ -3010,8 +3025,16 @@ struct Server::Impl {
         // benchmarks.md) and keep the run deterministic. --lidar gpu takes the compute kernel.
         if (!hasLidar || options.lidar != Lidar::Gpu) {
             if (hasLidar) {
+                // Said whatever the machine's tier: on a Tier 1 or 2 GPU the CPU is chosen, not
+                // fallen back to (QA 2026-11-14: "auto picks the CPU on Tier 2").
                 log(v1::LOG_LEVEL_INFO, "sensors",
-                    "lidar on the CPU (Tier 0: exact casts, Embree culling, all cores)");
+                    options.lidar == Lidar::Auto
+                        ? "lidar on the CPU (--lidar auto, on any GPU: the exact caster with "
+                          "Embree culling on all cores is faster than the GPU kernel's round "
+                          "trip for scans of this size and keeps the run deterministic, "
+                          "docs/design/benchmarks.md; --lidar gpu casts on the GPU)"
+                        : "lidar on the CPU (--lidar cpu: exact casts, Embree culling, all "
+                          "cores)");
             }
             return {};
         }
@@ -7780,10 +7803,14 @@ Status Server::start() {
                               : "multicopter: the built-in controller waits on the ground until "
                                 "/cmd_vel asks it to climb, and lands when brought down") +
                   (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
-    } else if (!s.primaryPath().empty()) {
-        s.log(v1::LOG_LEVEL_WARN, "controller",
-              "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
-                  std::to_string(s.robot.actuatedJoints.size()));
+    } else if (!s.replay && !s.jointControlled() && !s.robot.actuatedJoints.empty()) {
+        // A replay drives nothing, joint control drives every joint, and a robot without
+        // actuated joints has nothing to drive: only a robot with motors a demo cannot use.
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "no demo driver: a demo drives two actuated wheel joints, swerve modules, a car "
+              "or a multicopter; the robot has " +
+                  std::to_string(s.robot.actuatedJoints.size()) +
+                  " actuated joints (drive them with --joint-control or ros2_control)");
     }
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;

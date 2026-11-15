@@ -61,6 +61,13 @@ Duration DriveCommand::preferredStep() const {
 }
 
 Status DriveCommand::declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) {
+    if (settings_.demo && !settings_.lateral && !settings_.basePose.empty()) {
+        SignalSpec pose = scalar(settings_.basePose, units::m);
+        pose.type = SignalType::Pose;
+        pose.frame = "world_local";
+        pose.feedback = true;
+        pose_ = d.input(pose);
+    }
     linear_ = d.output(scalar(kLinear, units::m_per_s));
     angular_ = d.output(scalar(kAngular, units::rad_per_s));
     if (settings_.lateral) {
@@ -70,6 +77,9 @@ Status DriveCommand::declare(const WorldView&, const ModuleConfig&, SignalDeclar
 }
 
 Status DriveCommand::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
+    eightStarted_ = false;
+    eightSide_ = 1.0;
+    eightTurned_ = 0.0;
     bus.write(linear_, 0.0);
     bus.write(angular_, 0.0);
     if (settings_.lateral) {
@@ -99,7 +109,9 @@ Status DriveCommand::step(const StepContext& context, SignalBus& bus) {
         }
         const double loopSeconds = 2.0 * std::numbers::pi * s.turnRadiusM / s.speedMps;
         const double phase = std::sin(std::numbers::pi * t / loopSeconds);
-        if (!s.lateral) {
+        if (!s.lateral && pose_.valid()) {
+            command = VelocityCommand{v, figureEightTurn(v, bus)};
+        } else if (!s.lateral) {
             command = VelocityCommand{v, (v / s.turnRadiusM) * std::tanh(8.0 * phase)};
         }
         source_ = "demo";
@@ -112,15 +124,78 @@ Status DriveCommand::step(const StepContext& context, SignalBus& bus) {
     return {};
 }
 
+double DriveCommand::figureEightTurn(double v, SignalBus& bus) {
+    constexpr double kRadialGain = 2.0;   // rad of heading per m off the circle (as atan)
+    constexpr double kHeadingGain = 2.0;  // 1/s: rad/s of turn per rad of heading error
+    const std::span<const double> p = bus.readN(pose_);
+    if (p[3] == 0.0 && p[4] == 0.0 && p[5] == 0.0 && p[6] == 0.0) {
+        return 0.0;  // no pose written yet
+    }
+    const double yaw =
+        std::atan2(2.0 * (p[3] * p[6] + p[4] * p[5]), 1.0 - 2.0 * (p[5] * p[5] + p[6] * p[6]));
+    const double r = settings_.turnRadiusM;
+    const auto wrap = [](double a) { return std::remainder(a, 2.0 * std::numbers::pi); };
+    const auto centre = [&] {
+        // The loop's centre: a radius to the side of the start, left for the left loop.
+        return std::array<double, 2>{eightStart_[0] - eightSide_ * r * std::sin(eightHeading_),
+                                     eightStart_[1] + eightSide_ * r * std::cos(eightHeading_)};
+    };
+    if (!eightStarted_) {
+        eightStarted_ = true;
+        eightStart_ = {p[0], p[1]};
+        eightHeading_ = yaw;
+        eightSide_ = 1.0;
+        eightTurned_ = 0.0;
+        const auto c = centre();
+        eightBearing_ = std::atan2(p[1] - c[1], p[0] - c[0]);
+    }
+    auto c = centre();
+    double bearing = std::atan2(p[1] - c[1], p[0] - c[0]);
+    eightTurned_ += eightSide_ * wrap(bearing - eightBearing_);
+    eightBearing_ = bearing;
+    if (eightTurned_ >= 2.0 * std::numbers::pi) {
+        // Back where the loops touch: the other loop, the other way round.
+        eightSide_ = -eightSide_;
+        eightTurned_ = 0.0;
+        c = centre();
+        bearing = std::atan2(p[1] - c[1], p[0] - c[0]);
+        eightBearing_ = bearing;
+    }
+    // Along the circle's tangent, leaning in when outside it and out when inside.
+    const double off = std::hypot(p[0] - c[0], p[1] - c[1]) - r;
+    const double wanted =
+        bearing + eightSide_ * (0.5 * std::numbers::pi + std::atan(kRadialGain * off));
+    return eightSide_ * v / r + kHeadingGain * wrap(wanted - yaw);
+}
+
 Status DriveCommand::saveState(StateWriter& writer) const {
     writer.put(externalSeen_);
+    writer.put(eightStarted_);
+    writer.put(eightStart_[0]);
+    writer.put(eightStart_[1]);
+    writer.put(eightHeading_);
+    writer.put(eightSide_);
+    writer.put(eightTurned_);
+    writer.put(eightBearing_);
     return {};
 }
 
 Status DriveCommand::restoreState(StateReader& reader) {
     reader.get(externalSeen_);
+    reader.get(eightStarted_);
+    reader.get(eightStart_[0]);
+    reader.get(eightStart_[1]);
+    reader.get(eightHeading_);
+    reader.get(eightSide_);
+    reader.get(eightTurned_);
+    reader.get(eightBearing_);
     return reader.failed() ? Status::error(StatusCode::InvalidConfig, "short command state")
                            : Status{};
+}
+
+void DriveCommand::shiftOrigin(const std::array<double, 3>& shift) {
+    eightStart_[0] -= shift[0];
+    eightStart_[1] -= shift[1];
 }
 
 // --- wheels ------------------------------------------------------------------------------------

@@ -80,6 +80,19 @@ What the numbers say:
 - On this machine, Tier 0 beats the integrated GPU by 1.7 to 5 times for these scans and is
   deterministic, so `--lidar auto` stays on the CPU. Tier 1 (`--lidar gpu`) is for lidars with
   far more beams, or a discrete GPU; it needs re-measuring there.
+- Re-measured on a discrete GPU (2026-11-15, an RTX 4060 Laptop GPU, Tier 2, beside the same
+  CPU family; `bench_lidar --benchmark_filter=LidarTier`, medians of 3, the machine busy with a
+  build, load average about 18, so both columns are slower than in the table above):
+
+  | Scan of 32 768 beams | Tier 0 (CPU) | Tier 1 kernel on the RTX 4060 |
+  |---|---|---|
+  | 50 shapes | 1.90 ms | 3.96 ms |
+  | 400 shapes | 3.40 ms | 3.76 ms |
+
+  The discrete GPU is still not faster: its round trip (upload, dispatch, read-back) dominates.
+  So `--lidar auto` takes the CPU on every tier, on purpose, and the server's log says so
+  ("lidar on the CPU (--lidar auto, on any GPU ...)"). TODO(verify): an idle-machine run, and a
+  lidar with far more beams, where the GPU may win.
 
 ## 4. Whole runs: where the server's time goes (2026-11-12)
 
