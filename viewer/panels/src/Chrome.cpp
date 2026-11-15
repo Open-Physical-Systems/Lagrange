@@ -50,14 +50,14 @@ constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
      "02-scene"},
     {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-4", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
-    {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-1",
+    {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-2",
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
     {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-4", ImGuiKey_4,
      "Ctrl+4", "05-signals"},
     {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-2", ImGuiKey_5,
      "Ctrl+5", "06-sensors"},
     {Workspace::Environment, "Environment", widgets::Icon::Environment,
-     "lagrange-dock-environment-1", ImGuiKey_6, "Ctrl+6", "07-environment"},
+     "lagrange-dock-environment-2", ImGuiKey_6, "Ctrl+6", "07-environment"},
     {Workspace::Replay, "Replay", widgets::Icon::Replay, "lagrange-dock-replay-1", ImGuiKey_7,
      "Ctrl+7", "08-replay"},
     {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-2", ImGuiKey_8, "Ctrl+8",
@@ -129,12 +129,15 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         const ImGuiID scopes = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Down, fraction(372.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Network", left);
+        ImGui::DockBuilderDockWindow("###ElectricalProbes", left);
         ImGui::DockBuilderDockWindow("Schematic", centre);
         ImGui::DockBuilderDockWindow("Circuit", centre);
         ImGui::DockBuilderDockWindow("Netlist", centre);
         ImGui::DockBuilderDockWindow("3D overlay", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
+        ImGui::DockBuilderDockWindow("###ElectricalAddScope", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
+        ImGui::DockBuilderDockWindow("###ElectricalHistory", right);
     } else if (workspace == Workspace::Builder) {
         // Design (12-builder SPEC "Dock layout"): left 270 px, Robot | Files over a 212 px
         // Add | Templates; right 350 px, Properties | History; the Builder view over a 220 px
@@ -217,8 +220,10 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Right, fraction(300.0F, size.x - px(320.0F)), nullptr, &centre);
         ImGui::DockBuilderDockWindow("###EnvironmentState", left);
         ImGui::DockBuilderDockWindow("###EnvironmentPresets", left);
+        ImGui::DockBuilderDockWindow("###FieldViewport", centre);
         ImGui::DockBuilderDockWindow("###FieldSlice", centre);
         ImGui::DockBuilderDockWindow("Overlays", right);
+        ImGui::DockBuilderDockWindow("###FieldInfo", right);
     } else if (workspace == Workspace::Ros2) {
         // Design: Topics 440 px left, ros2_control 340 px right, the node graph over a
         // 300 px console.
@@ -1596,6 +1601,8 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     for (std::unique_ptr<Panel>& panel : createSignalsTabPanels()) {
         panels.push_back(std::move(panel));
     }
+    // The Inspector before the Electrical panels: its tab before History (design).
+    panels.push_back(createElectricalInspectorPanel());
     for (std::unique_ptr<Panel>& panel : createElectricalPanels()) {
         panels.push_back(std::move(panel));
     }
@@ -1619,7 +1626,6 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
         }
     }
     panels.push_back(createRosConsolePanel());
-    panels.push_back(createElectricalInspectorPanel());
     panels.push_back(createDomainsPanel());
     for (std::unique_ptr<Panel>& panel : createWiringPanels()) {
         panels.push_back(std::move(panel));
@@ -1722,6 +1728,9 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     if (built && shown == Workspace::Electrical) {
         ImGui::SetWindowFocus("Schematic");
     }
+    if (built && shown == Workspace::Environment) {
+        ImGui::SetWindowFocus("Overlays");  // design: Overlays in front of Field info
+    }
     if (built && shown == Workspace::Builder) {
         // The first tab of each group in front (SPEC: Robot, Add, Properties, Joints, catalog).
         for (const char* window :
@@ -1730,11 +1739,17 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
             ImGui::SetWindowFocus(window);
         }
     }
-    // A panel asked for on the command line, in front once it exists.
+    // A panel asked for on the command line, in front once it exists, and again after a
+    // default layout is built (which puts the first tabs in front).
+    static std::string askedPanel;
     if (context.focusPanel != nullptr && !context.focusPanel->empty() &&
         ImGui::FindWindowByName(context.focusPanel->c_str()) != nullptr) {
         ImGui::SetWindowFocus(context.focusPanel->c_str());
+        askedPanel = *context.focusPanel;
         context.focusPanel->clear();
+    } else if (built && !askedPanel.empty() &&
+               ImGui::FindWindowByName(askedPanel.c_str()) != nullptr) {
+        ImGui::SetWindowFocus(askedPanel.c_str());
     }
 }
 
