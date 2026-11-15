@@ -74,6 +74,7 @@ add_library(
     builder/src/SensorCatalog.cpp
     builder/src/SensorNeeds.cpp
     builder/src/TestServer.cpp
+    builder/src/TestSpawn.cpp
     builder/src/Urdf.cpp
     builder/src/Validation.cpp
 )
@@ -410,6 +411,7 @@ if(BUILD_TESTING)
         builder/test/test_sensor_catalog_loader.cpp
         builder/test/test_gizmo.cpp
         builder/test/test_test_server.cpp
+        builder/test/test_test_spawn.cpp
         builder/test/test_scene_renderer_statics.cpp
         builder/test/test_mesh_shapes.cpp
         builder/test/test_overlay.cpp

@@ -10,6 +10,7 @@
 #include "lagrange/viewer/builder/History.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
+#include "lagrange/viewer/builder/TestSpawn.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
 #include <cstdint>
@@ -111,6 +112,9 @@ struct BuilderSession {
     /// The Test target is the run this viewer is connected to (RFC 0016 §7.2): the robot is
     /// imported into it as text and removed again by Back, instead of a test server's own run.
     bool testIntoRun{false};
+    /// Test ▾ → Start at…: where the robot starts, per world (`<config>/builder_spawns.tsv`;
+    /// the Test menu loads it the first time it is drawn).
+    builder::SpawnMemory testSpawns;
     /// Grows whenever a new document replaces the history (Open, a template): views that key on
     /// history.revision() key on this too, since a new History counts from 0 again.
     std::uint64_t opened{0};
@@ -148,7 +152,10 @@ struct BuilderSession {
 
     // Out, read and cleared by BuilderHost::afterUi().
     bool testRequested{false};
-    std::string testWorld;      ///< with testRequested: "none", a sample world, or a world file
+    std::string testWorld;  ///< with testRequested: "none", a sample world, or a world file
+    /// With testRequested: `--spawn`'s value for the test server; empty: no --spawn. BuilderHost
+    /// keeps it here while the test runs (the report shows it).
+    std::string testSpawn;
     bool backRequested{false};  ///< Back to Build (Esc while testing)
     bool saveRequested{false};
     std::filesystem::path savePath;  ///< with saveRequested: empty = `path` (Save), else Save as

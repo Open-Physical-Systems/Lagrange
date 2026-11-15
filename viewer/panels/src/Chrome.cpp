@@ -13,6 +13,7 @@
 #include <array>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -616,6 +617,96 @@ std::string documentName(const BuilderSession& session) {
     return session.document().robot + ".urdf";
 }
 
+/// Test ▾ → Start at… (SPEC "Modes"): where the robot starts in the chosen world, remembered
+/// per world, passed to the test server as --spawn. Not for the connected run: ImportRobot
+/// carries no pose (proto/…/command.proto), so the robot goes where its file puts it.
+void drawStartAt(BuilderSession& session) {
+    const std::string world = session.testTarget.empty() ? "none" : session.testTarget;
+    builder::SpawnPose pose = session.testSpawns.at(world);
+    // "Start at" in Sans, the pose after it in Mono (every number is Mono): the label is padded
+    // with spaces to leave room, and the pose drawn there.
+    const std::string shown = builder::spawnLabel(pose);
+    const float monoSize = px(theme::kMonoSize);
+    // Room for a typical pose whatever is shown, so the menu keeps its width (and stays on the
+    // screen) while the fields beside it are typed in.
+    const float monoWidth = std::max(
+        theme::fonts().mono->CalcTextSizeA(monoSize, FLT_MAX, 0.0F, shown.c_str()).x,
+        theme::fonts().mono->CalcTextSizeA(monoSize, FLT_MAX, 0.0F, "-100, -100, 0 · 180°").x);
+    const float space = std::max(ImGui::CalcTextSize(" ").x, 1.0F);
+    const std::string label =
+        "Start at" +
+        std::string(static_cast<std::size_t>(std::ceil((monoWidth + px(28.0F)) / space)), ' ') +
+        "###start-at";
+    ImGui::Separator();
+    // Where the row's text starts, and its draw list: once BeginMenu opened the submenu, the
+    // current window (and its last item) are the submenu's.
+    const ImVec2 row = ImGui::GetCursorScreenPos();
+    ImDrawList* const draw = ImGui::GetWindowDrawList();
+    const bool open = ImGui::BeginMenu(label.c_str(), !session.testIntoRun);
+    {
+        const float x = row.x + ImGui::CalcTextSize("Start at").x + px(8.0F);
+        const float y = row.y + (ImGui::GetTextLineHeight() - monoSize) * 0.5F;
+        ImVec4 color = c::t2;
+        if (session.testIntoRun) {
+            color.w *= ImGui::GetStyle().DisabledAlpha;
+        }
+        draw->AddText(theme::fonts().mono, monoSize, ImVec2(x, y),
+                      ImGui::ColorConvertFloat4ToU32(color), shown.c_str());
+    }
+    if (open) {
+        widgets::Caption("In the world's frame: x, y, z (m), heading (°)");
+        widgets::Caption("z: where the robot's lowest point goes");
+        struct Field {
+            const char* name;
+            double* value;
+            const char* unit;
+        };
+        const std::array<Field, 4> fields{{{"x", &pose.x, "m"},
+                                           {"y", &pose.y, "m"},
+                                           {"z", &pose.z, "m"},
+                                           {"heading", &pose.yawDeg, "°"}}};
+        bool changed = false;
+        for (const Field& field : fields) {
+            ImGui::PushID(field.name);
+            const float top = ImGui::GetCursorPosY();
+            ImGui::SetCursorPosY(top + (ImGui::GetFrameHeight() - px(theme::kCaptionSize)) * 0.5F);
+            widgets::Caption("%s", field.name);
+            ImGui::SameLine(px(72.0F));
+            ImGui::SetCursorPosY(top);
+            char shown[32];
+            std::snprintf(shown, sizeof(shown), "%g", *field.value);
+            std::string text = shown;
+            if (widgets::CommitField("##value", &text, field.unit, false, px(150.0F))) {
+                char* end = nullptr;
+                const double typed = std::strtod(text.c_str(), &end);
+                if (end != text.c_str() && std::isfinite(typed)) {
+                    *field.value = typed;
+                    changed = true;
+                }
+            }
+            ImGui::PopID();
+        }
+        if (changed) {
+            session.testSpawns.set(world, pose);
+        }
+        const builder::SpawnPose fallback = builder::defaultSpawn(world);
+        ImGui::BeginDisabled(pose == fallback);
+        const std::string reset =
+            fallback.isOrigin() ? std::string("The world's origin")
+                                : "This world's default (" + builder::spawnLabel(fallback) + ")";
+        if (widgets::Button(reset.c_str(), widgets::ButtonKind::Default)) {
+            session.testSpawns.reset(world);
+        }
+        ImGui::EndDisabled();
+        ImGui::EndMenu();
+    }
+    if (!open) {
+        ImGui::SetItemTooltip("%s", session.testIntoRun
+                                        ? "The connected run adds the robot where its file puts it"
+                                        : "Where Test starts the robot in this world (--spawn)");
+    }
+}
+
 /// Build mode (SPEC "Modes"): Undo, Redo, the document readout, Build, Test · target ▾, Save.
 void drawBuildControls(PanelContext& context) {
     BuilderSession& session = *context.builder;
@@ -679,6 +770,10 @@ void drawBuildControls(PanelContext& context) {
     // without lagrange_server on this machine (state 5).
     // Into the connected run (RFC 0016 §7.2) needs a server that imports instead.
     const int errors = session.problems.errors();
+    if (!session.testSpawns.loaded() && !context.configDirectory.empty()) {
+        session.testSpawns.load(std::filesystem::path(context.configDirectory) /
+                                "builder_spawns.tsv");
+    }
     const bool connected = context.connection.state == ConnectionState::Ready;
     const bool intoRun = connected && context.connection.canImport;
     if (intoRun && context.launcher->localServer.empty()) {
@@ -696,6 +791,7 @@ void drawBuildControls(PanelContext& context) {
         } else {
             session.testRequested = true;
             session.testWorld = session.testTarget.empty() ? "none" : session.testTarget;
+            session.testSpawn = builder::spawnArgument(session.testSpawns.at(session.testWorld));
         }
     }
     const float chevron = px(10.0F);
@@ -778,6 +874,7 @@ void drawBuildControls(PanelContext& context) {
             }
             ImGui::EndMenu();
         }
+        drawStartAt(session);
         if (ImGui::MenuItem("Into the connected run", nullptr, session.testIntoRun, intoRun)) {
             session.testIntoRun = true;
         }

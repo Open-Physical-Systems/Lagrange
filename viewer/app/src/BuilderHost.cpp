@@ -1365,6 +1365,8 @@ void BuilderHost::startTest(double now) {
         return;
     }
     request.world = session_.testWorld.empty() ? "none" : session_.testWorld;
+    request.spawn = session_.testSpawn;  // Test ▾ → Start at…
+    spawn_ = session_.testSpawns.at(request.world);
     // Plan decision 4: a socket named by the viewer's pid, never by the robot (sun_path).
     request.endpoint =
         "unix:" + proto::defaultUnixSocketPath("builder-" + std::to_string(::getpid()));
@@ -1621,8 +1623,35 @@ void BuilderHost::stopDriving() {
     session_.jointDriveError.clear();
 }
 
+void BuilderHost::carryCamera(bool into) {
+    if (into == cameraAtSpawn_ || (into && spawn_.isOrigin())) {
+        return;
+    }
+    cameraAtSpawn_ = into;
+    Camera& camera = session_.camera;
+    const double heading = spawn_.yawDeg * std::numbers::pi / 180.0 * (into ? 1.0 : -1.0);
+    const std::array<double, 3> offset{spawn_.x, spawn_.y, spawn_.z};
+    std::array<double, 3>& target = camera.target;
+    if (!into) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            target.at(k) -= offset.at(k);
+        }
+    }
+    const double x = target[0];
+    const double y = target[1];
+    target[0] = std::cos(heading) * x - std::sin(heading) * y;
+    target[1] = std::sin(heading) * x + std::cos(heading) * y;
+    if (into) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            target.at(k) += offset.at(k);
+        }
+    }
+    camera.yaw += heading;
+}
+
 void BuilderHost::endTest(const std::string& failure) {
     stopDriving();
+    carryCamera(false);
     if (inRun_) {
         // Back takes the robot out of the run again; the run itself goes on.
         if (!session_.testRobotName.empty() &&
@@ -1682,6 +1711,7 @@ void BuilderHost::pollTest(double now) {
         if (client_.connection().state == ConnectionState::Ready &&
             client_.stats().snapshots > snapshotsAtStart_ && client_.scene() != nullptr) {
             session_.mode = BuilderSession::Mode::Testing;
+            carryCamera(true);
             // The loader's notes and warnings (the run started): listed under Loader.
             for (const std::string& line : lastLines(test_.logTail(16 * 1024), 200)) {
                 // A mesh the loader could not read is a magenta box in the run (QA F14).

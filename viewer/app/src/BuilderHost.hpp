@@ -170,7 +170,13 @@ private:
     proto::Endpoint previousEndpoint_;
     bool previousRunning_{false};
     std::uint64_t snapshotsAtStart_{0};
-    bool inRun_{false};                   ///< the Test runs in the connected run
+    bool inRun_{false};  ///< the Test runs in the connected run
+    /// Test ▾ → Start at…: the start pose of the test server's run. The Builder view's camera
+    /// is carried there when the run is shown (the robot seen as in Build) and back by Back.
+    builder::SpawnPose spawn_;
+    bool cameraAtSpawn_{false};
+    /// Moves the Builder view's camera from the robot's frame into the run's (`into`) or back.
+    void carryCamera(bool into);
     std::uint64_t importRequest_{0};      ///< ImportRobot's request id while Starting
     std::uint64_t removeAfterImport_{0};  ///< Back while Starting: this import's robot goes
     std::uint64_t removeRequest_{0};      ///< RemoveRobot's request id until answered
