@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -402,6 +403,36 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         }
     }
     groupCount_ = groups;
+    // Tether cables (RFC 0011 step 6, rotor_aero.md §2.7): the rotors' air at each node of each
+    // cable the server names, with its node count ("<name>=<nodes>"), read from the tether
+    // domain's tether/<n>/nodes and written back as tether/<n>/downwash.
+    cables_.clear();
+    if (const auto* named = config.find<std::vector<std::string>>("tether_nodes");
+        named != nullptr && !rotors_.empty()) {
+        for (const std::string& entry : *named) {
+            const std::size_t eq = entry.rfind('=');
+            const long long nodes =
+                eq == std::string::npos ? 0 : std::strtoll(entry.c_str() + eq + 1, nullptr, 10);
+            if (eq == std::string::npos || eq == 0 || nodes < 2 || nodes > (1 << 20)) {
+                return Status::error(
+                    StatusCode::InvalidConfig,
+                    "aerodynamics.tether_nodes: '" + entry + "' is not <tether>=<nodes>");
+            }
+            const std::string base = "tether/" + entry.substr(0, eq) + "/";
+            const auto length = static_cast<std::uint32_t>(3 * nodes);
+            SignalSpec at = spec(base + "nodes", SignalType::ScalarArray, units::m, "world_local");
+            at.arrayLength = length;
+            at.optional = true;
+            SignalSpec out =
+                spec(base + "downwash", SignalType::ScalarArray, units::m_per_s, "world_local");
+            out.arrayLength = length;
+            TetherNodes cable;
+            cable.nodes = d.input(at);
+            cable.downwash = d.output(out);
+            cable.values.assign(length, std::numeric_limits<double>::quiet_NaN());
+            cables_.push_back(std::move(cable));
+        }
+    }
     if (hasGround_) {
         downwash_.setGround(groundPoint_, groundNormal_);
     } else {
@@ -507,6 +538,10 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     }
     if (dustOut_.valid()) {
         bus.write(dustOut_, 0.0);
+    }
+    for (TetherNodes& cable : cables_) {
+        std::ranges::fill(cable.values, std::numeric_limits<double>::quiet_NaN());
+        bus.writeN(cable.downwash, cable.values);
     }
     downwash_.update({});
     others_.update({});
@@ -689,6 +724,22 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
         return downwash_.velocityAt(at, group);
     };
+    // Every robot's wake at each tether node, its own drone's too: the cable is not the rotors'
+    // body (the rotor data leave out only what the rotors do to their own airframe).
+    for (TetherNodes& cable : cables_) {
+        const std::span<const double> at = bus.readN(cable.nodes);
+        std::ranges::fill(cable.values, std::numeric_limits<double>::quiet_NaN());
+        for (std::size_t i = 0; 3 * i + 2 < at.size() && 3 * i + 2 < cable.values.size(); ++i) {
+            const Vec3 x{at[3 * i], at[3 * i + 1], at[3 * i + 2]};
+            if (!std::isfinite(x[0]) || !std::isfinite(x[1]) || !std::isfinite(x[2])) {
+                break;
+            }
+            const Vec3 w = wakeAt(x, Downwash::kNoGroup);
+            std::copy(w.begin(), w.end(),
+                      cable.values.begin() + static_cast<std::ptrdiff_t>(3 * i));
+        }
+        bus.writeN(cable.downwash, cable.values);
+    }
     // The fountain under each low multirotor: a push up its thrust axis on its first link.
     std::vector<Vec3> fountain(groupCount_, Vec3{});
     for (const Downwash::Group& g : downwash_.groups()) {

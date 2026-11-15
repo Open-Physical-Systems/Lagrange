@@ -241,6 +241,14 @@ Status Tethers::declare(const WorldView& world, const ModuleConfig& config, Sign
         SignalSpec nodes = spec(base + "nodes", SignalType::ScalarArray, units::m, "world_local");
         nodes.arrayLength = static_cast<std::uint32_t>(3 * cables_.back().capacity());
         o.nodes = d.output(nodes);
+        // The rotors' downwash at each node, from the aerodynamics domain when it runs with
+        // rotors (rotor_aero.md §2.7); a step late, at last step's nodes.
+        SignalSpec stream =
+            spec(base + "downwash", SignalType::ScalarArray, units::m_per_s, "world_local");
+        stream.arrayLength = nodes.arrayLength;
+        stream.optional = true;
+        stream.feedback = true;
+        o.downwash = d.input(stream);
     }
     wrenches_.assign(bodies_.size(), std::array<double, 6>{});
     return {};
@@ -363,6 +371,7 @@ Status Tethers::step(const StepContext& context, SignalBus& bus) {
     for (std::size_t k = 0; k < specs_.size(); ++k) {
         const TetherSpec& t = specs_[k];
         Cable& cable = cables_[k];
+        const Out& o = out_[k];
         const Pose anchorPose = bodyPose(t.anchorBody, bus);
         const Pose attachPose = bodyPose(t.attachBody, bus);
         const Vec3 anchor = pointIn(anchorPose, t.anchorInBody);
@@ -372,6 +381,23 @@ Status Tethers::step(const StepContext& context, SignalBus& bus) {
             cable.setEndRobots(robotsOfEnds_[k][0], robotsOfEnds_[k][1]);
             laid_[k] = true;
         }
+        // The downwash at last step's nodes, re-counted from the attach end (where a winch
+        // adds or takes a mass the anchor end shifts); NaN past the last node, 0 unconnected.
+        stream_.clear();
+        const std::span<const double> dw = bus.readN(o.downwash);
+        std::size_t published = 0;
+        while (3 * published + 2 < dw.size() && std::isfinite(dw[3 * published]) &&
+               std::isfinite(dw[3 * published + 1]) && std::isfinite(dw[3 * published + 2])) {
+            ++published;
+        }
+        // Still air everywhere (unconnected, no thrust) leaves the drag exactly as without it.
+        const bool blows =
+            std::any_of(dw.begin(), dw.begin() + static_cast<std::ptrdiff_t>(3 * published),
+                        [](double c) { return c != 0.0; });
+        for (std::size_t i = published; blows && i-- > 0;) {
+            stream_.push_back({dw[3 * i], dw[3 * i + 1], dw[3 * i + 2]});
+        }
+        air.stream = stream_;
         cable.step(dt, anchor, attach, obstacles_, air);
         // What the cable did to the bodies: contact pushes, the pull at each end.
         const auto pushes = cable.pushes();
@@ -385,7 +411,6 @@ Status Tethers::step(const StepContext& context, SignalBus& bus) {
         addWrench(t.attachBody, cable.forceOnAttach(), attach, attachPose);
         addWrench(t.anchorBody, cable.forceOnAnchor(), anchor, anchorPose);
         const auto nodes = cable.nodes();
-        const Out& o = out_[k];
         bus.write(o.tensionAttach, cable.tensionAttach());
         bus.write(o.tensionAnchor, cable.tensionAnchor());
         bus.write(o.length, cable.length());

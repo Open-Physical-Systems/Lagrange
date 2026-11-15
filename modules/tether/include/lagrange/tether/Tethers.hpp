@@ -3,7 +3,9 @@
 // The tether domain (RFC 0011): every TetherAPI_1 prim is a cable from its anchor to a point on a
 // body, simulated by tether::Cable every 1 ms against every collider at its body's pose this step.
 // It writes each cable's tensions, length, winch speed, contacts and node positions, and pulls
-// and pushes bodies through body/<b>/wrench/tether. Zero substitute (`--domain tether=off`):
+// and pushes bodies through body/<b>/wrench/tether. With rotors and the aerodynamics domain it
+// reads tether/<n>/downwash, the rotors' air at each node, and blows the cable with it too.
+// Zero substitute (`--domain tether=off`):
 // tensions 0 and nothing else.
 
 #include "lagrange/module/IModule.hpp"
@@ -57,6 +59,7 @@ private:
     struct Out {
         SignalId tensionAttach{}, tensionAnchor{}, length{}, winchSpeed{}, contacts{}, caught{},
             nodes{};
+        SignalId downwash{};  // input: the rotors' air at each node
     };
 
     [[nodiscard]] Pose bodyPose(BodyId body, const SignalBus& bus) const;
@@ -83,6 +86,7 @@ private:
     double airDensity_{0.0};
     Vec3 gravity_{};
     std::vector<double> nodeBuffer_;
+    std::vector<Vec3> stream_;  // this step's downwash per node, from the attach end
     std::vector<std::array<double, 6>> wrenches_;  // per moving body, summed over the cables
 };
 

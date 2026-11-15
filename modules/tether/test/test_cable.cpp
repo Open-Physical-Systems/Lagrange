@@ -1,6 +1,7 @@
-// The cable model of RFC 0011 against what is known of cables: the catenary, a taut string's
-// fundamental, the capstan equation, contact that pushes back equally, no interpenetration when it
-// piles up, the winch holding its tension, and the same numbers from the same run.
+// The cable model of RFC 0011 against what is known of cables: the catenary, drag in a downwash,
+// a taut string's fundamental, the capstan equation, contact that pushes back equally, no
+// interpenetration when it piles up, the winch holding its tension, and the same numbers from the
+// same run.
 #include "lagrange/tether/Cable.hpp"
 
 #include <cmath>
@@ -56,6 +57,46 @@ TEST(Cable, HangsAsACatenary) {
     // The pull on the attach point is along the cable there, towards the anchor and up.
     EXPECT_LT(cable.forceOnAttach()[0], 0.0);
     EXPECT_LT(cable.forceOnAttach()[2], 0.0);  // the cable hangs below: it pulls down
+}
+
+// The rotors' downwash on a taut cable across it (RFC 0011 step 6): air blowing down at v across
+// a straight cable of length L pushes it with ½·ρ·Cd·d·v² per metre, all of which its two ends
+// hold. Given on the attach half only (the stream counts from the attach end), half of it.
+TEST(Cable, ADownwashAcrossItPushesWithItsDynamicPressure) {
+    CableParams p;
+    p.length = 2.0;
+    p.segmentLength = 0.2;
+    p.diameter = 0.005;
+    p.dragCoeff = 1.2;
+    p.axialStiffness = 2e5;
+    p.settle = 5.0;
+    constexpr double kRho = 1.225;  // kg/m³
+    constexpr double kDown = 10.0;  // m/s
+    const Vec3 anchor{0.0, 0.0, 0.0};
+    const Vec3 attach{2.0, 0.0, 0.0};
+    const auto heldUp = [&](std::size_t blown) {
+        Cable cable(p, anchor, attach, 0);
+        Air air;
+        air.gravity = {};  // the drag alone
+        air.density = kRho;
+        const std::vector<Vec3> stream(blown, Vec3{0.0, 0.0, -kDown});
+        air.stream = stream;
+        for (int i = 0; i < 4000; ++i) {
+            cable.step(1e-3, anchor, attach, {}, air);
+        }
+        EXPECT_EQ(cable.nodes().size(), 11U);
+        return -(cable.forceOnAttach()[2] + cable.forceOnAnchor()[2]);
+    };
+    const double whole = 0.5 * kRho * p.dragCoeff * p.diameter * kDown * kDown * p.length;
+    const double all = heldUp(11);
+    const double half = heldUp(6);  // masses 5..10: segments 5..9, the attach half
+    std::printf(
+        "downwash across a cable: ends hold %.4f N (½ρCd·d·v²·L %.4f), attach half "
+        "%.4f N\n",
+        all, whole, half);
+    EXPECT_NEAR(all, whole, 0.02 * whole);
+    EXPECT_NEAR(half, 0.5 * whole, 0.02 * whole);
+    EXPECT_EQ(heldUp(0), 0.0);  // no stream, no push
 }
 
 TEST(Cable, ATautStringRingsAtItsFundamental) {

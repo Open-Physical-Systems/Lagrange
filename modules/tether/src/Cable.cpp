@@ -250,14 +250,19 @@ SurfacePoint surfacePoint(const Obstacle& shape, const Vec3& at) {
     return out;
 }
 
+std::size_t Cable::capacityFor(const CableParams& params) {
+    const double segment = std::max(params.segmentLength, 1e-3);
+    const double longest = std::max(params.maxLength, params.length);
+    return static_cast<std::size_t>(std::ceil(1.5 * longest / segment)) + 3;
+}
+
 Cable::Cable(const CableParams& params, const Vec3& anchor, const Vec3& attach, std::size_t bodies)
     : params_(params) {
     params_.segmentLength = std::max(params_.segmentLength, 1e-3);
     params_.substeps = std::max(params_.substeps, 1);
     radius_ = 0.5 * params_.diameter;
     maxLength_ = std::max(params_.maxLength, params_.length);
-    const auto capacity =
-        static_cast<std::size_t>(std::ceil(1.5 * maxLength_ / params_.segmentLength)) + 3;
+    const std::size_t capacity = capacityFor(params_);
     x_.assign(capacity, Vec3{});
     v_.assign(capacity, Vec3{});
     p_.assign(capacity, Vec3{});
@@ -866,12 +871,28 @@ void Cable::step(double dt, const Vec3& anchor, const Vec3& attach,
                     continue;
                 }
                 const Vec3 t = scale(d, 1.0 / l);
-                const Vec3 rel = sub(air.wind, scale(add(v_[j], v_[j + 1]), 0.5));
-                const double along = dot(rel, t);
-                const Vec3 across = sub(rel, scale(t, along));
                 const double q = 0.5 * rho * params_.diameter * l;
-                Vec3 drag = scale(across, q * params_.dragCoeff * norm(across));
-                addTo(drag, scale(t, q * params_.dragCoeff / 50.0 * std::abs(along) * along));
+                // The drag on a piece of the segment moving at `velocity` in `air`.
+                const auto dragIn = [&](const Vec3& airHere, const Vec3& velocity) {
+                    const Vec3 rel = sub(airHere, velocity);
+                    const double along = dot(rel, t);
+                    const Vec3 across = sub(rel, scale(t, along));
+                    Vec3 f = scale(across, q * params_.dragCoeff * norm(across));
+                    addTo(f, scale(t, q * params_.dragCoeff / 50.0 * std::abs(along) * along));
+                    return f;
+                };
+                // The rotors' air at the segment's masses (counted from the attach end, so a
+                // mass added or taken at the anchor keeps the rest): each half of the segment
+                // in its own mass's air, since a wake can be narrower than a segment.
+                const std::size_t fromEnd = count_ - 2 - j;  // segment j's attach-side mass
+                if (fromEnd + 1 < air.stream.size()) {
+                    addTo(force_[j],
+                          scale(dragIn(add(air.wind, air.stream[fromEnd + 1]), v_[j]), 0.5));
+                    addTo(force_[j + 1],
+                          scale(dragIn(add(air.wind, air.stream[fromEnd]), v_[j + 1]), 0.5));
+                    continue;
+                }
+                const Vec3 drag = dragIn(air.wind, scale(add(v_[j], v_[j + 1]), 0.5));
                 addTo(force_[j], scale(drag, 0.5));
                 addTo(force_[j + 1], scale(drag, 0.5));
             }

@@ -162,6 +162,12 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 /// outwash keeps in the air there; site parameters, no defaults) it writes env/dust/downwash
 /// (kg/m³) once the outwash's friction velocity passes Bagnold's threshold for those grains.
 ///
+/// Tethers (config "tether_nodes", a list of "<tether>=<nodes>" the server fills when the tether
+/// domain runs; rotor_aero.md §2.7): with rotors and the downwash on, it reads each cable's
+/// tether/<n>/nodes (m, 3 per node, NaN past the last) and writes tether/<n>/downwash (m/s,
+/// world, the same layout): every robot's wake at each node, its own drone's included, without
+/// the wind and gust the tether already takes from env/wind/velocity.
+///
 /// Config "downwash_model": "fitted" (the default, above) or "lbm" (rotor_aero.md §8): the first
 /// multirotor's air is computed live in a lattice Boltzmann box that follows it (LiveAir, on a
 /// hardware GPU; config "downwash_lbm_cell", m, default 0.04; "downwash_lbm_cpu": the CPU
@@ -203,6 +209,10 @@ private:
         Dryden turbulence;
         std::size_t group{Downwash::kNoGroup};  // its robot, when that robot has rotors
     };
+    struct TetherNodes {  // a tether's nodes in, the rotors' air at them out
+        SignalId nodes, downwash;
+        std::vector<double> values;
+    };
     struct RotorLink {
         double radius{0.0};
         std::size_t group{0};
@@ -220,6 +230,7 @@ private:
     SignalId densityIn_, rainIn_, snowIn_;  // the weather's, when it runs
     bool downwashOn_{true};
     std::vector<RotorLink> rotors_;
+    std::vector<TetherNodes> cables_;
     std::size_t groupCount_{0};
     Downwash downwash_;
     std::array<double, 3> groundNormal_{0.0, 0.0, 1.0};

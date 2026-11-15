@@ -10,6 +10,7 @@ touches or is tied to gets one wrench, `body/<b>/wrench/tether`.
 flowchart LR
     RB["every collider at its body's pose<br/>(rigid body)"] --> C
     WIND["env/wind/velocity<br/>(aerodynamics)"] --> C
+    DW["tether/n/downwash<br/>(aerodynamics, with rotors)"] --> C
     C["the cable: masses a segment apart<br/>20 substeps a step"] --> T["tether/n/tension_attach,<br/>tension_anchor, length, nodes ..."]
     C --> W["body/b/wrench/tether<br/>(pull at the ends, pushes at contacts)"]
     WINCH["winch: fixed, tension, free"] --> C
@@ -69,7 +70,19 @@ segments), the contacts, and the velocities $v = (p - x)/h$.
 $u$ relative to it, split into $u_n$ across and $u_t$ along:
 $F = \tfrac12 \rho\, C_d\, d\, L\, |u_n|\, u_n + \tfrac12 \rho\, \tfrac{C_d}{50}\, d\, L\, |u_t|\, u_t$,
 half to each end. The air is the site's wind (ground truth and gusts, from the aerodynamics
-domain). The drone's downwash on the cable is not in yet.
+domain) plus, when the run has rotors, their downwash at the segment: the mean of what the
+aerodynamics domain writes at its two masses.
+
+**Downwash.** The aerodynamics domain builds every multirotor's wake (near wake of each rotor,
+merged jet, outwash along the ground; [rotor_aero.md](../design/domains/rotor_aero.md) §2). Each
+step it reads `tether/<n>/nodes`, evaluates every robot's wake at each mass (the drone's own
+too: the cable is not part of its airframe) and writes `tether/<n>/downwash`, one velocity per
+mass in the same layout. The tether module reads it a step late (1 ms, a feedback input), at
+last step's masses; it matches them from the attach end, so a mass the winch adds or takes at
+the anchor leaves the others where they were. A cable crossing a wake of speed $w$ at right
+angles feels $\tfrac12\rho C_d d\,w^2$ per metre; one hanging along it, only the tangential
+fiftieth. Without rotors, with `aerodynamics.downwash: false` or with the domain off, the signal
+is not there and the drag is exactly as before.
 
 **Contacts.** Every mass is a sphere of the cable's radius. Against each collider near the cable
 (every shape type, at its body's pose this step) the module finds the signed distance, normal and
@@ -119,6 +132,7 @@ nothing in. `fixed` holds the length. Paying out stops at `maxLength`.
 | `tether/<n>/contacts` | | masses touching anything this step |
 | `tether/<n>/caught` | | held somewhere by static friction |
 | `tether/<n>/nodes` | m | x, y, z of each mass, world; unused entries NaN |
+| `tether/<n>/downwash` | m/s | read, written by the aerodynamics domain: the rotors' air at each mass, world, same layout |
 | `body/<b>/wrench/tether` | N, N·m | for each body it is tied to or touches |
 
 ## Seeing it
@@ -138,12 +152,20 @@ connects and shows no cable.
 | Draped over a body's box | the weight held by the box and both ends | 0.7 % | `Cable.PushesABodyAsMuchAsTheBodyHoldsItUp` |
 | 6 m piled on the ground | no segment within a diameter of another, none in the ground | holds | `Cable.PilesUpWithoutPassingThroughItself` |
 | A tension winch, drone climbing | its set point, on average | 2.00 N of 2.00 | `Cable.ATensionWinchHoldsItsTension` |
-| The sample quad hovering on 3 m of tether | the weight held by the station and the drone | 0.2 % | `TetherRun.AQuadcopterHoversOnItsTether` |
+| The sample quad hovering on 3 m of tether | the weight held by the station and the drone | 0.5 % over it (its downwash included) | `TetherRun.AQuadcopterHoversOnItsTether` |
+| A 2 m taut cable across air blowing down at 10 m/s | $\tfrac12\rho C_d d v^2 L$; on the attach half, half | 0.04 %, 0.05 % | `Cable.ADownwashAcrossItPushesWithItsDynamicPressure` |
+| The sample quad's tether 0.32 m under rotor 3, across its slipstream | the actuator disc's closed form (rotor_aero.md §2.9) | 0.0529 N held up for 0.0537 N, 1.5 % | `TetherRun.TheDronesDownwashPushesItsTetherDown` |
 | Laid out through a slab | comes out at 1 m/s | 1.26 m/s, at most 14 N | `Cable.LaidThroughABoxItComesOutSlowly` |
 | Over a slab's edge, out, down and back in under it | the centre line stays out of the slab | at worst 1.3 mm in, within its 2.5 mm radius (centimetres with contacts at the masses alone) | `Cable.BendsOverAnEdgeWithoutCuttingIntoIt` |
 | Lifted off a pad on a slab by a drone, tension winch at 2.5 N | pays out, tension near its set point | 2.6 m out, 2.9 N mean | `Cable.LiftedOffAPadTheWinchPaysOut` |
 
 **Limits.**
+- The downwash is taken at the masses. A wake column narrower than a segment (a rotor's near
+  wake is 0.18 m across under the sample quad; the default segment is 0.2 m) pushes only the
+  masses that sit in it, so more or less than it should depending on where they fall (right
+  over many placements, not in one): use a shorter `segmentLength`, 5 cm in the check above,
+  for a cable that crosses one. The air the cable pushes back on the rotors is
+  not modelled.
 - Twist and bending stiffness beyond the light bend term are not modelled: the model is for limp
   cables.
 - Turns of the cable do not rub on each other (no friction between them).
