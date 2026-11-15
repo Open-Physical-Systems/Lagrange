@@ -19,6 +19,7 @@ add_library(
     lagrange_viewer_client
     STATIC
     client/src/ProfileDraft.cpp
+    client/src/ProfileExtras.cpp
     client/src/ProfileSession.cpp
     client/src/RecentList.cpp
     client/src/RosFrames.cpp
@@ -41,6 +42,7 @@ target_link_libraries(
     lagrange_viewer_client
     PUBLIC lagrange_proto::lagrange_proto_transport
     PRIVATE mcap_vendor::mcap yaml-cpp::yaml-cpp
+    PRIVATE yaml-cpp::yaml-cpp
 )
 
 # The robot builder's model (RFC 0016): document, mass, kinematics, validation, undo, URDF,
@@ -209,6 +211,8 @@ add_library(
     panels/src/ViewerSelf.cpp
     panels/src/ViewportPanel.cpp
     panels/src/WiringPanels.cpp
+    panels/src/DomainsTabs.cpp
+    panels/src/YamlText.cpp
     panels/src/WorldPanels.cpp
 )
 lagrange_target_defaults(lagrange_viewer_panels)
@@ -269,6 +273,29 @@ install(
     PATTERN "OFL.txt"
 )
 
+# The profile schema (profiles/schema.json): lagrange_profiles owns it; the viewer build-depends
+# on that package for this data file only and installs a copy, which the Domains workspace's
+# Schema tab shows, so a viewer-only install still has it.
+set(_lagrange_profile_schema "")
+foreach(_candidate "${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json")
+    if(NOT _lagrange_profile_schema AND EXISTS "${_candidate}")
+        set(_lagrange_profile_schema "${_candidate}")
+    endif()
+endforeach()
+string(REPLACE ":" ";" _lagrange_schema_prefixes "$ENV{AMENT_PREFIX_PATH}")
+foreach(_prefix IN LISTS _lagrange_schema_prefixes)
+    set(_candidate "${_prefix}/share/lagrange_profiles/schema.json")
+    if(NOT _lagrange_profile_schema AND EXISTS "${_candidate}")
+        set(_lagrange_profile_schema "${_candidate}")
+    endif()
+endforeach()
+if(_lagrange_profile_schema)
+    install(
+        FILES "${_lagrange_profile_schema}"
+        DESTINATION share/${PROJECT_NAME}/profiles
+    )
+endif()
+
 # The sensor catalog (RFC 0016 §5, R11): lagrange_sensors owns it; the viewer build-depends on
 # that package for this data file only (no find_package, no library) and installs a copy, so a
 # viewer-only install still has it.
@@ -305,6 +332,7 @@ if(BUILD_TESTING)
         client/test/test_flow_legend.cpp
         client/test/test_schematic_layout.cpp
         client/test/test_profile_draft.cpp
+        client/test/test_profile_extras.cpp
         client/test/test_profile_session.cpp
         client/test/test_radar_scale.cpp
         client/test/test_recent_list.cpp
@@ -335,6 +363,7 @@ if(BUILD_TESTING)
         test_viewer_client
         PRIVATE
             LAGRANGE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../proto/test/golden"
+            LAGRANGE_PROFILE_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
     )
     lagrange_target_defaults(test_viewer_client)
 
@@ -384,6 +413,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(test_profile_editor test/test_profile_editor.py TIMEOUT 180)
     ament_add_pytest_test(test_performance_tabs test/test_performance_tabs.py TIMEOUT 900)
+    ament_add_pytest_test(test_domains_tabs test/test_domains_tabs.py TIMEOUT 300)
     ament_add_pytest_test(test_radar_view test/test_radar_view.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
