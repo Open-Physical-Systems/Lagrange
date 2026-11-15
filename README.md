@@ -286,7 +286,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (24)</summary>
+<details><summary>Plan and evaluation (25)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Robot builder: phase 1 and 1b work plan (RFC 0016)](docs/plan/builder-phase1-plan.md)
@@ -296,6 +296,7 @@ recorded to MCAP and replayed.
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
+- [Owner decisions, 2026-11-15](docs/plan/owner-decisions-2026-11-15.md)
 - [Progress](docs/plan/progress.md)
 - [QA pass, 2026-11-12 (v1.2.1)](docs/plan/qa-2026-11-12.md)
 - [Sensors QA, 2026-11-12: the built-in kinds, faults, images](docs/plan/qa-sensors-2026-11-12.md)
