@@ -295,7 +295,7 @@ def test_a_mesh_part_with_each_collision_choice_saves_and_reopens(tmp_path, choi
     if choice == "mesh":
         assert len(collisions) == 1 and "ell.obj" in collisions[0], ell
     elif choice == "split":
-        parts = [c for c in collisions if "empty_collision/ell_0_" in c]
+        parts = [c for c in collisions if "robot_collision/ell_0_" in c]
         assert len(parts) >= 2, ell  # an L is two convex parts at least
         for part in parts:
             name = re.search(r'filename="([^"]+)"', part).group(1)

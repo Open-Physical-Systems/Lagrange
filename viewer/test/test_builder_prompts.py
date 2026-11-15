@@ -10,6 +10,8 @@
   offered back (Restore); an older one is removed without a word.
 - L7: Save as… adds ".urdf" before the overwrite question: an existing foo.urdf chosen as "foo"
   is not replaced without asking.
+- QA4 M1: closing the viewer over unsaved edits asks Save / Discard / Cancel too (`N:close` does
+  what the window's close button does).
 
 `--input N:open:FILE`, `N:saveas:FILE` and `N:template:NAME` do what a dropped file, the Save
 as… dialog and a template card do. Run on the software Vulkan device (llvmpipe) unless
@@ -38,6 +40,9 @@ TEST_BUTTON = "1430,48"  # "Test · empty world", left of its chevron
 # The unsaved-changes sheet over rover_mk1 (1 edit) asking about "primitives_arm.urdf".
 UNSAVED_DISCARD = "927,484"
 UNSAVED_SAVE = "983,484"
+# The same sheet when the viewer is closed (QA4 M1).
+CLOSE_DISCARD = UNSAVED_DISCARD
+CLOSE_SAVE = UNSAVED_SAVE
 # The restore sheet over rover_mk1.urdf.
 RESTORE = "975,490"
 DISCARD_AUTOSAVE = "911,490"
@@ -184,6 +189,55 @@ def test_a_template_over_unsaved_edits_asks_too(tmp_path):
     )
     assert done.returncode == 0, done.stderr
     assert fresh["prompt"] == "" and fresh["links"] == 2 and fresh["edits"] == 1
+
+
+# --- QA4 M1: closing the viewer -------------------------------------------------------------------
+
+
+def edited_then_close(tmp_path: Path, *after: str, frames: int = 18):
+    script = [f"3:click:{BOX_TILE}", "8:close", *after]
+    return run(
+        tmp_path,
+        "--builder-open",
+        str(rover_copy(tmp_path)),
+        "--input",
+        ";".join(script),
+        frames=frames,
+    )
+
+
+def test_closing_over_unsaved_edits_asks_first(tmp_path):
+    builder, done = edited_then_close(tmp_path, frames=14)
+    assert done.returncode == 0, done.stderr
+    assert builder["prompt"] == "unsaved"
+    assert "closed at frame" not in done.stderr
+
+
+def test_closing_cancel_keeps_the_viewer_open(tmp_path):
+    builder, done = edited_then_close(tmp_path, "14:key:escape")
+    assert done.returncode == 0, done.stderr
+    assert builder["prompt"] == "" and builder["edits"] == 1
+    assert "closed at frame" not in done.stderr
+
+
+def test_closing_discard_closes_without_saving(tmp_path):
+    _, done = edited_then_close(tmp_path, f"14:click:{CLOSE_DISCARD}", frames=30)
+    assert done.returncode == 0, done.stderr
+    assert "closed at frame" in done.stderr
+    assert "box_link" not in (tmp_path / "rover_mk1.urdf").read_text()
+
+
+def test_closing_save_writes_the_file_then_closes(tmp_path):
+    _, done = edited_then_close(tmp_path, f"14:click:{CLOSE_SAVE}", frames=30)
+    assert done.returncode == 0, done.stderr
+    assert "closed at frame" in done.stderr
+    assert "box_link" in (tmp_path / "rover_mk1.urdf").read_text()
+
+
+def test_closing_without_edits_asks_nothing(tmp_path):
+    _, done = run(tmp_path, "--builder-open", str(rover_copy(tmp_path)), "--input", "3:close")
+    assert done.returncode == 0, done.stderr
+    assert "closed at frame" in done.stderr
 
 
 # --- M3 ------------------------------------------------------------------------------------------

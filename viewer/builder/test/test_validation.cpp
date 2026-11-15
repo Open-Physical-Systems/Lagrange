@@ -1,4 +1,5 @@
 // The builder's own validation (RFC 0016 §8.1, plan WP-A): one test per rule.
+#include "lagrange/viewer/builder/Edits.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Urdf.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
@@ -656,8 +657,8 @@ TEST(Validation, EveryCatalogKindWithItsDefaultsSaysWhatTheServerWillRefuse) {
         {"uwb", Level::Warning},
         {"vehicle_can", Level::Error},
         // QA F10: beside the rover's 15 Hz camera its 160 ms ping never lines up (alone, it
-        // starts): a warning naming both.
-        {"sonar", Level::Warning},
+        // starts): an error naming both (QA4 M2: the server refuses to start).
+        {"sonar", Level::Error},
     };
     std::size_t kinds = 0;
     for (const CatalogEntry& entry : realCatalog().entries()) {
@@ -670,6 +671,7 @@ TEST(Validation, EveryCatalogKindWithItsDefaultsSaysWhatTheServerWillRefuse) {
         sensor.name = "probe";
         sensor.link = "base_link";
         sensor.type = entry.name;
+        sensor.origin.xyz[2] = topOf(*findLink(document, "base_link"));  // on it (QA4 M3)
         document.sensors.push_back(sensor);
         const auto problems = validate(document, &realCatalog(), {});
         const auto errors = about(problems, "probe", Level::Error);
@@ -732,15 +734,65 @@ TEST(Validation, SensorRatesThatNeverLineUpAreNamed) {
     sonar.link = "base_link";
     document.sensors.push_back(sonar);
     auto problems = validate(document, &realCatalog(), {});
-    EXPECT_EQ(count(problems, Level::Warning, "sonar",
+    // QA4 M2: the server refuses it (IncommensurateSteps), so an error (Test is disabled).
+    EXPECT_EQ(count(problems, Level::Error, "sonar",
                     "sensors 'camera' (every 67 ms) and 'sonar' (every 160 ms, its ping"),
               1U)
         << dump(problems);
-    EXPECT_EQ(count(problems, Level::Warning, "sonar", "every 10.72 s"), 1U) << dump(problems);
+    EXPECT_EQ(count(problems, Level::Error, "sonar", "every 10.72 s"), 1U) << dump(problems);
+    // The fix: the sonar's step is its ping, so the camera's rate, the usual one nearest 15 Hz
+    // that lines up (20 Hz, 50 ms: every 800 ms).
+    EXPECT_EQ(count(problems, Level::Error, "sonar", "set 'camera''s update rate to 20 Hz"), 1U)
+        << dump(problems);
+    findSensor(document, "camera")->updateRate = 20.0;
+    problems = validate(document, &realCatalog(), {});
+    EXPECT_EQ(count(problems, Level::Error, "sonar", "line up only"), 0U) << dump(problems);
     // A 10 Hz camera (100 ms) lines up with it every 800 ms.
     findSensor(document, "camera")->updateRate = 10.0;
     problems = validate(document, &realCatalog(), {});
-    EXPECT_EQ(count(problems, Level::Warning, "sonar", "line up only"), 0U) << dump(problems);
+    EXPECT_EQ(count(problems, Level::Error, "sonar", "line up only"), 0U) << dump(problems);
+}
+
+TEST(Validation, ARaySensorInsideItsOwnLinkIsNamed) {
+    // QA4 M3: a lidar at the origin of its link's box sees the box.
+    Document document = newDocument("r");
+    const std::string lidar = addSensor(document, "base_link", "lidar");
+    const std::string imu = addSensor(document, "base_link", "imu");
+    EXPECT_EQ(count(validate(document, &realCatalog(), {}), Level::Warning, lidar,
+                    "inside the collision of its own link"),
+              0U);
+    findSensor(document, lidar)->origin.xyz = {0.0, 0.0, 0.0};
+    findSensor(document, imu)->origin.xyz = {0.0, 0.0, 0.0};  // not a ray sensor: fine
+    const auto problems = validate(document, &realCatalog(), {});
+    EXPECT_EQ(count(problems, Level::Warning, lidar, "inside the collision of its own link"), 1U)
+        << dump(problems);
+    EXPECT_EQ(count(problems, Level::Warning, imu, "inside the collision"), 0U);
+    // A rotated box: the point is tested in the shape's frame.
+    document.links[0].shapes[0].origin.rpy = {0.0, 1.5707963267948966, 0.0};  // x up now
+    findSensor(document, lidar)->origin.xyz = {0.0, 0.0, 0.12};  // inside: half x is 0.15
+    EXPECT_EQ(count(validate(document, &realCatalog(), {}), Level::Warning, lidar,
+                    "inside the collision"),
+              1U);
+}
+
+TEST(Validation, SensorRateClashOffersTheNearestRateThatLinesUp) {
+    // QA4 M2: a 151 ms IMU beside the rover's 10 Hz lidar lines up every 15.1 s: the IMU gets
+    // the usual rate nearest its 6.6 Hz that lines up with every other sensor (5 Hz would meet
+    // the 67 ms camera only every 13.4 s; 10 Hz, 100 ms, does).
+    Document document = rover();
+    Sensor imu;
+    imu.name = "imu2";
+    imu.type = "imu";
+    imu.link = "base_link";
+    imu.updateRate = 1000.0 / 151.0;
+    document.sensors.push_back(imu);
+    auto problems = validate(document, &realCatalog(), {});
+    EXPECT_EQ(count(problems, Level::Error, "imu2", "every 15.1 s"), 1U) << dump(problems);
+    EXPECT_EQ(count(problems, Level::Error, "imu2", "set 'imu2''s update rate to 10 Hz"), 1U)
+        << dump(problems);
+    findSensor(document, "imu2")->updateRate = 10.0;
+    problems = validate(document, &realCatalog(), {});
+    EXPECT_EQ(count(problems, Level::Error, "imu2", "line up only"), 0U) << dump(problems);
 }
 // QA F8: a part of a tonne or more from its shapes is a size to check.
 TEST(Validation, WarnsOnAnImplausiblyHeavyPart) {

@@ -17,6 +17,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -57,6 +58,23 @@ const ImVec4 kLidarAttenuated = theme::hex(0x2A8F76);
 constexpr float kLidarStrongIntensity = 0.12F;
 
 using Clock = std::chrono::steady_clock;
+
+/// SIGTERM or SIGINT arrived (QA4 L2): the frame loop ends as when the window closes, so the
+/// Builder's test server and every other child is stopped by the destructors, not orphaned.
+volatile std::sig_atomic_t gStopSignal = 0;
+
+extern "C" void onStopSignal(int /*signal*/) {
+    gStopSignal = 1;
+}
+
+/// Installs onStopSignal for SIGTERM and SIGINT (after SDL_Init, which may install its own).
+void catchStopSignals() {
+    struct sigaction action{};
+    action.sa_handler = onStopSignal;
+    sigemptyset(&action.sa_mask);
+    ::sigaction(SIGTERM, &action, nullptr);
+    ::sigaction(SIGINT, &action, nullptr);
+}
 
 /// Frame-time breakdown for LAGRANGE_VIEWER_PROFILE=1: per stage, the median and the 95th
 /// percentile over the frames since the scene arrived, printed to stderr at the end (headless)
@@ -1681,6 +1699,18 @@ public:
     void builderSaveAsChosen(const std::string& path) { builderHost_.saveAsChosen(path); }
     /// The Save as… dialog closed without a choice.
     void builderSaveAsCancelled() { builderHost_.saveAsCancelled(); }
+    /// The window is asked to close (QA4 M1): true when it may close now; else the Builder is
+    /// shown with its unsaved-changes prompt, and takeBuilderClose() says when it was answered.
+    [[nodiscard]] bool builderMayClose() {
+        if (builderHost_.requestClose()) {
+            return true;
+        }
+        if (!launcherActive()) {
+            setWorkspace(Workspace::Builder);  // where the prompt is drawn
+        }
+        return false;
+    }
+    [[nodiscard]] bool takeBuilderClose() { return builderHost_.takeClose(); }
     /// Headless `--input N:template:NAME`: a click on that template card.
     void builderTemplateRequest(const std::string& name) {
         builderSession_.templateRequested = true;
@@ -2418,7 +2448,17 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             return false;
         };
         double lastFrameMs = 0.0;
+        catchStopSignals();
+        bool closed = false;  // `--input N:close`, as the window's close button
         while ((recording ? written : rendered) < wanted) {
+            if (gStopSignal != 0) {
+                std::fprintf(stderr, "lagrange_viewer: stopped by a signal\n");
+                break;
+            }
+            if (closed || ui.takeBuilderClose()) {
+                std::fprintf(stderr, "lagrange_viewer: closed at frame %u\n", rendered);
+                break;
+            }
             // With --open, wait for the requested file's scene, not the one served before it.
             const auto current = client.scene();
             // The launcher needs no scene: it is what is shown before connecting.
@@ -2448,6 +2488,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     }
                     if (event.frame == rendered && event.kind == "saveas") {
                         ui.builderSaveAsChosen(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "close" && ui.builderMayClose()) {
+                        closed = true;  // what the window's close button does (QA4 M1)
                     }
                     if (event.frame == rendered && event.kind == "template") {
                         ui.builderTemplateRequest(event.text);
@@ -2869,14 +2912,19 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         auto last = Clock::now();
         FrameProfile profile;
         auto profiled = last;
+        catchStopSignals();
         while (running) {
+            if (gStopSignal != 0) {
+                break;  // QA4 L2: the destructors stop the test server
+            }
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 ImGui_ImplSDL3_ProcessEvent(&event);
-                if (event.type == SDL_EVENT_QUIT ||
-                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                     event.window.windowID == SDL_GetWindowID(window))) {
-                    running = false;
+                if ((event.type == SDL_EVENT_QUIT ||
+                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                      event.window.windowID == SDL_GetWindowID(window))) &&
+                    ui.builderMayClose()) {
+                    running = false;  // QA4 M1: unsaved Builder edits ask first
                 }
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                     rebuild = true;
@@ -3091,6 +3139,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
             if (options.frames != 0 && ++presentedFrames >= options.frames) {
                 running = false;  // smoke-test mode
+            }
+            if (ui.takeBuilderClose()) {
+                running = false;  // the unsaved-changes prompt let the window close (QA4 M1)
             }
             const auto now = Clock::now();
             frameMs = std::chrono::duration<float, std::milli>(now - last).count();

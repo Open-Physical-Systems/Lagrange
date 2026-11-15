@@ -3,7 +3,7 @@
 // "Split into convex parts" (RFC 0016 Addendum A, choice 2): CoACD run as `lagrange bake` runs
 // it (lagrange_collision_bake's bake_urdf, same threshold and seed), as a child process polled
 // with waitpid(WNOHANG), so the UI thread never waits (CLAUDE.md §8). The parts are written
-// beside the robot's file in `<robot>_collision/`, as `<link>_0_<NNN>.obj`, and come back as
+// beside the robot's file in `<file stem>_collision/`, as `<link>_0_<NNN>.obj`, and come back as
 // absolute paths for setSplitParts (the URDF writer makes them relative on Save).
 //
 // CoACD is found as `lagrange bake` finds it: bake_urdf runs with the user's python3 and
@@ -37,10 +37,13 @@ struct SplitRequest {
 
 /// A robot or link name as the split's files use it (distinctFileName: no '/', no "..", no
 /// leading '.', and names that differ keep different files): the parts of link L are
-/// `splitFolderName(robot)/splitFileName(L)_0_<NNN>.obj` beside the robot's file.
+/// `splitFolderFor(robot file)/splitFileName(L)_0_<NNN>.obj` beside the robot's file.
 [[nodiscard]] std::string splitFileName(std::string_view name);
-/// `<splitFileName(robot)>_collision`: the folder of the parts beside the robot's file.
+/// `<splitFileName(robot)>_collision`: bake_urdf's folder of the parts for robot `robot`.
 [[nodiscard]] std::string splitFolderName(std::string_view robot);
+/// `<splitFileName(stem of robotFile)>_collision`: the folder of the parts beside the robot's
+/// file, named after the file (QA4 L9: robots of the same name in two files do not share it).
+[[nodiscard]] std::string splitFolderFor(const std::filesystem::path& robotFile);
 
 /// lib/lagrange_collision_bake/bake_urdf under $AMENT_PREFIX_PATH; nullopt when not installed.
 [[nodiscard]] std::optional<std::filesystem::path> findBakeProgram();

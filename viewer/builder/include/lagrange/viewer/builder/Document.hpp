@@ -121,7 +121,8 @@ inline constexpr std::string_view kNewRootLink = "base_link";
 inline constexpr std::array<double, 3> kNewRootBox{0.3, 0.2, 0.1};
 
 /// A new document (SPEC state 1): robot `robot`, one link `base_link` with one box shape of
-/// kNewRootBox, visual, collision and solid, no joints, no sensors.
+/// kNewRootBox, visual, collision and solid, of the first density preset (aluminium), no joints,
+/// no sensors.
 [[nodiscard]] Document newDocument(std::string robot = "robot");
 
 /// Finders by name; nullptr when there is none. Names are unique in a valid document; with

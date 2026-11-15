@@ -1,11 +1,13 @@
 // What a sensor needs before the server will start it (RFC 0016 QA F5), and sensor rates the
-// scheduler cannot line up (QA F10), from the sensor catalog's data: its `required` parameters,
-// its `requires` items and the sonar's `step_at_least`. validate() calls both.
+// scheduler cannot line up (QA F10; an error since QA4 M2, with the nearest rate that does), from
+// the sensor catalog's data: its `required` parameters, its `requires` items and the sonar's
+// `step_at_least`. validate() calls both.
 #include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -285,6 +287,35 @@ std::vector<Problem> checkSensorRates(const Document& document, const SensorCata
         }
         steps.push_back(std::move(step));
     }
+    // The nearest of the usual rates (by ratio) for `change` that lines up with every other
+    // sensor within the scheduler's limit; "" when its step is not its rate's (the sonar's
+    // ping) or none does.
+    const auto fixFor = [&steps](const Step& change) -> std::string {
+        if (!change.why.empty()) {
+            return {};
+        }
+        std::int64_t others = kPhysicsStep;
+        for (const Step& step : steps) {
+            if (step.sensor != change.sensor) {
+                others = together(others, step.ns);
+            }
+        }
+        constexpr std::array<double, 15> kUsual{1,   2,   5,   10,  20,  25,  40,  50,
+                                                100, 125, 200, 250, 400, 500, 1000};
+        std::vector<double> rates(kUsual.begin(), kUsual.end());
+        const double rate = change.sensor->updateRate;
+        std::ranges::sort(rates, {}, [rate](double r) { return std::abs(std::log(r / rate)); });
+        for (const double r : rates) {
+            const std::int64_t ns = periodOf(r, cameraType(change.sensor->type));
+            if (together(others, ns) > kMaxHyperperiod) {
+                continue;
+            }
+            char text[32];
+            std::snprintf(text, sizeof(text), "%g Hz", r);
+            return text;
+        }
+        return {};
+    };
     std::vector<Problem> out;
     // Every pair (and each against the 1 ms physics step, which divides any whole-ms step).
     std::set<const Sensor*> named;
@@ -300,15 +331,23 @@ std::vector<Problem> checkSensorRates(const Document& document, const SensorCata
             named.insert(b.sensor);
             char every[48];
             std::snprintf(every, sizeof(every), "%.6g s", static_cast<double>(both) * 1e-9);
+            // QA4 M2: the server refuses to start (IncommensurateSteps), so it is an error,
+            // with the nearest rate that lines up as the fix.
+            std::string fix =
+                ". Change one rate so that one period divides the other (or both "
+                "are multiples of a common one, such as 20 ms)";
+            if (const std::string rate = fixFor(b); !rate.empty()) {
+                fix = ": set " + inQuotes(b.sensor->name) + "'s update rate to " + rate;
+            } else if (const std::string other = fixFor(a); !other.empty()) {
+                fix = ": set " + inQuotes(a.sensor->name) + "'s update rate to " + other;
+            }
             out.push_back(
-                {Level::Warning, b.sensor->name,
+                {Level::Error, b.sensor->name,
                  "sensors " + inQuotes(a.sensor->name) + " (every " + duration(a.ns) + a.why +
                      ") and " + inQuotes(b.sensor->name) + " (every " + duration(b.ns) + b.why +
                      ") line up only every " +
                      (both == kForever ? std::string("few centuries") : std::string(every)) +
-                     "; the server refuses steps that repeat after more than 10 s. Change one "
-                     "rate so that one period divides the other (or both are multiples of a "
-                     "common one, such as 20 ms)"});
+                     "; the server refuses to start steps that repeat after more than 10 s" + fix});
         }
     }
     return out;

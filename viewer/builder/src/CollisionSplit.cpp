@@ -4,7 +4,8 @@
 // The split runs bake_urdf (`lagrange bake`) on a one-link URDF that names the mesh by its
 // absolute path, in a work folder beside the robot's file: bake_urdf writes the parts into
 // `<work>/<robot>_collision/<link>_0_<NNN>.obj` (already scaled, as lagrange_mesh_to_obj scales
-// them), and on success they are moved to `<robot dir>/<robot>_collision/`. Robot and link go
+// them), and on success they are moved to `<robot dir>/<file stem>_collision/` (QA4 L9: two
+// files of robots with the same name keep their parts apart). Robot and link go
 // into those paths as splitFileName() makes them (code review L3): never a '/', never "..".
 #include "lagrange/meshes/MeshImport.hpp"
 #include "lagrange/viewer/builder/CollisionSplit.hpp"
@@ -135,6 +136,10 @@ std::string splitFolderName(std::string_view robot) {
     return splitFileName(robot) + "_collision";
 }
 
+std::string splitFolderFor(const std::filesystem::path& robotFile) {
+    return splitFolderName(robotFile.stem().string());
+}
+
 std::optional<std::filesystem::path> findBakeProgram() {
     const char* prefixes = std::getenv("AMENT_PREFIX_PATH");  // NOLINT(concurrency-mt-unsafe)
     std::istringstream list(prefixes != nullptr ? prefixes : "");
@@ -170,7 +175,7 @@ struct CollisionSplit::Process {
     void finish() {
         const std::filesystem::path from = work / splitFolderName(request.robot);
         const std::filesystem::path to =
-            request.robotFile.parent_path() / splitFolderName(request.robot);
+            request.robotFile.parent_path() / splitFolderFor(request.robotFile);
         std::error_code failure;
         std::filesystem::create_directories(to, failure);
         if (failure) {

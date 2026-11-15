@@ -330,6 +330,43 @@ TEST(Overlay, ABatteryABusAndTwoMotorsAreValid) {
     EXPECT_EQ(addMotor(twice, "left_wheel_joint", -1, nullptr), "");
 }
 
+TEST(Overlay, ItsOwnUnitCommentsAreNotCommentsThatWouldBeLost) {
+    // QA4 L1: an overlay the builder saved reads back with no "comments ... not kept" note.
+    const Document document = poweredRover();
+    const std::string text = writeOverlay(document);
+    ASSERT_NE(text.find("  # "), std::string::npos) << text;
+    Document again = urdf(kTestDir / "rover_mk1.urdf");
+    const OverlayReadResult read = readOverlay(text, again);
+    ASSERT_TRUE(read.ok) << read.error;
+    EXPECT_TRUE(read.notes.empty()) << read.notes.front();
+    // A comment of the user's after the header still is.
+    std::string edited = text;
+    edited.insert(edited.find("\n", edited.find("elec:windingResistance")), "  # measured");
+    Document third = urdf(kTestDir / "rover_mk1.urdf");
+    const OverlayReadResult noted = readOverlay(edited, third);
+    ASSERT_TRUE(noted.ok) << noted.error;
+    ASSERT_EQ(noted.notes.size(), 1U);
+    EXPECT_NE(noted.notes.front().find("comments after the file's header"), std::string::npos);
+}
+
+TEST(Overlay, ItsHeaderNamesTheSavedFiles) {
+    // QA4 L7: the header names the file saved, not <robot>.urdf; a Save as… renames it.
+    Document document = poweredRover();
+    OverlayWriteOptions options;
+    options.savedAt = "/robots/my_rover.urdf";
+    const std::string text = writeOverlay(document, options);
+    EXPECT_NE(text.find("--robot my_rover.urdf --overlay my_rover.overlay.yaml"), std::string::npos)
+        << text;
+    Document again = urdf(kTestDir / "rover_mk1.urdf");
+    ASSERT_TRUE(readOverlay(text, again).ok);
+    options.savedAt = "/robots/other.urdf";
+    EXPECT_NE(writeOverlay(again, options).find("--robot other.urdf --overlay other.overlay.yaml"),
+              std::string::npos);
+    // A header the user wrote is kept as written.
+    again.overlay.header = "# my notes\n";
+    EXPECT_TRUE(writeOverlay(again, options).starts_with("# my notes\nschema_version: 1"));
+}
+
 TEST(Overlay, ValidationRules) {
     {
         // A motor on a fixed joint.

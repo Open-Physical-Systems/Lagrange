@@ -1,4 +1,5 @@
 #include "lagrange/viewer/builder/Document.hpp"
+#include "lagrange/viewer/builder/Materials.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -25,6 +26,9 @@ Document newDocument(std::string robot) {
     box.kind = Shape::Kind::Box;
     box.size = kNewRootBox;
     root.shapes.push_back(box);
+    // QA4 L3: valid from the start, its mass from the first material preset's density (the Add
+    // panel's first choice) rather than none.
+    root.inertial.density = densityPresets().front().density;
     document.links.push_back(std::move(root));
     return document;
 }

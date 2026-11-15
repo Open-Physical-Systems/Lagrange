@@ -715,11 +715,11 @@ std::filesystem::path fakeBake(const std::filesystem::path& dir) {
 
 /// Runs one split to its end; the parts, or empty with the reason in `error`.
 std::vector<std::string> split(const std::filesystem::path& dir, const std::string& robot,
-                               const std::string& link, std::string& error) {
+                               const std::string& link, std::string& error, std::string file = {}) {
     builder::CollisionSplit run;
     builder::SplitRequest request;
     request.program = fakeBake(dir).string();
-    request.robotFile = dir / "robot.urdf";
+    request.robotFile = dir / (file.empty() ? builder::splitFileName(robot) + ".urdf" : file);
     request.robot = robot;
     request.link = link;
     request.mesh = "part.obj";
@@ -759,6 +759,24 @@ TEST(CollisionSplitNames, OneLinksPartsNeverTakeAwayOthers) {
             EXPECT_TRUE(std::filesystem::exists(part)) << part;
             EXPECT_EQ(std::filesystem::path(part).parent_path(), dir / "rover_collision");
         }
+    }
+}
+
+TEST(CollisionSplitNames, SameNamedRobotsInTwoFilesKeepTheirOwnParts) {
+    // QA4 L9: the parts' folder is named after the robot's file, not the robot, so two files of
+    // robots both named "robot" do not overwrite each other's parts.
+    const auto dir = scratch("split_files");
+    std::ofstream(dir / "part.obj") << "v 0 0 0\n";
+    std::string error;
+    const auto first = split(dir, "robot", "arm", error, "first.urdf");
+    ASSERT_EQ(first.size(), 2U) << error;
+    const auto second = split(dir, "robot", "arm", error, "second.urdf");
+    ASSERT_EQ(second.size(), 2U) << error;
+    EXPECT_EQ(std::filesystem::path(first.front()).parent_path(), dir / "first_collision");
+    EXPECT_EQ(std::filesystem::path(second.front()).parent_path(), dir / "second_collision");
+    EXPECT_EQ(builder::splitFolderFor(dir / "first.urdf"), "first_collision");
+    for (const auto& part : first) {
+        EXPECT_TRUE(std::filesystem::exists(part)) << part;
     }
 }
 

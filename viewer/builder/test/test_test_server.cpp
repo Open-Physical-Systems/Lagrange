@@ -209,3 +209,47 @@ TEST(ChildProcess, ALogLinkIsNotWrittenThrough) {
         std::filesystem::status(scratch / "plain.log").permissions() & std::filesystem::perms::all,
         std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
 }
+
+TEST(ChildProcess, DiesWithTheViewer) {
+    // QA4 L2: a viewer killed (or crashed) does not leave its test server running: the child
+    // asked for SIGTERM when its parent dies. The "viewer" here is a forked process that starts
+    // the child and exits at once, without its destructors.
+    Scratch scratch;
+    const auto pidFile = scratch / "child.pid";
+    const pid_t viewer = ::fork();
+    ASSERT_GE(viewer, 0);
+    if (viewer == 0) {
+        auto* child = new ChildProcess();  // NOLINT(cppcoreguidelines-owning-memory): never freed
+        const std::string script = "echo $$ > " + pidFile.string() + "; exec sleep 30";
+        if (!child->start({"/bin/sh", "-c", script}, scratch / "child.log").empty()) {
+            ::_exit(2);
+        }
+        for (int i = 0; i < 500 && !std::filesystem::exists(pidFile); ++i) {
+            std::this_thread::sleep_for(10ms);
+        }
+        std::this_thread::sleep_for(100ms);  // the pid written in full
+        ::_exit(0);
+    }
+    int status = 0;
+    ASSERT_EQ(::waitpid(viewer, &status, 0), viewer);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    pid_t child = -1;
+    std::ifstream(pidFile) >> child;
+    ASSERT_GT(child, 0);
+    // Gone (or a zombie waiting for init) within a few seconds, not after sleep's 30 s.
+    const auto running = [child] {
+        std::ifstream stat("/proc/" + std::to_string(child) + "/stat");
+        std::string pid;
+        std::string name;
+        std::string state;
+        return static_cast<bool>(stat >> pid >> name >> state) && state != "Z";
+    };
+    const auto start = Clock::now();
+    while (running() && Clock::now() - start < 5s) {
+        std::this_thread::sleep_for(20ms);
+    }
+    EXPECT_FALSE(running()) << "the child outlived its parent";
+    if (running()) {
+        ::kill(child, SIGKILL);
+    }
+}

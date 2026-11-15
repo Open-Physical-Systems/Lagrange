@@ -65,10 +65,12 @@ struct AddedLink {
 [[nodiscard]] AddedLink addLink(Document& document, std::string_view parent, Shape::Kind kind,
                                 Joint::Type type, double density);
 
-/// Adds a sensor of `type` (a built-in type or a kind) on `link` at the link's origin, named
-/// after the type and made unique, with the update rate of the reader's default and no
-/// parameters (every parameter at its catalog default). Returns the name; empty when `link` is
-/// not a link of the document.
+/// Adds a sensor of `type` (a built-in type or a kind) on `link`, named after the type and made
+/// unique, with the update rate of the reader's default (an IMU 100 Hz) and no parameters
+/// (every parameter at its catalog default). It sits on the link's shapes, not inside them
+/// (QA4 M3): a camera on the front (+x) face, anything else on top (rotation ignored, as
+/// topOf); at the link's origin when the link has no primitive shape. Returns the name; empty when
+/// `link` is not a link of the document.
 [[nodiscard]] std::string addSensor(Document& document, std::string_view link,
                                     std::string_view type);
 
