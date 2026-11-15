@@ -33,6 +33,7 @@ find_package(lagrange_importers REQUIRED)
 find_package(lagrange_ros2_control REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
+find_package(console_bridge REQUIRED)
 find_package(tinyxml2 REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
@@ -111,6 +112,7 @@ target_link_libraries(
         lagrange_importers::lagrange_importers
         lagrange_ros2_control::lagrange_ros2_control
         urdfdom::urdfdom_model
+        console_bridge::console_bridge
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp
         mcap_vendor::mcap

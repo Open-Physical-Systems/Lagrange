@@ -341,12 +341,14 @@ void drawPanel(const FramePanel& panel, std::size_t scale, std::vector<std::uint
     const auto scaled = static_cast<double>(scale);
     for (std::size_t py = 0; py < panel.height * scale; ++py) {
         const double gy = (static_cast<double>(py) + 0.5) / scaled - 0.5;
-        const auto y0 = static_cast<std::size_t>(std::clamp(gy, 0.0, panel.height - 1.0));
+        const auto y0 =
+            static_cast<std::size_t>(std::clamp(gy, 0.0, static_cast<double>(panel.height) - 1.0));
         const std::size_t y1 = std::min(y0 + 1, panel.height - 1);
         const double fy = std::clamp(gy - static_cast<double>(y0), 0.0, 1.0);
         for (std::size_t px = 0; px < panel.width * scale; ++px) {
             const double gx = (static_cast<double>(px) + 0.5) / scaled - 0.5;
-            const auto x0 = static_cast<std::size_t>(std::clamp(gx, 0.0, panel.width - 1.0));
+            const auto x0 = static_cast<std::size_t>(
+                std::clamp(gx, 0.0, static_cast<double>(panel.width) - 1.0));
             const std::size_t x1 = std::min(x0 + 1, panel.width - 1);
             const double fx = std::clamp(gx - static_cast<double>(x0), 0.0, 1.0);
             const std::size_t at = 3 * ((top + panel.height * scale - 1 - py) * imageWidth + px);

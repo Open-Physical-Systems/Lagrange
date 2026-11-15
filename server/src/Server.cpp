@@ -2254,11 +2254,11 @@ struct Server::Impl {
             const Clock::time_point ticked = Clock::now();
             tickNs.push_back(nanosSince(tickStart, ticked));
             capture();
-            const Clock::time_point captured = Clock::now();
-            captureNs += nanosSince(ticked, captured);
+            const Clock::time_point capturedAt = Clock::now();
+            captureNs += nanosSince(ticked, capturedAt);
             record();
             const Clock::time_point recorded = Clock::now();
-            recordNs += nanosSince(captured, recorded);
+            recordNs += nanosSince(capturedAt, recorded);
             if (Status status = worldUpdate(false); !status.ok()) {
                 return status;
             }
@@ -2360,10 +2360,15 @@ struct Server::Impl {
         signals.set_generation(1);
         recordedId.assign(scheduler->bus().signalCount(), kNoIndex);
         std::vector<std::string> left;
+        std::vector<std::string> buffers;
         for (const v1::SignalInfo& info : full.catalog().signals()) {
             if (info.components() > options.recordMaxComponents) {
                 left.push_back(info.name());
                 continue;
+            }
+            if (isHandle(static_cast<SignalType>(std::max(0, static_cast<int>(info.type()) - 1)))) {
+                // In the catalog, so a replay declares it, but with no samples: a buffer.
+                buffers.push_back(info.name());
             }
             recordedId[info.id()] = static_cast<std::uint32_t>(signals.signals_size());
             v1::SignalInfo& kept = *signals.add_signals();
@@ -2398,6 +2403,12 @@ struct Server::Impl {
         for (const std::string& name : left) {
             log(v1::LOG_LEVEL_INFO, "recorder",
                 name + " is not recorded: larger than --record-max-components");
+        }
+        for (const std::string& name : buffers) {
+            log(v1::LOG_LEVEL_INFO, "recorder",
+                name +
+                    " is a buffer (an image or points) and is not recorded: a replay of this "
+                    "file shows no frame for it");
         }
         return {};
     }
@@ -5144,7 +5155,9 @@ struct Server::Impl {
                              bool overlayTemporary = false) {
         using ros2::SimResult;
         const auto refuse = [&](SimResult code, std::string message) {
-            Spawned{.path = path,
+            Spawned{.name = {},
+                    .path = path,
+                    .spawn = {},
                     .temporary = temporary,
                     .overlay = overlay,
                     .overlayTemporary = overlayTemporary}
@@ -5187,6 +5200,11 @@ struct Server::Impl {
                     base = "robot_" + base;
                 }
             }
+            if (!allowRenaming && nameTaken(base)) {
+                return refuse(SimResult::NameNotUnique,
+                              "an entity is already named " + base +
+                                  " (the file's own name): give another name or allow renaming");
+            }
             name = base;
             for (int n = 2; nameTaken(name); ++n) {
                 name = base + "_" + std::to_string(n);
@@ -5221,7 +5239,22 @@ struct Server::Impl {
     /// carries: the path for a file, the robot's scene path ("/name") for content.
     /// Server::commandJoint with its reason: empty when the joint takes the command, else why
     /// not, in one line.
-    std::string commandJoint(const std::string& joint, const std::string& mode, double value) {
+    /// Server::commandJointChecked: a refusal's reason, or the value taken, held within the
+    /// joint's limits from the robot file.
+    Server::JointCommandResult commandJointChecked(const std::string& joint,
+                                                   const std::string& mode, double value) {
+        Server::JointCommandResult out;
+        out.value = value;
+        out.refused = commandJoint(joint, mode, out.value, &out.limit);
+        out.clamped = out.refused.empty() && out.value != value;
+        return out;
+    }
+
+    /// `value` is held within the joint's limits (a velocity within its velocity limit, a
+    /// position within its range, an effort within its effort limit, when the robot file gives
+    /// them); `limit`, when given, says which limit held it.
+    std::string commandJoint(const std::string& joint, const std::string& mode, double& value,
+                             std::string* limit = nullptr) {
         // A joint that copies another takes no commands, and a motor only what its mode follows.
         const World::Joints& joints = robot.world.joints;
         const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
@@ -5234,8 +5267,13 @@ struct Server::Impl {
         if (mode != "position" && mode != "velocity" && mode != "effort" && mode != "voltage") {
             return "no mode " + mode + ": position, velocity, effort or voltage";
         }
-        if (joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
+        const auto index = static_cast<std::size_t>(named - joints.names.begin());
+        if (joints.mimic[index] != kNoMimic) {
             return joint + " copies another joint (mimic): command that one";
+        }
+        if (!options.jointControl) {
+            return "joint control is off in this run: nothing takes joint commands "
+                   "(Simulation(..., joint_control=True), lagrange_server --joint-control)";
         }
         // The motor's mode (electrical::driveModes; none while the electrical domain is
         // substituted: then every joint takes torque).
@@ -5259,6 +5297,36 @@ struct Server::Impl {
         } else if (mode == "voltage") {
             // Joint control turns torque into the joint itself; volts would leave it limp.
             return joint + " has no motor in voltage mode: it takes position, velocity or effort";
+        }
+        const bool slide = joints.type[index] == JointType::Prismatic;
+        const auto number = [](double x) {
+            std::array<char, 32> text{};
+            std::snprintf(text.data(), text.size(), "%g", x);
+            return std::string(text.data());
+        };
+        const auto hold = [&](double low, double high, const std::string& what) {
+            if (value < low || value > high) {
+                value = std::clamp(value, low, high);
+                if (limit != nullptr) {
+                    *limit = what;
+                }
+            }
+        };
+        if (mode == "velocity" && std::isfinite(joints.velocityLimit[index]) &&
+            joints.velocityLimit[index] > 0.0) {
+            const double v = joints.velocityLimit[index];
+            hold(-v, v, "its velocity limit, " + number(v) + (slide ? " m/s" : " rad/s"));
+        } else if (mode == "effort" && std::isfinite(joints.effortLimit[index]) &&
+                   joints.effortLimit[index] > 0.0) {
+            const double e = joints.effortLimit[index];
+            hold(-e, e, "its effort limit, " + number(e) + (slide ? " N" : " N·m"));
+        } else if (mode == "position" && (joints.type[index] == JointType::Revolute || slide) &&
+                   std::isfinite(joints.lowerLimit[index]) &&
+                   std::isfinite(joints.upperLimit[index]) &&
+                   joints.lowerLimit[index] < joints.upperLimit[index]) {
+            hold(joints.lowerLimit[index], joints.upperLimit[index],
+                 "its range, " + number(joints.lowerLimit[index]) + " to " +
+                     number(joints.upperLimit[index]) + (slide ? " m" : " rad"));
         }
         JointTarget target;
         target.value = value;
@@ -5293,7 +5361,8 @@ struct Server::Impl {
                    " takes no commands: it is fixed, or of a passive robot (only the robot ROS "
                    "drives takes joint commands)";
         }
-        return commandJoint(request.joint(), request.mode(), request.value());
+        double value = request.value();
+        return commandJoint(request.joint(), request.mode(), value);
     }
 
     Expected<std::string, std::string> importRobot(const v1::ImportRobot& request) {
@@ -7441,7 +7510,9 @@ public:
         std::string path;
         bool temporary = false;
         std::string name = request.name;
-        bool allowRenaming = request.allowRenaming || request.name.empty();
+        // An empty name is the file's own (simulation_interfaces SpawnEntity): renamed on a clash
+        // only when allow_renaming says so.
+        const bool allowRenaming = request.allowRenaming;
         if (!request.uri.empty()) {
             auto resolved =
                 meshes::resolveMeshUri(request.uri, std::filesystem::current_path().string());
@@ -7456,16 +7527,35 @@ public:
             }
             path = *written;
             temporary = true;
-            // Unnamed text is named by its own <robot name> (renamed on a clash), as the
-            // viewer's ImportRobot does, not after its temporary file.
+            // Unnamed text is named by its own <robot name>, as the viewer's ImportRobot does,
+            // not after its temporary file.
             if (name.empty()) {
                 name = modelNameOf(request.resource);
-                allowRenaming = true;
+                if (name.empty()) {
+                    if (!allowRenaming) {
+                        std::error_code ignored;
+                        std::filesystem::remove(path, ignored);
+                        return {{SimResult::NameInvalid,
+                                 "no name given and resource_string names none: give a name or "
+                                 "allow renaming"},
+                                ""};
+                    }
+                    name = "robot";
+                }
             }
         } else {
             return {{SimResult::NoResource, "give the robot file as uri or resource_string"}, ""};
         }
-        return s_.spawn(path, name, allowRenaming, at, temporary);
+        ros2::SpawnOutcome outcome = s_.spawn(path, name, allowRenaming, at, temporary);
+        if (temporary) {
+            // The text's temporary file means nothing to the caller: it sent the text.
+            std::string& message = outcome.outcome.message;
+            for (std::size_t found = message.find(path); found != std::string::npos;
+                 found = message.find(path, found)) {
+                message.replace(found, path.size(), "resource_string");
+            }
+        }
+        return outcome;
     }
 
     ros2::SimOutcome remove(const std::string& name) override { return s_.remove(name); }
@@ -7903,12 +7993,18 @@ bool Server::commandJoint(const std::string& joint, const std::string& mode, dou
     return impl_->commandJoint(joint, mode, value).empty();
 }
 
+Server::JointCommandResult Server::commandJointChecked(const std::string& joint,
+                                                       const std::string& mode, double value) {
+    return impl_->commandJointChecked(joint, mode, value);
+}
+
 Expected<std::string, Status> Server::spawnRobot(const std::string& path, const std::string& name,
                                                  const Pose& spawn) {
     if (!impl_->scheduler) {
         return Unexpected{Status::error(StatusCode::Internal, "spawnRobot() before load()")};
     }
-    const ros2::SpawnOutcome outcome = impl_->spawn(path, name, false, spawn, false);
+    // Without a name, the file's (numbered on a clash); a given name must be free.
+    const ros2::SpawnOutcome outcome = impl_->spawn(path, name, name.empty(), spawn, false);
     if (outcome.outcome.result != ros2::SimResult::Ok) {
         return Unexpected{Status::error(StatusCode::InvalidConfig, outcome.outcome.message)};
     }

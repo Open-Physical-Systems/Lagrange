@@ -131,6 +131,11 @@ TEST(Profile, RefusesWhatThisServerCannotRun) {
     ProfileCheck check = checkProfile(text, schema(), context());
     EXPECT_FALSE(check.valid);
     EXPECT_TRUE(hasIssue(check, "/domains/electrical/enabled")) << issues(check);
+    // It says why: the robot has no power system, and how to give it one (QA3 F5).
+    EXPECT_NE(issues(check).find("the robot has no power system"), std::string::npos)
+        << issues(check);
+    EXPECT_NE(issues(check).find("--overlay"), std::string::npos) << issues(check);
+    EXPECT_EQ(issues(check).find("no module in this server"), std::string::npos) << issues(check);
     // A substitute that does not exist for the domain here.
     check = checkProfile(profile("{enabled: false, substitute: replay, source: run.mcap}"),
                          schema(), context());

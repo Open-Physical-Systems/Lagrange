@@ -65,6 +65,29 @@ def test_times_and_poses_that_are_not_finite_are_refused() -> None:
     assert all(math.isfinite(x) for x in sim.read("body/base_link/pose"))
 
 
+def test_command_joint_says_why_and_what_it_clamped() -> None:
+    # QA3 F8: a refusal was a bare False and a velocity of 1e9 was taken silently.
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None, joint_control=True)
+    missing = sim.command_joint("no_such_joint", "velocity", 1.0)
+    assert not missing
+    assert "no joint no_such_joint" in missing.reason
+    nan = sim.command_joint("left_wheel_joint", "velocity", math.nan)
+    assert "not a finite number" in nan.reason
+    with pytest.raises(ValueError, match="no mode"):
+        sim.command_joint("left_wheel_joint", "speed", 1.0, strict=True)
+    taken = sim.command_joint("left_wheel_joint", "velocity", 1.0)
+    assert taken and taken.taken and not taken.clamped and taken.value == 1.0
+    assert taken.reason == ""
+    fast = sim.command_joint("left_wheel_joint", "velocity", 1e9)
+    assert fast, fast.reason
+    assert fast.clamped
+    assert 0.0 < fast.value < 1e9
+    assert "velocity limit" in fast.limit
+    assert "clamped" in repr(fast)
+    off = lagrange.Simulation(lagrange.sample_robot(), world=None)
+    assert "joint control is off" in off.command_joint("left_wheel_joint", "velocity", 1.0).reason
+
+
 def test_world_queries() -> None:
     sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
     assert "base_link" in sim.bodies()

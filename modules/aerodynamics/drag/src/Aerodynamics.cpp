@@ -746,8 +746,8 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             air[k] += wake[k];
         }
         // Drag in the body frame: −½·ρ·|v|·(Cd ∘ A ∘ v), v the link's velocity through the air.
-        const Vec3 relative{velocity[0] - air[0], velocity[1] - air[1], velocity[2] - air[2]};
-        const Vec3 local = rotate(conjugate(q), relative);
+        const Vec3 through{velocity[0] - air[0], velocity[1] - air[1], velocity[2] - air[2]};
+        const Vec3 local = rotate(conjugate(q), through);
         const double speed = std::hypot(local[0], local[1], local[2]);
         Vec3 force{};
         for (std::size_t k = 0; k < 3; ++k) {

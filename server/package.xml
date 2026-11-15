@@ -42,6 +42,7 @@
   <depend>lagrange_ros2_control</depend>
   <depend>rclcpp</depend>
   <depend>urdfdom</depend>
+  <depend>libconsole-bridge-dev</depend>
   <depend>tinyxml2</depend>
   <depend>ament_index_cpp</depend>
   <test_depend>sensor_msgs</test_depend>

@@ -16,6 +16,54 @@ namespace lagrange::server {
 
 namespace {
 
+/// Why a domain the profile enables cannot run here, and what to do: most domains have a module
+/// in this server but nothing to run on in this robot and world (QA3 F5: a power profile on a
+/// robot without its overlay).
+std::string whyNotRunnable(const std::string& domain) {
+    static const std::map<std::string, std::string, std::less<>> kNeeds{
+        {"electrical",
+         "the robot has no power system (no motors or battery: ElectricalMotorAPI_1, "
+         "BatteryAPI_1); give its power-system overlay (--overlay FILE, a run file's overlay:, "
+         "Python Simulation(..., overlay=FILE)) or a robot file with one, or disable electrical "
+         "and name a substitute (ideal)"},
+        {"thermal",
+         "the robot has no thermal nodes or materials (ThermalAPI_1, ThermalMaterialAPI_1, or "
+         "an overlay's thermal entries); give them or disable thermal and name a substitute "
+         "(ambient)"},
+        {"sensors", "the robot has no sensors; disable sensors and name a substitute"},
+        {"rotor_aero",
+         "the robot has no rotors (RotorAPI_1, an overlay's rotors:); disable rotor_aero and "
+         "name a substitute"},
+        {"aerodynamics",
+         "nothing in the stage has drag (AeroAPI_1) or rotors; disable aerodynamics and name a "
+         "substitute (zero)"},
+        {"emi",
+         "the stage has no EMI sources or victims (EmiSourceAPI_1, EmiSusceptibilityAPI_1, "
+         "--emi-motor-leads); disable emi and name a substitute (zero)"},
+        {"comms",
+         "the robot has no radio links or CAN buses (RadioLinkAPI_1, CanBusAPI_1); disable "
+         "comms and name a substitute (ideal)"},
+        {"vehicle_dynamics",
+         "the robot is not a road vehicle (VehicleAPI_1); disable vehicle_dynamics and name a "
+         "substitute"},
+        {"traffic",
+         "the world has no traffic (a world with RoadLaneAPI_1 lanes, --traffic); disable "
+         "traffic and name a substitute"},
+        {"humans",
+         "the stage has no people (HumanAPI_1, --humans); disable humans and name a substitute"},
+        {"hydrodynamics",
+         "the stage has no water (WaterAPI_1, --water); disable hydrodynamics and name a "
+         "substitute"},
+        {"tether",
+         "the stage has no tethers (TetherAPI_1, --tether); disable tether and name a "
+         "substitute (zero)"},
+    };
+    if (const auto found = kNeeds.find(domain); found != kNeeds.end()) {
+        return domain + " cannot run here: " + found->second;
+    }
+    return domain + " has no module in this server yet; disable it and name a substitute";
+}
+
 namespace jsonschema = jsoncons::jsonschema;
 
 constexpr double kNsPerS = 1e9;
@@ -301,10 +349,7 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             }
             if (enabled) {
                 if (!context.modules.contains(name)) {
-                    error(check, at + "/enabled",
-                          name +
-                              " has no module in this server yet; disable it and name a "
-                              "substitute");
+                    error(check, at + "/enabled", whyNotRunnable(name));
                 }
                 if (name == "rigid_body" && domain.contains("backend")) {
                     const std::string backend = domain["backend"].as<std::string>();

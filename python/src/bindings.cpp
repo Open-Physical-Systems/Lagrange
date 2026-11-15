@@ -232,8 +232,15 @@ public:
                                  " has no numpy layout here");
     }
 
-    bool commandJoint(const std::string& joint, const std::string& mode, double value) {
-        return server_->commandJoint(joint, mode, value);
+    lagrange::server::Server::JointCommandResult commandJoint(const std::string& joint,
+                                                              const std::string& mode, double value,
+                                                              bool strict) {
+        lagrange::server::Server::JointCommandResult result =
+            server_->commandJointChecked(joint, mode, value);
+        if (strict && !result.taken()) {
+            throw std::invalid_argument(result.refused);
+        }
+        return result;
     }
 
     [[nodiscard]] nb::bytes saveState() const {
@@ -333,6 +340,33 @@ private:
 
 NB_MODULE(_lagrange, m) {
     m.doc() = "Lagrange simulator, headless (roadmap 0.2-H5)";
+    using JointCommand = lagrange::server::Server::JointCommandResult;
+    nb::class_<JointCommand>(m, "JointCommand",
+                             "What command_joint did: true when the joint took the command. "
+                             "reason says why not; value is what it took, clamped (then "
+                             "limit says by which limit) when the value asked was beyond the "
+                             "joint's velocity limit, effort limit or range.")
+        .def("__bool__", &JointCommand::taken)
+        .def_prop_ro("taken", &JointCommand::taken, "Whether the joint took the command.")
+        .def_ro("reason", &JointCommand::refused, "Why it was refused; empty when taken.")
+        .def_ro("value", &JointCommand::value,
+                "The value taken (rad, m, rad/s, m/s, N·m, N or V), within the joint's limits.")
+        .def_ro("clamped", &JointCommand::clamped,
+                "The value asked was beyond the joint's limit and was held at it.")
+        .def_ro("limit", &JointCommand::limit,
+                "The limit that held a clamped value, with its value; empty otherwise.")
+        .def("__repr__", [](const JointCommand& c) {
+            if (!c.taken()) {
+                return "JointCommand(refused: " + c.refused + ")";
+            }
+            std::ostringstream text;
+            text << "JointCommand(taken, value=" << c.value;
+            if (c.clamped) {
+                text << ", clamped to " << c.limit;
+            }
+            text << ")";
+            return text.str();
+        });
     nb::class_<Simulation>(m, "Simulation",
                            "A run without ROS or viewers, stepped from Python. The robot and "
                            "world are URDF, SDFormat, MJCF or USD files; overlay= adds a power "
@@ -354,14 +388,13 @@ NB_MODULE(_lagrange, m) {
         .def("delete", &Simulation::removeRobot, "name"_a, "Take a robot out of the run.")
         .def("step_until", &Simulation::stepUntil, "seconds"_a,
              "Advance to this simulated time (s), as fast as possible.")
-        .def(
-            "command_joint",
-            [](Simulation& sim, const std::string& joint, const std::string& mode, double value) {
-                return sim.commandJoint(joint, mode, value);
-            },
-            "joint"_a, "mode"_a, "value"_a,
-            "With joint_control=True: hold a joint at this position, velocity or effort. False "
-            "if it takes no such command.")
+        .def("command_joint", &Simulation::commandJoint, "joint"_a, "mode"_a, "value"_a,
+             "strict"_a = false,
+             "With joint_control=True: hold a joint at this position, velocity or effort. "
+             "Returns a JointCommand, false when the joint takes no such command (its reason "
+             "says why; strict=True raises ValueError with it instead); a value beyond the "
+             "joint's velocity limit, effort limit or range from the robot file is clamped to "
+             "it (clamped, value and limit say so).")
         .def("command_joints", &Simulation::commandJoints, "joints"_a, "mode"_a, "values"_a,
              "command_joint for each joint with its value, all in one mode, in one call. False "
              "if any of them takes no such command (the others still take theirs).")

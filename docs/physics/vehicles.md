@@ -88,6 +88,12 @@ controller: throttle from a PI on the speed error, brake when too fast, the stee
 the turn rate; with no command it drives a demo circle (5 m radius, 3 m/s) round the origin.
 When something holds the demo still for 2 s (a post at a corner, a stopped car of the traffic),
 it backs away for 3 s with the steering the other way round and tries again.
+The demo sees nothing: among traffic it can stand for 10 to 20 s at a time. A traffic car that
+has turned into the junction stops for the sedan when the sedan is in its lane ahead (traffic
+gives way to robots), while the sedan, held nose to nose by it, backs away along that same lane
+and so stays ahead of it; the car creeps on only as the sedan's retries take it out of the lane
+(measured in the city block: held from t ≈ 30 to 48 s). It is a demo, not a driver: give
+`/cmd_vel`, or `--traffic vehicles=0` for a circle nothing interrupts.
 
 ## Wheeled robots without a vehicle model
 

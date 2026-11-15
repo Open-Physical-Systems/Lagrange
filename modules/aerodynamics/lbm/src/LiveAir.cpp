@@ -89,8 +89,8 @@ LiveAir::Placement LiveAir::placementFor(const Vec3& centre) const {
     const LbmBoxConfig probe = configAt(false, 1.0);
     Placement p;
     // On the grid of cells, so a moved box's cells line up with the old one's.
-    p.origin = {std::round((centre[0] - 0.5 * probe.nx * dx) / dx) * dx,
-                std::round((centre[1] - 0.5 * probe.ny * dx) / dx) * dx,
+    p.origin = {std::round((centre[0] - 0.5 * static_cast<double>(probe.nx) * dx) / dx) * dx,
+                std::round((centre[1] - 0.5 * static_cast<double>(probe.ny) * dx) / dx) * dx,
                 std::round((centre[2] - settings_.below) / dx) * dx};
     if (hasGround_ && p.origin[2] < groundZ_ + kGroundSnap) {
         p.origin[2] = groundZ_;
@@ -227,7 +227,8 @@ bool LiveAir::contains(const Vec3& world) const {
     }
     const LbmBoxConfig& c = box_->config();
     const double dx = settings_.cell;
-    const std::array<double, 3> size{c.nx * dx, c.ny * dx, c.nz * dx};
+    const std::array<double, 3> size{static_cast<double>(c.nx) * dx, static_cast<double>(c.ny) * dx,
+                                     static_cast<double>(c.nz) * dx};
     for (std::size_t k = 0; k < 3; ++k) {
         const double local = world.at(k) - origin_.at(k);
         if (local < 0.0 || local > size.at(k)) {
