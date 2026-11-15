@@ -402,8 +402,13 @@ void SceneRenderer::uploadMeshes(const SceneStatics& statics) {
 void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
                            const RenderOptions& options,
                            std::span<const std::span<const OverlayLines>> overlayLists) {
-    if (frame != nullptr && frame->statics && frame->statics->generation != meshGeneration_) {
+    // Keyed on which statics, not only their generation: two scenes (the server's and the
+    // Builder's own document) count generations each from 1, and drawing one with the other's
+    // meshes puts every prim's mesh on another prim.
+    if (frame != nullptr && frame->statics &&
+        (frame->statics != meshStatics_.lock() || frame->statics->generation != meshGeneration_)) {
         uploadMeshes(*frame->statics);
+        meshStatics_ = frame->statics;
     }
     const VkExtent2D extent = color_.extent;
     const double aspect = static_cast<double>(extent.width) / extent.height;

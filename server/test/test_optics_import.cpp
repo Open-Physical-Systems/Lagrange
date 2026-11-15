@@ -252,6 +252,79 @@ TEST(OpticsImport, SdformatGivesTheUrdfRigsBeamsAndLens) {
     std::filesystem::remove(sdf);
 }
 
+// Sensors QA F1: sensors.md's 200° example (its cutoff 1.7453 rad a hair inside the half field
+// of view, 1.74535) imports to USD, reads back with the same lens and runs from both.
+TEST(OpticsImport, TheDocumentedFisheyeRunsFromUsdAsFromUrdf) {
+    const std::filesystem::path urdf =
+        std::filesystem::temp_directory_path() /
+        ("lagrange_fisheye_doc_" + std::to_string(::getpid()) + ".urdf");
+    std::ofstream(urdf) << R"(<?xml version="1.0"?><robot name="rig"><link name="world"/>
+<link name="head"><inertial><mass value="5"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0"
+iyz="0"/></inertial></link>
+<joint name="fix" type="fixed"><parent link="world"/><child link="head"/><origin xyz="0 0 1"/>
+</joint>
+<gazebo reference="head"><sensor name="fisheye" type="camera"><update_rate>10</update_rate>
+<camera><horizontal_fov>3.4907</horizontal_fov><image><width>64</width><height>64</height>
+</image><lens><type>equidistant</type><cutoff_angle>1.7453</cutoff_angle><k1>-0.013</k1>
+<k2>0.0042</k2><k3>-0.0011</k3><k4>0.0001</k4></lens></camera></sensor></gazebo></robot>)";
+    const auto fromUrdf = loadModel(urdf.string());
+    ASSERT_TRUE(fromUrdf) << fromUrdf.error();
+    const std::string usd = usdOf(urdf.string());
+    const auto fromUsd = loadModel(usd);
+    ASSERT_TRUE(fromUsd) << fromUsd.error();
+    const auto& a = settingsOf(*fromUrdf, "fisheye");
+    const auto& b = settingsOf(*fromUsd, "fisheye");
+    EXPECT_EQ(FisheyeLens::from(a).k, FisheyeLens::from(b).k);
+    EXPECT_EQ(FisheyeLens::from(a).cutoff, FisheyeLens::from(b).cutoff);
+    EXPECT_NEAR(b.at("horizontal_fov") / a.at("horizontal_fov"), 1.0, 1e-6);
+    for (const std::string& path : {urdf.string(), usd}) {
+        ServerOptions o;
+        o.robotPath = path;
+        o.worldPath.clear();
+        o.demoDrive = false;
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.cameras = false;
+        Server server(o);
+        const Status loaded = server.load();
+        EXPECT_TRUE(loaded.ok()) << path << ": " << loaded.message;
+    }
+    std::filesystem::remove(urdf);
+    std::filesystem::remove(usd);
+}
+
+// Sensors QA F7: a channel table with a word that is not a number was cut there, silently (one
+// channel of "-0.2 abc 0.3"); it refuses the file, from URDF and SDFormat alike.
+TEST(OpticsImport, AChannelTableThatIsNotNumbersIsRefused) {
+    const std::filesystem::path urdf = std::filesystem::temp_directory_path() /
+                                       ("lagrange_angles_" + std::to_string(::getpid()) + ".urdf");
+    std::ofstream(urdf) << R"(<?xml version="1.0"?><robot name="rig"><link name="head">
+<inertial><mass value="5"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+</link><gazebo reference="head"><sensor name="vlp" type="ray"><update_rate>10</update_rate><ray>
+<scan><horizontal><samples>8</samples></horizontal><vertical><samples>3</samples>
+<angles>-0.2 abc 0.3</angles></vertical></scan></ray></sensor></gazebo></robot>)";
+    const auto fromUrdf = loadModel(urdf.string());
+    ASSERT_FALSE(fromUrdf);
+    EXPECT_NE(fromUrdf.error().find("'-0.2 abc 0.3' is not a list of numbers"), std::string::npos)
+        << fromUrdf.error();
+    EXPECT_NE(fromUrdf.error().find("vlp"), std::string::npos) << fromUrdf.error();
+    const std::filesystem::path sdf = std::filesystem::temp_directory_path() /
+                                      ("lagrange_angles_" + std::to_string(::getpid()) + ".sdf");
+    std::ofstream(sdf) << R"(<?xml version="1.0"?>
+<sdf version="1.12" xmlns:lagrange="https://open-physical-systems.github.io/Lagrange">
+<model name="rig"><static>true</static><link name="head"><pose>0 0 1 0 0 0</pose>
+<sensor name="vlp" type="lidar"><update_rate>10</update_rate><lidar><scan><horizontal>
+<samples>8</samples></horizontal><vertical><samples>2</samples>
+<lagrange:angles>0.1 x</lagrange:angles></vertical></scan></lidar></sensor>
+</link></model></sdf>)";
+    const auto fromSdf = loadModel(sdf.string());
+    ASSERT_FALSE(fromSdf);
+    EXPECT_NE(fromSdf.error().find("is not a list of numbers"), std::string::npos)
+        << fromSdf.error();
+    std::filesystem::remove(urdf);
+    std::filesystem::remove(sdf);
+}
+
 TEST(OpticsImport, ARosetteLidarRunsAndSaysWhereItsBeamsWent) {
     const std::string path = opticsRig();
     ServerOptions o;

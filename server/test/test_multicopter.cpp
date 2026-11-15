@@ -16,6 +16,7 @@
 #include "lagrange/services/WrenchSum.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -681,6 +682,48 @@ TEST(Multicopter, ASecondQuadcopterSpawnedBesideItLeavesItFlying) {
     EXPECT_NEAR(flown - ground, 2.0, 0.3) << "the first hovers 2 m above its start";
     // The copy stays where it was put, its rotors still: robots after the first are passive.
     EXPECT_LT(server.read("body/q2_base_link/pose").at(2), ground + 0.2);
+}
+
+// Comparison measurements 2026-11-14 (docs/validation/comparison.md): with the electrical
+// domain off (`--domain electrical=off`, profile `substitute: ideal`) the quadcopter never took
+// off. The ideal torque source passes on the torque_command signals declared before it, and the
+// server added it before the multicopter controller, so the rotors got no torque at all. Then,
+// with the torque delivered exactly, the rotors' speed loops rang through the motors' reaction
+// on the frame at every step. Off, it hovers as with the motors, steadily.
+TEST(Multicopter, HoversWithTheElectricalDomainOff) {
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_QUAD_USDA;
+    o.worldPath.clear();
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    o.airDensityKgM3 = 1.225;
+    o.substituted.insert("electrical");
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    const double ground = server.read("body/base_link/pose").at(2);
+    EXPECT_TRUE(server.read("motor/rotor_1_motor/current_q").empty()) << "no motor model runs";
+    ASSERT_TRUE(server.stepUntil(SimTime{6'000'000'000}).ok());
+    EXPECT_NEAR(server.read("body/base_link/pose").at(2) - ground, 2.0, 0.05);
+    // Held, and steady from one step to the next: the commanded torque, delivered exactly, at
+    // the propeller's drag, the rotors at a hover's speed.
+    std::array<double, 4> torque{};
+    for (std::int64_t ms = 0; ms < 3; ++ms) {
+        ASSERT_TRUE(server.stepUntil(SimTime{8'000'000'000 + ms * 1'000'000}).ok());
+        EXPECT_NEAR(server.read("body/base_link/pose").at(2) - ground, 2.0, 0.05) << "holds";
+        EXPECT_LT(std::abs(server.read("body/base_link/twist").at(5)), 1e-3) << "no yaw";
+        for (std::size_t i = 0; i < 4; ++i) {
+            const std::string joint = "joint/rotor_" + std::to_string(i + 1) + "_joint/";
+            const double now = server.read(joint + "torque").at(0);
+            EXPECT_EQ(now, server.read(joint + "torque_command").at(0));
+            EXPECT_GT(std::abs(server.read(joint + "velocity").at(0)), 400.0);
+            if (ms > 0) {
+                EXPECT_NEAR(now, torque.at(i), 0.01 * std::abs(torque.at(i))) << joint;
+            }
+            torque.at(i) = now;
+        }
+    }
 }
 
 }  // namespace

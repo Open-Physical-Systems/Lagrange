@@ -32,6 +32,9 @@ struct ArduPilotSettings {
     double speedGain{0.02};               // N·m per rad/s of rotor speed error
     double airDensity{0.0};               // kg/m³, for the ESCs' feed-forward
     double frameTimeoutS{5.0};  // s of wall time to wait for a frame before giving up a step
+    // The electrical domain is off (its ideal torque source): the ESCs bound each rotor's torque
+    // command by its drive's and cut the speed gain to what the step allows (as Px4Settings).
+    bool idealMotors{false};
 };
 
 /// The UDP link to ArduPilot, kept across rebuilds of the run (as Px4Link).

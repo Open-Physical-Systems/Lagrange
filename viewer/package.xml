@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_viewer</name>
-  <version>1.3.0</version>
+  <version>1.4.0</version>
   <description>Lagrange viewer: a native Vulkan and Dear ImGui desktop application. It talks to a simulation only through the viewer protocol and links no simulation module.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -14,12 +14,28 @@
   <depend>lagrange_gpu</depend>
   <depend>imgui_vendor</depend>
   <depend>libsdl3-dev</depend>
+  <depend>tinyxml2</depend>
+  <depend>yaml-cpp</depend>
+  <depend>mcap_vendor</depend>
+  <depend>lagrange_meshes</depend>
+  <!-- The sensor catalog data file only (RFC 0016 §5, plan R11): no library is linked. -->
+  <build_depend>lagrange_sensors</build_depend>
+  <build_depend>lagrange_profiles</build_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>lagrange_assets</test_depend>
+  <!-- The builder's CoACD split and test_mesh_shapes run lagrange_collision_bake. -->
+  <test_depend>lagrange_collision_bake</test_depend>
+  <test_depend>lagrange_core</test_depend>
   <test_depend>lagrange_mock_server</test_depend>
   <test_depend>lagrange_server</test_depend>
   <test_depend>mesa-vulkan-drivers</test_depend>
+  <!-- test_ros2_tabs: a user stack beside the server (actions, robot_state_publisher). -->
+  <test_depend>control_msgs</test_depend>
+  <test_depend>example_interfaces</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>robot_state_publisher</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

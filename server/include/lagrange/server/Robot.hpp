@@ -78,12 +78,13 @@ void shiftRegion(Robot& robot, const std::array<double, 3>& shift);
 
 /// A robot from a URDF, an SDFormat or MJCF file (lagrange_importers, told apart by their root
 /// element) or a USD stage (.usd, .usda, .usdc: lagrange_stage), with the ground added unless
-/// the file has a ground plane of its own.
+/// the file has a floor of its own (hasOwnFloor: a plane, a height field or a level slab).
 [[nodiscard]] Expected<Robot, std::string> loadModel(const std::string& path,
                                                      const LoadOptions& options = {});
 
 /// Adds a second file to a loaded robot (the world's scenery, or another robot), in any of the
-/// formats loadModel reads. Its own ground plane is left out.
+/// formats loadModel reads. Its own ground plane is left out; a floor of its own other than a plane
+/// (a level slab, a height field) replaces the robot's ground plane and slab instead.
 [[nodiscard]] Expected<void, std::string> addModel(Robot& robot, const std::string& path,
                                                    const LoadOptions& options = {});
 

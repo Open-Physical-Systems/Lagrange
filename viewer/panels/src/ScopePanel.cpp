@@ -1,5 +1,6 @@
 // Signals workspace, centre: stacked plots with a linked time axis, cursors, a single-shot
 // trigger and CSV export (docs/design/ui/05-signals/SPEC.md).
+#include "PanelFormat.hpp"
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -106,19 +107,30 @@ public:
     }
 
 private:
+    /// SameLine with `spacing` when an item `width` wide still fits the row; else the item starts
+    /// the next row (the toolbar wraps in a narrow panel instead of cutting its buttons, QA3).
+    static void nextTo(float spacing, float width) {
+        const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        if (ImGui::GetItemRectMax().x + spacing + width <= right) {
+            ImGui::SameLine(0.0F, spacing);
+        }
+    }
+
     void toolbar(PanelContext& context, ScopeSession& session) {
         int mode = session.paused() ? 1 : 0;
         if (widgets::Segmented("##mode", kModes.data(), 2, &mode)) {
             session.setPaused(mode == 1);
         }
-        ImGui::SameLine(0.0F, px(12.0F));
+        // "window" and its choices stay together.
+        const float windowLabel = ImGui::CalcTextSize("window").x;
+        nextTo(px(12.0F), windowLabel + px(6.0F) + widgets::SegmentedWidth(kWindows.data(), 4));
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("window");
         ImGui::SameLine(0.0F, px(6.0F));
         widgets::Segmented("##window", kWindows.data(), 4, &session.window);
 
-        ImGui::SameLine(0.0F, px(12.0F));
         ImGui::BeginDisabled(session.traces().empty());
+        nextTo(px(12.0F), widgets::ButtonWidth("Trigger ..."));
         if (widgets::Button("Trigger ...")) {
             ImGui::OpenPopup("##trigger");
         }
@@ -135,17 +147,17 @@ private:
                 std::snprintf(text, sizeof(text), "fired at %.4f s",
                               static_cast<double>(trigger.firedNs) * 1e-9);
             }
-            ImGui::SameLine(0.0F, px(8.0F));
+            nextTo(px(8.0F), widgets::PillWidth(text));
             widgets::Pill(text,
                           trigger.armed ? widgets::PillKind::Accent : widgets::PillKind::Warn);
         }
 
-        ImGui::SameLine(0.0F, px(12.0F));
+        nextTo(px(12.0F), widgets::ButtonWidth("Cursors A·B"));
         if (widgets::Button("Cursors A·B", session.cursors ? widgets::ButtonKind::On
                                                            : widgets::ButtonKind::Default)) {
             session.showCursors(!session.cursors);
         }
-        ImGui::SameLine(0.0F, px(6.0F));
+        nextTo(px(6.0F), widgets::ButtonWidth("Export CSV"));
         if (widgets::Button("Export CSV")) {
             exportCsv(session);
         }
@@ -153,7 +165,11 @@ private:
         ImGui::EndDisabled();
         if (!exportMessage_.empty()) {
             ImGui::SameLine(0.0F, px(10.0F));
-            widgets::Mono(exportFailed_ ? c::error : c::t2, "%s", exportMessage_.c_str());
+            ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+            ImGui::PushStyleColor(ImGuiCol_Text, exportFailed_ ? c::error : c::t2);
+            fit::text(exportMessage_, ImGui::GetContentRegionAvail().x, true);
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
         }
         (void)context;
     }

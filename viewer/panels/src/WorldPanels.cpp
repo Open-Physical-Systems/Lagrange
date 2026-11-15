@@ -5,6 +5,7 @@
 // then converts to float pixels, so a point far from the origin does not jitter.
 #include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
+#include "lagrange/viewer/Geodesy.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
@@ -15,7 +16,10 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <imgui_internal.h>
+#include <initializer_list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -73,6 +77,100 @@ ImVec4 agentColor(const WorldInfo::Agent& agent) {
     return c::t1;
 }
 
+/// What the World panels share: the region picked in Regions (the map frames and marks it),
+/// and the map's cursor (Geodesy reads it out in latitude and longitude).
+struct WorldShared {
+    std::string selectedRegion;  // a region's name; empty for none
+    bool frameRequested{false};  // the map frames the selected region on its next draw
+    bool cursorValid{false};     // the map has been hovered
+    bool cursorLive{false};      // ... and is now
+    double cursorX{0.0};         // world ENU, metres
+    double cursorY{0.0};
+};
+
+/// A region as the panels show it: one the server reports, or, when it reports none, the one
+/// region its run is (`local`), around everything loaded.
+struct RegionView {
+    std::string name;
+    double minX{0.0};
+    double minY{0.0};
+    double maxX{0.0};
+    double maxY{0.0};
+    bool local{false};
+
+    [[nodiscard]] bool contains(double x, double y) const {
+        return x >= minX && x < maxX && y >= minY && y < maxY;
+    }
+};
+
+std::vector<RegionView> regionsOf(const WorldInfo& world) {
+    std::vector<RegionView> regions;
+    for (const WorldInfo::Region& region : world.regions) {
+        regions.push_back({region.name, region.minX, region.minY, region.maxX, region.maxY});
+    }
+    if (!regions.empty()) {
+        return regions;
+    }
+    // One server, one region: its extent is what it has loaded and where its agents are.
+    RegionView local{"this server", DBL_MAX, DBL_MAX, -DBL_MAX, -DBL_MAX, true};
+    const double tile = world.tileSizeM > 0.0 ? world.tileSizeM : 256.0;
+    for (const WorldInfo::Tile& loaded : world.tiles) {
+        local.minX = std::min(local.minX, loaded.x * tile);
+        local.minY = std::min(local.minY, loaded.y * tile);
+        local.maxX = std::max(local.maxX, (loaded.x + 1) * tile);
+        local.maxY = std::max(local.maxY, (loaded.y + 1) * tile);
+    }
+    for (const WorldInfo::Agent& agent : world.agents) {
+        const double r = std::max(agent.activeRadiusM, 1.0);
+        local.minX = std::min(local.minX, agent.x - r);
+        local.minY = std::min(local.minY, agent.y - r);
+        local.maxX = std::max(local.maxX, agent.x + r);
+        local.maxY = std::max(local.maxY, agent.y + r);
+    }
+    if (local.minX > local.maxX) {
+        local.minX = local.minY = -1.0;
+        local.maxX = local.maxY = 1.0;
+    }
+    regions.push_back(local);
+    return regions;
+}
+
+/// The name of the region an agent is in, or nullptr when the server reports no regions.
+const char* regionOfAgent(const WorldInfo& world, const WorldInfo::Agent& agent) {
+    for (const WorldInfo::Region& region : world.regions) {
+        if (agent.x >= region.minX && agent.x < region.maxX && agent.y >= region.minY &&
+            agent.y < region.maxY) {
+            return region.name.c_str();
+        }
+    }
+    return nullptr;
+}
+
+/// An agent's height in world ENU from its prim in the scene, when the scene has it.
+std::optional<double> agentUp(const PanelContext& context, const WorldInfo::Agent& agent) {
+    if (!context.scene || !context.scene->statics || agent.prim == kNone ||
+        agent.prim >= context.scene->transforms.size()) {
+        return std::nullopt;
+    }
+    return context.scene->transforms[agent.prim].position[2] + context.scene->statics->regionEnu[2];
+}
+
+std::optional<geodesy::Origin> geoOriginOf(const WorldInfo& world) {
+    if (!world.georeferenced) {
+        return std::nullopt;
+    }
+    return geodesy::Origin({world.latitudeDeg, world.longitudeDeg, world.heightM});
+}
+
+/// "1.2 km" or "850 m".
+void length(double metres, char* out, std::size_t size) {
+    if (std::abs(metres) >= 1000.0) {
+        std::snprintf(out, size, "%.2f km", metres / 1000.0);
+    } else {
+        std::snprintf(out, size, "%.0f m", metres);
+    }
+}
+
 void bytes(std::uint64_t value, char* out, std::size_t size) {
     const double megabytes = static_cast<double>(value) / (1024.0 * 1024.0);
     if (megabytes >= 1024.0) {
@@ -81,6 +179,84 @@ void bytes(std::uint64_t value, char* out, std::size_t size) {
         std::snprintf(out, size, "%.0f MB", megabytes);
     }
 }
+
+// --- scenery --------------------------------------------------------------------------------
+
+std::array<double, 3> rotated(const std::array<float, 4>& q, const std::array<double, 3>& v) {
+    // q = (w, x, y, z): v + 2w(u × v) + 2u × (u × v), u the vector part.
+    const double w = q[0];
+    const std::array<double, 3> u{q[1], q[2], q[3]};
+    const std::array<double, 3> t{2.0 * (u[1] * v[2] - u[2] * v[1]),
+                                  2.0 * (u[2] * v[0] - u[0] * v[2]),
+                                  2.0 * (u[0] * v[1] - u[1] * v[0])};
+    return {v[0] + w * t[0] + (u[1] * t[2] - u[2] * t[1]),
+            v[1] + w * t[1] + (u[2] * t[0] - u[0] * t[2]),
+            v[2] + w * t[2] + (u[0] * t[1] - u[1] * t[0])};
+}
+
+/// The outlines of the scene's collision shapes seen from above, for the map of a world that
+/// streams no tiles (it would be empty otherwise): each shape's box at its prim's pose now.
+/// Rebuilt when the scene changes; only the moving prims' poses are read each frame.
+class Scenery {
+public:
+    struct Outline {
+        std::uint32_t prim{kNone};                      // kNone: fixed in the region-local frame
+        std::array<std::array<double, 3>, 4> corner{};  // in the prim's frame, m
+    };
+
+    /// Shapes larger than this across are the ground or terrain: left out.
+    static constexpr double kMaxExtentM = 200.0;
+
+    void update(const SceneFrame& frame) {
+        if (!frame.statics || frame.statics->generation == generation_) {
+            return;
+        }
+        generation_ = frame.statics->generation;
+        outlines_.clear();
+        const SceneStatics& statics = *frame.statics;
+        for (const ColliderData& collider : statics.colliders) {
+            if (collider.mesh >= statics.meshes.size()) {
+                continue;
+            }
+            const std::array<float, 6>& box = statics.meshes[collider.mesh].aabb;
+            if (box[3] - box[0] > kMaxExtentM || box[4] - box[1] > kMaxExtentM) {
+                continue;
+            }
+            Outline outline;
+            outline.prim = collider.prim;
+            const double z = 0.5 * (box[2] + box[5]);
+            const std::array<std::array<double, 2>, 4> xy{
+                {{box[0], box[1]}, {box[3], box[1]}, {box[3], box[4]}, {box[0], box[4]}}};
+            for (std::size_t k = 0; k < 4; ++k) {
+                const std::array<double, 3> local =
+                    rotated(collider.rotation, {xy[k][0], xy[k][1], z});
+                outline.corner[k] = {local[0] + collider.position[0],
+                                     local[1] + collider.position[1],
+                                     local[2] + collider.position[2]};
+            }
+            outlines_.push_back(outline);
+        }
+    }
+
+    [[nodiscard]] const std::vector<Outline>& outlines() const { return outlines_; }
+
+    /// A corner in world ENU (the map's frame): through its prim's pose now, then the region.
+    static std::array<double, 2> world(const SceneFrame& frame, const Outline& outline,
+                                       std::size_t k) {
+        std::array<double, 3> p = outline.corner[k];
+        if (outline.prim != kNone && outline.prim < frame.transforms.size()) {
+            const Transform& t = frame.transforms[outline.prim];
+            const std::array<double, 3> r = rotated(t.rotation, p);
+            p = {r[0] + t.position[0], r[1] + t.position[1], r[2] + t.position[2]};
+        }
+        const std::array<double, 3>& region = frame.statics->regionEnu;
+        return {p[0] + region[0], p[1] + region[1]};
+    }
+
+private:
+    std::uint64_t generation_{0};
+    std::vector<Outline> outlines_;
+};
 
 // --- agents -------------------------------------------------------------------------------
 
@@ -142,8 +318,16 @@ public:
                           ImVec2(min.x + px(28.0F), min.y + px(8.0F)), u32(c::t1),
                           agent.name.c_str());
             char line[96];
-            std::snprintf(line, sizeof(line), "%s · %.1f m/s · %.0f m active", agent.kind.c_str(),
-                          agent.speed, agent.activeRadiusM);
+            if (const char* region = regionOfAgent(*world, agent)) {
+                std::snprintf(line, sizeof(line), "region %s · %s · %.1f m/s", region,
+                              agent.kind.c_str(), agent.speed);
+            } else if (agent.activeRadiusM > 0.0) {
+                std::snprintf(line, sizeof(line), "%s · %.1f m/s · %.0f m active",
+                              agent.kind.c_str(), agent.speed, agent.activeRadiusM);
+            } else {
+                // 0: no active region of its own (session.proto), not one of no size.
+                std::snprintf(line, sizeof(line), "%s · %.1f m/s", agent.kind.c_str(), agent.speed);
+            }
             draw->AddText(fonts.mono, px(theme::kCaptionSize),
                           ImVec2(min.x + px(28.0F), min.y + px(30.0F)), u32(c::t3), line);
             if (!agent.status.empty()) {
@@ -163,10 +347,197 @@ private:
     char filter_[96]{};
 };
 
+// --- regions ------------------------------------------------------------------------------
+
+class RegionsPanel final : public Panel {
+public:
+    explicit RegionsPanel(std::shared_ptr<WorldShared> shared) : shared_(std::move(shared)) {}
+
+    [[nodiscard]] const char* title() const override { return "Regions"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::World; }
+
+    void draw(PanelContext& context) override {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        const bool open = ImGui::Begin(title());
+        ImGui::PopStyleVar();
+        if (!open) {
+            ImGui::End();
+            return;
+        }
+        const ImVec2 top = ImGui::GetCursorPos();  // below the tab bar
+        ImGui::SetCursorPos(ImVec2(top.x + px(8.0F), top.y + px(6.0F)));
+        const std::shared_ptr<const WorldInfo> world = worldOrHint(context);
+        if (!world) {
+            ImGui::End();
+            return;
+        }
+        const std::vector<RegionView> regions = regionsOf(*world);
+        const std::optional<geodesy::Origin> geo = geoOriginOf(*world);
+        const double tile = world->tileSizeM > 0.0 ? world->tileSizeM : 256.0;
+        const theme::Fonts& fonts = theme::fonts();
+        ImGui::SetCursorPosY(top.y);
+        char text[128];
+        const RegionView* chosen = nullptr;
+        for (std::size_t i = 0; i < regions.size(); ++i) {
+            const RegionView& region = regions[i];
+            std::size_t agents = 0;
+            bool focus = false;
+            for (const WorldInfo::Agent& agent : world->agents) {
+                if (region.local || region.contains(agent.x, agent.y)) {
+                    ++agents;
+                    focus = focus || agent.focus;
+                }
+            }
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float height = px(52.0F);
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            const ImVec2 max(min.x + width, min.y + height);
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::InvisibleButton("##region", ImVec2(width, height))) {
+                shared_->selectedRegion = region.name;
+                shared_->frameRequested = true;
+            }
+            ImGui::PopID();
+            const bool selected = region.name == shared_->selectedRegion;
+            if (selected) {
+                chosen = &region;
+            }
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            if (selected) {
+                draw->AddRectFilled(min, max, u32(c::accentWeak));
+                draw->AddRectFilled(min, ImVec2(min.x + px(2.0F), max.y), u32(c::accent));
+            } else if (ImGui::IsItemHovered()) {
+                draw->AddRectFilled(min, max, u32(c::bg3));
+            }
+            draw->AddLine(ImVec2(min.x, max.y), max, u32(c::line));
+            // A small dashed square: a region's boundary as the map draws it.
+            const ImVec2 box(min.x + px(9.0F), min.y + px(11.0F));
+            const float side = px(10.0F);
+            for (float t = 0.0F; t < side; t += px(4.0F)) {
+                const float e = std::min(t + px(2.0F), side);
+                const ImU32 dash = u32(selected ? c::accent : c::t3);
+                draw->AddLine(ImVec2(box.x + t, box.y), ImVec2(box.x + e, box.y), dash);
+                draw->AddLine(ImVec2(box.x + t, box.y + side), ImVec2(box.x + e, box.y + side),
+                              dash);
+                draw->AddLine(ImVec2(box.x, box.y + t), ImVec2(box.x, box.y + e), dash);
+                draw->AddLine(ImVec2(box.x + side, box.y + t), ImVec2(box.x + side, box.y + e),
+                              dash);
+            }
+            draw->AddText(fonts.sansMedium, px(theme::kBodySize),
+                          ImVec2(min.x + px(28.0F), min.y + px(8.0F)), u32(c::t1),
+                          region.name.c_str());
+            char across[24];
+            char along[24];
+            length(region.maxX - region.minX, across, sizeof(across));
+            length(region.maxY - region.minY, along, sizeof(along));
+            std::size_t tiles = 0;
+            for (const WorldInfo::Tile& loaded : world->tiles) {
+                if (region.local ||
+                    region.contains((loaded.x + 0.5) * tile, (loaded.y + 0.5) * tile)) {
+                    ++tiles;
+                }
+            }
+            std::snprintf(text, sizeof(text), "%s × %s · %zu tiles%s", across, along, tiles,
+                          region.local ? " · one server" : "");
+            draw->AddText(fonts.mono, px(theme::kCaptionSize),
+                          ImVec2(min.x + px(28.0F), min.y + px(30.0F)), u32(c::t3), text);
+            std::snprintf(text, sizeof(text), "%zu agent%s", agents, agents == 1 ? "" : "s");
+            const float pill = widgets::PillWidth(text);
+            const ImVec2 after = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(ImVec2(max.x - pill - px(10.0F), min.y + px(8.0F)));
+            widgets::Pill(text, focus ? widgets::PillKind::Accent : widgets::PillKind::Neutral);
+            ImGui::SetCursorScreenPos(after);
+            ImGui::Dummy(ImVec2(0.0F, 0.0F));
+        }
+
+        // The picked region in detail (the first one until one is picked).
+        if (chosen == nullptr && !regions.empty()) {
+            chosen = &regions.front();
+        }
+        ImGui::Indent(px(8.0F));
+        if (chosen != nullptr &&
+            widgets::SectionHeader(chosen->name.c_str(), chosen->local ? "local" : "region")) {
+            const RegionView& region = *chosen;
+            std::snprintf(text, sizeof(text), "%+.1f … %+.1f", region.minX, region.maxX);
+            widgets::PropertyRow("east (x)", text, "m");
+            std::snprintf(text, sizeof(text), "%+.1f … %+.1f", region.minY, region.maxY);
+            widgets::PropertyRow("north (y)", text, "m");
+            const double cx = 0.5 * (region.minX + region.maxX);
+            const double cy = 0.5 * (region.minY + region.maxY);
+            std::snprintf(text, sizeof(text), "%+.1f, %+.1f", cx, cy);
+            widgets::PropertyRow("centre ENU", text, "m");
+            if (geo) {
+                const geodesy::Geodetic g = geo->toGeodetic({cx, cy, 0.0});
+                std::snprintf(text, sizeof(text), "%.6f, %.6f", g.latitudeDeg, g.longitudeDeg);
+                widgets::PropertyRow("centre lat, lon", text, "°");
+            }
+            std::array<std::uint32_t, 4> lods{};
+            for (const WorldInfo::Tile& loaded : world->tiles) {
+                if (region.local ||
+                    region.contains((loaded.x + 0.5) * tile, (loaded.y + 0.5) * tile)) {
+                    ++lods.at(std::min<std::size_t>(loaded.lod, 3));
+                }
+            }
+            std::snprintf(text, sizeof(text), "%u · %u · %u · %u", lods[0], lods[1], lods[2],
+                          lods[3]);
+            widgets::PropertyRow("tiles LOD0…3", text, nullptr);
+            if (region.local) {
+                widgets::PropertyRow("origin anchor",
+                                     world->anchor.empty() ? "-" : world->anchor.c_str(), nullptr);
+                std::snprintf(text, sizeof(text), "%+.1f, %+.1f", world->origin[0],
+                              world->origin[1]);
+                widgets::PropertyRow("region origin", text, "m");
+                std::snprintf(text, sizeof(text), "%llu",
+                              static_cast<unsigned long long>(world->recenters));
+                widgets::PropertyRow("re-centers", text, nullptr);
+            }
+            // Its agents: where each is, in world ENU.
+            std::size_t shown = 0;
+            for (const WorldInfo::Agent& agent : world->agents) {
+                if (!region.local && !region.contains(agent.x, agent.y)) {
+                    continue;
+                }
+                if (shown++ == kAgentRows) {
+                    break;
+                }
+                std::snprintf(text, sizeof(text), "%+.1f, %+.1f", agent.x, agent.y);
+                widgets::PropertyRow(agent.name.c_str(), text, "m");
+            }
+            if (shown > kAgentRows) {
+                widgets::Caption("and more: the Agents tab lists every one.");
+            }
+        }
+        if (widgets::SectionHeader("Handoff", "1 server today")) {
+            ImGui::PushTextWrapPos(0.0F);
+            if (world->regions.empty()) {
+                widgets::Caption(
+                    "This server runs its world as one region. Robots far apart run in "
+                    "regions of their own, each with its own origin, in headless runs; a "
+                    "viewer sees its server's region.");
+            } else {
+                std::snprintf(text, sizeof(text),
+                              "%zu region%s · boundaries ready for multi-server handoff",
+                              world->regions.size(), world->regions.size() == 1 ? "" : "s");
+                widgets::Caption("%s", text);
+            }
+            widgets::Caption("Distributed simulation is post-1.0.");
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::Unindent(px(8.0F));
+        ImGui::End();
+    }
+
+private:
+    static constexpr std::size_t kAgentRows = 12;  // agents listed under a region
+    std::shared_ptr<WorldShared> shared_;
+};
+
 // --- map ----------------------------------------------------------------------------------
 
 class MapPanel final : public Panel {
 public:
+    explicit MapPanel(std::shared_ptr<WorldShared> shared) : shared_(std::move(shared)) {}
+
     [[nodiscard]] const char* title() const override { return "Map"; }
     [[nodiscard]] Workspace workspace() const override { return Workspace::World; }
 
@@ -192,8 +563,14 @@ public:
             "##map", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
         const ImGuiIO& io = ImGui::GetIO();
         const double tile = world->tileSizeM > 0.0 ? world->tileSizeM : 256.0;
+        // The scenery's outlines, where no tiles are streamed (a world in one piece).
+        const bool drawScenery = world->tiles.empty() && context.scene != nullptr;
+        if (drawScenery) {
+            scenery_.update(*context.scene);
+        }
 
-        // First view: centred on the focus agent, wide enough for the loaded tiles.
+        // First view: centred on the focus agent, wide enough for the loaded tiles (or, for a
+        // world in one piece, for its scenery and agents).
         if (!framed_) {
             for (const WorldInfo::Agent& agent : world->agents) {
                 if (agent.focus) {
@@ -201,13 +578,42 @@ public:
                     centreY_ = agent.y;
                 }
             }
-            double extent = tile * 4.0;
+            double extent = world->tiles.empty() ? kMinExtentM : tile * 4.0;
             for (const WorldInfo::Tile& loaded : world->tiles) {
                 extent = std::max({extent, std::abs((loaded.x + 0.5) * tile - centreX_),
                                    std::abs((loaded.y + 0.5) * tile - centreY_)});
             }
+            if (drawScenery) {
+                for (const Scenery::Outline& outline : scenery_.outlines()) {
+                    for (std::size_t k = 0; k < 4; ++k) {
+                        const auto p = Scenery::world(*context.scene, outline, k);
+                        extent = std::max(
+                            {extent, std::abs(p[0] - centreX_), std::abs(p[1] - centreY_)});
+                    }
+                }
+                for (const WorldInfo::Agent& agent : world->agents) {
+                    extent = std::max(
+                        {extent, std::abs(agent.x - centreX_), std::abs(agent.y - centreY_)});
+                }
+                extent = std::min(extent, kMaxFrameM);
+            }
             metresPerPixel_ = (extent * 2.2) / std::max(std::min(size.x, size.y), 1.0F);
             framed_ = !world->tiles.empty() || !world->agents.empty();
+        }
+        // The region picked in the Regions tab: framed once, with a margin.
+        if (shared_->frameRequested) {
+            shared_->frameRequested = false;
+            for (const RegionView& region : regionsOf(*world)) {
+                if (region.name == shared_->selectedRegion) {
+                    centreX_ = 0.5 * (region.minX + region.maxX);
+                    centreY_ = 0.5 * (region.minY + region.maxY);
+                    const double across =
+                        std::max((region.maxX - region.minX) / std::max(size.x, 1.0F),
+                                 (region.maxY - region.minY) / std::max(size.y, 1.0F));
+                    metresPerPixel_ = std::clamp(across * 1.15, 0.01, 500.0);
+                    framed_ = true;
+                }
+            }
         }
         if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
                                       ImGui::IsMouseDragging(ImGuiMouseButton_Right))) {
@@ -247,6 +653,27 @@ public:
                                 ImVec2(min.x + tilePixels - 1.0F, min.y + tilePixels - 1.0F),
                                 u32(fill));
         }
+        // Scenery: each collision shape's outline from above, under the agents.
+        if (drawScenery) {
+            for (const Scenery::Outline& outline : scenery_.outlines()) {
+                std::array<ImVec2, 4> corners{};
+                bool visible = false;
+                for (std::size_t k = 0; k < 4; ++k) {
+                    const auto p = Scenery::world(*context.scene, outline, k);
+                    corners.at(k) = toScreen(p[0], p[1]);
+                    visible =
+                        visible ||
+                        (corners.at(k).x >= origin.x && corners.at(k).x <= origin.x + size.x &&
+                         corners.at(k).y >= origin.y && corners.at(k).y <= origin.y + size.y);
+                }
+                if (!visible) {
+                    continue;
+                }
+                draw->AddConvexPolyFilled(corners.data(), 4, u32(theme::hex(0x3A4E6E, 0.35F)));
+                draw->AddPolyline(corners.data(), 4, u32(theme::hex(0x6E7F98, 0.8F)),
+                                  ImDrawFlags_Closed, px(1.0F));
+            }
+        }
         // Regions: dashed outline with the name, ready for handoff between servers later.
         const theme::Fonts& fonts = theme::fonts();
         const float small = px(theme::kCaptionSize);
@@ -264,7 +691,25 @@ public:
             draw->AddText(fonts.mono, small, ImVec2(a.x + px(6.0F), a.y + px(4.0F)), u32(c::t3),
                           region.name.c_str());
         }
+        // The region picked in the Regions tab, marked in the accent.
+        if (!shared_->selectedRegion.empty()) {
+            for (const RegionView& region : regionsOf(*world)) {
+                if (region.name != shared_->selectedRegion) {
+                    continue;
+                }
+                const ImVec2 a = toScreen(region.minX, region.maxY);
+                const ImVec2 b = toScreen(region.maxX, region.minY);
+                draw->AddRectFilled(a, b, u32(theme::hex(0xE8772E, 0.06F)));
+                draw->AddRect(a, b, u32(c::accent), 0.0F, 0, px(1.5F));
+                if (region.local) {
+                    draw->AddText(fonts.mono, small, ImVec2(a.x + px(6.0F), a.y + px(4.0F)),
+                                  u32(c::accent), region.name.c_str());
+                }
+            }
+        }
         // Agents: active region, dot, label; a crosshair on the floating origin's anchor.
+        // Labels go after every dot (placeAgentLabels).
+        agentLabels_.clear();
         for (const WorldInfo::Agent& agent : world->agents) {
             const ImVec2 at = toScreen(agent.x, agent.y);
             const ImVec4 color = agentColor(agent);
@@ -279,12 +724,16 @@ public:
                 draw->AddLine(ImVec2(at.x, at.y - px(14.0F)), ImVec2(at.x, at.y + px(14.0F)),
                               u32(color));
             }
-            char label[96];
-            std::snprintf(label, sizeof(label), "%s%s", agent.name.c_str(),
-                          agent.name == world->anchor ? " · origin" : "");
-            draw->AddText(fonts.mono, small, ImVec2(at.x + px(10.0F), at.y - small - px(2.0F)),
-                          u32(color), label);
+            agentLabels_.push_back(
+                AgentLabel{agent.name + (agent.name == world->anchor ? " · origin" : ""), at,
+                           u32(color), agent.name == world->anchor});
         }
+        // Clear of the legend at the top right (drawn next) and the scale bar at the bottom left.
+        placeAgentLabels(draw, origin, size,
+                         {ImRect(ImVec2(origin.x + size.x - px(236.0F), origin.y),
+                                 ImVec2(origin.x + size.x, origin.y + px(150.0F))),
+                          ImRect(ImVec2(origin.x, origin.y + size.y - px(76.0F)),
+                                 ImVec2(origin.x + px(230.0F), origin.y + size.y))});
         draw->PopClipRect();
 
         // Legend with a count per tile state (design: top right).
@@ -335,12 +784,16 @@ public:
         draw->AddText(fonts.mono, px(theme::kMonoSize),
                       ImVec2(barAt.x + bar + px(8.0F), barAt.y - px(7.0F)), u32(c::t1), text);
 
-        // Cursor position in the world's ENU frame, and the tile under it.
-        if (ImGui::IsItemHovered()) {
+        // Cursor position in the world's ENU frame, and the tile under it; Geodesy reads it.
+        shared_->cursorLive = ImGui::IsItemHovered();
+        if (shared_->cursorLive) {
             const double x =
                 centreX_ + static_cast<double>(io.MousePos.x - middle.x) * metresPerPixel_;
             const double y =
                 centreY_ - static_cast<double>(io.MousePos.y - middle.y) * metresPerPixel_;
+            shared_->cursorValid = true;
+            shared_->cursorX = x;
+            shared_->cursorY = y;
             std::snprintf(text, sizeof(text), "cursor ENU  x %+.1f  y %+.1f m  ·  tile (%d, %d)", x,
                           y, static_cast<int>(std::floor(x / tile)),
                           static_cast<int>(std::floor(y / tile)));
@@ -363,10 +816,73 @@ public:
     }
 
 private:
+    static constexpr double kMinExtentM = 10.0;   // a small world still fills a sensible view
+    static constexpr double kMaxFrameM = 2000.0;  // the first view of a world in one piece
+    std::shared_ptr<WorldShared> shared_;
+    Scenery scenery_;
     double centreX_{0.0};  // world ENU of the middle of the view, metres
     double centreY_{0.0};
     double metresPerPixel_{4.0};
     bool framed_{false};
+
+    struct AgentLabel {
+        std::string text;
+        ImVec2 at;  // the agent's dot
+        ImU32 color{0};
+        bool anchor{false};
+    };
+    std::vector<AgentLabel> agentLabels_;
+
+    /// Each agent's name beside its dot (QA3 F7: labels ran into each other and out of the
+    /// map): the floating origin's anchor first, then the others; each at the first of four
+    /// places around its dot that is inside the map and clear of the labels already placed and
+    /// of `keepOut`; a name with no such place is left out (its dot stays, hovering it says
+    /// the name). On a dark box so that it reads over the scenery's outlines.
+    void placeAgentLabels(ImDrawList* draw, const ImVec2& origin, const ImVec2& size,
+                          std::initializer_list<ImRect> keepOut) {
+        ImFont* font = theme::fonts().mono;
+        const float small = px(theme::kCaptionSize);
+        const ImRect map(origin, ImVec2(origin.x + size.x, origin.y + size.y));
+        std::ranges::stable_partition(agentLabels_, &AgentLabel::anchor);
+        std::vector<ImRect> taken(keepOut);
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        for (const AgentLabel& label : agentLabels_) {
+            const ImVec2 extent = font->CalcTextSizeA(small, FLT_MAX, 0.0F, label.text.c_str());
+            const float pad = px(3.0F);
+            const float off = px(label.anchor ? 16.0F : 8.0F);  // past the anchor's crosshair
+            const std::array<ImVec2, 4> corners{{
+                {label.at.x + off, label.at.y - extent.y - px(4.0F)},
+                {label.at.x + off, label.at.y + px(4.0F)},
+                {label.at.x - off - extent.x, label.at.y - extent.y - px(4.0F)},
+                {label.at.x - off - extent.x, label.at.y + px(4.0F)},
+            }};
+            std::optional<ImRect> placed;
+            for (const ImVec2& corner : corners) {
+                const ImRect box(ImVec2(corner.x - pad, corner.y - px(1.0F)),
+                                 ImVec2(corner.x + extent.x + pad, corner.y + extent.y + px(1.0F)));
+                const bool inside = map.Contains(box);
+                const bool clear = std::ranges::none_of(
+                    taken, [&](const ImRect& other) { return other.Overlaps(box); });
+                if (inside && clear) {
+                    placed = box;
+                    break;
+                }
+            }
+            if (!placed) {
+                const float dx = mouse.x - label.at.x;
+                const float dy = mouse.y - label.at.y;
+                if (map.Contains(mouse) && dx * dx + dy * dy <= px(8.0F) * px(8.0F)) {
+                    ImGui::SetTooltip("%s", label.text.c_str());
+                }
+                continue;
+            }
+            taken.push_back(*placed);
+            draw->AddRectFilled(placed->Min, placed->Max, u32(theme::hex(0x091120, 0.85F)),
+                                px(2.0F));
+            draw->AddText(font, small, ImVec2(placed->Min.x + pad, placed->Min.y + px(1.0F)),
+                          label.color, label.text.c_str());
+        }
+    }
 };
 
 // --- streaming and geodesy ----------------------------------------------------------------
@@ -472,13 +988,185 @@ private:
     }
 };
 
+class GeodesyPanel final : public Panel {
+public:
+    explicit GeodesyPanel(std::shared_ptr<WorldShared> shared) : shared_(std::move(shared)) {}
+
+    [[nodiscard]] const char* title() const override { return "Geodesy"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::World; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        const std::shared_ptr<const WorldInfo> world = worldOrHint(context);
+        if (!world) {
+            ImGui::End();
+            return;
+        }
+        const std::optional<geodesy::Origin> geo = geoOriginOf(*world);
+        const double tile = world->tileSizeM > 0.0 ? world->tileSizeM : 256.0;
+        char text[128];
+        char unit[32];
+
+        if (widgets::SectionHeader("Datum", nullptr)) {
+            ImGui::Indent(px(8.0F));
+            widgets::PropertyRow("datum", "WGS84 → local ENU", nullptr);
+            std::snprintf(text, sizeof(text), "%.3f", geodesy::kSemiMajorAxisM);
+            widgets::PropertyRow("semi-major a", text, "m");
+            std::snprintf(text, sizeof(text), "%.9f", geodesy::kInverseFlattening);
+            widgets::PropertyRow("1 / f", text, nullptr);
+            widgets::PropertyRow("axes", "x east · y north · z up", nullptr);
+            ImGui::Unindent(px(8.0F));
+        }
+
+        if (widgets::SectionHeader("Geo origin", geo ? "stage" : "none")) {
+            ImGui::Indent(px(8.0F));
+            if (geo) {
+                const geodesy::Geodetic& g = geo->geodetic();
+                std::snprintf(text, sizeof(text), "%.7f", g.latitudeDeg);
+                widgets::PropertyRow("latitude", text, "°");
+                std::snprintf(text, sizeof(text), "%.7f", g.longitudeDeg);
+                widgets::PropertyRow("longitude", text, "°");
+                widgets::PropertyRow("lat · DMS", geodesy::dms(g.latitudeDeg, 'N', 'S').c_str(),
+                                     nullptr);
+                widgets::PropertyRow("lon · DMS", geodesy::dms(g.longitudeDeg, 'E', 'W').c_str(),
+                                     nullptr);
+                std::snprintf(text, sizeof(text), "%.2f", g.heightM);
+                widgets::PropertyRow("height", text, "m ellipsoid");
+                const std::string zone = geodesy::utmZone(g.latitudeDeg, g.longitudeDeg);
+                widgets::PropertyRow("UTM zone", zone.empty() ? "UPS (polar)" : zone.c_str(),
+                                     nullptr);
+                const geodesy::Ecef& e = geo->ecef();
+                std::snprintf(text, sizeof(text), "%.3f, %.3f, %.3f", e.x / 1000.0, e.y / 1000.0,
+                              e.z / 1000.0);
+                widgets::PropertyRow("ECEF", text, "km");
+                const std::array<double, 2> perDegree = geo->metresPerDegree();
+                std::snprintf(text, sizeof(text), "%.1f", perDegree[0]);
+                widgets::PropertyRow("1° latitude", text, "m");
+                std::snprintf(text, sizeof(text), "%.1f", perDegree[1]);
+                widgets::PropertyRow("1° longitude", text, "m");
+            } else {
+                ImGui::PushTextWrapPos(0.0F);
+                widgets::Caption(
+                    "This stage is not georeferenced: positions are metres in its own frame. "
+                    "Give it a place with --geo-origin LAT,LON,HEIGHT or the profile's "
+                    "world.geo_origin.");
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+
+        // Where the run's local frame is, in the world.
+        if (widgets::SectionHeader("Floating origin", nullptr)) {
+            ImGui::Indent(px(8.0F));
+            std::snprintf(text, sizeof(text), "%+.1f, %+.1f, %+.1f", world->origin[0],
+                          world->origin[1], world->origin[2]);
+            widgets::PropertyRow("origin ENU", text, "m");
+            if (geo) {
+                const geodesy::Geodetic g =
+                    geo->toGeodetic({world->origin[0], world->origin[1], world->origin[2]});
+                std::snprintf(text, sizeof(text), "%.7f, %.7f", g.latitudeDeg, g.longitudeDeg);
+                widgets::PropertyRow("origin lat, lon", text, "°");
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+
+        // The map's cursor: in the world's ENU, and on the Earth.
+        if (widgets::SectionHeader("Cursor",
+                                   shared_->cursorLive
+                                       ? "on the map"
+                                       : (shared_->cursorValid ? "last on the map" : nullptr))) {
+            ImGui::Indent(px(8.0F));
+            if (shared_->cursorValid) {
+                const double x = shared_->cursorX;
+                const double y = shared_->cursorY;
+                std::snprintf(text, sizeof(text), "%+.1f, %+.1f", x, y);
+                widgets::PropertyRow("ENU", text, "m");
+                std::snprintf(text, sizeof(text), "(%d, %d)",
+                              static_cast<int>(std::floor(x / tile)),
+                              static_cast<int>(std::floor(y / tile)));
+                std::snprintf(unit, sizeof(unit), "%.0f m tiles", tile);
+                widgets::PropertyRow("tile", text, unit);
+                if (geo) {
+                    const geodesy::Geodetic g = geo->toGeodetic({x, y, 0.0});
+                    std::snprintf(text, sizeof(text), "%.7f, %.7f", g.latitudeDeg, g.longitudeDeg);
+                    widgets::PropertyRow("lat, lon", text, "°");
+                    std::snprintf(text, sizeof(text), "%.3f", geo->planeRiseM(x, y));
+                    widgets::PropertyRow("flat-world error", text, "m");
+                }
+            } else {
+                widgets::Caption("Hover the map to read a position here.");
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+
+        std::snprintf(text, sizeof(text), "%zu", world->agents.size());
+        if (widgets::SectionHeader("Agents", text)) {
+            ImGui::Indent(px(8.0F));
+            std::size_t shown = 0;
+            double farthest = 0.0;
+            for (const WorldInfo::Agent& agent : world->agents) {
+                farthest = std::max(farthest, std::hypot(agent.x, agent.y));
+                if (shown++ >= kAgentRows) {
+                    continue;
+                }
+                const std::optional<double> up = agentUp(context, agent);
+                char tip[160];
+                if (geo) {
+                    const geodesy::Geodetic g =
+                        geo->toGeodetic({agent.x, agent.y, up.value_or(0.0)});
+                    std::snprintf(text, sizeof(text), "%.6f, %.6f", g.latitudeDeg, g.longitudeDeg);
+                    if (up) {
+                        std::snprintf(
+                            tip, sizeof(tip),
+                            "ENU %+.2f, %+.2f, %+.2f m\nheight %.2f m above the ellipsoid", agent.x,
+                            agent.y, *up, g.heightM);
+                    } else {
+                        std::snprintf(tip, sizeof(tip), "ENU %+.2f, %+.2f m", agent.x, agent.y);
+                    }
+                    widgets::PropertyRow(agent.name.c_str(), text, "°", false, tip);
+                } else {
+                    std::snprintf(text, sizeof(text), "%+.1f, %+.1f, %+.1f", agent.x, agent.y,
+                                  up.value_or(0.0));
+                    widgets::PropertyRow(agent.name.c_str(), text, "m");
+                }
+            }
+            if (shown > kAgentRows) {
+                widgets::Caption("and %zu more", shown - kAgentRows);
+            }
+            // How far the flat world is from the Earth's curve where its farthest agent is.
+            if (geo && farthest >= 1.0) {
+                char far[24];
+                length(farthest, far, sizeof(far));
+                std::snprintf(text, sizeof(text), "%.3f", geo->planeRiseM(farthest, 0.0));
+                std::snprintf(unit, sizeof(unit), "m at %s", far);
+                widgets::PropertyRow("flat-world error", text, unit, false,
+                                     "How far the flat world (the tangent plane at the geo "
+                                     "origin) is above the ellipsoid as far out as the "
+                                     "farthest agent: about d² / 2R.");
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        ImGui::End();
+    }
+
+private:
+    static constexpr std::size_t kAgentRows = 12;
+    std::shared_ptr<WorldShared> shared_;
+};
+
 }  // namespace
 
 std::vector<std::unique_ptr<Panel>> createWorldPanels() {
     std::vector<std::unique_ptr<Panel>> panels;
+    auto shared = std::make_shared<WorldShared>();
     panels.push_back(std::make_unique<AgentsPanel>());
-    panels.push_back(std::make_unique<MapPanel>());
+    panels.push_back(std::make_unique<RegionsPanel>(shared));
+    panels.push_back(std::make_unique<MapPanel>(shared));
     panels.push_back(std::make_unique<StreamingPanel>());
+    panels.push_back(std::make_unique<GeodesyPanel>(shared));
     return panels;
 }
 

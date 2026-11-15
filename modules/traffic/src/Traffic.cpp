@@ -28,6 +28,11 @@ constexpr double kRelaxation = 0.5;           // s, from the social force to a s
 constexpr double kMaxSideStep = 0.8;          // m/s, the fastest sideways step
 constexpr double kLookAhead = 80.0;           // m, how far a vehicle looks for a leader
 constexpr double kEgoLateral = 2.5;           // m: a robot this close to a lane is on it
+constexpr double kEgoClearance = 0.5;         // m kept from a robot's footprint sideways
+constexpr double kEgoHorizon = 3.0;           // s ahead that a robot's way is followed
+constexpr double kEgoEntryHorizon = 10.0;     // s, the same into a junction (through it)
+constexpr double kEgoSampleStep = 0.25;       // s between the points of a robot's way
+constexpr double kEgoMargin = 1.0;            // s by which an agent must clear a robot's path
 constexpr double kHidden = -100.0;            // m, where the zero substitute keeps agents
 constexpr double kVehicleSpacing = 12.0;      // m between vehicles when placing them
 constexpr double kPedestrianSpacing = 3.0;    // m between pedestrians
@@ -72,6 +77,24 @@ std::array<double, 4> yawQuat(double yaw) {
     return {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
 }
 
+/// Yaw about z, then pitch about the turned y, then roll about the turned x (w, x, y, z).
+std::array<double, 4> attitude(double yaw, const Tilt& tilt) {
+    if (tilt.roll == 0.0 && tilt.pitch == 0.0) {
+        return yawQuat(yaw);
+    }
+    const double cy = std::cos(yaw / 2.0);
+    const double sy = std::sin(yaw / 2.0);
+    const double cp = std::cos(tilt.pitch / 2.0);
+    const double sp = std::sin(tilt.pitch / 2.0);
+    const double cr = std::cos(tilt.roll / 2.0);
+    const double sr = std::sin(tilt.roll / 2.0);
+    return {cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy};
+}
+
+constexpr double kTiltBase = 1.0;   // m, the centre-line span the pitch is taken over
+constexpr double kBesideMin = 0.5;  // m, a lane nearer than this beside gives no bank
+
 }  // namespace
 
 /// Whether two polylines cross (or touch), in the plane.
@@ -93,9 +116,59 @@ bool crosses(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
     return false;
 }
 
+Tilt tiltAt(const LaneGraph& graph, std::size_t index, double along) {
+    Tilt tilt;
+    if (!graph.sloped) {
+        return tilt;
+    }
+    const Lane& lane = graph.lanes[index];
+    const auto [p, yaw] = lane.at(along);
+    const Vec3 back = lane.at(along - kTiltBase / 2.0).first;
+    const Vec3 ahead = lane.at(along + kTiltBase / 2.0).first;
+    const double run = distance2d(ahead, back);
+    if (run > 1e-6) {
+        tilt.pitch = -std::atan2(ahead[2] - back[2], run);
+    }
+    if (graph.beside.size() > index && graph.beside[index]) {
+        const Lane& other = graph.lanes[*graph.beside[index]];
+        const Vec3 q = other.at(other.project(p).first).first;
+        // Across this lane's direction, positive to its left.
+        const double lateral = -std::sin(yaw) * (q[0] - p[0]) + std::cos(yaw) * (q[1] - p[1]);
+        if (std::abs(lateral) > kBesideMin) {
+            tilt.roll = std::atan((q[2] - p[2]) / lateral);
+        }
+    }
+    return tilt;
+}
+
 LaneGraph lanesOf(const WorldView& world) {
     LaneGraph g;
     g.lanes = roadLanesOf(world).lanes;
+    // The lane beside each, for the bank: the same road section, kind and junction, the next
+    // OpenDRIVE lane id inwards (across the centre: -1 and 1), else outwards.
+    g.beside.assign(g.lanes.size(), std::nullopt);
+    double low = INFINITY;
+    double high = -INFINITY;
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        const Lane& a = g.lanes[i];
+        for (const Vec3& p : a.points) {
+            low = std::min(low, p[2]);
+            high = std::max(high, p[2]);
+        }
+        const int in =
+            a.lane > 0 ? (a.lane == 1 ? -1 : a.lane - 1) : (a.lane == -1 ? 1 : a.lane + 1);
+        const int out = a.lane > 0 ? a.lane + 1 : a.lane - 1;
+        for (const int want : {in, out}) {
+            for (std::size_t k = 0; k < g.lanes.size() && !g.beside[i]; ++k) {
+                const Lane& b = g.lanes[k];
+                if (k != i && b.road == a.road && b.lane == want && b.sStart == a.sStart &&
+                    b.sidewalk == a.sidewalk && b.junction == a.junction) {
+                    g.beside[i] = k;
+                }
+            }
+        }
+    }
+    g.sloped = high - low > 1e-6;
     // Junctions: driving lanes of a junction leave the same lane, end on the same lane, or cross.
     // (Not "the same road": on a road network a road joins two junctions.)
     // Each approach (a lane into a junction) gets a signal group by its heading at the stop line.
@@ -551,8 +624,9 @@ std::vector<WalkerStart> walkersFor(const WorldView& world, int count, std::uint
     for (int i = 0, failed = 0; i < count && !walks.empty() && failed < kFullAfterFailures; ++i) {
         ++failed;  // until it finds a place
         for (int attempt = 0; attempt < 400; ++attempt) {
-            const Lane& lane =
-                g.lanes[walks[static_cast<std::size_t>(unit(rng) * walks.size()) % walks.size()]];
+            const Lane& lane = g.lanes[walks[static_cast<std::size_t>(
+                                                 unit(rng) * static_cast<double>(walks.size())) %
+                                             walks.size()]];
             const auto [p, yaw] = lane.at(unit(rng) * lane.length());
             const bool clear =
                 std::ranges::none_of(out,
@@ -664,8 +738,9 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
             return false;
         }
         for (int attempt = 0; attempt < 400; ++attempt) {
-            const Lane& lane =
-                g.lanes[from[static_cast<std::size_t>(unit(rng) * from.size()) % from.size()]];
+            const Lane& lane = g.lanes[from[static_cast<std::size_t>(
+                                                unit(rng) * static_cast<double>(from.size())) %
+                                            from.size()]];
             const double s = 6.0 + unit(rng) * (lane.length() - 12.0);
             const auto [p, yaw] = lane.at(s);
             const bool clear =
@@ -759,16 +834,16 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
     };
     std::array<int, 2> made{0, 0};
     for (int i = 0, failed = 0; i < population.vehicles && failed < kFullAfterFailures; ++i) {
-        const bool placed = place(roads, kVehicleSpacing, false, made[0]);
-        made[0] += placed ? 1 : 0;
-        failed = placed ? 0 : failed + 1;
+        const bool put = place(roads, kVehicleSpacing, false, made[0]);
+        made[0] += put ? 1 : 0;
+        failed = put ? 0 : failed + 1;
     }
     // On a world with crossings pedestrians are walkers, which the caller adds as people.
     for (int i = 0, failed = 0;
          g.crossings.empty() && i < population.pedestrians && failed < kFullAfterFailures; ++i) {
-        const bool placed = place(walks, kPedestrianSpacing, true, made[1]);
-        made[1] += placed ? 1 : 0;
-        failed = placed ? 0 : failed + 1;
+        const bool put = place(walks, kPedestrianSpacing, true, made[1]);
+        made[1] += put ? 1 : 0;
+        failed = put ? 0 : failed + 1;
     }
 
     // The signals: poles and housings as scenery, and the lamps that the module moves.
@@ -1287,6 +1362,68 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
         twist.feedback = true;
         e.pose = d.input(pose);
         e.twist = d.input(twist);
+        // Its footprint: the extent of its root body's colliders in the body's x and y.
+        const auto body = std::ranges::find(raw.bodies.names, name);
+        const auto b = static_cast<BodyId>(body - raw.bodies.names.begin());
+        double halfLength = 0.0;
+        double halfWidth = 0.0;
+        bool found = false;
+        for (std::size_t c = 0; body != raw.bodies.names.end() && c < raw.colliders.body.size();
+             ++c) {
+            if (raw.colliders.body[c] != b) {
+                continue;
+            }
+            const std::array<double, 3>& size = raw.colliders.size[c];
+            const Pose& in = raw.colliders.poseInBody[c];
+            std::vector<Vec3> corners;  // in the shape's frame
+            switch (raw.colliders.shape[c]) {
+                case ShapeType::Box:
+                    for (const double x : {-size[0], size[0]}) {
+                        for (const double y : {-size[1], size[1]}) {
+                            for (const double z : {-size[2], size[2]}) {
+                                corners.push_back({x, y, z});
+                            }
+                        }
+                    }
+                    break;
+                case ShapeType::Sphere:
+                case ShapeType::Capsule:
+                case ShapeType::Cylinder: {
+                    // A box round it: radius across, half length plus radius along z.
+                    const double r = size[0];
+                    const double h = raw.colliders.shape[c] == ShapeType::Sphere    ? r
+                                     : raw.colliders.shape[c] == ShapeType::Capsule ? size[1] + r
+                                                                                    : size[1];
+                    for (const double x : {-r, r}) {
+                        for (const double y : {-r, r}) {
+                            for (const double z : {-h, h}) {
+                                corners.push_back({x, y, z});
+                            }
+                        }
+                    }
+                    break;
+                }
+                case ShapeType::ConvexHull:
+                    if (raw.colliders.hull[c] < raw.hulls.size()) {
+                        for (const auto& v : raw.hulls[raw.colliders.hull[c]].points) {
+                            corners.push_back(v);
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+            for (const Vec3& corner : corners) {
+                const Vec3 r = rotate(in.orientation, corner);
+                halfLength = std::max(halfLength, std::abs(in.position[0] + r[0]));
+                halfWidth = std::max(halfWidth, std::abs(in.position[1] + r[1]));
+                found = true;
+            }
+        }
+        if (found) {
+            e.halfLength = halfLength;
+            e.halfWidth = halfWidth;
+        }
         ego_.push_back(e);
     }
     // Junction lanes in conflict: their paths cross, or they end on the same lane (a merge).
@@ -1455,6 +1592,8 @@ void Traffic::place(Agent& a) {
     }
     a.position = {p[0], p[1], p[2] + a.height / 2.0};
     a.yaw = yaw;
+    // Vehicles lie on the road (its slope and bank); people stand upright.
+    a.tilt = a.pedestrian ? Tilt{} : tiltAt(graph_, a.lane, a.s);
 }
 
 bool Traffic::respawn(Agent& a, std::size_t agentIndex) {
@@ -1572,14 +1711,67 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
     updateWalkers(bus, dt, agents_.size());
     updateControllers(bus, dt);
     // The robots, as obstacles and leaders.
-    std::vector<std::pair<Vec3, double>> egos;  // position, speed
+    // Where each robot will be: along its arc (its speed and yaw rate held) every
+    // kEgoSampleStep up to kEgoEntryHorizon, with its heading and velocity there.
+    struct EgoAt {
+        Vec3 position, velocity;
+        double yaw{0.0};
+        double tau{0.0};
+        double halfLength{0.0}, halfWidth{0.0};
+    };
+    std::vector<std::vector<EgoAt>> egoPaths;
+    std::vector<Vec3> egoNow;
     egos_.clear();
     for (const Ego& e : ego_) {
         const std::span<const double> p = bus.readN(e.pose);
         const std::span<const double> v = bus.readN(e.twist);
-        egos.push_back({{p[0], p[1], p[2]}, std::hypot(v[0], v[1])});
+        const double yaw =
+            std::atan2(2.0 * (p[3] * p[6] + p[4] * p[5]), 1.0 - 2.0 * (p[5] * p[5] + p[6] * p[6]));
+        const double speed = std::hypot(v[0], v[1]);
+        const double course = std::atan2(v[1], v[0]);
+        const double rate = v[5];  // rad/s about z
+        std::vector<EgoAt> path;
+        for (int k = 0; k * kEgoSampleStep <= kEgoEntryHorizon + 1e-9; ++k) {
+            const double tau = k * kEgoSampleStep;
+            const double turn = rate * tau;
+            Vec3 q{p[0], p[1], p[2]};
+            if (std::abs(rate) > 1e-3) {
+                q[0] += speed / rate * (std::sin(course + turn) - std::sin(course));
+                q[1] -= speed / rate * (std::cos(course + turn) - std::cos(course));
+            } else {
+                q[0] += v[0] * tau;
+                q[1] += v[1] * tau;
+            }
+            path.push_back({q,
+                            {speed * std::cos(course + turn), speed * std::sin(course + turn), 0.0},
+                            yaw + turn,
+                            tau,
+                            e.halfLength,
+                            e.halfWidth});
+        }
+        egoPaths.push_back(std::move(path));
+        egoNow.push_back({p[0], p[1], p[2]});
         egos_.push_back({p[0], p[1], p[2]});
     }
+    // Where a robot's footprint at `r` meets lane `l` within `width` of its centre line: how far
+    // along the lane (its middle), half its extent along the lane, and its speed along it.
+    struct Meet {
+        double s{0.0}, along{0.0}, speed{0.0};
+    };
+    const auto meet = [&](const EgoAt& r, std::size_t l, double width) -> std::optional<Meet> {
+        const Lane& lane = graph_.lanes[l];
+        const auto [s, lateral] = lane.project(r.position);
+        const double heading = lane.at(s).second;
+        const double rel = r.yaw - heading;
+        const double across =
+            std::abs(r.halfLength * std::sin(rel)) + std::abs(r.halfWidth * std::cos(rel));
+        if (std::abs(lateral) > width / 2.0 + across + kEgoClearance) {
+            return std::nullopt;
+        }
+        return Meet{s,
+                    std::abs(r.halfLength * std::cos(rel)) + std::abs(r.halfWidth * std::sin(rel)),
+                    r.velocity[0] * std::cos(heading) + r.velocity[1] * std::sin(heading)};
+    };
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         const Lane* lanePtr = &graph_.lanes[a.lane];
@@ -1604,8 +1796,8 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                     repel(agents_[k].position);
                 }
             }
-            for (const auto& [p, v] : egos) {
-                repel(p);
+            for (const Vec3& e : egoNow) {
+                repel(e);
             }
             // Sideways: the force's lateral part over a relaxation time, drifting back to the
             // lane's middle; the walker's left is the lane's left when walking along it.
@@ -1679,15 +1871,32 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                 consider(current->length() - a.s + o.s - half - o.length / 2.0, o.speed);
             }
         }
-        for (const auto& [p, v] : egos) {
-            for (const std::size_t l : {a.lane, a.next.value_or(a.lane)}) {
-                const auto [s, lateral] = graph_.lanes[l].project(p);
-                if (std::abs(lateral) > kEgoLateral) {
-                    continue;
+        // The robots: where each is and where it will be within kEgoHorizon, by its footprint
+        // across and along the lane, not by its middle alone (a car crossing a junction meets the
+        // lane with its nose 2.3 m before its middle). A robot crossing ahead is a leader at its
+        // speed along the lane, never backwards; one the agent is through before it arrives is
+        // not.
+        for (const std::vector<EgoAt>& path : egoPaths) {
+            for (const EgoAt& r : path) {
+                if (r.tau > kEgoHorizon + 1e-9) {
+                    break;
                 }
-                const double ahead = l == a.lane ? s - a.s : current->length() - a.s + s;
-                if (ahead > 0.0 && ahead < kLookAhead) {
-                    consider(ahead - half - 2.5, v);  // the robot's half length, about a car's
+                const int lanes = a.next && *a.next != a.lane ? 2 : 1;
+                for (int n = 0; n < lanes; ++n) {
+                    const std::size_t l = n == 0 ? a.lane : *a.next;
+                    const std::optional<Meet> m = meet(r, l, a.width);
+                    if (!m) {
+                        continue;
+                    }
+                    const double ahead = l == a.lane ? m->s - a.s : current->length() - a.s + m->s;
+                    if (ahead + m->along < -half || ahead - m->along > kLookAhead) {
+                        continue;  // behind it, or too far to matter
+                    }
+                    if (r.tau > 0.0 &&
+                        (ahead + m->along + half) / std::max(a.speed, 0.1) < r.tau - kEgoMargin) {
+                        continue;  // through before the robot gets there
+                    }
+                    consider(std::max(ahead - half - m->along, 0.0), std::max(m->speed, 0.0));
                 }
             }
         }
@@ -1739,6 +1948,22 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                         graph_.lanes[o.lane].junction &&
                         std::ranges::count(graph_.lanes[o.lane].successors, exit) > 0;
                     yield = onExit || toExit;
+                }
+                // Nor while a robot is in the junction lane or will be before this vehicle is
+                // through it: once in, a vehicle that stops for a robot stands in its way.
+                const double span = toLine + through.length() + a.length;
+                const double clearIn =
+                    (-a.speed + std::sqrt(a.speed * a.speed + 2.0 * idm.a * span)) / idm.a;
+                for (std::size_t e = 0; e < egoPaths.size() && !yield; ++e) {
+                    for (const EgoAt& r : egoPaths[e]) {
+                        if (r.tau > clearIn + kEgoMargin) {
+                            break;
+                        }
+                        if (meet(r, *a.next, a.width)) {
+                            yield = true;
+                            break;
+                        }
+                    }
                 }
                 if (yield) {
                     consider(std::max(toLine - half, 0.0), 0.0);
@@ -1815,7 +2040,7 @@ void Traffic::write(SignalBus& bus, double t) {
         if (zero_) {
             pose = {a.position[0], a.position[1], kHidden, 1.0, 0.0, 0.0, 0.0};
         } else {
-            const auto q = yawQuat(a.yaw);
+            const auto q = attitude(a.yaw, a.tilt);
             pose = {a.position[0], a.position[1], a.position[2], q[0], q[1], q[2], q[3]};
         }
         bus.writeN(a.poseCommand, pose);

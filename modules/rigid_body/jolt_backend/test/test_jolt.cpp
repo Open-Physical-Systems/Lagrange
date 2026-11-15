@@ -3,6 +3,7 @@
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -132,6 +133,115 @@ TEST(Jolt, ALimitHoldsTheJointAndReportsItsTorque) {
     EXPECT_NEAR(bus.read(bus.find("joint/pivot/velocity")), 0.0, 1e-3);
     const double held = 9.80665 * std::sin(0.5);
     EXPECT_NEAR(bus.read(bus.find("joint/pivot/constraint_torque")), held, 0.05 * held);
+}
+
+/// The energy a pendulum from 1 rad keeps after 60 s at 1 ms on `substeps` Jolt steps per step,
+/// as a fraction of its start (I = 1 + 1e-6 kg·m² about the pivot, m g d = g).
+double energyKept(std::int64_t substeps) {
+    const World world = pendulum(1.0);
+    ModuleConfigData config;
+    config.values["substeps"] = substeps;
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+    EXPECT_TRUE(scheduler.wire(WorldView(world)));
+    const SignalId q = scheduler.bus().find("joint/pivot/position");
+    const SignalId w = scheduler.bus().find("joint/pivot/velocity");
+    const auto energy = [&] {
+        const double theta = 1.0 + scheduler.bus().read(q);
+        const double omega = scheduler.bus().read(w);
+        return 0.5 * (1.0 + 1e-6) * omega * omega + 9.80665 * (1.0 - std::cos(theta));
+    };
+    const double start = energy();
+    for (int k = 0; k < 60'000; ++k) {
+        EXPECT_TRUE(scheduler.stepTick().ok());
+    }
+    return energy() / start;
+}
+
+TEST(Jolt, APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt) {
+    // Jolt keeps each body free and holds the joint by projecting velocities: a body turned by
+    // ω Δt over a step has that share of its velocity made radial, and the projection takes it
+    // off, (ω Δt)² of the kinetic energy each step. Semi-implicit Euler with that projection, on
+    // a point mass in double precision, loses 16.35 % of this pendulum's energy in 60 s at 1 ms
+    // (rigid_body.md §8.1); Jolt, in single precision, 16.4 %. Nothing of Lagrange's damps it:
+    // the body damping is zero and the joint has no friction or motor.
+    const double one = energyKept(1);
+    const double four = energyKept(4);
+    std::printf("energy kept over 60 s: %.4f (1 step), %.4f (4 sub-steps)\n", one, four);
+    EXPECT_NEAR(1.0 - one, 0.1635, 0.01);
+    // Four sub-steps: a quarter of the step, a quarter of the loss (and a little more in single
+    // precision: 5.3 %, against 4.65 % for the double-precision model).
+    EXPECT_LT(1.0 - four, 0.06);
+    EXPECT_GT(1.0 - four, 0.03);
+    EXPECT_LE(four, 1.0) << "never gains";
+}
+
+TEST(Jolt, SubstepsKeepTheReactionAndInventNoContact) {
+    // A 1 kg bob hanging still from its pivot: the pivot holds it up with m g and nothing touches
+    // it, whatever the number of Jolt steps per step (each sub-step's impulse is over dt / n).
+    for (const std::int64_t substeps : {std::int64_t{1}, std::int64_t{4}}) {
+        const World world = pendulum(0.0);
+        ModuleConfigData config;
+        config.values["substeps"] = substeps;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+        ASSERT_TRUE(scheduler.wire(WorldView(world)));
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{500'000'000}).ok());
+        const SignalBus& bus = scheduler.bus();
+        const std::span<const double> reaction = bus.readN(bus.find("joint/pivot/reaction"));
+        EXPECT_NEAR(reaction[0], 0.0, 0.05) << substeps;
+        EXPECT_NEAR(reaction[1], 0.0, 0.05) << substeps;
+        EXPECT_NEAR(reaction[2], 9.80665, 0.05) << substeps;
+        const std::span<const double> contact = bus.readN(bus.find("body/bob/contact_force"));
+        for (std::size_t k = 0; k < 3; ++k) {
+            EXPECT_NEAR(contact[k], 0.0, 0.05) << substeps << " axis " << k;
+        }
+    }
+}
+
+TEST(Jolt, SubstepsInventNoContactOnASwingingPendulum) {
+    // A bob swinging from 2 rad: the pivot's force changes within a step, so a reaction taken
+    // from the last sub-step alone leaves part of the momentum change to "contact" (QA3 F2,
+    // 4 % of m g at 4 sub-steps). The mean over every sub-step leaves next to none.
+    for (const std::int64_t substeps : {std::int64_t{1}, std::int64_t{4}, std::int64_t{8}}) {
+        const World world = pendulum(2.0);
+        ModuleConfigData config;
+        config.values["substeps"] = substeps;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+        ASSERT_TRUE(scheduler.wire(WorldView(world)));
+        const SignalBus& bus = scheduler.bus();
+        const SignalId contactId = bus.find("body/bob/contact_force");
+        const SignalId reactionId = bus.find("joint/pivot/reaction");
+        double worst = 0.0;
+        double strongest = 0.0;
+        for (int k = 0; k < 3000; ++k) {
+            ASSERT_TRUE(scheduler.stepTick().ok());
+            if (k < 2) {
+                continue;  // the first step's momentum change is from rest
+            }
+            const std::span<const double> c = bus.readN(contactId);
+            worst = std::max(worst, std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]));
+            const std::span<const double> r = bus.readN(reactionId);
+            strongest = std::max(strongest, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]));
+        }
+        std::printf("swinging pendulum, %lld sub-steps: largest contact %.4f N, pivot %.2f N\n",
+                    static_cast<long long>(substeps), worst, strongest);
+        EXPECT_LT(worst, 0.01) << substeps;
+        // At the bottom the pivot holds m g (3 − 2 cos 2) = 3.83 m g (less what the joint loses).
+        EXPECT_NEAR(strongest, 9.80665 * (3.0 - 2.0 * std::cos(2.0)), 0.5) << substeps;
+    }
+}
+
+TEST(Jolt, RefusesSubstepsOutOfRange) {
+    const World world = pendulum(0.1);
+    for (const std::int64_t substeps : {std::int64_t{0}, std::int64_t{65}}) {
+        ModuleConfigData config;
+        config.values["substeps"] = substeps;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+        EXPECT_FALSE(scheduler.wire(WorldView(world))) << substeps;
+    }
 }
 
 }  // namespace

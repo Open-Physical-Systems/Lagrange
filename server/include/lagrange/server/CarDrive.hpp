@@ -26,7 +26,10 @@ struct CarCommand {
 /// the steering angle: the command's own, or the bicycle model's atan(L·ω/v) for a turn rate.
 /// Until the first external command, with `demo`, it drives a 5 m circle round the world's origin
 /// at 3 m/s (pure pursuit, so it stays on it), which fits the sample city block's junction; after
-/// it, a missing command stops it.
+/// it, a missing command stops it. When the demo is held where it is (a post at a corner, a
+/// stopped car of the traffic: QA 2026-11-14, the sedan stood still in the town against a
+/// crossing's post), it backs away with the steering the other way, as a driver turning in three
+/// moves does, and goes on.
 class CarController final : public IModule {
 public:
     CarController(std::function<std::optional<CarCommand>()> external, bool demo)
@@ -52,6 +55,12 @@ private:
     double wheelbase_{0.0};
     double maxSteer_{0.0};
     double integral_{0.0};
+    double stalled_{0.0};       // s the demo has been held at a standstill
+    double reversing_{0.0};     // s of backing away left
+    double reverseSteer_{0.0};  // rad while backing away
+    double yielding_{0.0};      // s of standing still left after backing away
+    double tries_{0.0};         // backings away in a row, without driving freely between
+    double free_{0.0};          // s driven freely since the last backing away
     SignalId speed_, pose_, throttle_, brake_, steering_;
 };
 

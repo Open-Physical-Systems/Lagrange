@@ -1,0 +1,42 @@
+# The sample plugin lagrange_thermal_probe's kind `thermistor` (thermal_probe.c), for the robot
+# builder's sensor catalog (RFC 0016 §5): installed under the ament resource
+# lagrange_sensor_catalog.
+schema_version: 1
+plugin: lagrange_thermal_probe
+kinds:
+  thermistor:
+    name: Thermistor (plugin)
+    category: environment
+    description: A contact sensor on a thermal node, a link with a material or a heat source, through
+      a first-order lag.
+    doc: docs/physics/heat-conduction.md
+    references: []
+    renders: false
+    params:
+      - path: target
+        type: text
+        refers_to: node
+        default_from: its own link
+        meaning: reads thermal/<target>/temperature
+      - path: time_constant
+        type: number
+        unit: s
+        default: 0.0
+        min: 0
+        meaning: 'first-order lag; 0: none'
+      - path: noise/stddev
+        type: number
+        unit: K
+        default: 0.0
+        min: 0
+        meaning: Gaussian, 1σ
+      - path: resolution
+        type: number
+        unit: K
+        default: 0.0
+        min: 0
+        meaning: 'quantum; 0: none'
+    signals:
+      - name: temperature
+        type: scalar
+        unit: K

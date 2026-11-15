@@ -494,5 +494,89 @@ TEST(SensorFaults, ASensorNamedFaultTakesFaults) {
     EXPECT_EQ(scheduler->bus().read(scheduler->bus().find("sensor/fault/fault/active")), 1.0);
 }
 
+/// A slow scanner: steps every 10 ms but samples every 500 ms (as a Wi-Fi scan), holding its
+/// outputs between: `sensor/slow/rssi` (dBm), `valid` (Bool) and `count` (Int).
+class Slow final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override { return {"sensors", "slow"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 10_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        const auto out = [&d](const char* name, SignalType type) {
+            SignalSpec s;
+            s.name = std::string("sensor/slow/") + name;
+            s.type = type;
+            s.unit = units::one;
+            return d.output(s);
+        };
+        rssi_ = out("rssi", SignalType::Scalar);
+        valid_ = out("valid", SignalType::Bool);
+        count_ = out("count", SignalType::Int);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus&) override { return {}; }
+    Status step(const StepContext& context, SignalBus& bus) override {
+        if (context.stepIndex % 50 != 0) {
+            for (const SignalId id : {rssi_, valid_, count_}) {
+                bus.hold(id);
+            }
+            return {};
+        }
+        bus.write(rssi_, -42.0);
+        bus.write(valid_, 1.0);
+        bus.write(count_, 2.0);
+        return {};
+    }
+
+private:
+    SignalId rssi_, valid_, count_;
+};
+
+// Sensors QA F5: disconnected with nan=1 between two samples, the numbers read NaN from the
+// fault's start; the Bool and the count are held, never NaN (F6).
+TEST(SensorFaults, ADisconnectAsNanShowsFromItsStartOnASlowSensor) {
+    const World world;
+    Scheduler scheduler;
+    scheduler.add(withFaults(std::make_unique<Slow>(), {fault("slow=disconnect,at=0.1,nan=1")}));
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId rssi = bus.find("sensor/slow/rssi");
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{50'000'000}).ok());
+    EXPECT_EQ(bus.read(rssi), -42.0);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{110'000'000}).ok());
+    EXPECT_TRUE(std::isnan(bus.read(rssi)));
+    EXPECT_EQ(bus.stamp(rssi).ns, 100'000'000);  // a new value at the fault's start
+    EXPECT_EQ(bus.read(bus.find("sensor/slow/valid")), 1.0);
+    EXPECT_EQ(bus.read(bus.find("sensor/slow/count")), 2.0);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'200'000'000}).ok());
+    EXPECT_TRUE(std::isnan(bus.read(rssi)));
+    EXPECT_EQ(bus.stamp(rssi).ns, 1'010'000'000);  // the sample at 1 s, NaN as well
+    EXPECT_EQ(bus.read(bus.find("sensor/slow/valid")), 1.0);
+    EXPECT_EQ(bus.stamp(bus.find("sensor/slow/valid")).ns, 10'000'000);  // held: never NaN
+}
+
+// Sensors QA F6: a Bool or a count takes no bias, drift or noise.
+TEST(SensorFaults, ABoolOrACountTakesNoOffsetOrNoise) {
+    const World world;
+    for (const char* text :
+         {"slow:valid=noise,sigma=1", "slow:count=bias,value=0.5", "slow:valid=drift,rate=1"}) {
+        Scheduler scheduler;
+        scheduler.add(withFaults(std::make_unique<Slow>(), {fault(text)}));
+        auto wired = scheduler.wire(WorldView(world));
+        ASSERT_FALSE(wired) << text;
+        EXPECT_NE(to_string(wired.error().front()).find("applies to measured numbers only"),
+                  std::string::npos)
+            << to_string(wired.error().front());
+    }
+    // Dropped as NaN: the number reads NaN, the Bool and the count are held.
+    Scheduler scheduler;
+    scheduler.add(withFaults(std::make_unique<Slow>(), {fault("slow=dropout,at=0.4,nan=1")}));
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{600'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    EXPECT_TRUE(std::isnan(bus.read(bus.find("sensor/slow/rssi"))));
+    EXPECT_EQ(bus.read(bus.find("sensor/slow/valid")), 1.0);
+    EXPECT_EQ(bus.read(bus.find("sensor/slow/count")), 2.0);
+}
+
 }  // namespace
 }  // namespace lagrange::sensors

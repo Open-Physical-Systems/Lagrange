@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -22,8 +23,10 @@ namespace lagrange {
 namespace {
 
 constexpr std::uint32_t kStateMagic = 0x5453474CU;  // "LGST"
-// 2: the bus's published buffers (their sequences and, outside a hash, their bytes) are saved.
+// 1: Lagrange 1.1 and 1.2. 2 (1.3): the bus's published buffers (their sequences and, outside a
+// hash, their bytes) are appended. restoreState reads both (RFC 0007: 1.x reads 1.x states).
 constexpr std::uint32_t kStateVersion = 2;
+constexpr std::uint32_t kStateVersionNoBuffers = 1;
 constexpr std::int64_t kMinBaseTickNs = 1'000;              // 1 µs
 constexpr std::int64_t kMaxHyperperiodNs = 10'000'000'000;  // 10 s
 constexpr std::uint64_t kInitTick = ~0ULL;  // commit tick of initial values: before tick 0
@@ -284,11 +287,59 @@ void Scheduler::checkSteps(std::vector<WiringError>& errors) {
                               " is below 1 µs; check the profile's dt values for a typo"});
     }
     if (overflow || lcm > kMaxHyperperiodNs) {
-        errors.push_back({Kind::IncommensurateSteps,
-                          {},
-                          "the steps repeat only after more than 10 s; check the profile's dt "
-                          "values for a typo such as 0.00101"});
+        errors.push_back({Kind::IncommensurateSteps, {}, hyperperiodMessage()});
     }
+}
+
+std::string Scheduler::hyperperiodMessage() const {
+    // RFC 0005: a violation names the offending pair, the two steps that line up last (a
+    // sonar's ping-limited 160 ms beside a 15 Hz camera's 67 ms line up every 10.72 s).
+    constexpr std::int64_t kForever = std::numeric_limits<std::int64_t>::max();
+    const auto pairPeriod = [](std::int64_t a, std::int64_t b) {
+        const std::int64_t factor = b / std::gcd(a, b);
+        return a > kForever / factor ? kForever : a * factor;
+    };
+    const Entry* worstA = nullptr;
+    const Entry* worstB = nullptr;
+    std::int64_t worst = 0;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        for (std::size_t j = i + 1; j < entries_.size(); ++j) {
+            const std::int64_t a = entries_[i].dt.ns;
+            const std::int64_t b = entries_[j].dt.ns;
+            if (a <= 0 || b <= 0) {
+                continue;
+            }
+            const std::int64_t together = pairPeriod(a, b);
+            if (together > worst) {
+                worstA = &entries_[i];
+                worstB = &entries_[j];
+                worst = together;
+            }
+        }
+    }
+    const auto rate = [](Duration d) {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.4g Hz", 1e9 / static_cast<double>(d.ns));
+        return std::string(text);
+    };
+    std::string out = "the steps repeat only after more than 10 s";
+    if (worstA != nullptr && worst > kMaxHyperperiodNs) {
+        char together[32];
+        std::snprintf(together, sizeof(together), "%.6g s", static_cast<double>(worst) * 1e-9);
+        out += ": " + worstA->label + " steps every " + formatDuration(worstA->dt) + " (" +
+               rate(worstA->dt) + ") and " + worstB->label + " every " +
+               formatDuration(worstB->dt) + " (" + rate(worstB->dt) + "), which line up only " +
+               (worst == kForever ? std::string("after centuries")
+                                  : "every " + std::string(together)) +
+               "; change one of their rates (update_rate, or what sets that step) so that one "
+               "period divides the other or both are whole multiples of a common one";
+    } else if (worstA != nullptr) {
+        out +=
+            " for all the modules together (no two of them alone): make the rates of the "
+            "slowest sensors share a common period";
+    }
+    out += ", or check a profile's dt values for a typo such as 0.00101";
+    return out;
 }
 
 void Scheduler::connect(std::vector<WiringError>& errors) {
@@ -705,6 +756,58 @@ void putHandles(StateWriter& writer, const std::vector<std::uint64_t>& handles) 
     writer.putBytes(handles.data(), handles.size() * sizeof(std::uint64_t));
 }
 
+bool skipBytes(StateReader& reader, std::uint64_t size) {
+    if (size > reader.remaining()) {
+        std::byte none{};
+        reader.getBytes(&none, reader.remaining() + 1);  // fails the reader
+        return false;
+    }
+    std::array<std::byte, 4096> chunk{};
+    while (size > 0) {
+        const std::size_t step = std::min<std::uint64_t>(size, chunk.size());
+        reader.getBytes(chunk.data(), step);
+        size -= step;
+    }
+    return !reader.failed();
+}
+
+/// Reads a length-prefixed array of `element`-byte items without keeping it.
+bool skipArray(StateReader& reader, std::size_t element) {
+    std::uint64_t count = 0;
+    return reader.get(count) && count <= reader.remaining() / element &&
+           skipBytes(reader, count * element);
+}
+
+/// Whether what `reader` holds is exactly a format 2 buffer section of `slots` handle slots,
+/// each keeping `kept` buffers (read without keeping it).
+bool isBufferSection(StateReader reader, std::size_t slots, std::size_t kept) {
+    std::uint64_t count = 0;
+    if (!reader.get(count) || count != slots) {
+        return false;
+    }
+    for (std::size_t slot = 0; slot < slots; ++slot) {
+        std::uint32_t published = 0;
+        if (!reader.get(published)) {
+            return false;
+        }
+        for (std::size_t k = 0; k < kept; ++k) {
+            std::uint64_t handle = 0;
+            std::uint8_t present = 0;
+            if (!reader.get(handle) || !reader.get(present)) {
+                return false;
+            }
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            std::string encoding;
+            if (present != 0 && (!reader.get(width) || !reader.get(height) ||
+                                 !reader.getString(encoding) || !skipArray(reader, 1))) {
+                return false;
+            }
+        }
+    }
+    return reader.remaining() == 0 && !reader.failed();
+}
+
 bool getHandles(StateReader& reader, std::vector<std::uint64_t>& handles) {
     std::uint64_t size = 0;
     if (!reader.get(size) || size != handles.size()) {
@@ -796,9 +899,18 @@ Status Scheduler::restoreState(StateReader& reader) {
     std::uint32_t version = 0;
     reader.get(magic);
     reader.get(version);
-    if (magic != kStateMagic || version != kStateVersion) {
-        return corrupt("not a scheduler state of version " + std::to_string(kStateVersion));
+    if (magic != kStateMagic || (version != kStateVersion && version != kStateVersionNoBuffers)) {
+        return corrupt("not a scheduler state of version " +
+                       std::to_string(kStateVersionNoBuffers) + " or " +
+                       std::to_string(kStateVersion));
     }
+    // Where a format 1 state (Lagrange 1.1 and 1.2) fails to read, the message says so and where
+    // what reads from it is listed.
+    const std::string olderHint =
+        version == kStateVersionNoBuffers
+            ? " (a saved-state format 1 state, written by Lagrange 1.1 or 1.2: it restores into "
+              "a run of the same robot, world and profile; docs/design/formats.md §11)"
+            : "";
     std::int64_t now = 0;
     std::uint64_t tick = 0;
     std::uint64_t modules = 0;
@@ -806,7 +918,11 @@ Status Scheduler::restoreState(StateReader& reader) {
     reader.get(tick);
     reader.get(modules);
     if (modules != order_.size()) {
-        return corrupt("module count");
+        return corrupt("module count (" + std::to_string(modules) + " saved, " +
+                       std::to_string(order_.size()) +
+                       " in this run: a state restores into a run of the same robot, world and "
+                       "profile)" +
+                       olderHint);
     }
     for (const std::uint32_t index : order_) {
         Entry& entry = entries_[index];
@@ -817,13 +933,14 @@ Status Scheduler::restoreState(StateReader& reader) {
         reader.get(stepIndex);
         reader.get(size);
         if (label != entry.label || reader.failed() || size > reader.remaining()) {
-            return corrupt("module " + entry.label);
+            return corrupt("module " + entry.label + olderHint);
         }
         std::vector<std::byte> blob(size);
         reader.getBytes(blob.data(), blob.size());
         StateReader module(blob);
         if (Status status = entry.module->restoreState(module); !status.ok()) {
-            return Status::error(status.code, entry.label + " restoreState: " + status.message);
+            return Status::error(status.code,
+                                 entry.label + " restoreState: " + status.message + olderHint);
         }
         entry.stepIndex = stepIndex;
     }
@@ -834,14 +951,73 @@ Status Scheduler::restoreState(StateReader& reader) {
         ok = ok && reader.get(timing.stamp.ns) && reader.get(timing.previousStamp.ns) &&
              reader.get(timing.commitTick) && reader.get(timing.commits);
     }
-    ok = ok && reader.getDoubles(bus_.inputValues_) && getHandles(reader, bus_.inputHandles_) &&
-         reader.getDoubles(bus_.windowSums_);
+    const StateReader atInputs = reader;
+    bool inputsMatch = ok && reader.getDoubles(bus_.inputValues_) &&
+                       getHandles(reader, bus_.inputHandles_) &&
+                       reader.getDoubles(bus_.windowSums_);
     for (SignalBus::InputSlot& slot : bus_.inputs_) {
-        ok = ok && reader.get(slot.windowWeight);
+        inputsMatch = inputsMatch && reader.get(slot.windowWeight);
+    }
+    if (ok && !inputsMatch) {
+        // The saved run's modules wrote what this run's do, but read less: a later release gave
+        // a module another input (after 1.3, the demo drive reads the robot's pose). What the
+        // inputs hold is read again from the outputs at each reader's next step; only a window
+        // average's partial window is lost, and it starts again from its writer's last value
+        // (docs/design/formats.md §11). The saved slots' window weights (one double each, with no
+        // count) run to the end of a format 1 state, or to its buffer section in format 2.
+        reader = atInputs;
+        ok = skipArray(reader, sizeof(double)) && skipArray(reader, sizeof(std::uint64_t)) &&
+             skipArray(reader, sizeof(double));
+        std::size_t weights = 0;
+        if (ok && version == kStateVersionNoBuffers) {
+            ok = reader.remaining() % sizeof(double) == 0;
+            weights = reader.remaining() / sizeof(double);
+        } else if (ok) {
+            ok = false;
+            for (std::size_t n = 0; n <= reader.remaining() / sizeof(double); ++n) {
+                StateReader after = reader;
+                if (skipBytes(after, n * sizeof(double)) &&
+                    isBufferSection(after, bus_.published_.size(), SignalBus::kKeptBuffers)) {
+                    weights = n;
+                    ok = true;
+                    break;
+                }
+            }
+        }
+        ok = ok && skipBytes(reader, weights * sizeof(double));
+        std::ranges::fill(bus_.windowSums_, 0.0);
+        std::ranges::fill(bus_.inputHandles_, 0);
+        for (SignalBus::InputSlot& slot : bus_.inputs_) {
+            slot.windowWeight = 0.0;
+            // An unconnected optional input reads its default; the others are prepared afresh.
+            if (slot.components != 0) {
+                std::fill_n(bus_.inputValues_.begin() + static_cast<std::ptrdiff_t>(slot.offset),
+                            slot.components * bus_.batchCount_,
+                            slot.signal == SignalBus::kNoModule ? slot.spec.defaultValue : 0.0);
+            }
+        }
+    }
+    if (version == kStateVersionNoBuffers) {
+        // Format 1 saved no buffers. What it implied: a restored run reads no image until its
+        // sensor's next frame (a handle whose buffer is gone reads as none), and it numbers its
+        // handles on from the newest one it holds, the last the saved run published (publishing
+        // sets the pending handle; committing copies it on), so the handles it publishes next are
+        // the saved run's.
+        for (std::size_t slot = 0; slot < bus_.published_.size(); ++slot) {
+            std::uint32_t newest = 0;
+            for (const auto* held :
+                 {&bus_.committedHandles_, &bus_.previousHandles_, &bus_.pendingHandles_}) {
+                newest = std::max(newest, static_cast<std::uint32_t>((*held)[slot] & 0xFFFF'FFFFU));
+            }
+            bus_.published_[slot] = newest;
+            bus_.kept_[slot] = {};
+        }
     }
     std::uint64_t slots = 0;
-    ok = ok && reader.get(slots) && slots == bus_.published_.size();
-    for (std::size_t slot = 0; ok && slot < bus_.published_.size(); ++slot) {
+    ok = ok && (version == kStateVersionNoBuffers ||
+                (reader.get(slots) && slots == bus_.published_.size()));
+    for (std::size_t slot = 0; ok && version == kStateVersion && slot < bus_.published_.size();
+         ++slot) {
         ok = reader.get(bus_.published_[slot]);
         for (SignalBus::KeptBuffer& kept : bus_.kept_[slot]) {
             std::uint8_t present = 0;
@@ -865,11 +1041,82 @@ Status Scheduler::restoreState(StateReader& reader) {
     bus_.forgetPrepared();
     bus_.markAllDirty();
     if (!ok || reader.failed()) {
-        return corrupt("signal bus layout");
+        return corrupt("signal bus layout" + olderHint);
     }
     now_ = SimTime{now};
     tick_ = tick;
     return {};
+}
+
+Expected<std::vector<std::string>, Status> Scheduler::addedSince(
+    std::span<const std::byte> state) const {
+    if (!wired_) {
+        return Unexpected{Status::error(StatusCode::Internal, "addedSince() before wire()")};
+    }
+    StateReader reader(state);
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::int64_t now = 0;
+    std::uint64_t tick = 0;
+    std::uint64_t modules = 0;
+    reader.get(magic);
+    reader.get(version);
+    reader.get(now);
+    reader.get(tick);
+    reader.get(modules);
+    if (reader.failed() || magic != kStateMagic || modules > reader.remaining()) {
+        return Unexpected{Status::error(StatusCode::InvalidConfig, "not a scheduler state")};
+    }
+    std::multiset<std::string> saved;
+    for (std::uint64_t k = 0; k < modules; ++k) {
+        std::string label;
+        std::uint64_t stepIndex = 0;
+        std::uint64_t size = 0;
+        reader.getString(label);
+        reader.get(stepIndex);
+        reader.get(size);
+        if (reader.failed() || size > reader.remaining()) {
+            return Unexpected{Status::error(StatusCode::InvalidConfig, "a cut scheduler state")};
+        }
+        std::vector<std::byte> skip(size);
+        reader.getBytes(skip.data(), skip.size());
+        saved.insert(std::move(label));
+    }
+    std::vector<std::string> added;
+    for (const std::uint32_t index : order_) {
+        const Entry& entry = entries_[index];
+        if (const auto found = saved.find(entry.label); found != saved.end()) {
+            saved.erase(found);
+            continue;
+        }
+        StateWriter probe;
+        if (!entry.module->saveState(probe).ok() || !probe.bytes().empty()) {
+            return Unexpected{Status::error(
+                StatusCode::InvalidConfig,
+                "saved state does not match: module " + entry.label +
+                    " of this run, which keeps state, is not in it: a state restores into a run "
+                    "of the same robot, world and profile")};
+        }
+        added.push_back(entry.label);
+    }
+    return added;
+}
+
+std::vector<std::string> Scheduler::leaveOut(const std::set<std::string>& labels) {
+    std::vector<std::string> left;
+    if (wired_ || labels.empty()) {
+        return left;
+    }
+    std::erase_if(entries_, [&](const Entry& entry) {
+        const ModuleInfo info = entry.module->info();
+        std::string label = std::string(info.domain) + "/" + std::string(info.name);
+        if (!labels.contains(label)) {
+            return false;
+        }
+        left.push_back(std::move(label));
+        return true;
+    });
+    return left;
 }
 
 std::string Scheduler::signatureOf(std::uint32_t index) const {

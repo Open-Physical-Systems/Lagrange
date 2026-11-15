@@ -3,7 +3,9 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/server/CarDrive.hpp"
 #include "lagrange/server/DiffDrive.hpp"
+#include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/RobotCheck.hpp"
 #include "lagrange/server/SwerveDrive.hpp"
@@ -16,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <tinyxml2.h>
 #include <utility>
@@ -386,6 +389,218 @@ TEST(LoadUrdf, SceneHasGroundRobotLinksAndVisuals) {
                                         "joint:continuous"}));
     // Wheels share one mesh; materials are deduplicated by colour.
     EXPECT_EQ(scene.materials.size(), 5U);  // ground + body, accent, rubber, steel
+}
+
+// One ground per run (docs/guide/cli.md, "Importing a robot"): the colliders that hold things
+// up, Lagrange's plane and a file's floor slabs.
+std::size_t groundColliders(const Robot& robot) {
+    const World::Colliders& c = robot.world.colliders;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        const bool slab = c.shape[i] == ShapeType::Box &&
+                          2.0 * std::min(c.size[i][0], c.size[i][1]) >= kFloorMinWidthM &&
+                          2.0 * c.size[i][2] <= 1.0;
+        const bool plane = c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane;
+        n += slab || plane ? 1U : 0U;
+    }
+    return n;
+}
+
+std::size_t groundSlabs(const Robot& robot) {
+    return static_cast<std::size_t>(
+        std::count_if(robot.scene.prims.begin(), robot.scene.prims.end(), [](const ScenePrim& p) {
+            return p.name == "ground" && p.parent == kNoIndex && p.body == kNoIndex;
+        }));
+}
+
+std::string writeFloorWorld(const std::string& name) {
+    const std::string path = (std::filesystem::path(::testing::TempDir()) / name).string();
+    std::ofstream out(path);
+    if (name.ends_with(".xml")) {
+        out << R"(<mujoco model="yard"><worldbody>
+  <geom name="ground" type="box" size="20 20 0.1" pos="0 0 -0.1"/>
+  <geom name="crate" type="box" size="0.5 0.5 0.5" pos="3 0 0.5"/>
+</worldbody></mujoco>)";
+    } else if (name.ends_with(".sdf")) {
+        out << R"(<?xml version="1.0"?><sdf version="1.11"><world name="yard">
+  <model name="floor"><static>true</static><pose>0 0 -0.1 0 0 0</pose><link name="l">
+    <collision name="c"><geometry><box><size>40 40 0.2</size></box></geometry></collision>
+  </link></model></world></sdf>)";
+    } else if (name.ends_with(".usda")) {
+        out << R"(#usda 1.0
+(
+    defaultPrim = "yard"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "yard"
+{
+    def Cube "floor" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        float3 xformOp:scale = (40, 40, 0.2)
+        double3 xformOp:translate = (0, 0, -0.1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}
+)";
+    } else {
+        out << R"(<?xml version="1.0"?><robot name="yard">
+  <link name="world"/>
+  <link name="floor"><collision><geometry><box size="40 40 0.2"/></geometry></collision></link>
+  <joint name="floor_joint" type="fixed"><parent link="world"/><child link="floor"/>
+    <origin xyz="0 0 -0.1"/></joint>
+</robot>)";
+    }
+    return path;
+}
+
+TEST(Ground, AWorldWithItsOwnFloorIsTheOnlyGround) {
+    for (const std::string& name :
+         {std::string("floor_world.xml"), std::string("floor_world.sdf"),
+          std::string("floor_world.usda"), std::string("floor_world.urdf")}) {
+        Robot robot = amr();
+        ASSERT_EQ(groundColliders(robot), 1U);
+        auto added = addModel(robot, writeFloorWorld(name));
+        ASSERT_TRUE(added) << name << ": " << added.error();
+        EXPECT_EQ(groundColliders(robot), 1U) << name;
+        EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                             ShapeType::Plane),
+                  0)
+            << name;
+        EXPECT_EQ(groundSlabs(robot), 0U) << name;
+        EXPECT_FALSE(robot.groundPlane) << name;
+        EXPECT_EQ(robot.scene.prims.front().path, "/amr_diffdrive") << name;
+        // The same file as the robot (lagrange FILE): its floor, no plane.
+        auto alone = loadModel(writeFloorWorld(name));
+        ASSERT_TRUE(alone) << name << ": " << alone.error();
+        EXPECT_EQ(groundColliders(*alone), 1U) << name;
+        EXPECT_EQ(groundSlabs(*alone), 0U) << name;
+    }
+}
+
+TEST(Ground, NoWorldOrAWorldWithoutAFloorKeepsLagrangesGround) {
+    const Robot empty = emptyModel();  // --robot none --world none
+    ASSERT_EQ(empty.world.colliders.shape.size(), 1U);
+    EXPECT_EQ(empty.world.colliders.shape[0], ShapeType::Plane);
+    EXPECT_EQ(groundSlabs(empty), 1U);
+
+    Robot robot = amr();  // --world none
+    EXPECT_EQ(robot.world.colliders.shape.front(), ShapeType::Plane);
+    EXPECT_EQ(groundColliders(robot), 1U);
+    EXPECT_EQ(groundSlabs(robot), 1U);
+    // The sample warehouse has walls and shelves but no floor: Lagrange's plane stays.
+    ASSERT_TRUE(addModel(robot, LAGRANGE_TEST_WAREHOUSE_URDF));
+    EXPECT_EQ(robot.world.colliders.shape.front(), ShapeType::Plane);
+    EXPECT_EQ(groundColliders(robot), 1U);
+    EXPECT_EQ(groundSlabs(robot), 1U);
+    EXPECT_TRUE(robot.groundPlane);
+}
+
+/// An SDFormat world of static boxes, each "x y z sx sy sz" (centre and full size, m).
+std::string writeBoxWorld(const std::string& name, const std::vector<std::string>& boxes) {
+    const std::string path = (std::filesystem::path(::testing::TempDir()) / name).string();
+    std::ofstream out(path);
+    out << R"(<?xml version="1.0"?><sdf version="1.11"><world name="w">)";
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        std::istringstream in(boxes[i]);
+        double v[6] = {};
+        for (double& x : v) {
+            in >> x;
+        }
+        out << "<model name=\"m" << i << "\"><static>true</static><pose>" << v[0] << ' ' << v[1]
+            << ' ' << v[2] << " 0 0 0</pose><link name=\"l\"><collision name=\"c\"><geometry><box>"
+            << "<size>" << v[3] << ' ' << v[4] << ' ' << v[5]
+            << "</size></box></geometry></collision></link></model>";
+    }
+    out << "</world></sdf>";
+    return path;
+}
+
+TEST(Ground, ARoofADeckOrAMezzanineIsNotTheFloor) {
+    // Wide, level and flat enough for a slab, but above the robot or above other scenery: the
+    // robot beside them stands on Lagrange's plane.
+    const std::vector<std::pair<std::string, std::vector<std::string>>> worlds = {
+        {"building.sdf", {"20 0 3 24 24 6"}},    // a 24 x 24 x 6 m building
+        {"mezzanine.sdf", {"0 0 3 20 20 0.2"}},  // a floating mezzanine
+        {"mezzanine_posts.sdf",                  // on posts
+         {"0 0 3.1 20 20 0.2", "9 9 1.5 0.3 0.3 3", "-9 -9 1.5 0.3 0.3 3"}},
+        {"bridge.sdf", {"0 30 8 40 12 0.5", "-15 30 4 2 2 8", "15 30 4 2 2 8"}},  // a deck
+    };
+    for (const auto& [name, boxes] : worlds) {
+        Robot robot = amr();
+        auto added = addModel(robot, writeBoxWorld(name, boxes));
+        ASSERT_TRUE(added) << name << ": " << added.error();
+        EXPECT_EQ(robot.world.colliders.shape.front(), ShapeType::Plane) << name;
+        EXPECT_TRUE(robot.lagrangePlane) << name;
+        EXPECT_TRUE(robot.groundPlane) << name;
+        EXPECT_EQ(groundSlabs(robot), 1U) << name;
+        // Given as the robot (lagrange FILE): nothing stands on it, so z = 0 is where robots go.
+        auto alone = loadModel(writeBoxWorld(name, boxes));
+        ASSERT_TRUE(alone) << name << ": " << alone.error();
+        EXPECT_EQ(alone->world.colliders.shape.front(), ShapeType::Plane) << name;
+    }
+    // Spawned on the roof: the roof holds it, and the plane is still there when it drives off.
+    LoadOptions onRoof;
+    onRoof.spawn.position = {20.0, 0.0, 6.0};
+    auto high = loadUrdf(LAGRANGE_TEST_AMR_URDF, onRoof);
+    ASSERT_TRUE(high) << high.error();
+    ASSERT_TRUE(addModel(*high, writeBoxWorld("roof.sdf", {"20 0 3 24 24 6"})));
+    EXPECT_EQ(high->world.colliders.shape.front(), ShapeType::Plane);
+}
+
+TEST(Ground, RealFloorsAreStillTheFloor) {
+    // A slab under a mezzanine on posts: the slab is the floor.
+    Robot robot = amr();
+    ASSERT_TRUE(addModel(
+        robot, writeBoxWorld("two_levels.sdf",
+                             {"0 0 -0.1 40 40 0.2", "0 0 3.1 20 20 0.2", "9 9 1.5 0.3 0.3 3"})));
+    EXPECT_FALSE(robot.groundPlane);
+    EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              0);
+    // Review 2 L2: a wall beside the slab sunk 0.3 m below z = 0 (its footprint off the
+    // slab's) does not unmake the floor; only scenery over or under the slab counts.
+    Robot sunk = amr();
+    ASSERT_TRUE(addModel(
+        sunk, writeBoxWorld("sunk_wall.sdf", {"0 0 -0.1 40 40 0.2", "21 0 1.2 0.4 40 3"})));
+    EXPECT_FALSE(sunk.groundPlane);
+    EXPECT_EQ(std::count(sunk.world.colliders.shape.begin(), sunk.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              0);
+    // The AMR_FMS warehouse: its 0.1 m floor with walls on it, the robot at its spawn.
+    LoadOptions options;
+    options.spawn.position = {26.0, 8.0, 0.0};
+    auto fms = loadUrdf(LAGRANGE_TEST_AMR_FMS_URDF, options);
+    ASSERT_TRUE(fms) << fms.error();
+    ASSERT_TRUE(addModel(*fms, LAGRANGE_TEST_AMR_FMS_WAREHOUSE));
+    EXPECT_FALSE(fms->groundPlane);
+    EXPECT_EQ(std::count(fms->world.colliders.shape.begin(), fms->world.colliders.shape.end(),
+                         ShapeType::Plane),
+              0);
+    EXPECT_EQ(groundSlabs(*fms), 0U);
+}
+
+TEST(Ground, OnlyLagrangesOwnPlaneIsTakenAway) {
+    // A file's own plane (here a ramp's tilted plane, kept on the world) stays when its floor
+    // slab takes the place of Lagrange's ground.
+    Robot robot = amr();
+    ASSERT_TRUE(robot.lagrangePlane);
+    const Pose tilted{{0, 0, -5}, {std::cos(0.1), std::sin(0.1), 0, 0}};
+    robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, tilted, 1.0);
+    removeGroundPlane(robot);
+    EXPECT_FALSE(robot.lagrangePlane);
+    ASSERT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              1);
+    EXPECT_NEAR(robot.world.colliders.poseInBody.back().position[2], -5.0, 1e-12);
+    // Twice is harmless: nothing more goes.
+    removeGroundPlane(robot);
+    EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                         ShapeType::Plane),
+              1);
 }
 
 TEST(LoadUrdf, FixedBaseRobotAndMissingFiles) {
@@ -782,6 +997,58 @@ TEST(AmrSimulation, TheSdfAndMjcfVersionsDriveLikeTheUrdf) {
             dot += pose[k] * urdf[k];
         }
         EXPECT_GT(std::abs(dot), std::cos(0.01)) << path;
+    }
+}
+
+// RFC 0007: 1.x reads the states earlier 1.x releases saved. The controllers whose state grew
+// read their older layouts (written here as those releases' saveState wrote them) and save the
+// current one; formats.md §11.
+TEST(OlderStates, ControllersReadTheLayoutsEarlierReleasesSaved) {
+    const auto resaved = [](const IModule& module) {
+        StateWriter writer;
+        EXPECT_TRUE(module.saveState(writer).ok());
+        return writer.bytes().size();
+    };
+    {  // DriveCommand, 1.1 to 1.3: whether an outside command was seen.
+        DriveCommand command(DriveCommand::Settings{}, nullptr);
+        StateWriter old;
+        old.put(true);
+        StateReader reader(old.bytes());
+        EXPECT_TRUE(command.restoreState(reader).ok());
+        EXPECT_EQ(resaved(command), 1 + 1 + 2 * 8 + 4 * 8U);
+    }
+    {  // CarController, 1.1 to 1.3: the speed loop's integral and whether a command was seen.
+        CarController car(nullptr, true);
+        StateWriter old;
+        old.put(0.25);
+        old.put(false);
+        StateReader reader(old.bytes());
+        EXPECT_TRUE(car.restoreState(reader).ok());
+        EXPECT_EQ(resaved(car), 8 + 1 + 6 * 8U);
+        StateWriter cut;  // shorter than the oldest layout: refused
+        cut.put(0.25);
+        StateReader short_(cut.bytes());
+        EXPECT_FALSE(car.restoreState(short_).ok());
+    }
+    {  // MulticopterController, 1.1: homed, home, set point, heading, airborne.
+        MulticopterController copter(MulticopterController::Settings{});
+        StateWriter old;
+        old.put(true);
+        for (const double v : {1.0, 2.0, 0.1, 1.0, 2.0, 2.1, 0.5}) {
+            old.put(v);
+        }
+        old.put(true);
+        StateReader reader(old.bytes());
+        EXPECT_TRUE(copter.restoreState(reader).ok());
+        StateWriter now;
+        ASSERT_TRUE(copter.saveState(now).ok());
+        EXPECT_EQ(now.bytes().size(), old.bytes().size() + 8 + 1 + 6 * 8 + 3U)
+            << "1.2's stand height, ramp and leash appended";
+        StateReader again(now.bytes());
+        EXPECT_TRUE(copter.restoreState(again).ok()) << "and read back as 1.2 and later save";
+        StateWriter twice;
+        ASSERT_TRUE(copter.saveState(twice).ok());
+        EXPECT_TRUE(std::ranges::equal(twice.bytes(), now.bytes()));
     }
 }
 

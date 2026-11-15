@@ -1,0 +1,360 @@
+{
+  "mujoco 0.5 ms kp 25": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "kp": 25.0,
+    "kd": 0.25,
+    "base_z_mean": 0.2529191767585353,
+    "base_z_ptp_mm": 5.075973949279361,
+    "max_joint_speed": 0.10737110971992188,
+    "stands_still": false
+  },
+  "mujoco 0.5 ms kp 50": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "kp": 50.0,
+    "kd": 0.5,
+    "base_z_mean": 0.2819240427283958,
+    "base_z_ptp_mm": 3.459774923625869,
+    "max_joint_speed": 0.011992392561574066,
+    "stands_still": false
+  },
+  "mujoco 0.5 ms kp 100": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "kp": 100.0,
+    "kd": 1.0,
+    "base_z_mean": 0.29525327159330733,
+    "base_z_ptp_mm": 0.3090816084308501,
+    "max_joint_speed": 0.00791977687259346,
+    "stands_still": true
+  },
+  "mujoco 0.5 ms kp 150": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "kp": 150.0,
+    "kd": 1.5,
+    "base_z_mean": 0.29836171687037366,
+    "base_z_ptp_mm": 0.08307271141305694,
+    "max_joint_speed": 0.0015653406958575451,
+    "stands_still": true
+  },
+  "mujoco 0.5 ms kp 250": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "kp": 250.0,
+    "kd": 2.5,
+    "base_z_mean": 0.3005934535918746,
+    "base_z_ptp_mm": 0.01071209950109786,
+    "max_joint_speed": 9.478117795214058e-05,
+    "stands_still": true
+  },
+  "mujoco 0.5 ms kp 400": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "kp": 400.0,
+    "kd": 4.0,
+    "stands_still": false,
+    "diverged": "rigid_body/mujoco at 0.153 s: MuJoCo found a non-finite acceleration and reset the state; reduce the step or check masses and inertias"
+  },
+  "mujoco 1 ms kp 25": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "kp": 25.0,
+    "kd": 0.25,
+    "base_z_mean": 0.25295419463245933,
+    "base_z_ptp_mm": 5.091521991048897,
+    "max_joint_speed": 0.09788131773018369,
+    "stands_still": false
+  },
+  "mujoco 1 ms kp 50": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "kp": 50.0,
+    "kd": 0.5,
+    "base_z_mean": 0.28195592344089787,
+    "base_z_ptp_mm": 3.3893299532308796,
+    "max_joint_speed": 0.014338733967284968,
+    "stands_still": false
+  },
+  "mujoco 1 ms kp 100": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "kp": 100.0,
+    "kd": 1.0,
+    "base_z_mean": 0.2952548086354972,
+    "base_z_ptp_mm": 0.3012759250768382,
+    "max_joint_speed": 0.00765662690305725,
+    "stands_still": true
+  },
+  "mujoco 1 ms kp 150": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "kp": 150.0,
+    "kd": 1.5,
+    "base_z_mean": 0.29836038349062777,
+    "base_z_ptp_mm": 0.07345865638158644,
+    "max_joint_speed": 0.0014448100648902246,
+    "stands_still": true
+  },
+  "mujoco 1 ms kp 250": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "kp": 250.0,
+    "kd": 2.5,
+    "base_z_mean": 0.30059345080597916,
+    "base_z_ptp_mm": 0.010083098674118496,
+    "max_joint_speed": 9.10815842636285e-05,
+    "stands_still": true
+  },
+  "mujoco 1 ms kp 400": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "kp": 400.0,
+    "kd": 4.0,
+    "stands_still": false,
+    "diverged": "rigid_body/mujoco at 0.02 s: MuJoCo found a non-finite acceleration and reset the state; reduce the step or check masses and inertias"
+  },
+  "mujoco 2 ms kp 25": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "kp": 25.0,
+    "kd": 0.25,
+    "base_z_mean": 0.253067016155969,
+    "base_z_ptp_mm": 4.999935153084972,
+    "max_joint_speed": 0.07901030513774339,
+    "stands_still": false
+  },
+  "mujoco 2 ms kp 50": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "kp": 50.0,
+    "kd": 0.5,
+    "base_z_mean": 0.2819725954740643,
+    "base_z_ptp_mm": 3.39089507354684,
+    "max_joint_speed": 0.016651492097243665,
+    "stands_still": false
+  },
+  "mujoco 2 ms kp 100": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "kp": 100.0,
+    "kd": 1.0,
+    "base_z_mean": 0.29525308381357707,
+    "base_z_ptp_mm": 0.2839989469070603,
+    "max_joint_speed": 0.007422311352121606,
+    "stands_still": true
+  },
+  "mujoco 2 ms kp 150": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "kp": 150.0,
+    "kd": 1.5,
+    "base_z_mean": 0.5343627903429251,
+    "base_z_ptp_mm": 838.72244369385,
+    "max_joint_speed": 0.09167115167123059,
+    "stands_still": false
+  },
+  "mujoco 2 ms kp 250": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "kp": 250.0,
+    "kd": 2.5,
+    "stands_still": false,
+    "diverged": "rigid_body/mujoco at 0.034 s: MuJoCo found a non-finite acceleration and reset the state; reduce the step or check masses and inertias"
+  },
+  "mujoco 2 ms kp 400": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "kp": 400.0,
+    "kd": 4.0,
+    "stands_still": false,
+    "diverged": "rigid_body/mujoco at 0.026 s: MuJoCo found a non-finite acceleration and reset the state; reduce the step or check masses and inertias"
+  },
+  "jolt 0.5 ms kp 25": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "kp": 25.0,
+    "kd": 0.25,
+    "base_z_mean": 0.25223852770775557,
+    "base_z_ptp_mm": 8.496716618537903,
+    "max_joint_speed": 0.14360475540161133,
+    "stands_still": false
+  },
+  "jolt 0.5 ms kp 50": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "kp": 50.0,
+    "kd": 0.5,
+    "base_z_mean": 0.28164849388599394,
+    "base_z_ptp_mm": 4.414111375808716,
+    "max_joint_speed": 0.006145624443888664,
+    "stands_still": false
+  },
+  "jolt 0.5 ms kp 100": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "kp": 100.0,
+    "kd": 1.0,
+    "base_z_mean": 0.2963853035569191,
+    "base_z_ptp_mm": 0.4247426986694336,
+    "max_joint_speed": 0.01310862135142088,
+    "stands_still": true
+  },
+  "jolt 0.5 ms kp 150": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "kp": 150.0,
+    "kd": 1.5,
+    "base_z_mean": 0.2996251561939716,
+    "base_z_ptp_mm": 0.14346837997436523,
+    "max_joint_speed": 0.0052948882803320885,
+    "stands_still": true
+  },
+  "jolt 0.5 ms kp 250": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "kp": 250.0,
+    "kd": 2.5,
+    "base_z_mean": 0.30185814264416694,
+    "base_z_ptp_mm": 0.06765127182006836,
+    "max_joint_speed": 0.004011769779026508,
+    "stands_still": true
+  },
+  "jolt 0.5 ms kp 400": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "kp": 400.0,
+    "kd": 4.0,
+    "base_z_mean": 2.794972711317241,
+    "base_z_ptp_mm": 6766.759499907494,
+    "max_joint_speed": 0.24928626418113708,
+    "stands_still": false
+  },
+  "jolt 1 ms kp 25": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "kp": 25.0,
+    "kd": 0.25,
+    "base_z_mean": 0.25269670043885706,
+    "base_z_ptp_mm": 6.22403621673584,
+    "max_joint_speed": 0.08840930461883545,
+    "stands_still": false
+  },
+  "jolt 1 ms kp 50": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "kp": 50.0,
+    "kd": 0.5,
+    "base_z_mean": 0.2817435715198517,
+    "base_z_ptp_mm": 4.202127456665039,
+    "max_joint_speed": 0.0009967944351956248,
+    "stands_still": false
+  },
+  "jolt 1 ms kp 100": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "kp": 100.0,
+    "kd": 1.0,
+    "base_z_mean": 0.2963962370157242,
+    "base_z_ptp_mm": 0.42897462844848633,
+    "max_joint_speed": 0.012950071133673191,
+    "stands_still": true
+  },
+  "jolt 1 ms kp 150": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "kp": 150.0,
+    "kd": 1.5,
+    "base_z_mean": 0.2996341758072376,
+    "base_z_ptp_mm": 0.13172626495361328,
+    "max_joint_speed": 0.0034662738908082247,
+    "stands_still": true
+  },
+  "jolt 1 ms kp 250": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "kp": 250.0,
+    "kd": 2.5,
+    "base_z_mean": 0.3018633929491043,
+    "base_z_ptp_mm": 0.061452388763427734,
+    "max_joint_speed": 0.0010729506611824036,
+    "stands_still": true
+  },
+  "jolt 1 ms kp 400": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "kp": 400.0,
+    "kd": 4.0,
+    "base_z_mean": 0.5185037626624107,
+    "base_z_ptp_mm": 595.4296141862869,
+    "max_joint_speed": 8.171789169311523,
+    "stands_still": false
+  },
+  "jolt 2 ms kp 25": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "kp": 25.0,
+    "kd": 0.25,
+    "base_z_mean": 0.25296134448051455,
+    "base_z_ptp_mm": 4.9464404582977295,
+    "max_joint_speed": 0.046606071293354034,
+    "stands_still": false
+  },
+  "jolt 2 ms kp 50": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "kp": 50.0,
+    "kd": 0.5,
+    "base_z_mean": 0.28184288305044175,
+    "base_z_ptp_mm": 4.216700792312622,
+    "max_joint_speed": 0.0009463908500038087,
+    "stands_still": false
+  },
+  "jolt 2 ms kp 100": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "kp": 100.0,
+    "kd": 1.0,
+    "base_z_mean": 0.296414137005806,
+    "base_z_ptp_mm": 0.4132688045501709,
+    "max_joint_speed": 0.01246057078242302,
+    "stands_still": true
+  },
+  "jolt 2 ms kp 150": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "kp": 150.0,
+    "kd": 1.5,
+    "base_z_mean": 0.1151503839790821,
+    "base_z_ptp_mm": 1.0319650173187256,
+    "max_joint_speed": 0.00042394056799821556,
+    "stands_still": false
+  },
+  "jolt 2 ms kp 250": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "kp": 250.0,
+    "kd": 2.5,
+    "base_z_mean": 7.513447513662278,
+    "base_z_ptp_mm": 15109.285652637482,
+    "max_joint_speed": 1147556.875,
+    "stands_still": false
+  },
+  "jolt 2 ms kp 400": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "kp": 400.0,
+    "kd": 4.0,
+    "base_z_mean": 3.6914946153499186,
+    "base_z_ptp_mm": 10211.734861135483,
+    "max_joint_speed": 1072927.75,
+    "stands_still": false
+  },
+  "_meta": {
+    "wall_s": 3.7844008700049017,
+    "load_start": 8.74,
+    "load_end": 8.74,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-legspike/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}

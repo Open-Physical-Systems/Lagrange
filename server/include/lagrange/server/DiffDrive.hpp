@@ -2,6 +2,7 @@
 
 #include "lagrange/module/IModule.hpp"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <string>
@@ -25,6 +26,11 @@ struct VelocityCommand {
 /// a figure-eight (a left loop, then a right one), or with Settings::lateral a square driven
 /// without turning (forward, left, back, right) and then a full turn on the spot. After it, a
 /// missing command means stop.
+/// With Settings::basePose (the base body's pose signal) the figure-eight is closed-loop: two
+/// circles of the loop radius that touch where the demo starts, tangent to the robot's heading
+/// there, followed by their geometry, so the robot keeps to the same 4.8 m by 2.4 m of floor
+/// however long it drives (open loop, slip and the smoothed turns made it wander, and the sample
+/// AMR ended against a rack of the warehouse: QA 2026-11-14).
 /// With an external source the module is not deterministic (its input comes from outside).
 class DriveCommand final : public IModule {
 public:
@@ -34,6 +40,7 @@ public:
         double rampSeconds{2.0};  // demo time to full speed
         bool demo{true};          // play the figure-eight until an external command arrives
         bool lateral{false};      // the robot moves sideways: write the lateral velocity
+        std::string basePose;     // "body/<base>/pose": the figure-eight follows its circles
     };
 
     DriveCommand(Settings settings, std::function<std::optional<VelocityCommand>()> external);
@@ -46,16 +53,27 @@ public:
     Status step(const StepContext& context, SignalBus& bus) override;
     Status saveState(StateWriter& writer) const override;
     Status restoreState(StateReader& reader) override;
+    void shiftOrigin(const std::array<double, 3>& shift) override;
 
     /// Where the current command comes from, for the console: "demo", "ros", "stopped".
     [[nodiscard]] const char* source() const { return source_; }
 
 private:
+    /// The closed-loop figure-eight's turn rate at forward speed `v`, from the base's pose.
+    double figureEightTurn(double v, SignalBus& bus);
+
     Settings settings_;
     std::function<std::optional<VelocityCommand>()> external_;
     bool externalSeen_{false};
     const char* source_{"demo"};
-    SignalId linear_, angular_, lateral_;
+    SignalId linear_, angular_, lateral_, pose_;
+    // The closed-loop figure-eight: where it started, which loop, how far round it.
+    bool eightStarted_{false};
+    std::array<double, 2> eightStart_{};  // m, region-local
+    double eightHeading_{0.0};            // rad, the heading at the start
+    double eightSide_{1.0};               // +1 the left loop (anticlockwise), -1 the right one
+    double eightTurned_{0.0};             // rad round the current loop
+    double eightBearing_{0.0};            // rad, the robot's bearing from the loop's centre
 };
 
 /// Turns the base velocity command into wheel torque commands (joint/<j>/torque_command) for a

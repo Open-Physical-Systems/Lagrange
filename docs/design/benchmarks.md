@@ -80,6 +80,19 @@ What the numbers say:
 - On this machine, Tier 0 beats the integrated GPU by 1.7 to 5 times for these scans and is
   deterministic, so `--lidar auto` stays on the CPU. Tier 1 (`--lidar gpu`) is for lidars with
   far more beams, or a discrete GPU; it needs re-measuring there.
+- Re-measured on a discrete GPU (2026-11-15, an RTX 4060 Laptop GPU, Tier 2, beside the same
+  CPU family; `bench_lidar --benchmark_filter=LidarTier`, medians of 3, the machine busy with a
+  build, load average about 18, so both columns are slower than in the table above):
+
+  | Scan of 32 768 beams | Tier 0 (CPU) | Tier 1 kernel on the RTX 4060 |
+  |---|---|---|
+  | 50 shapes | 1.90 ms | 3.96 ms |
+  | 400 shapes | 3.40 ms | 3.76 ms |
+
+  The discrete GPU is still not faster: its round trip (upload, dispatch, read-back) dominates.
+  So `--lidar auto` takes the CPU on every tier, on purpose, and the server's log says so
+  ("lidar on the CPU (--lidar auto, on any GPU ...)"). TODO(verify): an idle-machine run, and a
+  lidar with far more beams, where the GPU may win.
 
 ## 4. Whole runs: where the server's time goes (2026-11-12)
 
@@ -210,7 +223,7 @@ without the camera's time (each window's factor divided by one less the camera's
 | Run | Before (RTF) | After (RTF) | Without the camera, before → after | What changed it |
 |---|---|---|---|---|
 | Sample AMR, warehouse (`--lidar cpu`) | 27.3, 29.2 | 31.3, 31.5 | | caster hierarchy, lidar noise |
-| Quadcopter, open field | 61.9 to 65.9 | 59.3 to 63.9 | | 3 to 5 % slower: bus bookkeeping (below) |
+| Quadcopter, open field | 61.9 to 65.9 | 59.3 to 63.9 | | 3 to 5 % slower: bus bookkeeping (won back in §4.3) |
 | Thermal camera AMR, 6 people | 12.3, 17.4 | 12.7, 12.8 | 21.8, 21.3 → 25.8, 25.8 | caster hierarchy, lidar noise |
 | Sedan, city block | 10.4, 12.5 | 11.1, 11.7 | 19.6, 25.7 → 28.6, 32.2 | as above |
 | Sedan in the town | 3.0, 3.0 | 3.6, 3.0 | 5.3, 5.7 → 7.0, 5.8 | as above, MuJoCo writes |
@@ -264,11 +277,201 @@ Measured and not fixed:
 - **The bus bookkeeping costs the quadcopter 3 to 5 %** (62.6 → 59.9 and 65.7 → 63.1 RTF in two
   sets of four runs): its 100 µs ticks commit small signals that are all written every step, so
   the dirty flags and the per-slot checks are pure overhead there (merging nearby written signals
-  into one copy took back part of it). Left as it is; worth a look.
+  into one copy took back part of it). Won back in §4.3.
 - MuJoCo with a robot among the kinematic bodies: the broad-phase culling already applies with a
   robot present (it is per moving tree), so what is left is MuJoCo's per-body passes
   (kinematics, velocities, `mj_rnePostConstraint`) over all 664 bodies, which a backend cannot
   restrict to a subset of an `mjModel`.
+
+### 4.3 The quadcopter's commits (2026-11-15)
+
+The third round's dirty flags (§4.2) made each commit look at every output of the module one by
+one: its flag, then its record (a `SignalRecord`, a cache line each, for its offset and size), with
+a branchy merge of neighbours. The quadcopter's electrical network commits about 40 small outputs
+every 100 µs tick, all of them written, so that was pure cost. Now (`SignalBus::commitAll`,
+architecture.md §6):
+
+- **A module that wrote every output and held none commits with one copy.** At wiring the bus
+  notes, per module, whether its outputs are plain values with consecutive ids (so one stretch of
+  storage); then a commit checks the module's dirty and held flags in one pass and, when all are
+  written, copies the stretch, clears the flags and stamps the timings, without per-signal
+  branches. The electrical network, MuJoCo and the controllers take this way.
+- **The other commits read a 12-byte record per signal** (`CommitInfo`: offset, size, plain,
+  previous value read) instead of the signal records, in one pass with the stores to the flags not
+  forcing the compiler to reload the bus's arrays.
+
+Input preparation is unchanged (its held-copy check costs the quadcopter nothing measurable).
+
+Measured as in §4 (`--no-ros --rtf 0`, 25 s, the median of the 1 s windows after the first four),
+three builds of the same tree that differ only in `SignalBus` and its two lines in the scheduler:
+*old* is the bus before the third round (71880eb), *before* the bus as it was (dirty flags), *after*
+this one. Run in the order old, before, after, after, before, old, three times for the quadcopter
+and twice for the town; **load average 1.9 to 10.5 on 20 threads** (other agents' builds), so the
+spread within a build is up to 10 %. The overhead column is the scheduler's own time per tick, the
+modules' time less the ten costliest modules' step times (in the town more than ten modules run,
+so there it also holds the cheaper ones' steps).
+
+| Run | Old (RTF) | Before (RTF) | After (RTF) | Overhead per tick, old / before / after |
+|---|---|---|---|---|
+| Quadcopter, open field | 47.3, 52.1, 52.0, 46.5, 51.8, 52.0 | 43.0, 50.6, 46.5, 46.0, 49.7, 50.2 | 52.1, 52.2, 46.3, 46.5, 51.4, 52.1 | 335 to 384 / 392 to 472 / 340 to 391 ns |
+| Town, no robot, 24 cars, its walkers | 16.1, 14.6, 14.7, 10.5 | 18.2, 18.4, 16.4, 16.0 | 20.1, 19.8, 17.4, 18.0 | 21.2 to 31.3 / 13.4 to 15.0 / 8.7 to 10.3 µs |
+
+Paired by round, the quadcopter is back to the old bus's speed (in rounds 1 and 3 at their
+quietest both builds run at 52 RTF, where before ran 3 to 5 % slower as in §4.2; round 2 ran at
+46 for all three), and the town keeps the third round's gain and adds 6 to 12 % to it (`--robot
+none --traffic vehicles=24,pedestrians=36`; the town's own walkers walk, its lanes took no
+traffic pedestrians). A synthetic run of the same shape (a
+module at 100 µs writing 39 scalars, three at 1 ms, 2 × 10⁵ ticks per sample, the fastest of 40
+samples) gives 466 ns per tick for the old bus, 517 for before and 427 for after.
+
+Every signal is the same bit for bit: `LAGRANGE_DETERMINISM_HASHES=1 lagrange determinism` (whose
+state hash covers every committed, previous, pending and input value and every commit's time)
+prints the same 201 hashes over 20 s with the before and after builds for `amr_sample_urdf`,
+`sedan_city`, `quad_x500_hover`, the sedan in the town and the town without a robot (24 cars),
+and each passes. `test_scheduler` has a case for the three ways a commit goes (every output
+written, some written, one held) against a model of what the readers must see.
+
+### 4.4 Lagrange's own work in the MuJoCo backend (2026-11-15)
+
+The MuJoCo 4 spike ([mujoco-4.md](../plan/spikes/mujoco-4.md)) put Lagrange's share of a step of
+the 200-box pile at about 15 % on MuJoCo 3.12 (RTF 0.156 in Lagrange, 0.183 for `boxes.xml` in
+MuJoCo alone with Lagrange's options) and suspected the split step, the contact force and
+acceleration pass and the bus writes. A timed build of `MujocoBackend::step` (steady-clock laps
+around each stage, not committed) says otherwise:
+
+| Per 1 ms step (µs) | Box pile, 5 s | Sample AMR, warehouse | Sedan in the town |
+|---|---|---|---|
+| `mj_step2` (MuJoCo) | 5546 | 10.6 | 5.3 |
+| `mj_step1` (MuJoCo: positions, collisions) | 370 | 6.4 | 45.2 |
+| `mj_rnePostConstraint` (body accelerations, joint reactions) | 88.4 | 0.68 | 18.4 |
+| `body/<b>/contact_force` sums over the contacts | 13.1 | 0.17 | 0.25 |
+| Inputs read and applied | 1.3 | 0.14 | 10.8 |
+| Outputs written | 12.7 | 0.96 | 10.8 |
+| Kinematic culling | 0.06 | 0.03 | 2.2 |
+| Outside the module until its next step (scheduler, Python) | 3.9 | 21 (other modules) | 153 (other modules) |
+
+- **On the pile, Lagrange's own work is about 2 % of the step** (120 of 6040 µs), and most of it
+  is `mj_rnePostConstraint`, which the IMU's acceleration and `joint/<j>/reaction` need. The
+  split step costs nothing: Lagrange's compiled model (saved with `mj_saveModel`) stepped alone
+  by a C program runs at RTF 0.167 with `mj_step` and 0.166 with `mj_step1`/`mj_step2`, where
+  Lagrange ran it at 0.166.
+- **The gap to `boxes.xml` is the model, not the step.** Lagrange adds its ground plane at the top
+  of the file's own ground box (as it does when the file is given as the world too), and makes
+  that box a static body of its own after the 200 boxes. `boxes.xml` with the plane added runs at 0.206
+  alone (1219 contacts at 5 s); with the ground box also moved into a body at the end, as
+  Lagrange builds it, at 0.167 (1227 contacts, Lagrange's 1227). The pile is chaotic, so where
+  its geoms sit in the model changes how it falls and how hard the solver works by ±20 %. The
+  spike's 15 % is that, not Lagrange's work.
+- **The doubled floor is gone (2026-11-15).** Lagrange now adds its plane only to a file with no
+  floor of its own (`hasOwnFloor`: an upward plane, a height field, or a level slab at least
+  10 m wide; docs/guide/cli.md), for every loader and as robot or world. The pile then runs at
+  0.123 on MuJoCo (2.71 on Jolt, from 2.40): with no plane the boxes rest on the ground box in
+  its static body, whose contacts merge MuJoCo's constraint islands (34.8 per step against 43.9
+  with the box on the world body, 3.0 solver iterations against 2.2). MuJoCo alone with that
+  model: 0.125 (853 contacts), against 0.184 with the box on the world body. Done in §4.5:
+  0.180.
+- **In the town the backend's own work was large**: 42 of 93 µs with the sedan (MuJoCo's own
+  steps 51), reading 663 bodies' external wrenches (1 of them connected) and 654 pose commands,
+  writing every kinematic body's pose, twist and contact force, and `mj_rnePostConstraint`.
+
+What changed (`MujocoBackend`, bit-identical by construction):
+
+- **Inputs nothing writes are read once.** An unconnected optional input reads its default for
+  the whole run (`SignalBus::allocate`), so `init` notes which bodies' `external_wrench` and
+  `pose_command` have a writer, puts the others' defaults in place once (again after
+  `restoreState`, after its accelerations, which use the saved ones as before), and `step` reads
+  only the connected ones. Town with the sedan: 10.7 → 6.1 µs.
+- **A kinematic body that stands keeps its twist.** Its twist comes from its last two poses; when
+  both of the last two steps left its pose unchanged, the twist is the one already on the bus (the
+  same poses give the same bits) and is not worked out again. Town with the sedan: 10.8 → 7.9 µs.
+
+Not changed, and why:
+
+- **Computing contact forces and `mj_rnePostConstraint` only when a module reads them.** The bus
+  knows a signal's module readers, but not its other readers: Python's `sim.read`, the ROS
+  `get_entity_state` service (it reads `body/<b>/acceleration` by name), the viewer's scopes, the
+  recorder, and the state hash. A skipped output would read stale values there, and the first
+  read cannot know. On the pile it would save 1.7 % (88 + 13 µs of 6040); in the town 18 µs. A
+  lazy path would need the bus to call back into the writer on a read: not worth it for this.
+- **A partial `mj_rnePostConstraint` over the moving trees only** (in the town it spends 18 µs on
+  654 kinematic bodies whose results Lagrange never reads): it would copy MuJoCo 3.12's internals
+  bit for bit, and 3.14 already changed that function.
+
+Measured as in §4 (`--no-ros --rtf 0`, 25 s, the median of the 1 s windows after the first four;
+the MuJoCo column is `rigid_body/mujoco`'s median ms per step), the 1.3 install (*old*) against
+this build (*new*) of the same tree, in the order old, new, new, old, old, new; **load average
+5 to 26 on 20 threads** (other agents' builds; the AMR rounds at 17 to 26, the town's at 5 to
+25). The box pile is `bench_lagrange.py` (Python, 5 s, RTF of the stepping), load 5.6 to 10.4.
+
+| Run | Old (RTF) | New (RTF) | MuJoCo per step, old / new |
+|---|---|---|---|
+| Town, no robot, 24 cars, its walkers | 20.0, 18.6, 19.0 | 24.3, 24.7, 21.7 | 33 to 36 / 24 to 28 µs |
+| Sedan in the town, 24 cars | 2.61, 3.01, 2.80 | 2.98, 3.14, 3.06 | 110 to 127 / 96 to 107 µs |
+| Sample AMR, warehouse (`--lidar cpu`) | 15.8, 24.9, 23.8 | 17.3, 25.3, 22.6 | 19 to 28 / 19 to 24 µs |
+| 200-box pile, 5 s (Python) | 0.147, 0.160, 0.165 | 0.147, 0.148, 0.166 | — |
+
+The town without a robot (no degrees of freedom: the step is the inputs, kinematics and outputs)
+runs 20 to 25 % faster; with the sedan 5 to 10 %. The AMR (10 bodies, nothing connected but its
+wheels' torques) and the pile (200 free bodies, no inputs) were within the load's noise, as the
+per-stage times above predict.
+
+Every signal is the same bit for bit: `LAGRANGE_DETERMINISM_HASHES=1 lagrange determinism` prints
+the same 201 hashes over 20 s with old and new for `amr_sample_urdf`, `sedan_city`,
+`quad_x500_hover`, the sedan in the town, the town without a robot and the box pile, and each
+passes. `test_mujoco_backend` has a case for a kinematic body that stands and moves on, restored
+while it stands.
+
+### 4.5 Static scenery on MuJoCo's world body (2026-11-15)
+
+The MuJoCo backend built every world body as a MuJoCo body, so static scenery (a body welded to
+the world, as the MJCF importer makes of `worldbody` geoms, or a world file's fixed links) was a
+static body of its own, and contacts with it slowed the pile's solver (§4.4). Now
+(`staticScenery` in `MujocoBackend.cpp`) a body that never moves (`movingBodies`: no joint to
+the world, not kinematic, nor below one that is), in an articulated tree where no moving body has
+geometry, has its geoms built on MuJoCo's world body at their world poses, with the same
+friction; such a body with nothing moving below it is left out of the model. Nothing referred to
+it: static bodies have no signals (no pose, no contact force), and ray casts, the viewer and
+`--export-map` use the world tables. A tree with moving geometry (a fixed-base arm) keeps its
+static bodies, so its links' collisions with its base stay excluded. The floating origin and
+streamed tiles rebuild the run on the shifted or extended tables, so the geoms are placed anew
+(tiles' colliders were on the world body already). Jolt already makes every collider of a body
+that never moves a static Jolt body on its static layer; it is unchanged.
+
+Measured as in §4.4, the build before (`dev` at pull request 369, *old*) and this one (*new*) in
+the order old, new, new, old, three rounds; load average 1.7 to 11.4 on 20 threads. Six runs of
+each; the pile is `bench_lagrange.py` (5 s), the others `--no-ros --rtf 0` for 25 s with the
+median of the 1 s windows after the first four.
+
+| Run | Old (RTF) | New (RTF) | MuJoCo per step, old / new |
+|---|---|---|---|
+| 200-box pile, MuJoCo, 5 s (Python) | 0.113 to 0.123 (median 0.122) | 0.176 to 0.181 (median 0.180) | — |
+| 200-box pile, Jolt, 5 s (Python) | 2.50 to 2.71 | 2.67 to 2.72 | (Jolt unchanged) |
+| Sample AMR, warehouse (`--lidar cpu`) | 25.7 to 29.5 | 28.2 to 29.4 | 16.8 to 18.5 / 17.0 to 17.5 µs |
+| Sedan, city block | 11.3 to 12.4 | 11.6 to 12.4 | 12.1 to 14.2 / 12.2 to 12.7 µs |
+| Sedan in the town, 24 cars, 36 people | 3.08 to 3.25 | 3.10 to 3.67 | 86.8 to 93.8 / 86.0 to 91.1 µs |
+
+The pile runs 1.48 times as fast, as MuJoCo alone with the floor box on its world body (0.184).
+The other runs are within the noise: the warehouse's static links carry only its seven
+collision boxes, and the city block and the town (USD worlds) already had their scenery on the world body.
+
+State hashes change for runs whose world has static bodies: the MuJoCo state
+(`mjSTATE_INTEGRATION`) holds an applied wrench per MuJoCo body, and the left-out bodies are no
+longer in it. Where the scenery was already world geometry nothing changes:
+
+- **Sample AMR in the warehouse** (Python, 10 s; also `lagrange determinism` of
+  `amr_sample_urdf`, `sedan_city` and `quad_x500_hover`, which load the default warehouse): new
+  hashes, the robot's pose after 10 s the same bit for bit. The quadcopter over the warehouse
+  now gives the hash of the quadcopter alone (`e72044ab06f46b7f`).
+- **Sedan in the city block, sedan in the town, quadcopter alone**: the same hashes.
+- **The 200-box pile**: new hashes and a different pile. The floor's geom is now first in
+  MuJoCo's geom list, so contacts are found and solved in another order; the pile is chaotic, so
+  after 1 s boxes differ by 1e-6 m at the bottom and up to 3 mm at the top (box 199).
+
+Each run is still deterministic: `lagrange determinism` passes for all of them with both builds,
+and Jolt's pile gives the same hashes as before. `test_mujoco_backend`
+(`StaticSceneryIsWorldGeometryAndFixedBasesKeepTheirBodies`) checks the split, the geom's world
+pose, a box resting on a welded shelf of a turned static tree, and a fixed-base arm whose link
+overlaps its base and turns freely.
 
 ## 5. Start-up and Python throughput (2026-11-12)
 

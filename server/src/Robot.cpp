@@ -6,10 +6,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <console_bridge/console.h>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <numbers>
 #include <set>
 #include <sstream>
@@ -88,6 +90,43 @@ std::set<std::string> commandedJoints(const std::string& path) {
         }
     }
     return joints;
+}
+
+/// Why the joints do not make one tree below `root`, or empty. urdfdom accepts a joint whose
+/// child already hangs below the root, and links in a loop of their own off it; every walk down
+/// the tree would then never end, or leave them out (QA F2).
+std::string treeProblem(const urdf::ModelInterface& model, const urdf::Link& root) {
+    // A link with two parent joints closes a loop.
+    std::map<std::string, std::string> parentOf;
+    for (const auto& [name, joint] : model.joints_) {
+        const auto [it, inserted] = parentOf.emplace(joint->child_link_name, name);
+        if (!inserted) {
+            return "joints '" + it->second + "' and '" + name + "' both carry link '" +
+                   joint->child_link_name + "', which closes a loop";
+        }
+    }
+    std::set<std::string> seen{root.name};
+    std::vector<const urdf::Link*> stack{&root};
+    while (!stack.empty()) {
+        const urdf::Link* link = stack.back();
+        stack.pop_back();
+        for (const urdf::JointSharedPtr& joint : link->child_joints) {
+            if (!seen.insert(joint->child_link_name).second) {
+                return "joint '" + joint->name + "' closes a loop at link '" +
+                       joint->child_link_name + "'";
+            }
+            if (const urdf::LinkConstSharedPtr child = model.getLink(joint->child_link_name)) {
+                stack.push_back(child.get());
+            }
+        }
+    }
+    for (const auto& [name, link] : model.links_) {
+        if (!seen.contains(name)) {
+            return "link '" + name + "' is not below the root link '" + root.name +
+                   "' (its joints make a loop of their own)";
+        }
+    }
+    return {};
 }
 
 constexpr int kArmJoints = 3;  // a chain this long is an arm, not a wheel or a door
@@ -626,9 +665,11 @@ double firstStddev(const tinyxml2::XMLElement* element) {
 /// A lidar's opt-in scan pattern (LidarLayout.hpp; sensors.md, "Lidar scan patterns (as
 /// built)"): <pattern> grid | flash | rosette, a channel table <scan><vertical><angles> (rad,
 /// one per channel, any order) and the rosette's <rosette> (fov, point_rate, speed_1, speed_2,
-/// prism_ratio). Returns a note for a pattern it does not know, else an empty string.
+/// prism_ratio). Returns a note for a pattern it does not know, else an empty string; sets
+/// `refused` when the file's table cannot be read.
 std::string lidarPattern(const tinyxml2::XMLElement* ray,
-                         std::map<std::string, double, std::less<>>& settings) {
+                         std::map<std::string, double, std::less<>>& settings,
+                         std::string& refused) {
     if (ray == nullptr) {
         return {};
     }
@@ -658,6 +699,11 @@ std::string lidarPattern(const tinyxml2::XMLElement* ray,
         std::size_t ring = 0;
         for (double angle = 0.0; text >> angle; ++ring) {
             settings["vertical_angle_" + std::to_string(ring)] = angle;
+        }
+        // A word that is not a number ended the table there, silently (sensors QA F7).
+        if (!text.eof()) {
+            refused = std::string("<scan><vertical><angles> '") + angles->GetText() +
+                      "' is not a list of numbers (rad, one per channel)";
         }
     }
     if (const tinyxml2::XMLElement* rosette = ray->FirstChildElement("rosette")) {
@@ -891,10 +937,11 @@ void addThermalElements(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId
 }
 
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
-void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
+/// Why a sensor of the file cannot be read (it refuses the model), or empty.
+std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
     tinyxml2::XMLDocument document;
     if (document.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS) {
-        return;
+        return {};
     }
     const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
     World& world = robot.world;
@@ -1061,8 +1108,12 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 if (childNumber(ray, {"motion_distortion"}, 1.0) == 0.0) {
                     settings["motion_distortion"] = 0.0;
                 }
-                if (std::string note = lidarPattern(ray, settings); !note.empty()) {
+                std::string refused;
+                if (std::string note = lidarPattern(ray, settings, refused); !note.empty()) {
                     robot.notes.push_back(std::string(name) + ": " + note);
+                }
+                if (!refused.empty()) {
+                    return "sensor '" + std::string(name) + "': " + refused;
                 }
                 typeName = "Lidar";
             } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
@@ -1110,19 +1161,79 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             robot.sensorPrim.push_back(static_cast<std::uint32_t>(robot.scene.prims.size() - 1));
         }
     }
+    return {};
 }
+
+/// While it lives, console_bridge's errors (urdfdom's parse errors) are kept for the load's
+/// message, and still printed; it puts the previous handler back. console_bridge's handler is
+/// one for the process, so loads on several threads (a spawn service beside the viewer's import)
+/// take turns: each holds a mutex from before it swaps the handler in until after it puts the
+/// previous one back, so no load sees another's messages or restores a handler still in use.
+class ParserMessages final : public console_bridge::OutputHandler {
+public:
+    ParserMessages() : lock_(mutex()), previous_(console_bridge::getOutputHandler()) {
+        console_bridge::useOutputHandler(this);
+    }
+    ~ParserMessages() override { console_bridge::restorePreviousOutputHandler(); }
+    ParserMessages(const ParserMessages&) = delete;
+    ParserMessages& operator=(const ParserMessages&) = delete;
+    ParserMessages(ParserMessages&&) = delete;
+    ParserMessages& operator=(ParserMessages&&) = delete;
+
+    void log(const std::string& text, console_bridge::LogLevel level, const char* file,
+             int line) override {
+        if (previous_ != nullptr) {
+            previous_->log(text, level, file, line);
+        }
+        if (level < console_bridge::CONSOLE_BRIDGE_LOG_ERROR) {
+            return;
+        }
+        if (!text_.empty()) {
+            text_ += "; ";
+        }
+        text_ += text;
+    }
+    [[nodiscard]] std::string text() const { return text_; }
+
+private:
+    static std::mutex& mutex() {
+        static std::mutex m;
+        return m;
+    }
+    std::lock_guard<std::mutex> lock_;  // first: taken before the swap, let go after the restore
+    console_bridge::OutputHandler* previous_;
+    std::string text_;
+};
 
 }  // namespace
 
 Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
                                     const LoadOptions& options) {
-    const urdf::ModelInterfaceSharedPtr model = urdf::parseURDFFile(path);
+    urdf::ModelInterfaceSharedPtr model;
+    std::string parserSaid;
+    {
+        // urdfdom says what is wrong through console_bridge: kept for the message (a spawn
+        // service's caller or the viewer never sees the server's console).
+        const ParserMessages messages;
+        model = urdf::parseURDFFile(path);
+        parserSaid = messages.text();
+    }
     if (!model) {
-        return Unexpected{path + " is not a valid URDF (the parser's message is on the console)"};
+        return Unexpected{path + " is not a valid URDF" +
+                          (parserSaid.empty() ? "" : ": " + parserSaid)};
     }
     const urdf::LinkConstSharedPtr root = model->getRoot();
     if (!root) {
         return Unexpected{path + " has no root link"};
+    }
+    if (const std::string why = treeProblem(*model, *root); !why.empty()) {
+        // urdfdom holds a link's children by shared pointer, so the links of a loop hold each
+        // other and would never be freed (LeakSanitizer); let go of them before refusing.
+        for (auto& [name, link] : model->links_) {
+            link->child_links.clear();
+        }
+        return Unexpected{path + ": " + why +
+                          "; a URDF must be a tree of links, each with one parent joint"};
     }
     const std::size_t firstBody = robot.world.bodies.names.size();
     const std::size_t firstJoint = robot.world.joints.names.size();
@@ -1197,7 +1308,9 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
             robot.bodyRestPose[b].position[2] += lift;
         }
     }
-    addSensors(robot, path, firstBody);
+    if (std::string refused = addSensors(robot, path, firstBody); !refused.empty()) {
+        return Unexpected{path + ": " + refused};
+    }
     return {};
 }
 
@@ -1205,6 +1318,7 @@ Robot emptyModel(const LoadOptions& options) {
     Robot robot;
     robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
                             options.groundFriction);
+    robot.lagrangePlane = true;
     addGroundPrim(robot);
     return robot;
 }
@@ -1301,12 +1415,17 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     robot.sourcePath = path;
     robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
                             options.groundFriction);
+    robot.lagrangePlane = true;
     if (auto added = addUrdf(robot, path, options); !added) {
         return Unexpected{added.error()};
     }
     robot.name = robot.scene.prims.front().name;
 
-    addGroundPrim(robot);  // static scenery after the robot
+    if (hasOwnFloor(robot, false)) {
+        removeGroundPlane(robot);  // the file's floor is the ground (a world given as the robot)
+    } else {
+        addGroundPrim(robot);  // static scenery after the robot
+    }
     if (auto power = applyLagrangeBlock(robot, path); !power) {
         return Unexpected{power.error()};
     }
@@ -1498,8 +1617,18 @@ Expected<void, std::string> addModel(Robot& robot, const std::string& path,
             other = importers::importMjcf(path, import);
             break;
         case importers::Format::Urdf:
-        case importers::Format::Unknown:
-            return addUrdf(robot, path, options);
+        case importers::Format::Unknown: {
+            const bool ownFloor = hasOwnFloor(robot, false);
+            if (auto added = addUrdf(robot, path, options); !added) {
+                return added;
+            }
+            if (!ownFloor && hasOwnFloor(robot, false)) {
+                // A world with a floor of its own (a level slab): it is the ground.
+                removeGroundPlane(robot);
+                robot.groundPlane = false;
+            }
+            return {};
+        }
     }
     if (!other) {
         return Unexpected{other.error()};

@@ -201,12 +201,12 @@ struct CameraEffectsFrame {
 
 /// A thermal camera's image on the GPU (thermal_camera.slang): what does not change per frame.
 struct ThermalImageSetup {
-    std::uint32_t prims{0};     // entries of each frame's apparent-temperature table
-    std::uint32_t palette{0};   // 0 white hot, 1 black hot, 2 ironbow
-    double netd{0.0};           // K, the noise's standard deviation
-    double displayMin{0.0};     // K; displayMax > displayMin: a fixed display range
+    std::uint32_t prims{0};    // entries of each frame's apparent-temperature table
+    std::uint32_t palette{0};  // 0 white hot, 1 black hot, 2 ironbow
+    double netd{0.0};          // K, the noise's standard deviation
+    double displayMin{0.0};    // K; displayMax > displayMin: a fixed display range
     double displayMax{0.0};
-    double span{0.0};           // K, the least range of a frame's own display range
+    double span{0.0};  // K, the least range of a frame's own display range
 };
 
 /// A thermal frame: each scene prim's apparent temperature, the sky's, the noise's stream.

@@ -68,7 +68,11 @@ ros2 service call /delete_entity simulation_interfaces/srv/DeleteEntity "{entity
 ```
 
 The file is a URDF, SDFormat, MJCF or USD path (`file://` and `package://` URIs too), or its text
-in `resource_string`; xacro is run first (`xacro robot.urdf.xacro > robot.urdf`). The pose is in
+in `resource_string`; xacro is run first (`xacro robot.urdf.xacro > robot.urdf`). Without a
+`name`, text is named by its own `<robot name>` and a file after its file name; a name that is
+taken fails with `NAME_NOT_UNIQUE` unless `allow_renaming: true`, which numbers it (`crate_2`),
+and text that names no robot fails with `NAME_INVALID` unless renaming is allowed. A file that
+does not parse comes back as `RESOURCE_PARSE_ERROR` with the parser's own message. The pose is in
 the frame `world`, the frame of `/odom`'s origin; the robot is placed as `--spawn` places it, its
 lowest collision shape just above z.
 
@@ -316,6 +320,8 @@ lagrange robot_baked.urdf
 
 Each concave mesh becomes several `<collision>` elements, one per convex part (CoACD, `pip install coacd`). Your file is not changed. For a USD stage with mesh colliders, `collision_bake` does the same.
 
+The viewer's robot builder does the same for one link (Properties, Collision, *Split into convex parts*): it runs `lagrange bake`'s `bake_urdf` with your `python3`, so CoACD is found where `lagrange bake` finds it (the system, a venv on `PATH`, or `pip install --user`, looked up in your account's `~/.local` even when `HOME` points elsewhere). The parts go into `<robot>_collision/` beside the saved file.
+
 ## Importing a robot
 
 `lagrange robot.urdf` needs no setup:
@@ -329,6 +335,17 @@ Each concave mesh becomes several `<collision>` elements, one per convex part (C
   is one such chain. MJCF's written `<freejoint>` stays free.
 - A `<lagrange>` block in the URDF naming a SPICE netlist gives it its power system
   (`<lagrange><schematic file="power.cir"/>...`, formats.md §9.2), with no `--overlay`.
+- One ground per run. Lagrange adds its ground (an infinite plane at z = 0 and the 50 m slab you
+  see) only when neither the robot's file nor the world's has a floor of its own: a plane facing
+  up, a height field, or a level box at least 10 m by 10 m and no thicker than a quarter of its
+  narrower side, on the world or on a body fixed to it (an MJCF `worldbody` geom, an SDFormat
+  static model, a URDF world's links), whose top is the lowest ground there is: within 0.1 m of
+  z = 0 or below, not above the robots' lowest point, and not above the foot of any other
+  static scenery over or under it (a wall or pit sunk into the ground beside the slab does not
+  count). A building's roof, a mezzanine or a bridge deck is never the floor, so a robot
+  beside or under it keeps Lagrange's plane. A file with such a floor, as the robot or as the
+  world, keeps its own and gets no plane at its top (1.3.0 and earlier added the plane there
+  too); a file's own planes are never taken away.
 - On a robot fixed to the ground, a joint with no command yet holds its start position, up to its
   URDF effort limit; a joint stopped at that limit away from its target is logged, because the file's
   limit is kept, not raised.

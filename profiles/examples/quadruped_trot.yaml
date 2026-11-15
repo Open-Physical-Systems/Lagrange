@@ -1,0 +1,21 @@
+# profiles/examples/quadruped_trot.yaml — the sample quadruped (the trotting example's robot,
+# twelve driven joints, no sensors) on its own ground: MuJoCo at 1 ms, the step the legged spike
+# measured (docs/plan/spikes/legged-contact.md), every other domain substituted; the joints take
+# their commands as given (the electrical domain's ideal substitute, also with the power-system
+# overlay). quadruped_trot_powered.yaml is the same with the overlay's drives and battery running.
+# Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/quadruped_trot.yaml --joint-control
+#   ros2 run lagrange_server lagrange determinism profiles/examples/quadruped_trot.yaml
+# From Python: lagrange.envs.LagrangeEnv(lagrange.sample_quadruped(), profile="quadruped_trot").
+schema_version: 1
+stage: robots/quadruped/quadruped.urdf
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: false, substitute: ideal }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }

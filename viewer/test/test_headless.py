@@ -585,8 +585,17 @@ def test_replay_workspace_shows_the_recording_and_its_events(socket_dir):
 
 def test_viewport_draws_the_lidar_returns_as_sensor_frustums(socket_dir):
     """Scene viewport, Sensor frustums overlay (on by default): each lidar return is a cross
-    in the sensors domain colour, placed with the sensor's pose."""
-    stats, rows = run_workspace(socket_dir, "scene", "frustums.png", frames="120")
+    in the sensors domain colour, placed with the sensor's pose.
+
+    The shading and overlays are given: on a GPU with hardware ray tracing the viewport starts
+    Realistic with the sensor overlays off, which would change the draw calls."""
+    stats, rows = run_workspace(
+        socket_dir,
+        "scene",
+        "frustums.png",
+        frames="120",
+        extra=("--shading", "lit", "--overlays", "grid,axes,sensors"),
+    )
     assert stats["draw_calls"] == 7, "the overlay adds the strong and attenuated returns"
     # Only the viewport (left panel 280 px, inspector 340 px, header and timeline excluded),
     # so that the domain strip's Sensors chip does not count.
@@ -595,7 +604,7 @@ def test_viewport_draws_the_lidar_returns_as_sensor_frustums(socket_dir):
     assert returns > 40, f"no lidar returns in the viewport ({returns} pixels)"
 
 
-def run_workspace(socket_dir, workspace, name, frames="60"):
+def run_workspace(socket_dir, workspace, name, frames="60", extra=()):
     """Runs the viewer on one workspace against the mock server; returns stats and pixels."""
     image = socket_dir / name
     with ServerThread(str(socket_dir / "s.sock")) as server:
@@ -610,6 +619,7 @@ def run_workspace(socket_dir, workspace, name, frames="60"):
             workspace,
             "--screenshot",
             str(image),
+            *extra,
         )
     assert result.returncode == 0, result.stderr
     stats = json.loads(result.stdout.strip().splitlines()[-1])
@@ -626,10 +636,20 @@ def count(rows, wanted):
 
 
 def test_environment_workspace_draws_the_field_slice(socket_dir):
-    """Design 07-environment: environment state, a 2D field slice, the overlay list."""
-    stats, rows = run_workspace(socket_dir, "environment", "environment.png")
+    """Design 07-environment: environment state, the field in the 3D view (Viewport · fields,
+    in front) and as a 2D slice, the overlay list."""
+    stats, rows = run_workspace(socket_dir, "environment", "environment.png", "150")
     assert stats["environment_fields"] >= 1
-    # The slice is drawn with viridis: its low end is a dark purple no other panel uses.
+    # In the 3D view the slice lies in the scene, seen at a slant: count its viridis teal and
+    # green (a few thousand such pixels elsewhere: chips, meters).
+    field = count(
+        rows, lambda r, g, b: r <= 140 and 110 <= g <= 230 and 60 <= b <= 170 and g > b and g > r
+    )
+    assert field > 50000, f"field slice not drawn in the 3D view ({field} pixels)"
+    # The 2D slice: viridis's low end is a dark purple no other panel uses.
+    stats, rows = run_workspace(
+        socket_dir, "environment", "slice2d.png", "60", extra=("--panel", "###FieldSlice")
+    )
     purple = count(rows, lambda r, g, b: 50 <= r <= 80 and g <= 30 and 60 <= b <= 100)
     assert purple > 20000, f"field slice not drawn ({purple} pixels)"
 

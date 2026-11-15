@@ -20,6 +20,7 @@ ground.
 | Buildings: roofs, walls beside a wake (boxes of the scenery) | the same | done (§2.6) |
 | A wall beside a rotor: more inflow, less thrust, a roll towards it | the robot's own rotors | done (§2.7) |
 | Ceilings, scenery other than boxes and the ground plane | | not modelled |
+| Tethers in the wake, the drone's own included | each cable's masses (`tether/<n>/downwash`) | done (§2.9) |
 
 The model is `aerodynamics::Downwash` (`modules/aerodynamics/include/lagrange/aerodynamics/Downwash.hpp`),
 run by the aerodynamics domain (`AeroDrag`). It runs whenever the stage has rotors and the site
@@ -214,6 +215,30 @@ rotors; so a hovering drone needs that much less thrust here than a real one, at
 model has is how it changes near the ground. The live box (§8) has no frame, so it has the
 fountain in the air but not this push on the frame; the push is applied in both models.
 
+### 2.9 On a tether
+
+A tether (RFC 0011, [tether.md](../../physics/tether.md)) is blown by the same air. The server
+gives the domain each cable's node count (config `tether_nodes`, `<name>=<nodes>`) when the
+tether domain runs with rotors; the domain then reads `tether/<n>/nodes` and writes
+`tether/<n>/downwash`: every group's wake at each node, **its own drone's included**, since the
+cable is not part of the airframe the rotor data leave out. Only the wakes: the tether already
+takes the wind and gust from `env/wind/velocity`, so a run without rotors is unchanged. With the
+live box (§8) the box's air is used inside it, as for links. The domain reads the nodes after
+the tether module wrote them this step; the tether module reads the downwash a step late.
+
+Checked in a whole run (`TetherRun.TheDronesDownwashPushesItsTetherDown`): the sample quad
+hovers on 4.75 m of tether to a mast 4.2 m off along its front-left diagonal, which passes
+0.32 m under rotor 3's disc. Over 2 s of hover the station and the drone hold 0.0529 N more than
+the cable's weight; the drag law on the published downwash gives 0.0520 N, and the closed form
+for a cylinder across the actuator disc's slipstream, $\tfrac12\rho C_d d\, w^2\, 2 r_w
+\cos^2\theta$ with $w = v_i(1 + s/\sqrt{s^2+R^2})$, $r_w = R\sqrt{v_i/w}$ and $v_i =
+\sqrt{T/2\rho\pi R^2}$ from the run's own thrust, 0.0537 N (1.5 %). The peak on the cable is
+12.4 m/s for $v_i$ = 6.37 m/s. With the domain off the ends hold the weight (−0.0013 N). The
+same run twice gives the same state every 100 ms (`TetherRun.InTheWakeTheSameRunGivesTheSameState`,
+and `lagrange determinism` over 10 s). A cable tied at the frame's centre, as `--tether` ties it,
+hangs between the rotors' columns and above the merged jet: there the downwash adds 0.5 % to
+what the ends hold.
+
 ## 3. Signals
 
 | Signal | Unit | Writer | Reader |
@@ -223,6 +248,8 @@ fountain in the air but not this push on the frame; the push is applied in both 
 | `rotor/<j>/air_velocity` | m/s, world | aerodynamics | rotor_aero (`bem`, config `rotor_air`) |
 | `body/<b>/wrench/aero` | N, N·m | aerodynamics | wrench sum |
 | `env/dust/downwash` | kg/m³ | aerodynamics | weather (config `downwash_dust`) |
+| `tether/<n>/nodes` | m, world, 3 per node | tether | aerodynamics |
+| `tether/<n>/downwash` | m/s, world, 3 per node | aerodynamics | tether (feedback) |
 
 The modules talk only through these signals (invariant 1). The aerodynamics domain reads the
 rotors' outputs from the previous step (feedback), so there is no loop within a step.

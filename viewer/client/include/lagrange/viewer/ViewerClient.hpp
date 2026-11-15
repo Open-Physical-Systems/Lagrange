@@ -40,6 +40,15 @@ struct ConnectionInfo {
     std::string message;  ///< Refusal reason or last connection error, for the status bar.
     bool canSeek{false};
     bool canStep{false};
+    bool canImport{false};  ///< ImportRobot spawns into the run (Capabilities.can_import)
+};
+
+/// The answer to a command the UI waits for (importRobotText, removeRobot).
+struct CommandOutcome {
+    std::uint64_t requestId{0};
+    bool ok{false};
+    std::string error;              ///< one line, when !ok
+    std::string importedStagePath;  ///< ImportRobot: the file, or "/name" for content
 };
 
 enum class RunState : std::uint8_t { Unknown = 0, Stopped = 1, Paused = 2, Running = 3, Error = 4 };
@@ -143,7 +152,11 @@ struct PrimAttributes {
 struct PointCloud {
     std::int64_t simTimeNs{0};
     std::uint32_t count{0};
-    std::vector<float> points;  ///< count x (x, y, z, intensity), in the sensor's frame.
+    /// Floats per point: 4 for a lidar (x, y, z, intensity), 6 for a radar (x, y, z, radial
+    /// velocity m/s positive receding, rcs m², snr linear; RadarScale.hpp).
+    std::uint32_t floats{4};
+    std::vector<float> points;  ///< count x floats, in the sensor's frame.
+    [[nodiscard]] bool radar() const { return floats == 6; }
 };
 
 /// One image of a camera, as RGBA8 rows from the top. Immutable.
@@ -559,6 +572,15 @@ struct ClientStats {
     std::uint64_t samples{0};         ///< Samples stored into scope buffers.
     std::uint64_t invalidRuns{0};     ///< Signal runs rejected as malformed.
     std::uint64_t droppedSamples{0};  ///< Samples missing between runs, over all buffers.
+    /// What the Builder's cost rule (RFC 0016 R7) stops: sensor frames, field slices and
+    /// volumes, world states and ROS graphs received, in all.
+    std::uint64_t sensorFrames{0};
+    std::uint64_t fieldMessages{0};
+    std::uint64_t worldMessages{0};
+    std::uint64_t rosGraphs{0};
+    /// Of those and the signal blocks, the ones that came while quiet, after kQuietGrace (what was
+    /// already on its way when the unsubscribe was sent is not counted). Zero when quiet works.
+    std::uint64_t streamedWhileQuiet{0};
 };
 
 /// The viewer's only link to a simulation (invariant 14).
@@ -566,6 +588,11 @@ struct ClientStats {
 /// A worker thread owns the socket: it connects, reconnects with a backoff, decodes messages
 /// and builds scene frames. The UI thread only reads the latest published state and enqueues
 /// commands; it never waits on the network.
+/// The viewer protocol version this viewer speaks in its Hello (the server's must have the same
+/// major).
+inline constexpr std::uint32_t kProtocolMajor = 0;
+inline constexpr std::uint32_t kProtocolMinor = 1;
+
 class ViewerClient {
 public:
     explicit ViewerClient(proto::Endpoint endpoint);
@@ -578,6 +605,8 @@ public:
     ViewerClient& operator=(const ViewerClient&) = delete;
 
     void start();
+    /// Commands queued before it still reach a Ready server (the worker writes them for at most
+    /// 200 ms before closing); the rest are dropped, never sent to the next endpoint.
     void stop();
     /// True between start() and stop().
     [[nodiscard]] bool running() const { return thread_.joinable(); }
@@ -598,6 +627,11 @@ public:
     /// has no such signal or component. Call from the UI thread.
     [[nodiscard]] std::shared_ptr<ScopeBuffer> subscribe(const std::string& name,
                                                          std::uint32_t component = 0);
+    /// As subscribe(), but kept while quiet (setQuiet), into a small buffer (a few seconds):
+    /// for a readout of the latest value, such as the Builder's live joint positions while
+    /// testing (RFC 0016 §7.3). Stop it with unsubscribe().
+    [[nodiscard]] std::shared_ptr<ScopeBuffer> watchSignal(const std::string& name,
+                                                           std::uint32_t component = 0);
     /// Stops feeding `buffer`. The buffer keeps its history.
     void unsubscribe(const std::shared_ptr<ScopeBuffer>& buffer);
     [[nodiscard]] const proto::Endpoint& endpoint() const { return endpoint_; }
@@ -616,6 +650,20 @@ public:
     /// Asks the server to load a file that it can read: a robot description (.urdf, .xacro)
     /// or a recording (.mcap). The result arrives as a Notice and, on success, a new scene.
     void openFile(const std::string& path);
+    /// Spawns a robot from its text into the run (ImportRobot.content, inline; RFC 0016 §7.2),
+    /// with an overlay's text when not empty. Returns the request id; the answer arrives in
+    /// outcome(): its importedStagePath is the robot's scene path, "/name".
+    std::uint64_t importRobotText(const std::string& urdf, const std::string& overlay = {});
+    /// Removes a robot from the run by name (RemoveRobot). Returns the request id; the answer
+    /// arrives in outcome(). A server without RemoveRobot answers with an error.
+    std::uint64_t removeRobot(const std::string& name);
+    /// Drives one joint of the run (CommandJoint; RFC 0016 §7.3): `mode` "position",
+    /// "velocity", "effort" or "voltage". Returns the request id; the answer arrives in
+    /// outcome(). A server without joint control, or older than CommandJoint, refuses it.
+    std::uint64_t commandJoint(const std::string& joint, const std::string& mode, double value);
+    /// The answer to importRobotText(), removeRobot() or commandJoint() with this id, or nullptr
+    /// while it has not arrived (the last few are kept).
+    [[nodiscard]] std::shared_ptr<const CommandOutcome> outcome(std::uint64_t requestId) const;
 
     [[nodiscard]] Notice notice() const { return *notice_.load(); }
 
@@ -665,6 +713,14 @@ public:
     /// off until a panel that shows them asks. Remembered across reconnects.
     void setRosGraphWanted(bool wanted);
     void setWorldWanted(bool wanted);
+    /// Quiet (RFC 0016 R7, the Builder's cost rule): no signals, sensor frames, field slices,
+    /// ROS graph or world state while true. Turning it on sends Unsubscribe for every signal and
+    /// the "off" form of SubscribeSensor, SubscribeField, SetRosGraph and SetWorld; turning it
+    /// off sends again everything the panels still want. Scene deltas, status and logs keep
+    /// coming. Requests made while quiet are remembered and sent on leaving. Cheap to call every
+    /// frame: only a change does anything. UI thread.
+    void setQuiet(bool quiet);
+    [[nodiscard]] bool quiet() const { return quiet_; }
     /// Where the camera is (region-local, m), for a streamed world's tile selection. Cheap to
     /// call every frame: sent only when it moved 10 m or more and at most twice a second.
     void setCameraInterest(const std::array<double, 3>& eye);
@@ -700,7 +756,10 @@ public:
 private:
     void run();
     void handle(const v1::Envelope& envelope);
+    void countQuietable(const v1::Envelope& envelope);
     void enqueue(std::unique_ptr<v1::Envelope> envelope);
+    /// On the worker, as it stops: sends the queued commands to a Ready server (bounded).
+    void deliverBeforeClosing();
     void handleSignalBlock(const v1::Envelope& envelope);
     void sendSubscriptions();
     void requestSnapshot();
@@ -739,12 +798,26 @@ private:
         std::make_shared<const std::map<std::uint32_t, PrimAttributes>>()};
     std::atomic<std::uint64_t> manyAttributesRequest_{0};
     std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
+    /// Request ids of importRobotText() and removeRobot() not answered yet (guarded by
+    /// commandMutex_), and the last answers to them, newest last.
+    std::vector<std::uint64_t> awaited_;
+    std::atomic<std::shared_ptr<const std::vector<CommandOutcome>>> outcomes_{
+        std::make_shared<const std::vector<CommandOutcome>>()};
     std::atomic<std::uint64_t> profileSerial_{0};
     void post(bool error, std::string text);
     std::atomic<std::uint64_t> signalBlocks_{0};
     std::atomic<std::uint64_t> samples_{0};
     std::atomic<std::uint64_t> invalidRuns_{0};
     std::atomic<std::uint64_t> droppedSamples_{0};
+    std::atomic<std::uint64_t> sensorFrames_{0};
+    std::atomic<std::uint64_t> fieldMessages_{0};
+    std::atomic<std::uint64_t> worldMessages_{0};
+    std::atomic<std::uint64_t> rosGraphs_{0};
+    std::atomic<std::uint64_t> streamedWhileQuiet_{0};
+    /// steady_clock nanoseconds when setQuiet(true) took effect; 0 while not quiet.
+    std::atomic<std::int64_t> quietSinceNs_{0};
+    /// Messages already sent by the server when the unsubscribe left are not stray.
+    static constexpr std::int64_t kQuietGraceNs = 1'000'000'000;
 
     /// A change to the set of subscriptions, handed from the UI thread to the worker.
     struct SubscriptionChange {
@@ -752,6 +825,7 @@ private:
         std::string name;
         std::uint32_t component{0};
         std::shared_ptr<ScopeBuffer> buffer;
+        bool evenQuiet{false};  // watchSignal(): sent while quiet too
     };
 
     void subscribeSensors();  // (re)sends the sensor subscriptions; worker thread
@@ -768,6 +842,8 @@ private:
     std::vector<WatchedField> fields_;  // guarded by sensorMutex_
     std::atomic<bool> rosGraphWanted_{false};
     std::atomic<bool> worldWanted_{false};
+    std::atomic<bool> quiet_{false};
+    std::atomic<bool> resubscribe_{false};  // the worker sends the signal subscriptions again
     std::array<double, 3> sentEye_{1e300, 1e300, 1e300};  // UI thread only
     std::chrono::steady_clock::time_point sentEyeAt_{};
     std::atomic<std::shared_ptr<const EnvironmentInfo>> environment_;

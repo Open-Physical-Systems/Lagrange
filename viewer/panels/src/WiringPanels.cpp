@@ -13,6 +13,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <imgui_internal.h>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -178,6 +179,7 @@ public:
         };
 
         // Wires first, so that nodes cover their ends.
+        labels_.clear();
         for (const WiringInfo::Wire& wire : wiring.wires) {
             const int from = indexOf(wire.from);
             const int to = indexOf(wire.to);
@@ -190,6 +192,7 @@ public:
         for (std::size_t i = 0; i < wiring.nodes.size(); ++i) {
             drawNode(session, draw, wiring.nodes[i], places_[i]);
         }
+        placeLabels(draw);
         ImGui::SetCursorScreenPos(origin);
         ImGui::Dummy(ImVec2(width + px(24.0F), height + px(24.0F)));
         ImGui::EndChild();
@@ -200,7 +203,7 @@ private:
     /// A wire from the writer to the reader, with "symbol · unit" at its middle. Wires out
     /// of a substitute are dashed in the accent; a unit conflict is red.
     void drawWire(ImDrawList* draw, const WiringInfo::Wire& wire, const WiringInfo::Node& writer,
-                  const ImVec2& fromNode, const ImVec2& toNode) const {
+                  const ImVec2& fromNode, const ImVec2& toNode) {
         const ImVec2 size(nodeWidth_, px(kNodeHeight));
         ImVec2 a(fromNode.x + size.x * 0.5F, fromNode.y + size.y * 0.5F);
         ImVec2 b(toNode.x + size.x * 0.5F, toNode.y + size.y * 0.5F);
@@ -256,19 +259,13 @@ private:
             std::snprintf(label, sizeof(label), "%s · %s -> %s", wire.symbol.c_str(),
                           wire.sourceUnit.c_str(), wire.sinkUnit.c_str());
         }
-        ImFont* font = theme::fonts().mono;
         const float text = px(theme::kCaptionSize);
-        const ImVec2 extent = font->CalcTextSizeA(text, FLT_MAX, 0.0F, label);
         const ImVec2 mid((a.x + b.x) * 0.5F, (a.y + b.y) * 0.5F);
-        const ImVec2 at(
-            mid.x - extent.x * 0.5F + normal.x * px(2.0F),
-            mid.y - extent.y * 0.5F +
-                (std::abs(unit.x) > 0.5F ? -px(9.0F) : 0.0F) * (backward ? -1.0F : 1.0F));
-        draw->AddRectFilled(ImVec2(at.x - px(3.0F), at.y - px(1.0F)),
-                            ImVec2(at.x + extent.x + px(3.0F), at.y + extent.y + px(1.0F)),
-                            u32(c::bg0));
-        draw->AddText(font, text, at,
-                      u32(wire.unitOk ? (writer.substitute ? c::accent : c::t3) : c::error), label);
+        // Placed after the nodes are drawn, where no node covers it (placeLabels).
+        labels_.push_back(
+            WireLabel{label, a, b, std::abs(unit.x) > 0.5F, backward,
+                      std::min(fromNode.y, toNode.y), std::max(fromNode.y, toNode.y) + size.y,
+                      u32(wire.unitOk ? (writer.substitute ? c::accent : c::t3) : c::error)});
         if (wire.stiff && !backward) {
             // A tightly coupled pair: say how the scheduler treats it (design: warn pill).
             const char* stiff = "stiff · implicit";
@@ -291,6 +288,7 @@ private:
         if (ImGui::InvisibleButton(node.module.c_str(), ImVec2(nodeWidth_, px(kNodeHeight)))) {
             session.selectedDomain = node.domain;  // the same selection as the Domains table
         }
+        const bool hovered = ImGui::IsItemHovered();
         const bool selected = session.selectedDomain == node.domain;
         const float rounding = px(4.0F);
         draw->AddRectFilled(min, max, u32(node.substitute ? c::bg1 : c::bg2), rounding);
@@ -332,24 +330,45 @@ private:
         } else {
             std::snprintf(name, sizeof(name), "%s", node.module.c_str());
         }
-        draw->AddText(fonts.sansSemiBold, label,
+        // The name and the tag on the right share the header: when both do not fit, the tag
+        // gives way first (down to 40 % of it), then the name; both end in an ellipsis.
+        const std::string_view tagText =
+            node.substitute ? std::string_view("sub") : std::string_view(node.detail);
+        const float headerRoom = nodeWidth_ - px(22.0F) - px(8.0F) - px(6.0F);
+        const float nameWidth = fonts.sansSemiBold->CalcTextSizeA(label, FLT_MAX, 0.0F, name).x;
+        const std::string tag = fit::cut(fonts.mono, small, tagText,
+                                         std::max(headerRoom - nameWidth, headerRoom * 0.4F));
+        const float tagWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, tag.c_str()).x;
+        const bool cutHeader =
+            fit::draw(draw, fonts.sansSemiBold, label,
                       ImVec2(min.x + px(22.0F), min.y + (header - label) * 0.5F - px(1.0F)),
-                      u32(node.substitute ? c::accent : c::t1), name);
-        const char* tag = node.substitute ? "sub" : node.detail.c_str();
-        const float tagWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, tag).x;
+                      u32(node.substitute ? c::accent : c::t1), name, headerRoom - tagWidth) ||
+            tag != tagText;
         draw->AddText(fonts.mono, small,
                       ImVec2(max.x - tagWidth - px(8.0F), min.y + (header - small) * 0.5F),
-                      u32(node.substitute ? c::accent : c::t3), tag);
+                      u32(node.substitute ? c::accent : c::t3), tag.c_str());
 
         char line[160];
         float y = min.y + header + px(7.0F);
-        std::snprintf(line, sizeof(line), "in  %s",
+        // What it reads and writes: cut with an ellipsis inside the node, all of it in the
+        // tooltip (a long list ran past the node's right edge, clipped mid-character).
+        const float room = nodeWidth_ - px(20.0F);
+        char inputs[160];
+        std::snprintf(inputs, sizeof(inputs), "in  %s",
                       node.inputs.empty() ? "-" : joined(node.inputs).c_str());
-        draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2), line);
+        bool cut = fit::draw(draw, fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2),
+                             inputs, room);
         y += px(19.0F);
-        std::snprintf(line, sizeof(line), "out %s",
+        char outputs[160];
+        std::snprintf(outputs, sizeof(outputs), "out %s",
                       node.outputs.empty() ? "-" : joined(node.outputs).c_str());
-        draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2), line);
+        cut = fit::draw(draw, fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2), outputs,
+                        room) ||
+              cut;
+        if ((cut || cutHeader) && hovered) {
+            ImGui::SetTooltip("%s  %.*s\n%s\n%s", name, static_cast<int>(tagText.size()),
+                              tagText.data(), inputs, outputs);
+        }
         y += px(19.0F);
         if (node.substitute) {
             std::snprintf(line, sizeof(line), "replaces the module");
@@ -364,7 +383,76 @@ private:
         draw->PopClipRect();
     }
 
+    /// A wire's "symbol · unit", placed once every node is drawn.
+    struct WireLabel {
+        std::string text;
+        ImVec2 a, b;  // the wire's ends
+        bool horizontal{false};
+        bool backward{false};  // the second of a pair of wires between two modules
+        float top{0.0F};       // the top of the higher node and the bottom of the lower one
+        float bottom{0.0F};
+        ImU32 color{0};
+    };
+
+    /// Draws the wires' labels where no node and no other label is (QA3 F7: a label in the
+    /// narrow gap between two columns hid under the nodes): at the wire's middle when it fits,
+    /// else further along the wire, else above (or below) both nodes at the wire's middle; when
+    /// nothing is free, at the middle, over what is there.
+    void placeLabels(ImDrawList* draw) {
+        ImFont* font = theme::fonts().mono;
+        const float size = px(theme::kCaptionSize);
+        const float pad = px(3.0F);
+        std::vector<ImRect> taken;
+        taken.reserve(places_.size() + labels_.size());
+        for (const ImVec2& place : places_) {
+            taken.emplace_back(ImVec2(place.x - pad, place.y - pad),
+                               ImVec2(place.x + nodeWidth_ + pad, place.y + px(kNodeHeight) + pad));
+        }
+        const auto free = [&](const ImRect& box) {
+            return std::ranges::none_of(taken, [&](const ImRect& t) { return t.Overlaps(box); });
+        };
+        for (const WireLabel& label : labels_) {
+            const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0.0F, label.text.c_str());
+            const auto boxAt = [&](const ImVec2& centre) {
+                return ImRect(ImVec2(centre.x - extent.x * 0.5F - pad, centre.y - extent.y * 0.5F),
+                              ImVec2(centre.x + extent.x * 0.5F + pad, centre.y + extent.y * 0.5F));
+            };
+            // Beside the wire, on the side away from its twin.
+            const float side =
+                (label.horizontal ? -px(9.0F) : 0.0F) * (label.backward ? -1.0F : 1.0F);
+            std::vector<ImVec2> candidates;
+            for (const float t : {0.5F, 0.35F, 0.65F, 0.2F, 0.8F}) {
+                candidates.emplace_back(label.a.x + (label.b.x - label.a.x) * t,
+                                        label.a.y + (label.b.y - label.a.y) * t + side);
+            }
+            // Then stacked above (or below, for the second wire of a pair) both nodes.
+            const float midX = (label.a.x + label.b.x) * 0.5F;
+            const float line = extent.y + px(4.0F);
+            for (int k = 0; k < 3; ++k) {
+                const float above =
+                    label.top - extent.y * 0.5F - px(4.0F) - line * static_cast<float>(k);
+                const float below =
+                    label.bottom + extent.y * 0.5F + px(4.0F) + line * static_cast<float>(k);
+                candidates.emplace_back(midX, label.backward ? below : above);
+                candidates.emplace_back(midX, label.backward ? above : below);
+            }
+            ImRect box = boxAt(candidates.front());
+            for (const ImVec2& candidate : candidates) {
+                if (free(boxAt(candidate))) {
+                    box = boxAt(candidate);
+                    break;
+                }
+            }
+            taken.push_back(box);
+            draw->AddRectFilled(ImVec2(box.Min.x, box.Min.y - px(1.0F)),
+                                ImVec2(box.Max.x, box.Max.y + px(1.0F)), u32(c::bg0));
+            draw->AddText(font, size, ImVec2(box.Min.x + pad, box.Min.y), label.color,
+                          label.text.c_str());
+        }
+    }
+
     std::vector<ImVec2> places_;
+    std::vector<WireLabel> labels_;
     float nodeWidth_{190.0F};  // in pixels, set every frame
 };
 
@@ -459,7 +547,10 @@ public:
         const WiringInfo& wiring = context.profileSession->wiring();
         char sync[24];
         format::step(wiring.syncNs, sync, sizeof(sync));
-        widgets::Caption("10 ms window  ·  modules exchange signals every %s", sync);
+        char caption[96];
+        std::snprintf(caption, sizeof(caption),
+                      "10 ms window  ·  modules exchange signals every %s", sync);
+        fit::caption(caption, ImGui::GetContentRegionAvail().x);
 
         rows_.clear();
         for (const WiringInfo::Node& node : wiring.nodes) {

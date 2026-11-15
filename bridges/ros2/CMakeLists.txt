@@ -63,7 +63,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_bridge
         test/test_bridge.cpp
-        ENV ROS_DOMAIN_ID=73 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 60
     )
     target_link_libraries(
@@ -78,11 +78,12 @@ if(BUILD_TESTING)
         ${ackermann_msgs_TARGETS}
     )
     lagrange_target_defaults(test_bridge)
+    lagrange_test_ros_domain(test_bridge 73)
     # The custom sensors' default topics (KindTopics.hpp), one message family at a time.
     ament_add_gtest(
         test_kind_topics
         test/test_kind_topics.cpp
-        ENV ROS_DOMAIN_ID=77 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 120
     )
     target_link_libraries(
@@ -96,6 +97,7 @@ if(BUILD_TESTING)
         ${vision_msgs_TARGETS}
     )
     lagrange_target_defaults(test_kind_topics)
+    lagrange_test_ros_domain(test_kind_topics 77)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

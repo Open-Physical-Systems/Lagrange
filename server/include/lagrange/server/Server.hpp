@@ -280,12 +280,27 @@ public:
     /// "effort" (N·m, N). False for another mode, a joint the run does not have, or a value
     /// that is not finite.
     bool commandJoint(const std::string& joint, const std::string& mode, double value);
+    /// commandJoint's outcome in full: why it was refused, or the value taken, held within the
+    /// joint's velocity limit, effort limit or range from the robot file (not the effort limit
+    /// on a voltage motor, whose effort carries volts that its drive holds to the bus voltage).
+    struct JointCommandResult {
+        std::string refused;  // empty when the joint took the command
+        double value{0.0};    // the value taken (rad, m, rad/s, m/s, N·m, N or V)
+        bool clamped{false};  // the value asked was beyond the joint's limit
+        std::string limit;    // which limit held it, with its value: "its velocity limit, 10 rad/s"
+        [[nodiscard]] bool taken() const { return refused.empty(); }
+    };
+    [[nodiscard]] JointCommandResult commandJointChecked(const std::string& joint,
+                                                         const std::string& mode, double value);
     /// After load(): takes a robot out of the run by its entity name, rebuilt likewise.
     Status removeRobot(const std::string& name);
     /// After load(): the simulated time.
     [[nodiscard]] SimTime now() const;
     /// After load(): the world (bodies, joints, colliders, sensors) as loaded.
     [[nodiscard]] const World& world() const;
+    /// After load(): what the loader noted about the robot's files and took its own way (an
+    /// unknown lidar pattern, a lens it does not draw, ...); start() logs them as [import].
+    [[nodiscard]] const std::vector<std::string>& importNotes() const;
     /// One iteration: waits up to `timeoutMs` for viewers, advances simulation time by the wall
     /// time that passed (times the real-time factor), and sends what changed.
     void runOnce(int timeoutMs);

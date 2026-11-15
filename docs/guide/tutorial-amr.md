@@ -69,7 +69,8 @@ viewer:
 ros2 run lagrange_viewer lagrange_viewer --connect unix:$XDG_RUNTIME_DIR/lagrange/default.sock
 ```
 
-The robot drives a figure-eight (a demo that plays until a velocity command arrives). The
+The robot drives a figure-eight (a demo that plays until a velocity command arrives: two
+1.2 m loops that touch where it starts, followed closed-loop, so it keeps to the aisle). The
 **Scene** workspace shows it with the lidar returns, the prim tree on the left and the console:
 
 ![The Scene workspace: the AMR in the warehouse with its lidar points, the prim tree, timeline
@@ -77,8 +78,8 @@ and console](../imgs/tutorial-scene.png)
 
 Things to try:
 
-- **Domains** (top bar) shows the profile: Rigid body and Sensors on, the rest substituted. The
-  wiring and the schedule show what runs when.
+- **Domains** (top bar) shows the profile: Rigid body, Electrical, Thermal and Sensors on, the
+  rest substituted. The wiring and the schedule show what runs when.
 - **Signals**: tick `base/command/linear_velocity` and `joint/left_wheel_joint/velocity` to plot
   them. The commanded speed ramps to 0.6 m/s. During the left loop (0.5 rad/s), the left wheel
   is the inner one: its rim moves at 0.6 − 0.5 × 0.23 = 0.485 m/s, so with a 0.1 m radius it
@@ -129,7 +130,9 @@ ros2 run lagrange_server lagrange_server --replay run.mcap
 
 then connect the viewer (`ros2 run lagrange_viewer lagrange_viewer`, Connect). The scene and
 every recorded signal come back sample for sample, and the Replay workspace's timeline seeks
-anywhere in the run. A replay runs no physics and publishes nothing to ROS.
+anywhere in the run. A replay runs no physics and publishes nothing to ROS. Recordings hold no
+camera images or point buffers: a robot with cameras replays, but its cameras show no frame
+(the console names the buffers left out).
 
 ## 5. Switch a domain off
 

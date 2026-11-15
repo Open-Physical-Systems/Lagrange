@@ -18,13 +18,16 @@ from ament_index_python.packages import get_package_share_directory
 # the path would hide the others (the mock server then fails to import its messages).
 __path__ = pkgutil.extend_path(__path__, __name__)
 
-from lagrange._lagrange import Simulation
+from lagrange._lagrange import JointCommand, Simulation
 
 __all__ = [
+    "JointCommand",
     "Simulation",
     "sample_city",
     "sample_profile",
     "sample_quadcopter",
+    "sample_quadruped",
+    "sample_quadruped_overlay",
     "sample_robot",
     "sample_sedan",
     "sample_tiled_town",
@@ -43,6 +46,19 @@ def sample_robot() -> str:
 def sample_quadcopter() -> str:
     """The sample quadcopter (USD, with its rotors, motors and battery) from lagrange_assets."""
     return get_package_share_directory("lagrange_assets") + "/robots/quad_x500/quad_x500.usda"
+
+
+def sample_quadruped() -> str:
+    """The sample quadruped (URDF, twelve driven joints, no sensors) from lagrange_assets."""
+    return get_package_share_directory("lagrange_assets") + "/robots/quadruped/quadruped.urdf"
+
+
+def sample_quadruped_overlay() -> str:
+    """The sample quadruped's power system (battery, bus, a drive on each joint) as an overlay,
+    for Simulation(..., overlay=)."""
+    return (
+        get_package_share_directory("lagrange_assets") + "/robots/quadruped/quadruped.overlay.yaml"
+    )
 
 
 def sample_sedan() -> str:

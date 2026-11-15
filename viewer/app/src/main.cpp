@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "lagrange/viewer/Panel.hpp"
 
 #include <algorithm>
 #include <array>
@@ -25,17 +26,21 @@ void usage() {
         "  --open <file>          ask the server to load a robot (.urdf, .xacro) or recording "
         "(.mcap)\n"
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
-        "  --workspace <name>     workspace to show at start-up: scene, domains or signals\n"
-        "  --shading <mode>       viewport shading at start-up: lit, unlit, wireframe, collision\n"
-        "                         or thermal\n"
+        "  --workspace <name>     workspace to show at start-up: scene, domains, electrical,\n"
+        "                         signals, sensors, environment, replay, ros2, world, "
+        "performance,\n"
+        "                         builder (the robot builder; without --connect, no server)\n"
+        "  --builder-open <file>  open a robot (.urdf, or .xacro by expansion) in the builder\n"
+        "  --builder-save <file>  headless: save the builder's robot here at the end (.urdf)\n"
         "  --follow <m>[,<deg>]   start with the follow camera, this far from the robot (and this\n"
         "                         far above the horizon)\n"
         "  --camera <x,y,z,m,yaw,pitch>  start the camera looking at x,y,z from m metres away, at\n"
         "                         these angles in degrees\n"
         "  --season <name>        how the realistic view draws the year: summer, fall, winter, "
         "rainy\n"
-        "  --shading <mode>       realistic (the default on a GPU), lit (without one), unlit, ...\n"
-        "  --overlays <list>      show these from the start: grid,axes,sensors,airflow\n"
+        "  --shading <mode>       viewport shading at start-up: realistic (the default on a GPU),\n"
+        "                         lit (without one), unlit, wireframe, collision or thermal\n"
+        "  --overlays <list>      show these from the start: grid,axes,sensors,radar,airflow\n"
         "  --slice <field>[:xy|xz|yz]  the Slice 2D panel's field and plane, e.g.\n"
         "                         aero/wind_speed:xz\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
@@ -44,8 +49,20 @@ void usage() {
         "  --cursors              show the scope's A and B cursors from the start\n"
         "  --export-netlist <f>   write the stage's power system to this netlist file\n"
         "  --input <script>       headless mouse and keyboard, by frame: "
-        "50:click:400,200;60:text:12;61:key:enter (keys: enter, tab, escape)\n"
+        "50:click:400,200;60:text:12;61:key:enter (keys: enter, tab, escape, space,\n"
+        "                         left, right, up, down, delete, f1-f12, or a letter\n"
+        "                         with ctrl+ and shift+: ctrl+b);\n"
+        "                         FRAME:wait:connected|build|idle|ready holds the frame count\n"
+        "                         until a builder Test is connected, back in Build, no tool\n"
+        "                         runs, or the client is ready on its server\n"
+        "                         FRAME:select:NAME selects a builder link, joint or sensor\n"
+        "                         FRAME:open:FILE, FRAME:saveas:FILE, FRAME:template:NAME do\n"
+        "                         what a dropped robot, Save as… and a template card do;\n"
+        "                         FRAME:world:FILE makes FILE the builder Test's world\n"
+        "                         FRAME:spawn:X,Y,Z,HEADING sets its Start at (m, deg)\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
+        "  --compare <file.mcap>  Replay: compare the replayed recording with this one\n"
+        "  --suite <file.yaml>    Replay: the validation suite for --compare\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
         "  --apply-profile        apply the edited profile once the server calls it valid\n"
@@ -65,6 +82,8 @@ void usage() {
 
 int main(int argc, char** argv) {
     lagrange::viewer::Options options;
+    std::string compareLog;
+    std::string compareSuite;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto value = [&]() -> const char* {
@@ -150,6 +169,10 @@ int main(int argc, char** argv) {
             options.exportNetlist = value();
         } else if (arg == "--input") {
             options.input = value();
+        } else if (arg == "--compare") {
+            compareLog = value();
+        } else if (arg == "--suite") {
+            compareSuite = value();
         } else if (arg == "--panel") {
             options.focusPanel = value();
         } else if (arg == "--select") {
@@ -158,6 +181,10 @@ int main(int argc, char** argv) {
             options.applyProfile = true;
         } else if (arg == "--workspace") {
             options.workspace = value();
+        } else if (arg == "--builder-open") {
+            options.builderOpen = value();
+        } else if (arg == "--builder-save") {
+            options.builderSave = value();
         } else if (arg == "--shading") {
             options.shading = value();
         } else if (arg == "--season") {
@@ -192,6 +219,10 @@ int main(int argc, char** argv) {
             usage();
             return 2;
         }
+    }
+    if (!compareLog.empty()) {
+        // Headless: the first frames wait for the comparison, so the screenshot shows it.
+        lagrange::viewer::setReplayCompare(compareLog, compareSuite, options.headless);
     }
     return lagrange::viewer::runViewer(options);
 }

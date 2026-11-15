@@ -41,7 +41,21 @@ struct LaneGraph {
     std::vector<Crossing> crossings;
     /// Where walkers go: per sidewalk lane, the sidewalk lanes that touch its start and its end.
     std::vector<std::array<std::vector<std::size_t>, 2>> walkLinks;
+    /// Per lane, the lane of the same kind beside it on its road section (OpenDRIVE lane id one
+    /// further in or out), for the road's bank; none for a lane alone.
+    std::vector<std::optional<std::size_t>> beside;
+    /// Whether any lane leaves the level (its centre lines' heights differ): agents then tilt.
+    bool sloped{false};
 };
+
+/// A vehicle's tilt on its lane `along` metres in: roll about its direction of travel (rad,
+/// positive raising its left), from the height of the lane beside it (a banked road), and
+/// pitch (rad, positive nose down, about its left axis) from its centre line's slope.
+struct Tilt {
+    double roll{0.0};
+    double pitch{0.0};
+};
+[[nodiscard]] Tilt tiltAt(const LaneGraph& graph, std::size_t lane, double along);
 
 /// The network of `world`'s RoadLaneAPI_1 lanes, with signal groups: per junction, approaches
 /// facing each other share a group.
@@ -142,6 +156,10 @@ struct Idm {
 /// with several lanes each way they change lanes to get past something slow. With less grip
 /// (env/friction_scale) they accelerate, brake and drive more gently; they do not skid: agents are
 /// kinematic.
+/// A robot is seen by its footprint (its root body's colliders), where it is and where it will be
+/// on its arc within kEgoHorizon, as a leader at its speed along their lane, unless they are
+/// through before it arrives; and they wait at a junction's line while a robot is in their
+/// junction lane or will be before they are through it.
 /// Pedestrians walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends, and keep
 /// away from each other and from the robot sideways by a social force (Helbing and Molnár 1995:
 /// A·exp(−d/B), A = 2 m/s², B = 0.3 m). On a world with crossings, walkers (HumanAPI_1 people named
@@ -193,9 +211,13 @@ private:
         SignalId poseCommand;
         Vec3 position{};
         double yaw{0.0};
+        Tilt tilt;  // on a sloped or banked road
     };
     struct Ego {
         SignalId pose, twist;
+        /// Its footprint: half its length (along its x) and half its width (m), from its root
+        /// body's colliders.
+        double halfLength{2.5}, halfWidth{1.0};
     };
     /// An actuated junction: one with crossings.
     struct Controller {

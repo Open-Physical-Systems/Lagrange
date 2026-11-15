@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <mutex>
 #include <numbers>
@@ -35,6 +36,7 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/PhysicsStepListener.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/RegisterTypes.h>
@@ -54,6 +56,12 @@ constexpr float kMimicMotorHz = 100.0F;
 // Explicit damping d is stable for d dt / I < 2; half of that leaves a margin.
 constexpr double kMaxDampingShare = 1.0;
 
+// The most sub-steps a profile may ask of Jolt per step (domains.rigid_body.substeps): each one
+// is a whole Jolt step, collision detection included, so the cost grows with the count.
+constexpr std::int64_t kMaxSubsteps = 64;
+// The impulses a joint constraint keeps (JoltBackend::Impl::jointLambdas).
+constexpr std::size_t kLambdas = 7;
+
 // Share of a step's new armature torque estimate taken (JoltBackend::Impl::updateArmatureTorques).
 constexpr double kArmatureRelaxation = 0.5;
 
@@ -61,6 +69,25 @@ constexpr double kArmatureRelaxation = 0.5;
 constexpr float kMaxAngularVelocityRadPerS = 1.0e6F;
 
 // Object layers: static scenery, and everything that moves.
+// A collider's own friction rides on its Jolt shape as user data: this tag in the upper 32 bits,
+// the float's bits in the lower. A body's Jolt friction is then only the scale of all of them
+// (env/friction_scale), so that a robot's feet and its body each touch with their own.
+constexpr JPH::uint64 kFrictionTag = 0x4C46'5249U;  // "LFRI"
+
+void tagFriction(JPH::Shape& shape, double friction) {
+    shape.SetUserData((kFrictionTag << 32U) |
+                      std::bit_cast<std::uint32_t>(static_cast<float>(friction)));
+}
+
+/// The friction of the collider a contact touches on `body`: its own, times the body's scale.
+float colliderFriction(const JPH::Body& body, const JPH::SubShapeID& part) {
+    const JPH::uint64 data = body.GetShape()->GetSubShapeUserData(part);
+    if ((data >> 32U) != kFrictionTag) {
+        return body.GetFriction();
+    }
+    return std::bit_cast<float>(static_cast<std::uint32_t>(data)) * body.GetFriction();
+}
+
 constexpr JPH::ObjectLayer kStaticLayer = 0;
 constexpr JPH::ObjectLayer kMovingLayer = 1;
 constexpr JPH::uint kLayers = 2;
@@ -274,13 +301,12 @@ struct JoltBackend::Impl {
         JPH::BodyID id;
         std::uint32_t root{0};
         double mass{0.0};
-        Mat3 inertia{};  // about the centre of mass, in the root's frame
-        Vec3 com{};      // in the root's frame
-        float friction{0.5F};
+        Mat3 inertia{};       // about the centre of mass, in the root's frame
+        Vec3 com{};           // in the root's frame
         Vec3 lastVelocity{};  // of the centre of mass, at the end of the previous step
     };
     std::vector<Group> groups;
-    std::vector<std::pair<JPH::BodyID, float>> staticFriction;  // scenery: body, base friction
+    std::vector<JPH::BodyID> staticBodies;  // scenery, for the friction scale
     double appliedFrictionScale{1.0};
     std::vector<std::int32_t> groupOf;  // per world body; -1 for static ones
     std::vector<Pose> inGroup;          // per world body: its pose in its group root's frame
@@ -308,8 +334,36 @@ struct JoltBackend::Impl {
         std::uint32_t childBody{0};    // world body
         std::int32_t parentGroup{-1};  // -1: the world or static scenery
         SignalId reaction;             // what the parent does to the child, at the child
+        /// The constraint's impulses (see jointLambdas), summed over the step's sub-steps,
+        /// then their mean over one sub-step.
+        std::array<double, kLambdas> lambdaSum{};
+        std::array<double, kLambdas> lambda{};
     };
     std::vector<Joint> joints;
+    int lambdaCount{0};  // sub-steps summed into the joints' lambdaSum this step
+
+    /// A joint constraint's impulses over the last sub-step (Jolt's GetTotalLambda*): a slider's
+    /// position (2), limits, motor, rotation (3); a hinge's position (3), rotation (2), limits,
+    /// motor.
+    static std::array<double, kLambdas> jointLambdas(const Joint& j);
+    /// Adds every joint's impulses over the sub-step just solved to its lambdaSum.
+    void sumLambdas();
+
+    /// Called by Jolt before each sub-step: from the second one on, the constraints hold the
+    /// previous sub-step's impulses, which would be lost to the next solve.
+    class SubstepListener final : public JPH::PhysicsStepListener {
+    public:
+        explicit SubstepListener(Impl& impl) : impl_(impl) {}
+        void OnStep(const JPH::PhysicsStepListenerContext& context) override {
+            if (!context.mIsFirstStep) {
+                impl_.sumLambdas();
+            }
+        }
+
+    private:
+        Impl& impl_;
+    };
+    std::unique_ptr<SubstepListener> substepListener;
 
     struct Body {
         std::uint32_t body{0};
@@ -343,6 +397,7 @@ struct JoltBackend::Impl {
     void updateArmatureTorques();
     std::vector<double> armatureMatrix, armatureForces;  // its scratch, kept between steps
     bool hasArmature{false};
+    int substeps{1};  // Jolt steps per Lagrange step (domains.rigid_body.substeps)
 
     /// Joint-space inertia M(a, b): what joint a feels when joint b accelerates (0 unless one's
     /// subtree holds the other's).
@@ -404,10 +459,10 @@ Vec3 JoltBackend::Impl::anchorOf(const Joint& j) const {
 void JoltBackend::Impl::applyFrictionScale(double scale) {
     JPH::BodyInterface& bi = system->GetBodyInterfaceNoLock();
     for (const Group& group : groups) {
-        bi.SetFriction(group.id, static_cast<float>(group.friction * scale));
+        bi.SetFriction(group.id, static_cast<float>(scale));
     }
-    for (const auto& [id, friction] : staticFriction) {
-        bi.SetFriction(id, static_cast<float>(friction * scale));
+    for (const JPH::BodyID id : staticBodies) {
+        bi.SetFriction(id, static_cast<float>(scale));
     }
     appliedFrictionScale = scale;
 }
@@ -700,9 +755,22 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config, 
     return {};
 }
 
-Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& io) {
+Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, SignalIo& io) {
     initJolt();
     Impl& s = *impl_;
+    // Jolt solves joints as constraints between free bodies (maximal coordinates): each step's
+    // velocity projection takes off the part of a body's velocity its turn over the step made
+    // radial, a loss of (ω·Δt)² of the kinetic energy per step, so O(Δt) per second (a 1 m
+    // pendulum from 1 rad loses 16 % in 60 s at 1 ms; docs/physics/rigid-body.md). Sub-steps
+    // divide it by their count at that many times the cost; one by default.
+    s.substeps = 1;
+    if (const auto asked = config.get<std::int64_t>("substeps")) {
+        if (*asked < 1 || *asked > kMaxSubsteps) {
+            return Status::error(StatusCode::InvalidConfig, "jolt: substeps must be from 1 to " +
+                                                                std::to_string(kMaxSubsteps));
+        }
+        s.substeps = static_cast<int>(*asked);
+    }
     const World& world = view.raw();
     const World::Bodies& bodies = world.bodies;
     const std::size_t n = bodies.names.size();
@@ -743,15 +811,22 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
     s.jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
     s.system = std::make_unique<JPH::PhysicsSystem>();
     s.system->Init(4096, 0, 8192, 8192, s.broadPhase, s.objectVsBroadPhase, s.objectPairs);
+    // Only with sub-steps: a registered step listener turns off Jolt's early exit when every
+    // body sleeps (PhysicsSystem::Update), so a run of one sub-step would never skip a step.
+    s.substepListener.reset();
+    if (s.substeps > 1) {
+        s.substepListener = std::make_unique<Impl::SubstepListener>(s);
+        s.system->AddStepListener(s.substepListener.get());
+    }
     s.system->SetGravity(jv(world.gravityLocal));
-    // Contact friction is the larger of the two bodies', as MuJoCo combines its geoms' (Jolt's
-    // default is the geometric mean).
-    s.system->SetCombineFriction(
-        [](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
-            return std::max(a.GetFriction(), b.GetFriction());
-        });
+    // Contact friction is the larger of the two colliders' (each a sub-shape of its body), as
+    // MuJoCo combines its geoms' (Jolt's default is the geometric mean of the bodies').
+    s.system->SetCombineFriction([](const JPH::Body& a, const JPH::SubShapeID& partA,
+                                    const JPH::Body& b, const JPH::SubShapeID& partB) {
+        return std::max(colliderFriction(a, partA), colliderFriction(b, partB));
+    });
     s.gravity = world.gravityLocal;
-    s.staticFriction.clear();
+    s.staticBodies.clear();
     s.appliedFrictionScale = 1.0;
     s.hasArmature = false;
     JPH::BodyInterface& bi = s.system->GetBodyInterfaceNoLock();
@@ -812,8 +887,9 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
             }
         }
         JPH::StaticCompoundShapeSettings compound;
-        float friction = 0.0F;
         int parts = 0;
+        bool mixedFriction = false;
+        double firstFriction = 0.0;
         for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
             const BodyId owner = world.colliders.body[c];
             if (owner == kWorldBody || s.groupOf[owner.index] != static_cast<std::int32_t>(g)) {
@@ -827,9 +903,13 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
                                      "jolt: collider of " + bodies.names[owner.index] + ": " +
                                          std::string(shape.GetError().c_str()));
             }
+            tagFriction(*shape.Get(), world.colliders.friction[c]);
             compound.AddShape(jv(p.position),
                               shapeRotation(world.colliders.shape[c], p.orientation), shape.Get());
-            friction = std::max(friction, static_cast<float>(world.colliders.friction[c]));
+            if (parts == 0) {
+                firstFriction = world.colliders.friction[c];
+            }
+            mixedFriction = mixedFriction || world.colliders.friction[c] != firstFriction;
             ++parts;
         }
         JPH::RefConst<JPH::Shape> shape;
@@ -862,13 +942,15 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
         }
         tensorJ(3, 3) = 1.0F;
         settings.mMassPropertiesOverride.mInertia = tensorJ;
-        // A frictionless collider stays frictionless (MuJoCo keeps 0 too); only a body without
-        // colliders, which touches nothing, takes Jolt's default.
-        settings.mFriction = parts > 0 ? friction : 0.5F;
+        // Each collider carries its own friction (tagFriction); the body's is the scale. A
+        // frictionless collider stays frictionless (MuJoCo keeps 0 too).
+        settings.mFriction = 1.0F;
+        // Jolt merges touching manifolds of one body with similar normals, keeping one of their
+        // sub-shapes: with colliders of different friction that would pick one friction for all.
+        settings.mUseManifoldReduction = !mixedFriction;
         s.groups[g].mass = mass;
         s.groups[g].inertia = inertia;
         s.groups[g].com = com;
-        s.groups[g].friction = settings.mFriction;
         settings.mCollisionGroup = JPH::CollisionGroup(
             filter, static_cast<JPH::CollisionGroup::GroupID>(bodies.robot[s.groups[g].root]),
             static_cast<JPH::CollisionGroup::SubGroupID>(g));
@@ -899,12 +981,12 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
             return Status::error(StatusCode::InvalidConfig,
                                  "jolt: " + std::string(shape.GetError().c_str()));
         }
+        tagFriction(*shape.Get(), world.colliders.friction[c]);
         JPH::BodyCreationSettings settings(shape.Get(), JPH::RVec3(jv(p.position)),
                                            shapeRotation(world.colliders.shape[c], p.orientation),
                                            JPH::EMotionType::Static, kStaticLayer);
-        settings.mFriction = static_cast<float>(world.colliders.friction[c]);
-        s.staticFriction.emplace_back(bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate),
-                                      settings.mFriction);
+        settings.mFriction = 1.0F;  // the scale; the collider's own is on its shape
+        s.staticBodies.push_back(bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate));
     }
 
     // Joints between groups: the anchor is the child's origin, the axis in the child frame.
@@ -1179,11 +1261,24 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
     }
 
     const double dt = context.dt.seconds();
+    for (Impl::Joint& j : s.joints) {
+        j.lambdaSum.fill(0.0);
+    }
+    s.lambdaCount = 0;
     const JPH::EPhysicsUpdateError error =
-        s.system->Update(static_cast<float>(dt), 1, s.temp.get(), s.jobs.get());
+        s.system->Update(static_cast<float>(dt), s.substeps, s.temp.get(), s.jobs.get());
     if (error != JPH::EPhysicsUpdateError::None) {
         return Status::error(StatusCode::Diverged, "jolt: physics update error " +
                                                        std::to_string(static_cast<int>(error)));
+    }
+    // The last sub-step's impulses, then the mean over the sub-steps: the listener (registered
+    // only with more than one sub-step) adds each earlier one. With one sub-step there is no
+    // listener, so Jolt skips the step when every body sleeps and the impulses stay the last.
+    s.sumLambdas();
+    for (Impl::Joint& j : s.joints) {
+        for (std::size_t k = 0; k < kLambdas; ++k) {
+            j.lambda[k] = j.lambdaSum[k] / s.lambdaCount;
+        }
     }
 
     for (Impl::Joint& j : s.joints) {
@@ -1193,14 +1288,14 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.prismatic) {
             const auto& slider = static_cast<JPH::SliderConstraint&>(*j.constraint);
             io.write(j.position, slider.GetCurrentPosition());
-            limitLambda = slider.GetTotalLambdaPositionLimits();
+            limitLambda = j.lambda[2];
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
             // Jolt's angle wraps at ±π; a joint's position counts turns, as MuJoCo's does.
             j.angle += std::remainder(static_cast<double>(hinge.GetCurrentAngle()) - j.angle,
                                       2.0 * std::numbers::pi);
             io.write(j.position, j.angle);
-            limitLambda = hinge.GetTotalLambdaRotationLimits();
+            limitLambda = j.lambda[5];
         }
         velocity = s.jointVelocity(j, axis);
         io.write(j.velocity, velocity);
@@ -1208,9 +1303,10 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.acceleration.valid()) {
             // Jolt has no joint-space acceleration: the change of velocity over the step.
             io.write(j.acceleration, j.lastAcceleration);
-            // The limit's impulse over the step, on the child along the axis. Contacts are not
-            // projected onto the joint (MuJoCo's qfrc_constraint includes them).
-            io.write(j.constraintTorque, limitLambda / dt);
+            // The limit's mean impulse over a sub-step (Jolt's total lambda restarts each
+            // sub-step), on the child along the axis. Contacts are not projected onto the joint
+            // (MuJoCo's qfrc_constraint includes them).
+            io.write(j.constraintTorque, limitLambda / (dt / s.substeps));
             const Vec3 anchor = s.anchorOf(j);
             io.write(j.effectiveInertia, j.armature + s.subtreeInertia(j, dv(axis), anchor));
         }
@@ -1247,13 +1343,53 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
 }
 
 // Jolt keeps its contact impulses to itself, but its constraints give theirs (GetTotalLambda*:
-// the impulse over the step, + on body 2, the child, − on body 1, the parent; the hinge's
-// rotation impulse in its basis b2 = a2⊥, c2 = a2 × b2, as HingeRotationConstraintPart builds
-// it). So a joint's reaction is its constraint impulses over the step plus the effort applied
-// through it, and what touches a group is what is left of its momentum change: m·Δv/Δt − m·g −
-// its external forces − the joints' forces on it (Newton's second law).
+// the impulse over a sub-step, dt / substeps, since each sub-step solves afresh from its warm
+// start; summed over every sub-step by the step listener and averaged, so the joints' share
+// matches the whole step's momentum change even while the joint force changes within it; + on body
+// 2, the child, − on body 1, the parent; the hinge's rotation impulse in its basis b2 = a2⊥, c2 =
+// a2 × b2, as HingeRotationConstraintPart builds it). So a joint's reaction is its constraint
+// impulses over the step plus the effort applied through it, and what touches a group is what is
+// left of its momentum change: m·Δv/Δt − m·g − its external forces − the joints' forces on it
+// (Newton's second law).
+std::array<double, kLambdas> JoltBackend::Impl::jointLambdas(const Joint& j) {
+    if (j.prismatic) {
+        const auto& slider = static_cast<const JPH::SliderConstraint&>(*j.constraint);
+        const JPH::Vector<2> across = slider.GetTotalLambdaPosition();
+        const JPH::Vec3 rotation = slider.GetTotalLambdaRotation();
+        return {across[0],
+                across[1],
+                slider.GetTotalLambdaPositionLimits(),
+                slider.GetTotalLambdaMotor(),
+                rotation.GetX(),
+                rotation.GetY(),
+                rotation.GetZ()};
+    }
+    const auto& hinge = static_cast<const JPH::HingeConstraint&>(*j.constraint);
+    const JPH::Vec3 position = hinge.GetTotalLambdaPosition();
+    const JPH::Vector<2> bend = hinge.GetTotalLambdaRotation();
+    return {position.GetX(),
+            position.GetY(),
+            position.GetZ(),
+            bend[0],
+            bend[1],
+            hinge.GetTotalLambdaRotationLimits(),
+            hinge.GetTotalLambdaMotor()};
+}
+
+void JoltBackend::Impl::sumLambdas() {
+    for (Joint& j : joints) {
+        const std::array<double, kLambdas> l = jointLambdas(j);
+        for (std::size_t k = 0; k < kLambdas; ++k) {
+            j.lambdaSum[k] += l[k];
+        }
+    }
+    ++lambdaCount;
+}
+
 void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
     const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    // The time the (mean) constraint impulses are over: one sub-step.
+    const auto h = static_cast<float>(dt / substeps);
     std::vector<Vec3> jointForce(groups.size(), Vec3{});  // on each group, from its joints
     const auto rotationOf = [&](JPH::BodyID id) {
         if (id.IsInvalid()) {
@@ -1272,24 +1408,28 @@ void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
             const JPH::Vec3 axis = (r1 * frame.GetAxisX()).Normalized();
             const JPH::Vec3 n1 = (r1 * frame.GetAxisY()).Normalized();
             const JPH::Vec3 n2 = (r1 * frame.GetAxisZ()).Normalized();
-            const JPH::Vector<2> across = slider.GetTotalLambdaPosition();
-            force = n1 * across[0] + n2 * across[1] +
-                    axis * (slider.GetTotalLambdaPositionLimits() + slider.GetTotalLambdaMotor());
-            torque = slider.GetTotalLambdaRotation();
-            force = force / static_cast<float>(dt) + axis * static_cast<float>(j.applied);
-            torque = torque / static_cast<float>(dt);
+            const auto& l = j.lambda;
+            force = n1 * static_cast<float>(l[0]) + n2 * static_cast<float>(l[1]) +
+                    axis * static_cast<float>(l[2] + l[3]);
+            torque = JPH::Vec3(static_cast<float>(l[4]), static_cast<float>(l[5]),
+                               static_cast<float>(l[6]));
+            force = force / h + axis * static_cast<float>(j.applied);
+            torque = torque / h;
         } else {
             const auto& hinge = static_cast<const JPH::HingeConstraint&>(*j.constraint);
             const JPH::Vec3 a1 = (r1 * hinge.GetLocalSpaceHingeAxis1()).Normalized();
             const JPH::Vec3 a2 = (r2 * hinge.GetLocalSpaceHingeAxis2()).Normalized();
             const JPH::Vec3 b2 = a2.GetNormalizedPerpendicular();
             const JPH::Vec3 c2 = a2.Cross(b2);
-            const JPH::Vector<2> bend = hinge.GetTotalLambdaRotation();
-            force = hinge.GetTotalLambdaPosition() / static_cast<float>(dt);
-            torque = (b2.Cross(a1) * bend[0] + c2.Cross(a1) * bend[1] +
-                      a1 * (hinge.GetTotalLambdaRotationLimits() + hinge.GetTotalLambdaMotor())) /
-                         static_cast<float>(dt) +
-                     a2 * static_cast<float>(j.applied);
+            const auto& l = j.lambda;
+            force = JPH::Vec3(static_cast<float>(l[0]), static_cast<float>(l[1]),
+                              static_cast<float>(l[2])) /
+                    h;
+            torque =
+                (b2.Cross(a1) * static_cast<float>(l[3]) + c2.Cross(a1) * static_cast<float>(l[4]) +
+                 a1 * static_cast<float>(l[5] + l[6])) /
+                    h +
+                a2 * static_cast<float>(j.applied);
         }
         // The forces act at the anchor; the torque goes to the child body's origin.
         const Vec3 f = dv(force);

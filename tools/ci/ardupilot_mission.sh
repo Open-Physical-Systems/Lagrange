@@ -9,7 +9,9 @@
 set -euo pipefail
 
 ARDUPILOT_DIR=${ARDUPILOT_DIR:-$HOME/ardupilot}
-OUT=${OUT:-/tmp/lagrange-ardupilot}
+# Logs in a directory of this run's unless OUT names one. (The MAVLink ports are fixed, so two
+# missions still cannot fly at once on one machine.)
+OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/lagrange-ardupilot-XXXXXX")}
 mkdir -p "$OUT"
 copter=$ARDUPILOT_DIR/build/sitl/bin/arducopter
 python=$ARDUPILOT_DIR/.venv/bin/python
@@ -27,7 +29,7 @@ params=$(ros2 pkg prefix lagrange_mavlink)/share/lagrange_mavlink/ardupilot/lagr
 
 site=(--air-density 1.225 --geo-origin "47.397742,8.545594,488")
 robot=(--robot assets/robots/quad_x500/quad_x500.usda --world assets/worlds/open_field/open_field.usda)
-socket=${XDG_RUNTIME_DIR:-/tmp}/lagrange-ardupilot.sock
+socket=${XDG_RUNTIME_DIR:-/tmp}/lagrange-ardupilot-$$.sock
 if [ "${1:-}" = "--wind" ]; then
     ros2 run lagrange_server lagrange run profiles/examples/quad_x500_gusty.yaml "${robot[@]}" \
         "${site[@]}" --mavlink ardupilot --no-ros --listen "unix:$socket" >"$OUT/server.log" 2>&1 &

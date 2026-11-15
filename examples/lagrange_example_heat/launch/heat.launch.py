@@ -14,6 +14,7 @@ ENDPOINT = "unix:/tmp/lagrange_example_heat.sock"
 
 
 def setup(context):
+    endpoint = LaunchConfiguration("endpoint").perform(context)
     assets = get_package_share_directory("lagrange_assets")
     share = get_package_share_directory("lagrange_example_heat")
     actions = [
@@ -35,7 +36,7 @@ def setup(context):
                 "--rtf",
                 "20",
                 "--listen",
-                ENDPOINT,
+                endpoint,
             ],
             output="screen",
         ),
@@ -56,7 +57,7 @@ def setup(context):
                     "lagrange_viewer",
                     "lagrange_viewer",
                     "--connect",
-                    ENDPOINT,
+                    endpoint,
                     "--shading",
                     "thermal",
                     "--camera",
@@ -72,6 +73,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("viewer", default_value="true", description="open the viewer"),
+            DeclareLaunchArgument(
+                "endpoint", default_value=ENDPOINT, description="the server's socket"
+            ),
             DeclareLaunchArgument(
                 "once", default_value="false", description="stop after the first result"
             ),

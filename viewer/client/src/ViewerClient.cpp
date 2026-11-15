@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <poll.h>
 #include <sys/eventfd.h>
@@ -20,8 +21,6 @@ namespace lagrange::viewer {
 
 namespace {
 
-constexpr std::uint32_t kProtocolMajor = 0;
-constexpr std::uint32_t kProtocolMinor = 1;
 constexpr int kPollTimeoutMs = 100;
 
 }  // namespace
@@ -60,6 +59,7 @@ struct ViewerClient::Worker {
     struct Wanted {
         std::uint32_t component;
         std::shared_ptr<ScopeBuffer> buffer;
+        bool evenQuiet{false};  // watchSignal(): subscribed while quiet too
     };
     std::unordered_map<std::string, std::vector<Wanted>> wanted;
     std::vector<const std::vector<Wanted>*> byId;  // index: signal id; null if not subscribed
@@ -128,12 +128,28 @@ void ViewerClient::stop() {
     wake();
     if (thread_.joinable()) {
         thread_.join();
+        {
+            // The worker delivered what it could to its server (run()): what is left was meant
+            // for that server, never for the next one (a Play queued for run A must not play
+            // the Builder's test server).
+            const std::lock_guard lock(commandMutex_);
+            commands_.clear();
+        }
+        // Stopped: not connected to anything (the worker no longer publishes). A refusal stays.
+        if (worker_->info.state != ConnectionState::Refused) {
+            worker_->info.state = ConnectionState::Disconnected;
+            worker_->info.message = "not connected";
+            connection_.store(std::make_shared<const ConnectionInfo>(worker_->info));
+        }
     }
 }
 
 ClientStats ViewerClient::stats() const {
-    return {snapshots_.load(),    deltas_.load(),  resyncs_.load(),     connects_.load(),
-            signalBlocks_.load(), samples_.load(), invalidRuns_.load(), droppedSamples_.load()};
+    return {snapshots_.load(),         deltas_.load(),         resyncs_.load(),
+            connects_.load(),          signalBlocks_.load(),   samples_.load(),
+            invalidRuns_.load(),       droppedSamples_.load(), sensorFrames_.load(),
+            fieldMessages_.load(),     worldMessages_.load(),  rosGraphs_.load(),
+            streamedWhileQuiet_.load()};
 }
 
 std::shared_ptr<ScopeBuffer> ViewerClient::subscribe(const std::string& name,
@@ -147,6 +163,24 @@ std::shared_ptr<ScopeBuffer> ViewerClient::subscribe(const std::string& name,
     {
         const std::lock_guard lock(commandMutex_);
         subscriptionChanges_.push_back({true, name, component, buffer});
+    }
+    wake();
+    return buffer;
+}
+
+std::shared_ptr<ScopeBuffer> ViewerClient::watchSignal(const std::string& name,
+                                                       std::uint32_t component) {
+    const std::shared_ptr<const SignalCatalog> catalog = catalog_.load();
+    const SignalInfo* info = catalog ? catalog->find(name) : nullptr;
+    if (info == nullptr || component >= info->components) {
+        return nullptr;
+    }
+    // A readout needs the latest value only: 4096 samples, 4 s at 1 kHz.
+    constexpr std::size_t kReadout = 4096;
+    auto buffer = std::make_shared<ScopeBuffer>(info->dtNs, kReadout);
+    {
+        const std::lock_guard lock(commandMutex_);
+        subscriptionChanges_.push_back({true, name, component, buffer, true});
     }
     wake();
     return buffer;
@@ -172,9 +206,16 @@ void ViewerClient::sendSubscriptions() {
     v1::Envelope subscribe;
     v1::Envelope unsubscribe;
     subscribe.mutable_subscribe()->set_catalog_generation(w.catalog->generation);
+    const bool quiet = quiet_;
     for (const SignalInfo& info : w.catalog->signals) {
         const auto found = w.wanted.find(info.name);
-        if (found != w.wanted.end() && !found->second.empty()) {
+        // While quiet only what watchSignal() asked for (a readout, RFC 0016 §7.3).
+        const bool sent =
+            found != w.wanted.end() && !found->second.empty() &&
+            (!quiet || std::ranges::any_of(found->second, [](const Worker::Wanted& item) {
+                return item.evenQuiet;
+            }));
+        if (sent) {
             w.byId[info.id] = &found->second;
             auto* item = subscribe.mutable_subscribe()->add_signals();
             item->set_signal(info.id);
@@ -299,6 +340,66 @@ void ViewerClient::openFile(const std::string& path) {
     enqueue(std::move(envelope));
 }
 
+std::uint64_t ViewerClient::importRobotText(const std::string& urdf, const std::string& overlay) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    v1::ImportRobot* import = envelope->mutable_command()->mutable_import_robot();
+    import->set_format(v1::ImportRobot::FORMAT_URDF);
+    import->mutable_content()->set_inline_(urdf);
+    import->mutable_content()->set_size(urdf.size());
+    if (!overlay.empty()) {
+        import->mutable_overlay_content()->set_inline_(overlay);
+        import->mutable_overlay_content()->set_size(overlay.size());
+    }
+    {
+        const std::lock_guard lock(commandMutex_);
+        awaited_.push_back(id);
+    }
+    enqueue(std::move(envelope));
+    return id;
+}
+
+std::uint64_t ViewerClient::removeRobot(const std::string& name) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    envelope->mutable_command()->mutable_remove_robot()->set_name(name);
+    {
+        const std::lock_guard lock(commandMutex_);
+        awaited_.push_back(id);
+    }
+    enqueue(std::move(envelope));
+    return id;
+}
+
+std::uint64_t ViewerClient::commandJoint(const std::string& joint, const std::string& mode,
+                                         double value) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    v1::CommandJoint* command = envelope->mutable_command()->mutable_command_joint();
+    command->set_joint(joint);
+    command->set_mode(mode);
+    command->set_value(value);
+    {
+        const std::lock_guard lock(commandMutex_);
+        awaited_.push_back(id);
+    }
+    enqueue(std::move(envelope));
+    return id;
+}
+
+std::shared_ptr<const CommandOutcome> ViewerClient::outcome(std::uint64_t requestId) const {
+    const std::shared_ptr<const std::vector<CommandOutcome>> all = outcomes_.load();
+    for (const CommandOutcome& candidate : *all) {
+        if (candidate.requestId == requestId) {
+            return {all, &candidate};  // shares the list's lifetime
+        }
+    }
+    return nullptr;
+}
+
 std::shared_ptr<SensorStream> ViewerClient::watchSensor(const std::string& name) {
     {
         const std::lock_guard lock(sensorMutex_);
@@ -308,6 +409,10 @@ std::shared_ptr<SensorStream> ViewerClient::watchSensor(const std::string& name)
             }
         }
         sensors_.push_back(std::make_shared<SensorStream>(name));
+    }
+    if (quiet_) {  // sent by setQuiet(false)
+        const std::lock_guard lock(sensorMutex_);
+        return sensors_.back();
     }
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
@@ -330,6 +435,9 @@ void ViewerClient::unwatchSensor(const std::string& name) {
         }
         sensors_.erase(it);
     }
+    if (quiet_) {
+        return;  // already off at the server
+    }
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
     v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
@@ -339,6 +447,9 @@ void ViewerClient::unwatchSensor(const std::string& name) {
 }
 
 void ViewerClient::subscribeSensors() {
+    if (quiet_) {
+        return;
+    }
     std::vector<std::string> names;
     {
         const std::lock_guard lock(sensorMutex_);
@@ -358,7 +469,6 @@ void ViewerClient::subscribeSensors() {
 
 void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     constexpr std::uint32_t kMaxPoints = 4'000'000;
-    constexpr std::uint32_t kFloats = 4;  // x, y, z, intensity
     const v1::SensorFrame& frame = envelope.sensor_frame();
     std::shared_ptr<SensorStream> stream;
     {
@@ -379,10 +489,26 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     // The message comes from the network: check every size before touching the bytes.
     const v1::PointCloudData& points = frame.points();
     const std::string& bytes = points.data().inline_();
-    const bool layout = points.fields_size() >= 4 && points.fields(0) == "x" &&
-                        points.fields(1) == "y" && points.fields(2) == "z" &&
-                        points.fields(3) == "intensity";
-    if (!layout || points.count() > kMaxPoints || points.stride() < kFloats * sizeof(float) ||
+    const auto fieldsAre = [&points](std::initializer_list<const char*> names) {
+        if (points.fields_size() < static_cast<int>(names.size())) {
+            return false;
+        }
+        int k = 0;
+        for (const char* name : names) {
+            if (points.fields(k++) != name) {
+                return false;
+            }
+        }
+        return true;
+    };
+    // A lidar's returns (x, y, z, intensity) or a radar's detections (RadarScale.hpp).
+    std::uint32_t floats = 0;
+    if (fieldsAre({"x", "y", "z", "velocity", "rcs", "snr"})) {
+        floats = 6;
+    } else if (fieldsAre({"x", "y", "z", "intensity"})) {
+        floats = 4;
+    }
+    if (floats == 0 || points.count() > kMaxPoints || points.stride() < floats * sizeof(float) ||
         bytes.size() != static_cast<std::size_t>(points.count()) * points.stride()) {
         ++stream->rejected_;
         return;
@@ -390,11 +516,12 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     auto cloud = std::make_shared<PointCloud>();
     cloud->simTimeNs = frame.sim_time().ns();
     cloud->count = points.count();
-    cloud->points.resize(static_cast<std::size_t>(points.count()) * kFloats);
+    cloud->floats = floats;
+    cloud->points.resize(static_cast<std::size_t>(points.count()) * floats);
     for (std::uint32_t i = 0; i < points.count(); ++i) {
-        std::memcpy(&cloud->points[static_cast<std::size_t>(i) * kFloats],
+        std::memcpy(&cloud->points[static_cast<std::size_t>(i) * floats],
                     bytes.data() + static_cast<std::size_t>(i) * points.stride(),
-                    kFloats * sizeof(float));
+                    floats * sizeof(float));
     }
     stream->latest_.store(std::move(cloud));
     ++stream->frames_;
@@ -580,7 +707,7 @@ std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, d
             changed = true;
         }
     }
-    if (changed) {
+    if (changed && !quiet_) {
         sendFieldSubscription(name, heightM, orientation, volume);
     }
     return stream;
@@ -589,12 +716,62 @@ std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, d
 void ViewerClient::sendViewRequests() {
     auto graph = std::make_unique<v1::Envelope>();
     graph->mutable_command()->set_request_id(nextRequestId_++);
-    graph->mutable_command()->mutable_set_ros_graph()->set_enabled(rosGraphWanted_);
+    graph->mutable_command()->mutable_set_ros_graph()->set_enabled(rosGraphWanted_ && !quiet_);
     enqueue(std::move(graph));
     auto world = std::make_unique<v1::Envelope>();
     world->mutable_command()->set_request_id(nextRequestId_++);
-    world->mutable_command()->mutable_set_world()->set_enabled(worldWanted_);
+    world->mutable_command()->mutable_set_world()->set_enabled(worldWanted_ && !quiet_);
     enqueue(std::move(world));
+}
+
+void ViewerClient::setQuiet(bool quiet) {
+    if (quiet_.exchange(quiet) == quiet) {
+        return;
+    }
+    quietSinceNs_ =
+        quiet ? std::max<std::int64_t>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count())
+              : 0;
+    // Signals: the worker sends the whole subscription again, empty while quiet.
+    resubscribe_ = true;
+    // Sensors and fields: off while quiet, on again after (their streams stay).
+    std::vector<std::string> sensors;
+    std::vector<WatchedField> fields;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const std::shared_ptr<SensorStream>& stream : sensors_) {
+            sensors.push_back(stream->name());
+        }
+        fields = fields_;
+    }
+    for (const std::string& name : sensors) {
+        auto envelope = std::make_unique<v1::Envelope>();
+        envelope->mutable_command()->set_request_id(nextRequestId_++);
+        v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
+        subscribe->set_sensor(name);
+        subscribe->set_enabled(!quiet);
+        enqueue(std::move(envelope));
+    }
+    for (const WatchedField& field : fields) {
+        if (quiet) {
+            auto envelope = std::make_unique<v1::Envelope>();
+            envelope->mutable_command()->set_request_id(nextRequestId_++);
+            v1::SubscribeField* subscribe = envelope->mutable_command()->mutable_subscribe_field();
+            subscribe->set_field(field.stream->name());
+            subscribe->set_enabled(false);
+            subscribe->set_orientation(
+                static_cast<v1::SliceOrientation>(field.stream->orientation()));
+            enqueue(std::move(envelope));
+        } else {
+            sendFieldSubscription(field.stream->name(), field.heightM, field.stream->orientation(),
+                                  field.volume);
+        }
+    }
+    if (rosGraphWanted_ || worldWanted_) {
+        sendViewRequests();
+    }
+    wake();
 }
 
 void ViewerClient::setRosGraphWanted(bool wanted) {
@@ -911,8 +1088,42 @@ WiringInfo toWiring(const v1::Wiring& source) {
 
 }  // namespace
 
+void ViewerClient::countQuietable(const v1::Envelope& envelope) {
+    std::atomic<std::uint64_t>* counter = nullptr;
+    switch (envelope.body_case()) {
+        case v1::Envelope::kSensorFrame:
+            counter = &sensorFrames_;
+            break;
+        case v1::Envelope::kFieldSlice:
+        case v1::Envelope::kFieldVolume:
+            counter = &fieldMessages_;
+            break;
+        case v1::Envelope::kWorld:
+            counter = &worldMessages_;
+            break;
+        case v1::Envelope::kRosGraph:
+            counter = &rosGraphs_;
+            break;
+        case v1::Envelope::kSignalBlock:  // counted in handleSignalBlock
+            break;
+        default:
+            return;
+    }
+    if (counter != nullptr) {
+        ++*counter;
+    }
+    const std::int64_t since = quietSinceNs_.load();
+    const std::int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch())
+                                 .count();
+    if (since != 0 && now - since > kQuietGraceNs) {
+        ++streamedWhileQuiet_;
+    }
+}
+
 void ViewerClient::handle(const v1::Envelope& envelope) {
     Worker& w = *worker_;
+    countQuietable(envelope);
     switch (envelope.body_case()) {
         case v1::Envelope::kServerHello: {
             const v1::ServerHello& hello = envelope.server_hello();
@@ -933,6 +1144,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             w.info.serverName = hello.server_name();
             w.info.canSeek = hello.capabilities().can_seek();
             w.info.canStep = hello.capabilities().can_step();
+            w.info.canImport = hello.capabilities().can_import();
             w.backoff.reset();
             w.everConnected = true;
             // The server sends its console history again on every connection.
@@ -945,6 +1157,9 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
                     wanted = fields_;
                 }
                 for (const WatchedField& field : wanted) {
+                    if (quiet_) {
+                        break;
+                    }
                     sendFieldSubscription(field.stream->name(), field.heightM,
                                           field.stream->orientation(), field.volume);
                 }
@@ -1244,6 +1459,25 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         }
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();
+            bool awaited = false;
+            {
+                const std::lock_guard lock(commandMutex_);
+                const auto it = std::ranges::find(awaited_, result.request_id());
+                if (it != awaited_.end()) {
+                    awaited_.erase(it);
+                    awaited = true;
+                }
+            }
+            if (awaited) {
+                constexpr std::size_t kKept = 8;
+                auto all = std::make_shared<std::vector<CommandOutcome>>(*outcomes_.load());
+                all->push_back({result.request_id(), result.ok(), result.error(),
+                                result.imported_stage_path()});
+                if (all->size() > kKept) {
+                    all->erase(all->begin());
+                }
+                outcomes_.store(std::move(all));
+            }
             if (result.has_attributes()) {
                 auto all = std::make_shared<std::map<std::uint32_t, PrimAttributes>>(
                     *attributesByPrim_.load());
@@ -1287,7 +1521,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             } else if (!result.ok()) {
                 post(true,
                      result.error().empty() ? "the server refused a command" : result.error());
-            } else if (!result.imported_stage_path().empty()) {
+            } else if (!awaited && !result.imported_stage_path().empty()) {
                 post(false, "Loaded " + result.imported_stage_path());
             }
             break;
@@ -1464,7 +1698,7 @@ void ViewerClient::run() {
                 for (SubscriptionChange& change : changes) {
                     if (change.add) {
                         w.wanted[change.name].push_back(
-                            {change.component, std::move(change.buffer)});
+                            {change.component, std::move(change.buffer), change.evenQuiet});
                     } else {
                         for (auto& [name, list] : w.wanted) {
                             std::erase_if(list, [&](const Worker::Wanted& item) {
@@ -1474,6 +1708,9 @@ void ViewerClient::run() {
                     }
                     w.subscriptionsDirty = true;
                 }
+                if (resubscribe_.exchange(false)) {
+                    w.subscriptionsDirty = true;
+                }
                 if (w.subscriptionsDirty) {
                     sendSubscriptions();
                 }
@@ -1481,7 +1718,44 @@ void ViewerClient::run() {
             (void)w.connection.flush(ec);
         }
     }
+    deliverBeforeClosing();
     w.connection.close();
+}
+
+void ViewerClient::deliverBeforeClosing() {
+    // stop() asked: the commands queued before it (a Play for the run the viewer leaves) still
+    // go to a server that is Ready, written for a short bounded time on this worker thread, so
+    // the UI thread never sleeps for them (CLAUDE.md §8).
+    Worker& w = *worker_;
+    if (w.connection.state() != proto::Connection::State::Connected ||
+        w.info.state != ConnectionState::Ready) {
+        return;
+    }
+    std::deque<std::unique_ptr<v1::Envelope>> pending;
+    {
+        const std::lock_guard lock(commandMutex_);
+        pending.swap(commands_);
+    }
+    for (const auto& command : pending) {
+        (void)w.connection.queue(*command);
+    }
+    // A local socket takes a few small frames at once; a slow TCP peer gets 200 ms at most.
+    constexpr auto kDeliverFor = std::chrono::milliseconds(200);
+    const auto until = std::chrono::steady_clock::now() + kDeliverFor;
+    std::error_code ec;
+    while (w.connection.pendingOutputBytes() > 0) {
+        const proto::IoStatus status = w.connection.flush(ec);
+        if (status == proto::IoStatus::Closed || status == proto::IoStatus::Error) {
+            return;
+        }
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            until - std::chrono::steady_clock::now());
+        if (w.connection.pendingOutputBytes() == 0 || left.count() <= 0) {
+            return;
+        }
+        pollfd fd{w.connection.fd(), POLLOUT, 0};
+        ::poll(&fd, 1, static_cast<int>(left.count()));
+    }
 }
 
 }  // namespace lagrange::viewer

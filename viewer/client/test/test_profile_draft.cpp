@@ -1,5 +1,8 @@
 #include "lagrange/viewer/ProfileDraft.hpp"
 
+#include <cstdint>
+#include <string>
+
 #include <gtest/gtest.h>
 
 namespace lagrange::viewer {
@@ -118,6 +121,33 @@ TEST(ProfileDraft, ACommentAfterADomainLineIsTolerated) {
     const auto thermal = draft.domain("thermal");
     ASSERT_TRUE(thermal.has_value());
     EXPECT_EQ(*findEntry(*thermal, "dt"), "0.1");
+}
+
+// Viewer QA H3: the YAML typed in the Profile panel is the draft, and the domain rows read it.
+TEST(ProfileDraft, TypedTextMarksOnlyTheLinesThatChanged) {
+    ProfileDraft draft;
+    draft.reset(kProfile);
+    std::string text = kProfile;
+    const std::string before = "  aerodynamics: {enabled: false, substitute: zero}";
+    text.replace(text.find(before), before.size(), "  aerodynamics: {enabled: true}");
+    text += "seed: 7\n";
+    const std::uint64_t revision = draft.revision();
+    draft.setText(text);
+    EXPECT_GT(draft.revision(), revision);
+    EXPECT_EQ(draft.text(), text);
+    EXPECT_EQ(draft.changedLineCount(), 2U);
+    EXPECT_TRUE(draft.domainChanged("aerodynamics"));
+    EXPECT_FALSE(draft.domainChanged("rigid_body"));
+    ASSERT_NE(draft.appliedLine(7), nullptr);  // the edited line replaces the applied one
+    EXPECT_EQ(*draft.appliedLine(7), before);
+    EXPECT_EQ(draft.appliedLine(11), nullptr);  // the new one replaces nothing
+    EXPECT_EQ(*findEntry(*draft.domain("aerodynamics"), "enabled"), "true");
+    // Typing it back as it was leaves nothing changed; the same text is not a new revision.
+    draft.setText(kProfile);
+    EXPECT_FALSE(draft.dirty());
+    const std::uint64_t same = draft.revision();
+    draft.setText(kProfile);
+    EXPECT_EQ(draft.revision(), same);
 }
 
 TEST(ProfileEntries, SetReplacesOrAppendsAndEraseRemoves) {

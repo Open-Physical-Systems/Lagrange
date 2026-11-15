@@ -341,6 +341,73 @@ TEST(ImportSdf, AWorldGivesOnePrimPerModelAndUsesItsGroundPlane) {
     EXPECT_EQ(model->world.joints.type.at(0), JointType::Free);
 }
 
+// One ground per run: a file's own floor (here a 40 m ground box, as in the comparison's box
+// pile) is the ground, with no plane of Lagrange's at its top; a box too small or too thick to be
+// a floor, or a loose one, leaves Lagrange's plane in.
+std::string mjcfWithGround(const std::string& ground) {
+    return R"(<mujoco model="pile">
+  <worldbody>
+    )" + ground +
+           R"(
+    <body name="box" pos="0 0 0.5"><freejoint/><geom type="box" size="0.1 0.1 0.1" mass="1"/></body>
+  </worldbody>
+</mujoco>)";
+}
+
+TEST(ImportMjcf, AGroundBoxIsTheOnlyGround) {
+    const auto path = writeText(
+        "floor_box.xml",
+        mjcfWithGround(R"(<geom name="ground" type="box" size="20 20 0.1" pos="0 0 -0.1"/>)"));
+    auto model = importMjcf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World::Colliders& colliders = model->world.colliders;
+    EXPECT_EQ(count(colliders, ShapeType::Plane), 0U);
+    EXPECT_EQ(count(colliders, ShapeType::Box), 2U);  // the floor and the falling box
+    EXPECT_TRUE(hasOwnFloor(*model));
+    for (const ScenePrim& prim : model->scene.prims) {
+        EXPECT_FALSE(prim.name == "ground" && prim.parent == kNoIndex && prim.body == kNoIndex)
+            << "Lagrange's slab is drawn over the file's floor";
+    }
+}
+
+TEST(ImportMjcf, NoFloorOfItsOwnGetsLagrangesGround) {
+    for (const std::string& ground : {
+             std::string(),                                                       // nothing
+             std::string(R"(<geom type="box" size="2 2 0.1" pos="0 0 -0.1"/>)"),  // a table
+             std::string(R"(<geom type="box" size="20 20 8" pos="0 0 -8"/>)"),    // a block
+             std::string(R"(<geom type="box" size="20 20 0.1" pos="0 0 -0.1" euler="0.3 0 0"/>)"),
+             std::string(
+                 R"(<body pos="0 0 -0.1"><freejoint/><geom type="box" size="20 20 0.1"/></body>)"),
+         }) {
+        auto model = importMjcf(writeText("no_floor.xml", mjcfWithGround(ground)).string());
+        ASSERT_TRUE(model) << model.error();
+        const World::Colliders& colliders = model->world.colliders;
+        EXPECT_EQ(count(colliders, ShapeType::Plane), 1U) << ground;
+        EXPECT_EQ(colliders.shape.front(), ShapeType::Plane) << ground;
+        EXPECT_EQ(colliders.body.front(), kWorldBody);
+        EXPECT_EQ(model->scene.prims.back().name, "ground") << ground;
+    }
+}
+
+TEST(ImportSdf, AStaticGroundBoxModelIsTheOnlyGround) {
+    const auto path = writeText("floor_box.sdf", R"(<?xml version="1.0"?>
+<sdf version="1.11">
+  <world name="pile">
+    <model name="floor"><static>true</static><pose>0 0 -0.1 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>40 40 0.2</size></box></geometry></collision>
+    </link></model>
+    <model name="crate"><pose>0 0 1 0 0 0</pose><link name="l"><inertial><mass>1</mass></inertial>
+      <collision name="c"><geometry><box><size>0.2 0.2 0.2</size></box></geometry></collision>
+    </link></model>
+  </world>
+</sdf>)");
+    auto model = importSdf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    EXPECT_EQ(count(model->world.colliders, ShapeType::Plane), 0U);
+    EXPECT_EQ(count(model->world.colliders, ShapeType::Box), 2U);
+    EXPECT_NE(model->scene.prims.back().name, "ground");
+}
+
 TEST(ImportMjcf, SeveralJointsOnABodyGetHelperFrames) {
     // A point mass on x and y slides and a hinge about z, offset from the body origin.
     const auto path = writeText("slider.xml", R"(<mujoco model="slider">
@@ -379,6 +446,128 @@ TEST(ImportMjcf, SeveralJointsOnABodyGetHelperFrames) {
             EXPECT_EQ(world.colliders.body[c], kWorldBody);
         }
     }
+}
+
+// The helper frames of a body with several joints take their 1 g from the body: the robot weighs
+// what the MJCF says, and each such body with its frames has the MJCF body's centre of mass and
+// inertia (the frames sit at the body's origin, on its joints' axes, so in every pose).
+TEST(ImportMjcf, HelperFramesAddNoMass) {
+    const auto path = writeText("legs.xml", R"(<mujoco model="legs">
+  <compiler angle="radian"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1"/>
+    <body name="trunk" pos="0 0 0.16">
+      <freejoint name="free"/>
+      <inertial pos="0 0 0" mass="4.0" diaginertia="0.01 0.03 0.035"/>
+      <geom type="box" size="0.22 0.08 0.03" mass="0"/>
+      <body name="upper_l" pos="0.18 0.1 0">
+        <joint name="swing_l" type="hinge" axis="0 0 1"/>
+        <joint name="lift_l" type="hinge" axis="1 0 0"/>
+        <inertial pos="0 0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="lower_l" pos="0 0.12 0">
+          <joint name="knee_l" type="hinge" axis="1 0 0"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom type="sphere" size="0.015" pos="0 0 -0.12" mass="0"/>
+        </body>
+      </body>
+      <body name="upper_r" pos="0.18 -0.1 0">
+        <joint name="swing_r" type="hinge" axis="0 0 1"/>
+        <joint name="tilt_r" type="hinge" axis="0 1 0"/>
+        <joint name="lift_r" type="hinge" axis="-1 0 0"/>
+        <inertial pos="0.01 -0.06 0.005" mass="0.15" fullinertia="0.0003 0.0003 0.0003 0.00001 0 0"/>
+        <geom type="sphere" size="0.015" pos="0 -0.12 0" mass="0"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>)");
+    auto model = importMjcf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World::Bodies& bodies = model->world.bodies;
+    double total = 0.0;
+    for (const double m : bodies.mass) {
+        total += m;
+    }
+    EXPECT_NEAR(total, 4.0 + 0.15 + 0.1 + 0.15, 1e-12) << "what the MJCF weighs";
+
+    // Each multi-joint body with its frames, about the body's origin: the frames sit there.
+    const auto check = [&](const std::string& name, std::size_t frames,
+                           const std::array<double, 3>& com, const std::array<double, 6>& inertia) {
+        const std::size_t b = body(*model, name);
+        std::vector<std::size_t> parts{b};
+        for (std::size_t p = bodies.parent[b].index; parts.size() <= frames;
+             p = bodies.parent[p].index) {
+            ASSERT_NE(bodies.names[p].find("_frame"), std::string::npos) << bodies.names[p];
+            EXPECT_DOUBLE_EQ(bodies.mass[p], 1e-3);
+            parts.push_back(p);
+        }
+        double mass = 0.0;
+        std::array<double, 3> moment{};
+        for (const std::size_t p : parts) {
+            // A frame sits at the body origin; the body's own centre of mass is in its frame.
+            const std::array<double, 3> c = p == b ? bodies.comLocal[b] : std::array<double, 3>{};
+            mass += bodies.mass[p];
+            for (std::size_t i = 0; i < 3; ++i) {
+                moment[i] += bodies.mass[p] * c[i];
+            }
+        }
+        EXPECT_NEAR(mass, 0.15, 1e-15) << name;
+        for (std::size_t i = 0; i < 3; ++i) {
+            EXPECT_NEAR(moment[i] / mass, com[i], 1e-12) << name << " centre of mass " << i;
+        }
+        // Inertia about the MJCF centre of mass: the body's moved there, plus each frame's.
+        const auto about = [&com](double m, const std::array<double, 3>& at) {
+            const std::array<double, 3> d{at[0] - com[0], at[1] - com[1], at[2] - com[2]};
+            const double d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            return std::array<double, 6>{m * (d2 - d[0] * d[0]), m * (d2 - d[1] * d[1]),
+                                         m * (d2 - d[2] * d[2]), -m * d[0] * d[1],
+                                         -m * d[0] * d[2],       -m * d[1] * d[2]};
+        };
+        std::array<double, 6> sum = bodies.inertiaLocal[b];
+        const std::array<double, 6> moved = about(bodies.mass[b], bodies.comLocal[b]);
+        for (std::size_t i = 0; i < 6; ++i) {
+            sum[i] += moved[i];
+        }
+        for (std::size_t k = 1; k < parts.size(); ++k) {
+            const std::array<double, 6> frame = about(bodies.mass[parts[k]], {});
+            for (std::size_t i = 0; i < 6; ++i) {
+                sum[i] += frame[i] + bodies.inertiaLocal[parts[k]][i];
+            }
+        }
+        for (std::size_t i = 0; i < 6; ++i) {
+            EXPECT_NEAR(sum[i], inertia[i], 1e-15) << name << " inertia " << i;
+        }
+    };
+    check("upper_l", 1, {0.0, 0.06, 0.0}, {0.0003, 0.0003, 0.0003, 0, 0, 0});
+    check("upper_r", 2, {0.01, -0.06, 0.005}, {0.0003, 0.0003, 0.0003, 0.00001, 0, 0});
+}
+
+// A joint's armature (rotor inertia reflected through its gear) reaches World::Joints::armature:
+// the joint's own `armature` plus an actuator's `armature` times its gear squared, as MuJoCo's
+// mass matrix adds them (3.12).
+TEST(ImportMjcf, JointAndActuatorArmatureReachTheWorld) {
+    const auto path = writeText("armature.xml", R"(<mujoco model="armature">
+  <worldbody>
+    <body name="a" pos="0 0 1">
+      <joint name="plain" type="hinge" axis="0 1 0"/>
+      <geom type="sphere" size="0.05" mass="1"/>
+      <body name="b" pos="0.2 0 0">
+        <joint name="own" type="hinge" axis="0 1 0" armature="0.02"/>
+        <geom type="sphere" size="0.05" mass="1"/>
+        <body name="c" pos="0.2 0 0">
+          <joint name="geared" type="hinge" axis="0 1 0" armature="0.001"/>
+          <geom type="sphere" size="0.05" mass="1"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator><motor joint="geared" gear="20" armature="0.00012"/></actuator>
+</mujoco>)");
+    auto model = importMjcf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World::Joints& joints = model->world.joints;
+    EXPECT_EQ(joints.armature[joint(*model, "plain")], 0.0);
+    EXPECT_DOUBLE_EQ(joints.armature[joint(*model, "own")], 0.02);
+    EXPECT_DOUBLE_EQ(joints.armature[joint(*model, "geared")], 0.001 + 0.00012 * 20.0 * 20.0);
 }
 
 TEST(ImportMjcf, MeshGeomsAreDrawnWithTheirTriangles) {

@@ -366,6 +366,41 @@ accepted.
 | 3 | motors, battery, bus and the overlay-only sensors (GNSS, magnetometer, barometer, radar) written to the overlay YAML; forms from `formats.md` §9's overlay keys | none expected |
 | 4 | USD round trip (open `.usda` made by `lagrange_import`), SDFormat | to be decided |
 
+### Addendum A (2026-11-15, asked for by the owner): meshes and how a link collides
+
+Phase 2 is taken next, right after phase 1, with this scope for meshes:
+
+- **Import a mesh as a part.** STL, DAE, OBJ and glTF, read by `lagrange_meshes` (open question
+  8), so the builder sees exactly what the server will load. A mesh shape has a file, an origin,
+  a scale (a file in millimetres gets 0.001) and a colour. Its mass comes from the closed mesh's
+  volume integrals (§4); a mesh that is not closed is a Problem and its mass comes from its
+  convex hull.
+- **The collision of each link is the user's choice**, one of four, chosen in Properties:
+  1. **The same as the mesh.** The visual mesh collides. The simulator collides a mesh as the
+     convex hull of its vertices (at most 256 points, `convexHullOf` in `core/world`), so the
+     builder draws that hull, translucent, and a concave mesh gets a hint that its inside will be
+     filled.
+  2. **Split into convex parts.** CoACD, as `lagrange bake` does (threshold and seed in the
+     form), run as a polled child process; the parts are written beside the URDF in
+     `<name>_collision/` and become the link's collision shapes.
+  3. **Shapes from templates.** Box, cylinder, sphere and capsule (URDF `<capsule>`, read by
+     urdfdom and the server, `server/src/Robot.cpp`) with their parameters, and **Fit to mesh**:
+     the tightest box or cylinder about the mesh's principal axes, or the enclosing sphere, as a
+     start to edit.
+  4. **Drawn by hand.** The same shapes placed directly over the translucent mesh in the Builder
+     view and sized and moved with handles (the Move and Rotate gizmos, and size handles on each
+     face). Several shapes per link. Free-form drawing, sketching or sculpting stays out (a
+     non-goal: not a CAD tool).
+- **In the document**: a shape already has `visual` and `collision` flags (§3); a link whose
+  collision differs from its visual writes them as separate `<visual>` and `<collision>`
+  elements, so no new data format is needed. The choice itself (1 to 4) is written as a
+  `lagrange_collision` attribute on the link, ignored by the loaders like `lagrange_density`
+  (plan decision 7), so reopening the file shows the same choice.
+- **Tests**: mass of closed meshes against their closed forms (a tessellated box and sphere),
+  Fit to mesh against known boxes and cylinders, the hull the builder draws equal to the server's
+  (same `convexHullOf`), a split written and loaded by `lagrange_server` with no notes, and the
+  round trip of each choice.
+
 ## Test plan
 
 1. `viewer/builder` gtests: mass properties against the closed forms (each shape, a composite

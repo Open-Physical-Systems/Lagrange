@@ -88,6 +88,7 @@ private:
 
     gpu::MeshSet meshes_;
     std::uint64_t meshGeneration_{0};  // SceneStatics::generation the meshes were built from
+    std::weak_ptr<const SceneStatics> meshStatics_;  // and the statics themselves
     gpu::Buffer gridMinor_;
     gpu::Buffer gridMajor_;
     gpu::Buffer axes_;

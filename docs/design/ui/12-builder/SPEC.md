@@ -1,8 +1,9 @@
-# 12 · Builder workspace: SPEC (draft, RFC 0016)
+# 12 · Builder workspace: SPEC (RFC 0016)
 
-Status: **draft for the owner**, with `rfcs/0016-robot-builder.md` (Draft). Nothing here is
-built yet. Where this screen needs something the design system does not have, it says so under
-"New in this screen" instead of improvising silently.
+Status: with `rfcs/0016-robot-builder.md`, **accepted by the owner on 2026-11-14** with every
+proposed answer; built in phase 1, Addendum A and phase 3 (#340–#368, `docs/guide/builder.md`).
+Where this screen needs something the design system does not have, it says so under "New in
+this screen" instead of improvising silently.
 
 ## Purpose
 Build a robot inside the viewer: links with simple shapes, joints between them, sensors from the
@@ -19,7 +20,7 @@ them with its own (`ui-conventions.md` §1):
 | Undo, Redo | `.btn.ic` (Ctrl Z, Ctrl Shift Z / Ctrl Y) | redo is `.dis` when the stack top is reached |
 | Document readout | `.ro`: `doc`, mono file name, warn `● unsaved · N` (N edits since the last save) | the name is the robot name until first saved |
 | **Build** | `.btn.on` | the current mode |
-| **Test · empty world ▾** | `.btn.pri` with a menu | the primary action. Menu: Empty world · A sample world… · A world file… · *Into the connected run* (greyed with "needs RFC 0016 §7.2" until approved) |
+| **Test · empty world ▾** | `.btn.pri` with a menu | the primary action. Menu: Empty world · A sample world… · A world file… · *Start at…* (where the robot starts in the chosen world: x, y, z in m and the heading in °, as `.fld` fields with the unit inside; the row shows the pose in mono; remembered per world; greyed for the connected run, whose import carries no pose) · *Into the connected run* (RFC 0016 §7.2: enabled when connected to a server that imports robots; the robot goes into that run as URDF text, passive when the run already has a robot, and Back removes it; greyed with "Connect to a server first" otherwise) |
 | **Save** | `.btn` (Ctrl S) | Save, Save as…, Export USD… (runs `lagrange_import`), Check loads… |
 
 While testing, these become: **Back to Build** (`.btn`, Esc), the Scene workspace's Play/Pause,
@@ -146,6 +147,26 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
   parameters are dropdowns, text parameters plain fields, lists a mono text field. Then the
   catalog's description (t3, 11 px), Output (the signals and ROS topic the sensor will have,
   read-only, from the catalog), and Faults (collapsed; the sensor-fault parameters).
+- **Robot** (phase 3, RFC 0016): Parts, Kept as written, then **Power** (`SectionHeader` with
+  the electrical domain dot, meta `overlay · N battery · N bus · N motors`): **Add bus** and
+  **Add battery** (`.btn` with a menu: the sample robots' values or empty fields), then one
+  section per bus (prim, fed by, motors, its fields) and per battery (prim, **output to** a bus
+  dropdown, its fields and its port's), each with **Remove** (ghost); a second row **Add load**
+  (a menu: the samples' values or empty fields) and **Add converter**, a third **Add fuse,
+  switch…** (a menu: resistor, fuse, switch, diode); then one section per converter (prim,
+  **input** and **output** bus dropdowns, its fields), per branch (title its kind; prim, `kind`,
+  **input**/**output** (a diode's **anode**/**cathode**), the fields its kind uses) and per load
+  (prim, **bus**, its fields; `resistance` only for a resistive load), each with read-only rows
+  of the signals the run will have and **Remove**; then *Overlay, kept as written* (collapsed,
+  read-only rows). The Power meta adds `· N parts` when there are loads, converters or branches. Fields: the schema attribute's last name in mono 11 px,
+  its unit (Ω, V, C, A, F, H, N·m/A), the default in the unit slot when a value differs
+  (`accentBorder`), "required" while a required one is empty; a value out of range keeps an
+  `err` outline and is a Problem.
+- **Joint → Motor** (phase 3): the same `SectionHeader`; none: a caption and **Add a motor**
+  (disabled with a tooltip on a fixed joint); with one: its prim, **bus** dropdown, the fields,
+  read-only rows of its signals, and **Remove motor**.
+- **Overlay sensors** (GNSS, magnetometer, barometer, radar): the sensor form with the pill
+  `<type> · overlay file`; Mount shows the link only, with a caption (the overlay has no pose).
 - History tab: the undo stack, newest at the top, one row per step ("Set range/max 12 → 20 m",
   "Add link caster"); clicking a row goes back to it.
 
@@ -161,7 +182,9 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
    be saved while unfinished), with a warn line in the save dialog.
 4. **Testing**: the workspace switches to a Test layout: the center top is the normal
    server-fed Viewport (any shading the tier allows), Joints shows the joints' live positions
-   read-only (sliders become meters, until a joint-command message exists: RFC 0016 §7.3), the
+   (the knob and value follow the run; dragging a knob or typing a value commands that joint's
+   position through `CommandJoint`, RFC 0016 §7.3, ≤ 30 Hz per joint; Zero all sends zeros; a
+   refusal shows as an err caption in the footer, "Not driven: …"), the
    bottom right shows **Drive** (the ROS 2 topics this robot takes, `/cmd_vel` when the server
    drives it, `/joint_commands` for joint control, each with a copyable command line) and Console
    with the test server's log; Properties is read-only. The status bar shows the test server.
@@ -170,7 +193,7 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
 5. **Disconnected / no server**: Build and Save work fully. Test needs `lagrange_server` on
    this machine; if it is not installed, Test is disabled with "lagrange_server is not installed"
    (the Launcher's wording), and *Into the connected run* is the only target when a server is
-   connected and approved.
+   connected and imports robots.
 6. **Error** (cannot read a file, cannot write): an err pill in the panel concerned, full
    message in Problems.
 

@@ -33,6 +33,9 @@ struct Px4Settings {
     double speedGain{0.02};               // N·m per rad/s of rotor speed error
     double airDensity{0.0};               // kg/m³, for the feed-forward (rotor_aero's)
     double actuatorTimeoutS{5.0};         // s of wall time to wait for PX4 before giving up a step
+    // The electrical domain is off (its ideal torque source): the ESCs bound each rotor's torque
+    // command by its drive's and cut the speed gain to what the step allows (Escs.hpp).
+    bool idealMotors{false};
 };
 
 /// The TCP link to PX4: listens on `port` from creation, and keeps PX4's connection across

@@ -1,0 +1,182 @@
+{
+  "mujoco 0.5 ms": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "weight_N": 151.074,
+    "sum_mean_N": 151.09522192991287,
+    "sum_error_pct": 0.014047374076846362,
+    "feet_sum_mean_N": 151.09522192991287,
+    "ripple_std_pct": 0.11456372227979617,
+    "ripple_p2p_pct": 0.545035548679698,
+    "per_foot_N": {
+      "front_left": 32.04151460696554,
+      "front_right": 32.041514606965485,
+      "rear_left": 43.50609635799099,
+      "rear_right": 43.50609635799099
+    },
+    "split_max_dev_pct": 15.19148591548774,
+    "per_foot_closed_N": {
+      "front_left": 32.061350306143844,
+      "front_right": 32.061350306143844,
+      "rear_left": 43.47564969385616,
+      "rear_right": 43.47564969385616
+    },
+    "per_foot_vs_closed_max_pct": 0.0700315333967995,
+    "penetration_mean_mm": 1.3102117512286575,
+    "penetration_max_mm": 1.5360405146231035,
+    "base_z_m": 0.29527483755159456,
+    "wall_s_per_sim_s_with_python_loop": 0.22138446974713588,
+    "load": 8.76
+  },
+  "mujoco 1 ms": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "weight_N": 151.074,
+    "sum_mean_N": 151.09482592454316,
+    "sum_error_pct": 0.013785247324586861,
+    "feet_sum_mean_N": 151.09482592454316,
+    "ripple_std_pct": 0.1113575477650331,
+    "ripple_p2p_pct": 0.5315557633536477,
+    "per_foot_N": {
+      "front_left": 32.04399853065173,
+      "front_right": 32.04399853065181,
+      "rear_left": 43.50341443161975,
+      "rear_right": 43.50341443161965
+    },
+    "split_max_dev_pct": 15.184384954710273,
+    "per_foot_closed_N": {
+      "front_left": 32.06348968760358,
+      "front_right": 32.06348968760358,
+      "rear_left": 43.47351031239643,
+      "rear_right": 43.47351031239643
+    },
+    "per_foot_vs_closed_max_pct": 0.06878699007380955,
+    "penetration_mean_mm": 1.31020869710441,
+    "penetration_max_mm": 1.5352212017787705,
+    "base_z_m": 0.2952759821125859,
+    "wall_s_per_sim_s_with_python_loop": 0.09997249924344942,
+    "load": 8.76
+  },
+  "mujoco 2 ms": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "weight_N": 151.074,
+    "sum_mean_N": 151.0934353415579,
+    "sum_error_pct": 0.012864782529012464,
+    "feet_sum_mean_N": 151.0934353415579,
+    "ripple_std_pct": 0.10446543634207495,
+    "ripple_p2p_pct": 0.49863845250103317,
+    "per_foot_N": {
+      "front_left": 32.04163950513782,
+      "front_right": 32.041639505137944,
+      "rear_left": 43.50507816564114,
+      "rear_right": 43.505078165641045
+    },
+    "split_max_dev_pct": 15.188790038368307,
+    "per_foot_closed_N": {
+      "front_left": 32.059861636581765,
+      "front_right": 32.059861636581765,
+      "rear_left": 43.47713836341825,
+      "rear_right": 43.47713836341825
+    },
+    "per_foot_vs_closed_max_pct": 0.06426320423700552,
+    "penetration_mean_mm": 1.3101986467502431,
+    "penetration_max_mm": 1.5336718163213372,
+    "base_z_m": 0.2952745656741414,
+    "wall_s_per_sim_s_with_python_loop": 0.042001912246632855,
+    "load": 8.76
+  },
+  "jolt 0.5 ms": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "weight_N": 151.074,
+    "sum_mean_N": 151.09634399500928,
+    "sum_error_pct": 0.014790099559994059,
+    "feet_sum_mean_N": 151.0963458528321,
+    "ripple_std_pct": 0.17600920283478724,
+    "ripple_p2p_pct": 0.7823913626010256,
+    "per_foot_N": {
+      "front_left": 31.682049746503107,
+      "front_right": 31.68783862742529,
+      "rear_left": 43.865234010332706,
+      "rear_right": 43.86122346856848
+    },
+    "split_max_dev_pct": 16.142377934873515,
+    "per_foot_closed_N": {
+      "front_left": 31.708503971508062,
+      "front_right": 31.708503971508062,
+      "rear_left": 43.82849602849195,
+      "rear_right": 43.82849602849195
+    },
+    "per_foot_vs_closed_max_pct": 0.08382213666851797,
+    "penetration_mean_mm": 0.004118679168410364,
+    "penetration_max_mm": 0.012837724404864137,
+    "base_z_m": 0.29638785894022557,
+    "wall_s_per_sim_s_with_python_loop": 0.1813521935036988,
+    "load": 8.76
+  },
+  "jolt 1 ms": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "weight_N": 151.074,
+    "sum_mean_N": 151.09842950762723,
+    "sum_error_pct": 0.016170557228390108,
+    "feet_sum_mean_N": 151.09843166121374,
+    "ripple_std_pct": 0.17691080185480623,
+    "ripple_p2p_pct": 0.7738980332586792,
+    "per_foot_N": {
+      "front_left": 31.705817827333515,
+      "front_right": 31.705530995786535,
+      "rear_left": 43.84374076027972,
+      "rear_right": 43.84334207781165
+    },
+    "split_max_dev_pct": 16.085470061770305,
+    "per_foot_closed_N": {
+      "front_left": 31.72886931448766,
+      "front_right": 31.72886931448766,
+      "rear_left": 43.808130685512346,
+      "rear_right": 43.808130685512346
+    },
+    "per_foot_vs_closed_max_pct": 0.08128645119101814,
+    "penetration_mean_mm": 0.003643443907532471,
+    "penetration_max_mm": 0.006867434380018744,
+    "base_z_m": 0.29640064711334824,
+    "wall_s_per_sim_s_with_python_loop": 0.09935746449627914,
+    "load": 8.76
+  },
+  "jolt 2 ms": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "weight_N": 151.074,
+    "sum_mean_N": 151.09693091648967,
+    "sum_error_pct": 0.015178598891706238,
+    "feet_sum_mean_N": 151.09693294743008,
+    "ripple_std_pct": 0.17017937263700483,
+    "ripple_p2p_pct": 0.7843411130138808,
+    "per_foot_N": {
+      "front_left": 31.73194069366016,
+      "front_right": 31.732676604078158,
+      "rear_left": 43.81632076155882,
+      "rear_right": 43.81599488813096
+    },
+    "split_max_dev_pct": 16.01286988246506,
+    "per_foot_closed_N": {
+      "front_left": 31.756776244415697,
+      "front_right": 31.756776244415697,
+      "rear_left": 43.78022375558431,
+      "rear_right": 43.78022375558431
+    },
+    "per_foot_vs_closed_max_pct": 0.08245048306749936,
+    "penetration_mean_mm": 0.0034634658845088275,
+    "penetration_max_mm": 0.004915323436320562,
+    "base_z_m": 0.2964166448666499,
+    "wall_s_per_sim_s_with_python_loop": 0.0514491102512693,
+    "load": 8.76
+  },
+  "_meta": {
+    "wall_s": 2.8885123979998752,
+    "load_start": 8.74,
+    "load_end": 8.76,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-legspike/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}

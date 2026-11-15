@@ -67,6 +67,9 @@ public:
     bool setMode(std::string_view name, std::string_view value);
     bool setStep(std::string_view name, std::int64_t dtNs);
     bool setSource(std::string_view name, std::string_view path);
+    /// The whole profile as typed in the Profile panel; the server validates it as any edit,
+    /// and the domain rows follow what it says (two-way binding, SPEC 03).
+    void setText(std::string_view text);
     void revert();
     /// Sends the draft to the server to be applied (restarts the run at t = 0).
     void apply(ViewerClient& client) const;

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test roads for superelevation and lane heights (test_opendrive.cpp), straight along x:
+     road 1: a constant 5° bank (0.0872664626 rad, falling to the right), 2 m up, with a 0.15 m
+     kerb (a sidewalk lane with <height>) on its right;
+     road 2: superelevation ramping linearly 0.01 rad/m from 0 for 20 m, then constant 0.2 rad;
+     its outer right lane level (@level="true");
+     road 3: on the ground, flat: no colliders. -->
+<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="banked" version="1"/>
+  <road id="1" length="40" junction="-1">
+    <type s="0" type="town"><speed max="50" unit="km/h"/></type>
+    <planView>
+      <geometry s="0" x="0" y="0" hdg="0" length="40"><line/></geometry>
+    </planView>
+    <elevationProfile><elevation s="0" a="2" b="0" c="0" d="0"/></elevationProfile>
+    <lateralProfile><superelevation s="0" a="0.0872664626" b="0" c="0" d="0"/></lateralProfile>
+    <lanes>
+      <laneSection s="0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane>
+        </left>
+        <center><lane id="0" type="none"><roadMark sOffset="0" type="solid" color="yellow" width="0.12"/></lane></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/>
+            <roadMark sOffset="0" type="solid" color="standard" width="0.12"/></lane>
+          <lane id="-2" type="sidewalk"><width sOffset="0" a="2" b="0" c="0" d="0"/>
+            <height sOffset="0" inner="0.15" outer="0.15"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road id="2" length="40" junction="-1">
+    <planView>
+      <geometry s="0" x="0" y="50" hdg="0" length="40"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0" a="0" b="0.01" c="0" d="0"/>
+      <superelevation s="20" a="0.2" b="0" c="0" d="0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0">
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane>
+          <lane id="-2" type="shoulder" level="true"><width sOffset="0" a="1" b="0" c="0" d="0"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road id="3" length="20" junction="-1">
+    <planView>
+      <geometry s="0" x="0" y="100" hdg="0" length="20"><line/></geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0">
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>

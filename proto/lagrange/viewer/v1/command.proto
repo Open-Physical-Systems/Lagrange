@@ -24,6 +24,8 @@ message Command {
     LoadStage load_stage = 30;
     ImportRobot import_robot = 31;
     OpenRecording open_recording = 32;
+    RemoveRobot remove_robot = 33; // added after 1.0 (RFC 0016 §7.2)
+    CommandJoint command_joint = 34; // added after 1.0 (RFC 0016 §7.3)
 
     ValidateProfile validate_profile = 40;
     ApplyProfile apply_profile = 41;
@@ -90,9 +92,31 @@ message ImportRobot {
   }
   Format format = 1;
   string path = 2; // path on the server's filesystem
-  DataRef content = 3; // or the file content, when the viewer is remote
-  string overlay_path = 4;
+  // Or the file's text, inline (blob and shm are refused): named by its own <robot name>,
+  // renamed on a clash; the result's imported_stage_path is then the robot's scene path
+  // ("/name"). Taken after 1.0 (RFC 0016 §7.2); an older server refuses it with an error.
+  DataRef content = 3;
+  string overlay_path = 4; // on the server's filesystem, applied as --overlay is
   repeated string xacro_args = 5;
+  // Or the overlay's text (YAML, or a SPICE netlist ending in .end), inline only; asset paths
+  // in it are best absolute. Added after 1.0 (RFC 0016 §11).
+  DataRef overlay_content = 6;
+}
+// Removes a robot from the run by name, as the ROS service /delete_entity does: one spawned or
+// imported, one added by --add-robot, or the robot loaded at start (not while ros2_control
+// drives it). The world's scenery stays. Added after 1.0 (RFC 0016 §7.2).
+message RemoveRobot {
+  string name = 1; // its top prim's name, with or without the leading "/"
+}
+// Drives one joint of the run's robot, as /joint_commands does under joint control
+// (--joint-control): the joint holds the value until told otherwise. Refused with a one-line
+// error for a joint the run does not have, one that takes no commands (fixed, a mimic, a
+// passive robot's), a mode its motor cannot follow, a value that is not finite, and a run whose
+// joints ros2_control or a robot controller drives. Added after 1.0 (RFC 0016 §7.3).
+message CommandJoint {
+  string joint = 1; // the joint's name in the run
+  string mode = 2; // "position" (rad, m), "velocity" (rad/s, m/s), "effort" (N·m, N), "voltage" (V)
+  double value = 3;
 }
 message OpenRecording {
   string path = 1;

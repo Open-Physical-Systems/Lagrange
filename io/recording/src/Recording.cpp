@@ -87,7 +87,9 @@ Expected<Recording, std::string> Recording::open(
                 s.name = info.name();
                 s.type = static_cast<SignalType>(std::max(0, static_cast<int>(info.type()) - 1));
                 s.unit = unitOf(info.unit());
-                s.components = std::max<std::uint32_t>(1, info.components());
+                // A buffer (an image, a point cloud) is a handle on the bus, no numbers: the
+                // recorder writes no samples for it and a replay holds it empty (no frame).
+                s.components = isHandle(s.type) ? 0 : std::max<std::uint32_t>(1, info.components());
                 s.dtNs = info.native_dt_ns();
                 s.writer = info.writer();
                 s.prim = info.prim();
@@ -109,6 +111,9 @@ Expected<Recording, std::string> Recording::open(
                     continue;
                 }
                 RecordedSignal& s = out.signals[slot->second];
+                if (s.components == 0) {
+                    continue;
+                }
                 const std::size_t count = run.sample_count();
                 const std::size_t components = std::max<std::uint32_t>(1, run.components());
                 if (components != s.components ||
@@ -145,6 +150,7 @@ struct ReplaySubstitute::Impl {
     };
     std::vector<Output> outputs;
     bool endLogged{false};
+    bool buffersLogged{false};  // said once that the buffers have no frames
 };
 
 ReplaySubstitute::ReplaySubstitute(std::string domain, std::string path)
@@ -199,13 +205,25 @@ Status ReplaySubstitute::declare(const WorldView&, const ModuleConfig&, SignalDe
         return f.loadStatus;
     }
     f.outputs.clear();
+    std::string buffers;
     for (const RecordedSignal& s : f.recording.signals) {
+        // Buffers (camera images, point clouds) are declared so their readers find them, and
+        // never written: the recording holds no frames, so a replayed camera has none.
         SignalSpec spec;
         spec.name = s.name;
         spec.type = s.type;
         spec.unit = s.unit;
         spec.arrayLength = s.type == SignalType::ScalarArray ? s.components : 1;
         f.outputs.push_back({&s, d.output(spec), std::vector<double>(s.components, 0.0)});
+        if (s.components == 0) {
+            buffers += (buffers.empty() ? "" : ", ") + s.name;
+        }
+    }
+    if (!buffers.empty() && !f.buffersLogged) {
+        f.buffersLogged = true;
+        services::log(services::LogLevel::Info, domain_ + "/replay",
+                      "recordings hold no images or point buffers: " + buffers +
+                          " show no frame in this replay");
     }
     return {};
 }
@@ -214,6 +232,9 @@ Status ReplaySubstitute::init(const WorldView&, const ModuleConfig&, SignalBus& 
     Impl& f = *impl_;
     f.endLogged = false;
     for (Impl::Output& o : f.outputs) {
+        if (o.signal->components == 0) {
+            continue;
+        }
         std::fill(o.last.begin(), o.last.end(), 0.0);
         if (o.signal->sampleCount() > 0) {
             for (std::uint32_t c = 0; c < o.signal->components; ++c) {
@@ -232,7 +253,7 @@ Status ReplaySubstitute::step(const StepContext& context, SignalBus& bus) {
     for (Impl::Output& o : f.outputs) {
         const RecordedSignal& s = *o.signal;
         const std::int64_t dt = std::max<std::int64_t>(s.dtNs, 1);
-        if (end % dt != 0) {
+        if (s.components == 0 || end % dt != 0) {
             continue;
         }
         const auto k = static_cast<std::size_t>(end / dt);
@@ -243,12 +264,14 @@ Status ReplaySubstitute::step(const StepContext& context, SignalBus& bus) {
                     o.last[c] = v;
                 }
             }
-        } else if (!f.endLogged) {
+        } else if (!f.endLogged && end - f.step.ns >= f.recording.duration.ns) {
+            // Only a step after the one that reached the end of the whole run (bench mode
+            // running on): a signal sampled coarser than the run's length, or a replay reaching
+            // its end, where the server stops, is nothing to report.
             f.endLogged = true;
-            services::log(services::LogLevel::Warning, domain_ + "/replay",
+            services::log(services::LogLevel::Info, domain_ + "/replay",
                           path_ + " ends at " +
-                              std::to_string(static_cast<double>(s.sampleCount() - 1) *
-                                             static_cast<double>(dt) / 1e9) +
+                              std::to_string(static_cast<double>(f.recording.duration.ns) / 1e9) +
                               " s; holding its last values");
         }
         bus.writeN(o.id, o.last);

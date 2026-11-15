@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/viewer/BuilderSession.hpp"
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/ProfileSession.hpp"
 #include "lagrange/viewer/RecentList.hpp"
@@ -7,6 +8,7 @@
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ScopeSession.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
+#include "lagrange/viewer/ViewerSelf.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -18,7 +20,7 @@
 namespace lagrange::viewer {
 
 /// A workspace is one saved dock layout with its own panels (docs/design/ui: workspace bar).
-/// All ten of the design are listed; the ones without panels yet show a notice.
+/// The ten of the design plus the Builder (RFC 0016); the ones without panels yet show a notice.
 enum class Workspace : std::uint8_t {
     Scene,
     Domains,
@@ -30,6 +32,7 @@ enum class Workspace : std::uint8_t {
     Ros2,
     World,
     Performance,
+    Builder,  ///< RFC 0016: build a robot; works with no server (Ctrl B)
 };
 
 [[nodiscard]] const char* toString(Workspace workspace);
@@ -61,18 +64,33 @@ struct LauncherState {
     char otherEndpoint[160]{};     ///< A server typed in by the user.
     bool showOther{false};
     std::string localServer;  ///< lagrange_server found in the ROS install; empty if none.
+    /// lagrange_assets' share directory (the robot-class samples); empty if not installed.
+    std::string assetDirectory;
     int server{1};  ///< 0: start lagrange_server, 1: the default local server, 2: the typed one.
     int robotClass{0};       ///< Selected card.
     std::string openTarget;  ///< File to ask the server to open after connecting; may be empty.
     RecentList recent;
     char recentFilter[64]{};
+    int recentRow{-1};  ///< The Recent row picked last (highlighted), or -1.
     std::string error;  ///< Why the last attempt to connect could not start.
+    /// What the keyboard moves (SPEC acceptance: Tab, arrow keys, Enter): Tab goes from the
+    /// robot-class cards to the server list to Connect and back; arrows pick within.
+    enum class KeyFocus { None, Cards, Servers, Connect };
+    KeyFocus keyFocus{KeyFocus::None};
 
     // Out, read by the application after the frame.
     bool connectRequested{false};
     bool startLocalRequested{false};  ///< Start lagrange_server first, then connect.
+    /// What lagrange_server is started with besides --listen: the chosen robot class's sample.
+    std::vector<std::string> startArguments;
     std::string connectEndpoint;
+    /// A page to show in the system's browser (xdg-open, never inside the viewer: CLAUDE.md
+    /// invariant 13): the documentation, a guide, the issue tracker, the config folder.
+    std::string openPageRequested;
     bool disconnectRequested{false};  ///< Stop the client and show the launcher again.
+    /// Build a robot (tile or Ctrl B): leave the launcher for the Builder workspace without
+    /// connecting (RFC 0016 open question 6, R1).
+    bool builderRequested{false};
 };
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
@@ -134,12 +152,15 @@ struct PanelContext {
     /// the session only. Never null in draw().
     std::vector<std::int64_t>* bookmarks{nullptr};
     LauncherState* launcher{nullptr};  ///< Never null in draw().
+    BuilderSession* builder{nullptr};  ///< The robot builder's state; never null in draw().
     bool* resetLayout{nullptr};        ///< Set to rebuild the shown workspace's default layout.
 
     std::string deviceName;
     std::string tierName;
     float frameMs{0.0F};
     std::uint32_t drawCalls{0};
+    /// The viewer's own frame: CPU phases, GPU passes, video memory. May be null (tests).
+    const ViewerTimings* viewerTimings{nullptr};
 };
 
 /// One dockable panel. draw() runs on the UI thread every frame while the panel is open and
@@ -163,6 +184,17 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createElectricalPanels();
 /// The Sensors workspace's list, lidar view, IMU scopes and sensor summary. One shared state.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createSensorsPanels();
+/// The Scene workspace's Layers tab (beside the scene tree) and History tab (beside the
+/// Inspector). One shared state.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createSceneTabsPanels();
+/// Window IDs of the sensor views drawn as tabs beside the Scene workspace's viewport (made by
+/// createSensorsPanels(); a tab shows only while the stage has such a sensor). Layouts dock
+/// them as "###" + the ID; `--panel ###SceneCamera` brings one in front.
+namespace scene_view_windows {
+inline constexpr const char* kCamera = "SceneCamera";
+inline constexpr const char* kLidar = "SceneLidar";
+inline constexpr const char* kRadar = "SceneRadar";
+}  // namespace scene_view_windows
 /// The Domains workspace's Wiring, Unit checks and Schedule panels.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createWiringPanels();
 /// The Performance workspace's overview, scheduler, modules, history and resources panels.
@@ -172,6 +204,17 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createReplayPanels();
 [[nodiscard]] std::unique_ptr<Panel> createReplayTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createReplayBookmarksPanel();
+/// Replay: Compare, Sim vs real, Validation and History (08-replay), sharing one comparison.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createReplayComparePanels();
+/// The Source strip that replaces the domain strip in the Replay workspace while a recording
+/// plays. Draws into the current window and returns true; false (nothing drawn) for a live run.
+bool drawReplaySourceStrip(PanelContext& context);
+/// Compares the replay with `realLog` (a recording on this machine) once the replay is known,
+/// with a suite file (empty: the signals both share). `blocking`: the first frame waits for
+/// the result (headless screenshots and tests).
+void setReplayCompare(const std::string& realLog, const std::string& suite, bool blocking);
+/// The comparison's state as JSON, for the headless report.
+[[nodiscard]] std::string replayCompareJson();
 /// The Environment, ROS 2 and World workspaces.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createEnvironmentPanels();
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createRos2Panels();
@@ -185,14 +228,31 @@ public:
 [[nodiscard]] std::unique_ptr<Panel> createSignalsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createCursorsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createStatisticsPanel();
+/// The Signals workspace's second tabs: Saved sets, Measure and FFT (05-signals).
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createSignalsTabPanels();
+/// What Measure and FFT computed last and how many sets are saved, as JSON (headless report).
+[[nodiscard]] std::string signalsTabsReport();
 [[nodiscard]] std::unique_ptr<Panel> createDomainsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createProfilePanel();
+
+/// The Builder workspace's panels (RFC 0016; window IDs in builder_windows).
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createBuilderPanels();
 
 /// Every panel that exists so far, for all workspaces.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createDefaultPanels();
 
 /// Draws the launcher (see LauncherState). Called by drawPanels() while it is active.
 void drawLauncher(PanelContext& context);
+
+/// The command palette (Ctrl K): fuzzy search over commands, prims, signals and topics. Called by
+/// drawPanels() every frame, on the launcher too; draws nothing until Ctrl K.
+void drawCommandPalette(PanelContext& context);
+/// Opens the command palette on the next frame (Tools → Command palette).
+void openCommandPalette();
+/// Shows a signal in the Signals browser: its search set to `name` (the palette's way there).
+void requestSignalSearch(std::string name);
+/// Selects a topic in the ROS 2 workspace's Topics panel.
+void requestRosTopic(std::string name);
 
 /// Draws the application chrome (menu bar, workspace bar, domain strip, status bar) and the
 /// panels of the workspace shown, laying them out on first use.

@@ -1,20 +1,30 @@
 // The application chrome shared by every workspace: menu bar, workspace bar, domain strip,
 // dock space and status bar (docs/design/ui/shared/ui-conventions.md §1).
+#include "BuilderCommon.hpp"
+#include "DomainsTabs.hpp"
 #include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Files.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <imgui_internal.h>  // DockBuilder and BeginViewportSideBar
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <imgui.h>
 
@@ -35,30 +45,33 @@ struct WorkspaceEntry {
     const char* design;  // its folder in docs/design/ui
 };
 
-// The ten workspaces of the design, in its order, with its shortcuts (Ctrl 1 ... Ctrl 0).
+// The ten workspaces of the design, in its order, with its shortcuts (Ctrl 1 ... Ctrl 0), and
+// the Builder (RFC 0016, docs/design/ui/12-builder: Ctrl B, after a rule).
 // The dock space names carry a layout version: change it when a default layout changes, so
 // that a layout saved by an older build is not applied to the new panels.
-constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
-    {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-4", ImGuiKey_1, "Ctrl+1",
+constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
+    {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-5", ImGuiKey_1, "Ctrl+1",
      "02-scene"},
-    {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-3", ImGuiKey_2,
+    {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-4", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
-    {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-1",
+    {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-2",
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
-    {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-3", ImGuiKey_4,
+    {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-4", ImGuiKey_4,
      "Ctrl+4", "05-signals"},
-    {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-1", ImGuiKey_5,
+    {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-2", ImGuiKey_5,
      "Ctrl+5", "06-sensors"},
     {Workspace::Environment, "Environment", widgets::Icon::Environment,
-     "lagrange-dock-environment-1", ImGuiKey_6, "Ctrl+6", "07-environment"},
+     "lagrange-dock-environment-2", ImGuiKey_6, "Ctrl+6", "07-environment"},
     {Workspace::Replay, "Replay", widgets::Icon::Replay, "lagrange-dock-replay-1", ImGuiKey_7,
      "Ctrl+7", "08-replay"},
-    {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-1", ImGuiKey_8, "Ctrl+8",
+    {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-2", ImGuiKey_8, "Ctrl+8",
      "09-ros2"},
-    {Workspace::World, "World", widgets::Icon::World, "lagrange-dock-world-1", ImGuiKey_9, "Ctrl+9",
+    {Workspace::World, "World", widgets::Icon::World, "lagrange-dock-world-2", ImGuiKey_9, "Ctrl+9",
      "10-world"},
     {Workspace::Performance, "Performance", widgets::Icon::Performance,
      "lagrange-dock-performance-1", ImGuiKey_0, "Ctrl+0", "11-performance"},
+    {Workspace::Builder, "Builder", widgets::Icon::Builder, "lagrange-dock-builder-1", ImGuiKey_B,
+     "Ctrl+B", "12-builder"},
 }};
 
 const WorkspaceEntry& entryOf(Workspace workspace) {
@@ -96,8 +109,16 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         const ImGuiID console =
             ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.38F, nullptr, &bottom);
         ImGui::DockBuilderDockWindow("Viewport", centre);
+        // Sensor views as extra tabs beside the viewport; Layers and History beside the tree
+        // and the Inspector (SPEC "Dock layout").
+        for (const char* view : {scene_view_windows::kCamera, scene_view_windows::kLidar,
+                                 scene_view_windows::kRadar}) {
+            ImGui::DockBuilderDockWindow((std::string("###") + view).c_str(), centre);
+        }
         ImGui::DockBuilderDockWindow("Scene", left);
+        ImGui::DockBuilderDockWindow("Layers", left);
         ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("History", right);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
         ImGui::DockBuilderDockWindow("###Bookmarks", bottom);
         ImGui::DockBuilderDockWindow("Console", console);
@@ -112,12 +133,45 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         const ImGuiID scopes = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Down, fraction(372.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Network", left);
+        ImGui::DockBuilderDockWindow("###ElectricalProbes", left);
         ImGui::DockBuilderDockWindow("Schematic", centre);
         ImGui::DockBuilderDockWindow("Circuit", centre);
         ImGui::DockBuilderDockWindow("Netlist", centre);
         ImGui::DockBuilderDockWindow("3D overlay", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
+        ImGui::DockBuilderDockWindow("###ElectricalAddScope", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
+        ImGui::DockBuilderDockWindow("###ElectricalHistory", right);
+    } else if (workspace == Workspace::Builder) {
+        // Design (12-builder SPEC "Dock layout"): left 270 px, Robot | Files over a 212 px
+        // Add | Templates; right 350 px, Properties | History; the Builder view over a 220 px
+        // band, 55 % Joints | Poses and 45 % Sensor catalog | Problems.
+        namespace w = builder_windows;
+        ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, fraction(270.0F, size.x),
+                                                   nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(350.0F, size.x - px(270.0F)), nullptr, &centre);
+        const ImGuiID add = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down,
+                                                        fraction(212.0F, size.y), nullptr, &left);
+        ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down,
+                                                     fraction(220.0F, size.y), nullptr, &centre);
+        const ImGuiID catalog =
+            ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.45F, nullptr, &bottom);
+        ImGui::DockBuilderDockWindow(w::kRobot, left);
+        ImGui::DockBuilderDockWindow(w::kFiles, left);
+        ImGui::DockBuilderDockWindow(w::kAdd, add);
+        ImGui::DockBuilderDockWindow(w::kTemplates, add);
+        ImGui::DockBuilderDockWindow(w::kProperties, right);
+        ImGui::DockBuilderDockWindow(w::kHistory, right);
+        ImGui::DockBuilderDockWindow(w::kView, centre);
+        ImGui::DockBuilderDockWindow(w::kJoints, bottom);
+        ImGui::DockBuilderDockWindow(w::kPoses, bottom);
+        ImGui::DockBuilderDockWindow(w::kCatalog, catalog);
+        ImGui::DockBuilderDockWindow(w::kProblems, catalog);
+        // The Test layout (SPEC state 4): Drive and the test server's Console join the bottom
+        // right while a Test runs; they submit nothing in Build.
+        ImGui::DockBuilderDockWindow(w::kDrive, catalog);
+        ImGui::DockBuilderDockWindow(w::kTestConsole, catalog);
     } else if (workspace == Workspace::Performance) {
         // Design: a row of KPI cards on top; under it the scheduler (320 px) over the
         // modules, and on the right (380 px) the RTF history (200 px) over the resources.
@@ -131,7 +185,10 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.58F, nullptr, &centre);
         ImGui::DockBuilderDockWindow("###PerformanceOverview", top);
         ImGui::DockBuilderDockWindow("###Scheduler", centre);
+        ImGui::DockBuilderDockWindow("###PerformanceThreads", centre);
         ImGui::DockBuilderDockWindow("###PerformanceModules", modules);
+        ImGui::DockBuilderDockWindow("###PerformanceGpuPasses", modules);
+        ImGui::DockBuilderDockWindow("###PerformanceMemory", modules);
         ImGui::DockBuilderDockWindow("RTF history", right);
         ImGui::DockBuilderDockWindow("Resources", resources);
         // The KPI row is not a tabbed panel in the design.
@@ -140,19 +197,25 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
                                 static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
         }
     } else if (workspace == Workspace::Replay) {
-        // Design: Recording over Channels and Bookmarks, 280 px left; the timeline (400 px)
-        // over the events. (Sim vs real and Validation are not built: they need a second log.)
+        // Design: Recording | Compare over Channels and Bookmarks, 280 px left; Validation |
+        // History, 340 px right; between them the timeline (400 px) | Events over Sim vs real.
         ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, fraction(280.0F, size.x),
                                                    nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(340.0F, size.x - px(280.0F)), nullptr, &centre);
         const ImGuiID channels =
             ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.66F, nullptr, &left);
-        const ImGuiID events =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.52F, nullptr, &centre);
+        const ImGuiID compare = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Down, 1.0F - fraction(400.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Recording", left);
+        ImGui::DockBuilderDockWindow("Compare", left);
         ImGui::DockBuilderDockWindow("Channels", channels);
         ImGui::DockBuilderDockWindow("###ReplayBookmarks", channels);
         ImGui::DockBuilderDockWindow("###ReplayTimeline", centre);
-        ImGui::DockBuilderDockWindow("###ReplayEvents", events);
+        ImGui::DockBuilderDockWindow("###ReplayEvents", centre);
+        ImGui::DockBuilderDockWindow("Sim vs real", compare);
+        ImGui::DockBuilderDockWindow("Validation", right);
+        ImGui::DockBuilderDockWindow("###ReplayHistory", right);
     } else if (workspace == Workspace::Environment) {
         // Design: Environment 320 px left, Overlays 300 px right, the field view between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -161,8 +224,10 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Right, fraction(300.0F, size.x - px(320.0F)), nullptr, &centre);
         ImGui::DockBuilderDockWindow("###EnvironmentState", left);
         ImGui::DockBuilderDockWindow("###EnvironmentPresets", left);
+        ImGui::DockBuilderDockWindow("###FieldViewport", centre);
         ImGui::DockBuilderDockWindow("###FieldSlice", centre);
         ImGui::DockBuilderDockWindow("Overlays", right);
+        ImGui::DockBuilderDockWindow("###FieldInfo", right);
     } else if (workspace == Workspace::Ros2) {
         // Design: Topics 440 px left, ros2_control 340 px right, the node graph over a
         // 300 px console.
@@ -172,27 +237,36 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Right, fraction(340.0F, size.x - px(440.0F)), nullptr, &centre);
         const ImGuiID console = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Down, fraction(300.0F, size.y), nullptr, &centre);
+        // Tabs in the design's order: Topics | Services | Actions | Params, Node graph | TF tree.
         ImGui::DockBuilderDockWindow("Topics", left);
+        ImGui::DockBuilderDockWindow("Services", left);
+        ImGui::DockBuilderDockWindow("Actions", left);
+        ImGui::DockBuilderDockWindow("Params", left);
         ImGui::DockBuilderDockWindow("Node graph", centre);
+        ImGui::DockBuilderDockWindow("TF tree", centre);
         ImGui::DockBuilderDockWindow("###RosConsole", console);
         ImGui::DockBuilderDockWindow("ros2_control", right);
     } else if (workspace == Workspace::World) {
-        // Design: Agents 300 px left, Streaming 320 px right, the map between.
+        // Design: Agents | Regions 300 px left, Streaming | Geodesy 320 px right, the map
+        // between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
         const ImGuiID right = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Right, fraction(320.0F, size.x - px(300.0F)), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Agents", left);
+        ImGui::DockBuilderDockWindow("Regions", left);
         ImGui::DockBuilderDockWindow("Map", centre);
         ImGui::DockBuilderDockWindow("Streaming", right);
+        ImGui::DockBuilderDockWindow("Geodesy", right);
     } else if (workspace == Workspace::Sensors) {
         // Design: sensor list 260 px left, Degradation 320 px right, sensor views between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Left, fraction(260.0F, size.x), nullptr, &centre);
         const ImGuiID right = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Right, fraction(320.0F, size.x - px(260.0F)), nullptr, &centre);
-        const ImGuiID imu =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.40F, nullptr, &centre);
+        ImGuiID imu = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.40F, nullptr, &centre);
+        // The bottom of the grid: IMU | radar (the design's magnetometer place, not built yet).
+        const ImGuiID radar = ImGui::DockBuilderSplitNode(imu, ImGuiDir_Right, 0.5F, nullptr, &imu);
         // The top of the 2x2 grid: lidar | camera.
         const ImGuiID camera =
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.5F, nullptr, &centre);
@@ -200,6 +274,7 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###Lidar", centre);
         ImGui::DockBuilderDockWindow("###Camera", camera);
         ImGui::DockBuilderDockWindow("###Imu", imu);
+        ImGui::DockBuilderDockWindow("###Radar", radar);
         ImGui::DockBuilderDockWindow("Degradation", right);
     } else if (workspace == Workspace::Domains) {
         // Design: Domains 520 px left, Profile 420 px right; between them the wiring over a
@@ -215,8 +290,15 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###UnitChecks", centre);
         ImGui::DockBuilderDockWindow("Schedule", schedule);
         ImGui::DockBuilderDockWindow("Profile", right);
+        // Their secondary tabs (SPEC 03): Modules beside Domains, Coupling beside Schedule,
+        // Diff and Schema beside Profile.
+        ImGui::DockBuilderDockWindow("###DomainsModules", left);
+        ImGui::DockBuilderDockWindow("Coupling", schedule);
+        ImGui::DockBuilderDockWindow("###ProfileDiff", right);
+        ImGui::DockBuilderDockWindow("Schema", right);
     } else {
-        // Design: Signals 300 px left; Cursors over Statistics, 300 px right; scope between.
+        // Design: Signals | Saved sets 300 px left; Cursors | Measure over Statistics | FFT,
+        // 300 px right; scope between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
         ImGuiID right = ImGui::DockBuilderSplitNode(
@@ -227,6 +309,9 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Scope", centre);
         ImGui::DockBuilderDockWindow("Cursors", right);
         ImGui::DockBuilderDockWindow("Statistics", statistics);
+        ImGui::DockBuilderDockWindow("###SavedSets", left);
+        ImGui::DockBuilderDockWindow("Measure", right);
+        ImGui::DockBuilderDockWindow("FFT", statistics);
     }
     ImGui::DockBuilderFinish(dockspace);
 }
@@ -252,14 +337,80 @@ float contextWidth(const char* key, const char* value) {
            fonts.sansMedium->CalcTextSizeA(size, FLT_MAX, 0.0F, value).x;
 }
 
-void contextItem(const char* key, const char* value) {
+void contextItem(const char* key, const char* value, bool mono = false) {
     ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
     ImGui::TextColored(c::t3, "%s", key);
     ImGui::PopFont();
     ImGui::SameLine(0.0F, px(5.0F));
-    ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
+    // A path is mono at 11 px (12-builder reference.html: the menu bar's file).
+    ImGui::PushFont(mono ? theme::fonts().mono : theme::fonts().sansMedium,
+                    mono ? theme::kCaptionSize : theme::kLabelSize);
     ImGui::TextColored(c::t2, "%s", value);
     ImGui::PopFont();
+}
+
+float monoContextWidth(const char* key, const char* value) {
+    const theme::Fonts& fonts = theme::fonts();
+    return fonts.sans->CalcTextSizeA(px(theme::kLabelSize), FLT_MAX, 0.0F, key).x + px(5.0F) +
+           fonts.mono->CalcTextSizeA(px(theme::kCaptionSize), FLT_MAX, 0.0F, value).x;
+}
+
+/// The widest the menu bar's file path may be (logical px), so it never reaches the menus.
+constexpr float kContextPathWidth = 320.0F;
+
+/// A path with the home folder written "~" (the menu bar's file, as the reference writes it).
+std::string homePath(const std::filesystem::path& path) {
+    std::string text = path.string();
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') {
+        const std::string prefix = std::string(home) + "/";
+        if (text.starts_with(prefix)) {
+            text = "~/" + text.substr(prefix.size());
+        }
+    }
+    return text;
+}
+
+/// The Builder's context (12-builder reference.html `.ctx`): the robot being built, its file
+/// (or "not saved yet"), and the server this viewer is connected to, or "none".
+void builderContext(const PanelContext& context) {
+    const BuilderSession& session = *context.builder;
+    const std::string robot = session.document().robot;
+    std::string file = session.path.empty() ? std::string("not saved yet") : homePath(session.path);
+    // A deep path keeps its last folders and the file name: the menus need the room.
+    const float most = px(kContextPathWidth);
+    std::string tail = file;
+    while (monoContextWidth("file", file.c_str()) > most) {
+        const std::size_t slash = tail.find('/', 1);
+        if (slash == std::string::npos || tail.find('/', slash + 1) == std::string::npos) {
+            break;  // the folder and the file name stay
+        }
+        tail = tail.substr(slash);
+        file = "…" + tail;
+    }
+    const bool ready = context.connection.state == ConnectionState::Ready;
+    const std::string server = ready && !context.connection.serverName.empty()
+                                   ? context.connection.serverName
+                                   : std::string("none");
+    const float gap = px(12.0F);
+    const float width = px(44.0F) + contextWidth("robot", robot.c_str()) + gap +
+                        monoContextWidth("file", file.c_str()) + gap +
+                        contextWidth("server", server.c_str()) + gap;
+    ImGui::SameLine();
+    widgets::AlignRight(width);
+    contextItem("robot", robot.c_str());
+    ImGui::SameLine(0.0F, gap);
+    contextItem("file", file.c_str(), true);
+    ImGui::SameLine(0.0F, gap);
+    contextItem("server", server.c_str());
+    ImGui::SameLine(0.0F, gap);
+    widgets::Kbd("Ctrl K");
+}
+
+/// The server shows a recording: started with --replay (it can seek), or a live server that
+/// opened one (its status then has a recorded range). Nothing to record then (L10).
+bool replaying(const PanelContext& context) {
+    return context.connection.canSeek || context.status.replayEndNs > context.status.replayBeginNs;
 }
 
 /// A recording seeks back to its first moment; a live run restarts at t = 0 on the server.
@@ -340,6 +491,14 @@ void drawMenuBar(PanelContext& context) {
                 *context.workspace = entry.workspace;
             }
         }
+        if (context.builder != nullptr) {
+            ImGui::Separator();
+            (void)ImGui::MenuItem("Pause the run while building", nullptr,
+                                  &context.builder->pauseRunWhileBuilding);
+            ImGui::SetItemTooltip(
+                "The connected run pauses while the Builder is in front in Build mode, and "
+                "plays again when you leave it; off, the run is left alone");
+        }
         endMenu();
     }
     if (menu("Simulation")) {
@@ -359,7 +518,9 @@ void drawMenuBar(PanelContext& context) {
         endMenu();
     }
     if (menu("Tools")) {
-        ImGui::MenuItem("Command palette", "Ctrl+K", false, false);  // not built yet
+        if (ImGui::MenuItem("Command palette", "Ctrl+K")) {
+            openCommandPalette();
+        }
         endMenu();
     }
     if (menu("Window")) {
@@ -369,7 +530,7 @@ void drawMenuBar(PanelContext& context) {
         endMenu();
     }
     if (menu("Help")) {
-        ImGui::MenuItem("Lagrange viewer, v0.1 in development", nullptr, false, false);
+        ImGui::MenuItem("Lagrange viewer " LAGRANGE_VIEWER_VERSION, nullptr, false, false);
         ImGui::MenuItem("Apache-2.0 · fonts: IBM Plex, SIL OFL 1.1", nullptr, false, false);
         endMenu();
     }
@@ -377,16 +538,26 @@ void drawMenuBar(PanelContext& context) {
     ImGui::PopStyleColor();
 
     // Context on the right.
+    if (*context.workspace == Workspace::Builder && context.builder != nullptr) {
+        builderContext(context);
+        ImGui::EndMainMenuBar();
+        return;
+    }
+    // Building offline (12-builder SPEC state 5) shows no run: not the one a Test left behind
+    // after Back when nothing was connected before it.
+    const bool offlineBuilder = *context.workspace == Workspace::Builder &&
+                                context.connection.state != ConnectionState::Ready;
+    const SceneFrame* scene = offlineBuilder ? nullptr : context.scene.get();
     // The file name only: a full path does not fit beside the run controls.
-    const char* stage = context.scene ? context.scene->statics->stagePath.c_str() : "";
+    const char* stage = scene != nullptr ? scene->statics->stagePath.c_str() : "";
     if (const char* slash = std::strrchr(stage, '/'); slash != nullptr && slash[1] != '\0') {
         stage = slash + 1;
     }
-    const char* robot = context.scene && !context.scene->statics->prims.empty()
-                            ? context.scene->statics->prims.front().name.c_str()
+    const char* robot = scene != nullptr && !scene->statics->prims.empty()
+                            ? scene->statics->prims.front().name.c_str()
                             : "";
     char profile[48] = "";
-    if (context.profileSession->profile()) {
+    if (!offlineBuilder && context.profileSession->profile()) {
         const std::size_t changes = context.profileSession->draft().changedLineCount();
         if (changes == 0) {
             std::snprintf(profile, sizeof(profile), "applied");
@@ -395,17 +566,30 @@ void drawMenuBar(PanelContext& context) {
         }
     }
     const float gap = px(12.0F);
-    float width = px(44.0F);  // the Ctrl K hint
-    if (*stage != '\0') {
-        width += contextWidth("stage", stage) + gap;
-    }
-    if (*robot != '\0') {
-        width += contextWidth("robot", robot) + gap;
-    }
-    if (*profile != '\0') {
-        width += contextWidth("profile", profile) + gap;
-    }
+    // What does not fit beside the menus is left out, the stage first (the Scene tree names it).
     ImGui::SameLine();
+    const float room = ImGui::GetContentRegionAvail().x - px(8.0F);
+    float width = 0.0F;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        width = px(44.0F);  // the Ctrl K hint
+        if (*stage != '\0') {
+            width += contextWidth("stage", stage) + gap;
+        }
+        if (*robot != '\0') {
+            width += contextWidth("robot", robot) + gap;
+        }
+        if (*profile != '\0') {
+            width += contextWidth("profile", profile) + gap;
+        }
+        if (width <= room) {
+            break;
+        }
+        if (*stage != '\0') {
+            stage = "";
+        } else {
+            robot = "";
+        }
+    }
     widgets::AlignRight(width);
     if (*stage != '\0') {
         contextItem("stage", stage);
@@ -423,6 +607,553 @@ void drawMenuBar(PanelContext& context) {
     ImGui::EndMainMenuBar();
 }
 
+// --- the Builder's chrome (12-builder SPEC "Modes", "Strip under the workspace bar") ---------
+
+/// The document's file name as the readout shows it: the robot name until first saved.
+std::string documentName(const BuilderSession& session) {
+    if (!session.path.empty()) {
+        return session.path.filename().string();
+    }
+    return session.document().robot + ".urdf";
+}
+
+/// Test ▾ → Start at… (SPEC "Modes"): where the robot starts in the chosen world, remembered
+/// per world, passed to the test server as --spawn. Not for the connected run: ImportRobot
+/// carries no pose (proto/…/command.proto), so the robot goes where its file puts it.
+void drawStartAt(BuilderSession& session) {
+    const std::string world = session.testTarget.empty() ? "none" : session.testTarget;
+    builder::SpawnPose pose = session.testSpawns.at(world);
+    // "Start at" in Sans, the pose after it in Mono (every number is Mono): the label is padded
+    // with spaces to leave room, and the pose drawn there.
+    const std::string shown = builder::spawnLabel(pose);
+    const float monoSize = px(theme::kMonoSize);
+    // Room for a typical pose whatever is shown, so the menu keeps its width (and stays on the
+    // screen) while the fields beside it are typed in.
+    const float monoWidth = std::max(
+        theme::fonts().mono->CalcTextSizeA(monoSize, FLT_MAX, 0.0F, shown.c_str()).x,
+        theme::fonts().mono->CalcTextSizeA(monoSize, FLT_MAX, 0.0F, "-100, -100, 0 · 180°").x);
+    const float space = std::max(ImGui::CalcTextSize(" ").x, 1.0F);
+    const std::string label =
+        "Start at" +
+        std::string(static_cast<std::size_t>(std::ceil((monoWidth + px(28.0F)) / space)), ' ') +
+        "###start-at";
+    ImGui::Separator();
+    // Where the row's text starts, and its draw list: once BeginMenu opened the submenu, the
+    // current window (and its last item) are the submenu's.
+    const ImVec2 row = ImGui::GetCursorScreenPos();
+    ImDrawList* const draw = ImGui::GetWindowDrawList();
+    const bool open = ImGui::BeginMenu(label.c_str(), !session.testIntoRun);
+    {
+        const float x = row.x + ImGui::CalcTextSize("Start at").x + px(8.0F);
+        const float y = row.y + (ImGui::GetTextLineHeight() - monoSize) * 0.5F;
+        ImVec4 color = c::t2;
+        if (session.testIntoRun) {
+            color.w *= ImGui::GetStyle().DisabledAlpha;
+        }
+        draw->AddText(theme::fonts().mono, monoSize, ImVec2(x, y),
+                      ImGui::ColorConvertFloat4ToU32(color), shown.c_str());
+    }
+    if (open) {
+        widgets::Caption("In the world's frame: x, y, z (m), heading (°)");
+        widgets::Caption("z: where the robot's lowest point goes");
+        struct Field {
+            const char* name;
+            double* value;
+            const char* unit;
+        };
+        const std::array<Field, 4> fields{{{"x", &pose.x, "m"},
+                                           {"y", &pose.y, "m"},
+                                           {"z", &pose.z, "m"},
+                                           {"heading", &pose.yawDeg, "°"}}};
+        bool changed = false;
+        for (const Field& field : fields) {
+            ImGui::PushID(field.name);
+            const float top = ImGui::GetCursorPosY();
+            ImGui::SetCursorPosY(top + (ImGui::GetFrameHeight() - px(theme::kCaptionSize)) * 0.5F);
+            widgets::Caption("%s", field.name);
+            ImGui::SameLine(px(72.0F));
+            ImGui::SetCursorPosY(top);
+            char current[32];
+            std::snprintf(current, sizeof(current), "%g", *field.value);
+            std::string text = current;
+            if (widgets::CommitField("##value", &text, field.unit, false, px(150.0F))) {
+                char* end = nullptr;
+                const double typed = std::strtod(text.c_str(), &end);
+                if (end != text.c_str() && std::isfinite(typed)) {
+                    *field.value = typed;
+                    changed = true;
+                }
+            }
+            ImGui::PopID();
+        }
+        if (changed) {
+            session.testSpawns.set(world, pose);
+        }
+        const builder::SpawnPose fallback = builder::defaultSpawn(world);
+        ImGui::BeginDisabled(pose == fallback);
+        const std::string reset =
+            fallback.isOrigin() ? std::string("The world's origin")
+                                : "This world's default (" + builder::spawnLabel(fallback) + ")";
+        if (widgets::Button(reset.c_str(), widgets::ButtonKind::Default)) {
+            session.testSpawns.reset(world);
+        }
+        ImGui::EndDisabled();
+        ImGui::EndMenu();
+    }
+    if (!open) {
+        ImGui::SetItemTooltip("%s", session.testIntoRun
+                                        ? "The connected run adds the robot where its file puts it"
+                                        : "Where Test starts the robot in this world (--spawn)");
+    }
+}
+
+/// Build mode (SPEC "Modes"): Undo, Redo, the document readout, Build, Test · target ▾, Save.
+void drawBuildControls(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    const std::string name = documentName(session);
+    const int unsaved = session.history.editsSinceSave();
+    char after[48] = "";
+    if (unsaved > 0 || session.path.empty()) {
+        std::snprintf(after, sizeof(after), "unsaved · %d", unsaved);
+    }
+    // A world by its file's name: "Test · warehouse_small".
+    const std::string target = session.testIntoRun ? "connected run"
+                               : session.testTarget.empty()
+                                   ? "empty world"
+                                   : std::filesystem::path(session.testTarget).stem().string();
+    const std::string test = "Test · " + target + "      ";  // room for the chevron
+    const float gap = px(4.0F);
+    const float width = px(26.0F) * 2.0F + widgets::ReadoutWidth("doc", name.c_str(), after) +
+                        widgets::ButtonWidth("Build", widgets::Icon::Builder, true) +
+                        widgets::ButtonWidth(test.c_str(), widgets::Icon::Play, true) +
+                        widgets::ButtonWidth("Save", widgets::Icon::Save, true) + gap * 5.0F +
+                        px(10.0F);
+    ImGui::SameLine();
+    widgets::AlignRight(width + px(4.0F));
+    const ImVec2 rule = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(rule.x, ImGui::GetWindowPos().y),
+        ImVec2(rule.x, ImGui::GetWindowPos().y + ImGui::GetWindowHeight()),
+        ImGui::ColorConvertFloat4ToU32(c::line));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(10.0F));
+    centreInBar(px(26.0F));
+    const float y = ImGui::GetCursorPosY();
+    const auto next = [&] {
+        ImGui::SameLine(0.0F, gap);
+        ImGui::SetCursorPosY(y);
+    };
+
+    ImGui::BeginDisabled(!session.history.canUndo());
+    if (widgets::Button("##undo", widgets::ButtonKind::Default, widgets::Icon::Undo, true)) {
+        (void)session.history.undo();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Undo (Ctrl Z)");
+    next();
+    ImGui::BeginDisabled(!session.history.canRedo());
+    if (widgets::Button("##redo", widgets::ButtonKind::Default, widgets::Icon::Redo, true)) {
+        (void)session.history.redo();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Redo (Ctrl Shift Z)");
+    next();
+    widgets::Readout("doc", name.c_str(), after, c::t1, c::warn);
+    if (!session.path.empty()) {
+        ImGui::SetItemTooltip("%s", session.path.string().c_str());
+    }
+    next();
+    (void)widgets::Button("Build", widgets::ButtonKind::On, widgets::Icon::Builder, true);
+    ImGui::SetItemTooltip("Build mode: no simulation");
+    next();
+
+    // Test · target ▾ (the primary action). Refused while there is an error (SPEC state 3) or
+    // without lagrange_server on this machine (state 5).
+    // Into the connected run (RFC 0016 §7.2) needs a server that imports instead.
+    const int errors = session.problems.errors();
+    if (!session.testSpawns.loaded() && !context.configDirectory.empty()) {
+        session.testSpawns.load(std::filesystem::path(context.configDirectory) /
+                                "builder_spawns.tsv");
+    }
+    const bool connected = context.connection.state == ConnectionState::Ready;
+    const bool intoRun = connected && context.connection.canImport;
+    if (intoRun && context.launcher->localServer.empty()) {
+        session.testIntoRun = true;  // SPEC state 5: then the only target
+    }
+    const bool installed = session.testIntoRun ? intoRun : !context.launcher->localServer.empty();
+    // Code review M3: not while a xacro expansion or a split is about to change the document.
+    const bool waiting = session.documentJobRunning;
+    ImGui::BeginDisabled(errors > 0 || !installed || waiting);
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float testWidth = widgets::ButtonWidth(test.c_str(), widgets::Icon::Play, true);
+    if (widgets::Button(test.c_str(), widgets::ButtonKind::Primary, widgets::Icon::Play, true)) {
+        if (ImGui::GetIO().MousePos.x > at.x + testWidth - px(24.0F)) {
+            ImGui::OpenPopup("##test-target");
+        } else {
+            session.testRequested = true;
+            session.testWorld = session.testTarget.empty() ? "none" : session.testTarget;
+            session.testSpawn = builder::spawnArgument(session.testSpawns.at(session.testWorld));
+        }
+    }
+    const float chevron = px(10.0F);
+    widgets::DrawIcon(
+        ImGui::GetWindowDrawList(), widgets::Icon::ChevronDown,
+        ImVec2(at.x + testWidth - px(10.0F) - chevron, at.y + px(8.0F)), chevron,
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(c::onAccent.x, c::onAccent.y, c::onAccent.z,
+                   errors > 0 || !installed || waiting ? ImGui::GetStyle().DisabledAlpha : 1.0F)),
+        ImGui::ColorConvertFloat4ToU32(c::accent));
+    ImGui::EndDisabled();
+    if (errors > 0) {
+        ImGui::SetItemTooltip("Fix %d problem%s first", errors, errors == 1 ? "" : "s");
+    } else if (waiting) {
+        ImGui::SetItemTooltip("Wait until %s is done",
+                              session.busy.empty() ? "the split" : session.busy.c_str());
+    } else if (!installed) {
+        ImGui::SetItemTooltip(session.testIntoRun ? "Not connected to a server that imports robots"
+                                                  : "lagrange_server is not installed");
+    } else if (session.testIntoRun) {
+        ImGui::SetItemTooltip("Add the robot to the run this viewer is connected to");
+    } else {
+        ImGui::SetItemTooltip("Test the robot in a simulator of its own on this machine");
+    }
+    if (ImGui::BeginPopup("##test-target")) {
+        if (ImGui::MenuItem("Empty world", nullptr,
+                            !session.testIntoRun && session.testTarget.empty())) {
+            session.testTarget.clear();
+            session.testIntoRun = false;
+        }
+        // A sample world (lagrange_assets' worlds) or a world file: the test server runs with
+        // --world FILE, the robot where the server puts a robot (its origin).
+        const std::vector<builder::SampleWorld> worlds =
+            context.launcher->assetDirectory.empty()
+                ? std::vector<builder::SampleWorld>{}
+                : builder::sampleWorlds(std::filesystem::path(context.launcher->assetDirectory) /
+                                        "worlds");
+        if (ImGui::BeginMenu("A sample world", !worlds.empty())) {
+            for (const builder::SampleWorld& world : worlds) {
+                const std::string file = world.file.string();
+                if (ImGui::MenuItem(world.name.c_str(), nullptr,
+                                    !session.testIntoRun && session.testTarget == file)) {
+                    session.testTarget = file;
+                    session.testIntoRun = false;
+                }
+                ImGui::SetItemTooltip("%s", file.c_str());
+            }
+            ImGui::EndMenu();
+        }
+        if (worlds.empty()) {
+            ImGui::SetItemTooltip("lagrange_assets is not installed");
+        }
+        if (ImGui::BeginMenu("A world file")) {
+            widgets::Caption("USD, SDFormat or URDF world");
+            ImGui::BeginDisabled(!context.canOpenFiles);
+            if (widgets::Button("Browse…", widgets::ButtonKind::Default)) {
+                session.worldDialogRequested = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            if (!context.canOpenFiles) {
+                ImGui::SetItemTooltip("Needs the windowed viewer's file dialog: type a path");
+            }
+            static std::string typed;  // the path field, kept while the menu is closed
+            std::string path = typed;
+            widgets::Caption("or a path:");
+            if (widgets::CommitField("##world-path", &path, nullptr, false, px(320.0F), false)) {
+                typed = path;
+            }
+            const bool usable = builder::isWorldFile(typed) && std::filesystem::exists(typed);
+            ImGui::BeginDisabled(!usable);
+            if (widgets::Button("Use this world", widgets::ButtonKind::Primary)) {
+                session.testTarget = std::filesystem::absolute(typed).lexically_normal().string();
+                session.testIntoRun = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            if (!usable && !typed.empty()) {
+                ImGui::SetItemTooltip("Not a world file here (.usda, .usd, .sdf, .world, .urdf)");
+            }
+            ImGui::EndMenu();
+        }
+        drawStartAt(session);
+        if (ImGui::MenuItem("Into the connected run", nullptr, session.testIntoRun, intoRun)) {
+            session.testIntoRun = true;
+        }
+        ImGui::SetItemTooltip(
+            "%s", intoRun     ? "Add the robot to the run this viewer shows; Back removes it"
+                  : connected ? "This server does not import robots (a replay)"
+                              : "Connect to a server first");
+        ImGui::EndPopup();
+    }
+    next();
+    if (widgets::Button("Save", widgets::ButtonKind::Default, widgets::Icon::Save, true)) {
+        ImGui::OpenPopup("##save-menu");
+    }
+    ImGui::SetItemTooltip("Save (Ctrl S), Export USD…, Check loads…");
+    if (ImGui::BeginPopup("##save-menu")) {
+        if (ImGui::MenuItem("Save", "Ctrl+S")) {
+            session.saveRequested = true;
+            session.savePath.clear();
+        }
+        if (ImGui::MenuItem("Save as…", nullptr, false, context.canOpenFiles)) {
+            session.saveAsDialogRequested = true;
+        }
+        if (!context.canOpenFiles) {
+            ImGui::SetItemTooltip("Needs the windowed viewer's file dialog");
+        }
+        if (ImGui::MenuItem("Open…", "Ctrl+O", false, context.canOpenFiles)) {
+            session.openDialogRequested = true;
+        }
+        if (ImGui::MenuItem("Export USD…")) {
+            session.exportUsdRequested = true;
+        }
+        if (ImGui::MenuItem("Check loads…", nullptr, false, session.canCheckLoads)) {
+            session.checkRequested = true;
+        }
+        if (errors > 0) {
+            ImGui::Separator();
+            ImGui::TextColored(c::warn, "%d problem%s: the file saves, but will not load yet",
+                               errors, errors == 1 ? "" : "s");
+        }
+        ImGui::EndPopup();
+    }
+}
+
+/// Testing (SPEC state 4): Back to Build, the Scene's Play/Pause, Step and readouts, and the
+/// TEST pill in place of REPLAY's.
+void drawTestControls(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    const bool ready = context.connection.state == ConnectionState::Ready &&
+                       session.mode == BuilderSession::Mode::Testing;
+    const bool running = context.status.runState == RunState::Running;
+    char time[32];
+    format::clock(context.status.simTimeNs, time, sizeof(time));
+    char rate[24];
+    std::snprintf(rate, sizeof(rate), "%.2f×", context.status.realTimeFactor);
+    char pill[96];
+    std::snprintf(pill, sizeof(pill), "%s · %s%s",
+                  session.mode == BuilderSession::Mode::Testing ? "TEST" : "STARTING",
+                  session.testRobotName.empty() ? session.document().robot.c_str()
+                                                : session.testRobotName.c_str(),
+                  session.testPassive ? " · passive" : "");
+    const float gap = px(4.0F);
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
+    const float playWidth =
+        px(20.0F) + px(14.0F) + px(6.0F) + ImGui::CalcTextSize(running ? "Pause" : "Play").x;
+    ImGui::PopFont();
+    const float width = widgets::ButtonWidth("Back to Build", widgets::Icon::Count, true) +
+                        playWidth + px(26.0F) + widgets::ReadoutWidth("sim t", time) +
+                        widgets::ReadoutWidth("RTF", rate) + widgets::PillWidth(pill) + gap * 6.0F +
+                        px(10.0F);
+    ImGui::SameLine();
+    widgets::AlignRight(width + px(4.0F));
+    const ImVec2 rule = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(rule.x, ImGui::GetWindowPos().y),
+        ImVec2(rule.x, ImGui::GetWindowPos().y + ImGui::GetWindowHeight()),
+        ImGui::ColorConvertFloat4ToU32(c::line));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(10.0F));
+    centreInBar(px(26.0F));
+    const float y = ImGui::GetCursorPosY();
+    const auto next = [&] {
+        ImGui::SameLine(0.0F, gap);
+        ImGui::SetCursorPosY(y);
+    };
+    if (widgets::Button("Back to Build", widgets::ButtonKind::Default, widgets::Icon::Count,
+                        true)) {
+        session.backRequested = true;
+    }
+    ImGui::SetItemTooltip("Stop the test and edit again (Esc)");
+    next();
+    ImGui::BeginDisabled(!ready);
+    if (widgets::Button(running ? "Pause" : "Play", widgets::ButtonKind::Primary,
+                        running ? widgets::Icon::Pause : widgets::Icon::Play, true)) {
+        if (running) {
+            context.client.pause();
+        } else {
+            context.client.play();
+        }
+    }
+    next();
+    ImGui::BeginDisabled(!context.connection.canStep || running);
+    if (widgets::Button("##step", widgets::ButtonKind::Default, widgets::Icon::Step, true)) {
+        context.client.step(kStepNs);
+    }
+    ImGui::SetItemTooltip("Step 10 ms");
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    next();
+    widgets::Readout("sim t", time);
+    next();
+    widgets::Readout("RTF", rate);
+    next();
+    ImGui::SetCursorPosY(y + px(4.0F));
+    widgets::Pill(pill, widgets::PillKind::Info);
+    if (session.testPassive) {
+        ImGui::SetItemTooltip("passive: the run already has a robot");
+    } else if (session.testIntoRun) {
+        ImGui::SetItemTooltip("In the connected run; Back to Build removes it");
+    }
+}
+
+/// The Robot strip (SPEC "Strip under the workspace bar"), in place of the domain chips.
+void drawRobotStrip(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    const builder::Document& document = session.document();
+    const builder::PartCounts counts = builder::countParts(document, &session.catalog);
+    centreInBar(ImGui::GetTextLineHeight());
+    widgets::Caption("Robot");
+    const ImVec4 rigid = widgets::domainColor("rigid_body");
+    const ImVec4 sensors = widgets::domainColor("sensors");
+    const ImVec4 neutral(0.0F, 0.0F, 0.0F, 0.0F);
+    const auto chip = [&](const char* id, const ImVec4& color, const std::string& name,
+                          const std::string& detail) {
+        ImGui::SameLine(0.0F, px(6.0F));
+        centreInBar(px(22.0F));
+        return widgets::DomainChip(id, color, name.c_str(), detail.c_str(), widgets::ChipState::On);
+    };
+    const auto plural = [](int n, const char* word) {
+        return std::to_string(n) + " " + word + (n == 1 ? "" : "s");
+    };
+    (void)chip("##links", rigid, plural(counts.links, "link"),
+               counts.roots == 1 ? "1 root" : std::to_string(counts.roots) + " roots");
+    std::string types;
+    const auto add = [&](int n, const char* word) {
+        if (n > 0) {
+            types += (types.empty() ? "" : " · ") + std::to_string(n) + " " + word;
+        }
+    };
+    add(counts.revolute, "rev");
+    add(counts.continuous, "cont");
+    add(counts.prismatic, "prism");
+    add(counts.fixed, "fixed");
+    (void)chip("##joints", rigid, plural(counts.joints, "joint"), types);
+    std::string kinds = plural(counts.types, "type");
+    kinds += " · " + plural(counts.kinds, "kind");
+    (void)chip("##sensors", sensors, plural(counts.sensors, "sensor"),
+               counts.sensors == 0 ? "" : kinds);
+    // Mass and COM at zero preview, in the root link's frame (RFC 0016 §4).
+    const builder::MassProperties mass = builder::robotMass(document);
+    char text[64];
+    std::snprintf(text, sizeof(text), "%.2f kg", mass.mass);
+    (void)chip("##mass", neutral, "mass", text);
+    std::snprintf(text, sizeof(text), "%.3f · %.3f · %.3f m", mass.com[0], mass.com[1],
+                  mass.com[2]);
+    (void)chip("##com", neutral, "COM", text);
+
+    // Right: what Build mode does, the validity, Check loads….
+    const char* fullInfo = session.mode == BuilderSession::Mode::Build
+                               ? "Build · no simulation · sensors not rendered · Lit"
+                           : session.testIntoRun ? "Test · the robot runs in the connected run"
+                                                 : "Test · the robot runs in its own simulator";
+    const char* shortInfo = session.mode == BuilderSession::Mode::Build ? "Build · Lit"
+                            : session.testIntoRun                       ? "Test · connected run"
+                                                                        : "Test · own simulator";
+    // QA F9: the pill counts what the Problems tab lists (its title's number), by level.
+    const BuilderSession::Problems& problems = session.problems;
+    const int errors = problems.errors() + (session.catalogError.empty() ? 0 : 1);
+    int total = session.catalogError.empty() ? 0 : 1;
+    int warnings = 0;
+    int hints = 0;
+    int fileErrors = 0;
+    for (const auto* list :
+         {&problems.builder, &problems.loader, &problems.check, &problems.files}) {
+        for (const builder::Problem& problem : *list) {
+            ++total;
+            warnings += problem.level == builder::Level::Warning ? 1 : 0;
+            hints += problem.level == builder::Level::Hint ? 1 : 0;
+            fileErrors += list == &problems.files && problem.level == builder::Level::Error ? 1 : 0;
+        }
+    }
+    char validity[96];
+    if (errors > 0) {
+        std::snprintf(validity, sizeof(validity), "%d problem%s", total, total == 1 ? "" : "s");
+    } else {
+        std::string summary = "URDF valid";
+        const auto addCount = [&](int n, const char* what) {
+            if (n > 0) {
+                summary += " · " + std::to_string(n) + " " + what + (n == 1 ? "" : "s");
+            }
+        };
+        addCount(fileErrors, "file error");
+        addCount(warnings, "warning");
+        addCount(hints, "hint");
+        if (total == 0) {
+            summary += " · 0 hints";
+        }
+        std::snprintf(validity, sizeof(validity), "%s", summary.c_str());
+    }
+    const bool check = session.canCheckLoads && session.mode == BuilderSession::Mode::Build;
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const float button = check ? ImGui::CalcTextSize("Check loads…").x + px(16.0F) : 0.0F;
+    ImGui::PopFont();
+    ImGui::SameLine();
+    // A narrow window (1024 px) has no room for the long note: the short one, then none; the
+    // whole note is the short pill's tooltip (QA3 F6: never "Check loa" cut by the window).
+    const float rest = widgets::PillWidth(validity) + (check ? px(8.0F) + button : 0.0F);
+    const float room = ImGui::GetContentRegionAvail().x - px(8.0F);
+    const char* info = fullInfo;
+    if (widgets::PillWidth(fullInfo) + px(6.0F) + rest > room) {
+        info = widgets::PillWidth(shortInfo) + px(6.0F) + rest <= room ? shortInfo : nullptr;
+    }
+    widgets::AlignRight((info != nullptr ? widgets::PillWidth(info) + px(6.0F) : 0.0F) + rest);
+    centreInBar(ImGui::GetTextLineHeight());
+    if (info != nullptr) {
+        widgets::Pill(info, widgets::PillKind::Info);
+        if (info != fullInfo) {
+            ImGui::SetItemTooltip("%s", fullInfo);
+        }
+        ImGui::SameLine(0.0F, px(6.0F));
+    }
+    widgets::Pill(validity, errors > 0 ? widgets::PillKind::Error : widgets::PillKind::Ok);
+    if (ImGui::IsItemClicked()) {
+        ImGui::SetWindowFocus(builder_windows::kProblems);
+    }
+    if (errors > 0) {
+        ImGui::SetItemTooltip("Open Problems");
+    }
+    if (check) {
+        ImGui::SameLine(0.0F, px(8.0F));
+        centreInBar(px(22.0F));
+        if (widgets::Button("Check loads…", widgets::ButtonKind::Ghost)) {
+            session.checkRequested = true;
+        }
+        ImGui::SetItemTooltip("What each joint must hold against gravity (lagrange check)");
+    }
+}
+
+/// The Builder's keys (SPEC "Modes"): Ctrl Z, Ctrl Shift Z / Ctrl Y, Ctrl S; Esc while testing.
+void builderShortcuts(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    if (ImGui::GetIO().WantTextInput) {
+        return;  // a field's own undo
+    }
+    if (session.mode == BuilderSession::Mode::Build) {
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
+            (void)session.history.undo();
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z) ||
+            ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) {
+            (void)session.history.redo();
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
+            session.saveRequested = true;
+            session.savePath.clear();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !ImGui::IsAnyItemActive() &&
+            ImGui::GetTopMostPopupModal() == nullptr) {
+            builder_ui::deleteSelection(session);
+        }
+        // F2 renames the selection in its tree row (SPEC "Robot (tree)").
+        if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && !ImGui::IsAnyItemActive() &&
+            ImGui::GetTopMostPopupModal() == nullptr &&
+            session.selection.kind != BuilderSession::Selection::Kind::None) {
+            session.renameRequested = true;
+        }
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        session.backRequested = true;
+    }
+}
+
 void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
     // Design (.tb): 40 px, bg1; the workspace tabs, then on the right, after a rule, the run
     // controls and readouts.
@@ -432,15 +1163,49 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         ImGui::BeginViewportSideBar("##workspace-bar", viewport, ImGuiDir_Up, px(40.0F), kBarFlags);
     ImGui::PopStyleVar(2);
     if (open) {
+        // A small window (1024 px wide) cannot hold the labelled tabs and the run controls: the
+        // tabs then show their icons alone, and the run controls keep their place (they are
+        // what a run needs; a tab's name is in its tooltip and its Ctrl key).
+        const bool builderControls =
+            *context.workspace == Workspace::Builder && !context.launcher->active;
+        float tabs = px(1.0F);
+        for (const WorkspaceEntry& entry : kWorkspaces) {
+            tabs += widgets::BarTabWidth(entry.label);
+        }
+        const float room = ImGui::GetContentRegionAvail().x;
+        // The run controls at their widest, or the Builder's (which ask for about as much).
+        const float controls = px(builderControls ? 560.0F : 520.0F);
+        const bool compactTabs = tabs + controls > room;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         for (const WorkspaceEntry& entry : kWorkspaces) {
+            if (entry.workspace == Workspace::Builder) {
+                // Design (12-builder: .ws.sepl): a 1 px rule sets the Builder apart.
+                const float x = ImGui::GetCursorScreenPos().x;
+                const float top = ImGui::GetWindowPos().y;
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(x, top),
+                                                    ImVec2(x, top + ImGui::GetWindowHeight()),
+                                                    ImGui::ColorConvertFloat4ToU32(c::line));
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(1.0F));
+            }
             if (widgets::BarTab(entry.label, entry.icon, *context.workspace == entry.workspace,
-                                entry.dockspace != nullptr)) {
+                                entry.dockspace != nullptr, compactTabs)) {
                 *context.workspace = entry.workspace;
             }
             ImGui::SameLine();
         }
         ImGui::PopStyleVar();
+
+        if (builderControls) {
+            // The Builder's own controls replace the run controls (SPEC "Modes").
+            if (context.builder->mode == BuilderSession::Mode::Build) {
+                drawBuildControls(context);
+            } else {
+                drawTestControls(context);
+            }
+            bottomRule();
+            ImGui::End();
+            return;
+        }
 
         const bool ready = context.connection.state == ConnectionState::Ready;
         const bool running = context.status.runState == RunState::Running;
@@ -452,11 +1217,21 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         std::snprintf(target, sizeof(target), "/ %.2f", context.status.realTimeFactorTarget);
 
         // Width of the control group, to right-align it: three buttons, two readouts, Record.
+        // Narrower still than the compact tabs leave room for: Play and Record lose their words.
         const float gap = px(4.0F);
+        float used = 0.0F;
+        for (const WorkspaceEntry& entry : kWorkspaces) {
+            used += widgets::BarTabWidth(entry.label, compactTabs);
+        }
+        const bool compactButtons = used + controls > room;
         ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
-        const float playWidth =
-            px(20.0F) + px(14.0F) + px(6.0F) + ImGui::CalcTextSize(running ? "Pause" : "Play").x;
-        const float recordWidth = px(20.0F) + px(8.0F) + px(6.0F) + ImGui::CalcTextSize("Record").x;
+        const float playWidth = compactButtons
+                                    ? px(26.0F)
+                                    : px(20.0F) + px(14.0F) + px(6.0F) +
+                                          ImGui::CalcTextSize(running ? "Pause" : "Play").x;
+        const float recordWidth =
+            compactButtons ? px(20.0F)
+                           : px(20.0F) + px(8.0F) + px(6.0F) + ImGui::CalcTextSize("Record").x;
         ImGui::PopFont();
         const float width = px(26.0F) * 2.0F + playWidth + recordWidth +
                             widgets::ReadoutWidth("sim t", time) +
@@ -484,13 +1259,18 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         ImGui::EndDisabled();
         next();
         ImGui::BeginDisabled(!ready);
-        if (widgets::Button(running ? "Pause" : "Play", widgets::ButtonKind::Primary,
-                            running ? widgets::Icon::Pause : widgets::Icon::Play, true)) {
+        if (widgets::Button(
+                compactButtons ? (running ? "##pause" : "##play") : (running ? "Pause" : "Play"),
+                widgets::ButtonKind::Primary, running ? widgets::Icon::Pause : widgets::Icon::Play,
+                true)) {
             if (running) {
                 context.client.pause();
             } else {
                 context.client.play();
             }
+        }
+        if (compactButtons) {
+            ImGui::SetItemTooltip("%s (Space)", running ? "Pause" : "Play");
         }
         ImGui::EndDisabled();
         next();
@@ -506,17 +1286,20 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         widgets::Readout("RTF", rate, target);
         next();
         // Record (design: its red dot means recording): a live run, on the server's machine.
-        const bool canRecord = ready && !context.connection.canSeek;  // not a replay
+        const bool canRecord = ready && !replaying(context);  // not a replay
         const bool recording = !context.status.recordingPath.empty();
         ImGui::BeginDisabled(!canRecord);
         const ImVec2 record = ImGui::GetCursorScreenPos();
-        if (widgets::Button("     Record", widgets::ButtonKind::Default, widgets::Icon::Count,
-                            true)) {
+        if (compactButtons ? widgets::Button("##record", widgets::ButtonKind::Default,
+                                             widgets::Icon::Count, true)
+                           : widgets::Button("     Record", widgets::ButtonKind::Default,
+                                             widgets::Icon::Count, true)) {
             context.client.setRecording(!recording);
         }
         const ImVec4 dot = recording ? c::error : c::t3;
         ImGui::GetWindowDrawList()->AddCircleFilled(
-            ImVec2(record.x + px(14.0F), record.y + px(13.0F)), px(4.0F),
+            ImVec2(record.x + (compactButtons ? px(10.0F) : px(14.0F)), record.y + px(13.0F)),
+            px(4.0F),
             ImGui::ColorConvertFloat4ToU32(
                 ImVec4(dot.x, dot.y, dot.z, canRecord ? 1.0F : ImGui::GetStyle().DisabledAlpha)));
         ImGui::EndDisabled();
@@ -544,42 +1327,23 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     if (open) {
+        if (*context.workspace == Workspace::Builder) {
+            drawRobotStrip(context);  // the Robot strip in place of the domains (SPEC)
+            bottomRule();
+            ImGui::End();
+            return;
+        }
+        // Replay (08-replay SPEC): the Source strip while a recording plays.
+        if (*context.workspace == Workspace::Replay && drawReplaySourceStrip(context)) {
+            bottomRule();
+            ImGui::End();
+            return;
+        }
         ProfileSession& session = *context.profileSession;
-        centreInBar(ImGui::GetTextLineHeight());
-        widgets::Caption("Domains");
-        if (session.domains().empty()) {
-            ImGui::SameLine(0.0F, px(10.0F));
-            widgets::Caption("%s", context.connection.state == ConnectionState::Ready
-                                       ? "waiting for the server's profile"
-                                       : "not connected");
-        }
-        for (const DomainView& view : session.domains()) {
-            if (!format::isPhysicsDomain(view.name)) {
-                continue;  // additional modules are listed in the Domains workspace
-            }
-            char detail[96];
-            format::domainDetail(view, detail, sizeof(detail));
-            widgets::ChipState state = widgets::ChipState::On;
-            if (session.domainHasError(view.name)) {
-                state = widgets::ChipState::Error;
-            } else if (view.pending) {
-                state = widgets::ChipState::Pending;
-            } else if (!view.enabled) {
-                state = widgets::ChipState::Substitute;
-            }
-            ImGui::SameLine(0.0F, px(6.0F));
-            centreInBar(px(22.0F));
-            const std::string_view label = widgets::domainShortLabel(view.name);
-            char name[32];
-            std::snprintf(name, sizeof(name), "%.*s", static_cast<int>(label.size()), label.data());
-            if (widgets::DomainChip(view.name.c_str(), widgets::domainColor(view.name), name,
-                                    detail, state)) {
-                *context.workspace = Workspace::Domains;
-                session.selectedDomain = view.name;
-            }
-        }
 
-        // On the right: what the profile's state is, and the way to edit it.
+        // On the right: what the profile's state is, and the way to edit it. These keep their
+        // place in a small window; the chips give up their detail, then their names (both in
+        // their tooltips) to leave room for them.
         char text[64] = "";
         widgets::PillKind kind = widgets::PillKind::Ok;
         const std::size_t changes = session.draft().changedLineCount();
@@ -597,6 +1361,76 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
         const float button = ImGui::CalcTextSize("Edit profile").x + px(16.0F);
         ImGui::PopFont();
         const float pill = *text != '\0' ? widgets::PillWidth(text) + px(8.0F) : 0.0F;
+
+        struct Chip {
+            const DomainView* view;
+            char name[32];
+            char detail[96];
+            widgets::ChipState state;
+        };
+        std::array<Chip, 16> chips{};
+        std::size_t count = 0;
+        for (const DomainView& view : session.domains()) {
+            if (!format::isPhysicsDomain(view.name) || count == chips.size()) {
+                continue;  // additional modules are listed in the Domains workspace
+            }
+            Chip& chip = chips.at(count++);
+            chip.view = &view;
+            format::domainDetail(view, chip.detail, sizeof(chip.detail));
+            chip.state = widgets::ChipState::On;
+            if (session.domainHasError(view.name)) {
+                chip.state = widgets::ChipState::Error;
+            } else if (view.pending) {
+                chip.state = widgets::ChipState::Pending;
+            } else if (!view.enabled) {
+                chip.state = widgets::ChipState::Substitute;
+            }
+            const std::string_view label = widgets::domainShortLabel(view.name);
+            std::snprintf(chip.name, sizeof(chip.name), "%.*s", static_cast<int>(label.size()),
+                          label.data());
+        }
+        ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+        const float caption = ImGui::CalcTextSize("Domains").x;
+        ImGui::PopFont();
+        const float room = ImGui::GetContentRegionAvail().x - pill - button - px(12.0F);
+        // 0: name and detail; 1: name; 2: the dot alone.
+        int level = 0;
+        for (; level < 2; ++level) {
+            float width = caption;
+            for (std::size_t i = 0; i < count; ++i) {
+                width += px(6.0F) + widgets::DomainChipWidth(level < 2 ? chips.at(i).name : "",
+                                                             level < 1 ? chips.at(i).detail : "");
+            }
+            if (width <= room) {
+                break;
+            }
+        }
+
+        centreInBar(ImGui::GetTextLineHeight());
+        widgets::Caption("Domains");
+        if (session.domains().empty()) {
+            ImGui::SameLine(0.0F, px(10.0F));
+            widgets::Caption("%s", context.connection.state == ConnectionState::Ready
+                                       ? "waiting for the server's profile"
+                                       : "not connected");
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const Chip& chip = chips.at(i);
+            ImGui::SameLine(0.0F, px(6.0F));
+            centreInBar(px(22.0F));
+            if (widgets::DomainChip(chip.view->name.c_str(), widgets::domainColor(chip.view->name),
+                                    level < 2 ? chip.name : "", level < 1 ? chip.detail : "",
+                                    chip.state)) {
+                *context.workspace = Workspace::Domains;
+                session.selectedDomain = chip.view->name;
+            }
+            if (level > 0) {
+                ImGui::SetItemTooltip(
+                    "%.*s · %s", static_cast<int>(widgets::domainLabel(chip.view->name).size()),
+                    widgets::domainLabel(chip.view->name).data(), chip.detail);
+            }
+        }
+
         ImGui::SameLine();
         widgets::AlignRight(pill + button);
         if (*text != '\0') {
@@ -630,6 +1464,59 @@ void statusItem(const char* key, const ImVec4& color, const char* format, ...) {
     ImGui::PopFont();
 }
 
+/// The version in the package.xml installed beside `program` (<prefix>/lib/<pkg>/<program> →
+/// <prefix>/share/<pkg>/package.xml), or empty. Read once per program.
+std::string installedVersion(const std::string& program) {
+    static std::string cachedFor;
+    static std::string cached;
+    if (program == cachedFor) {
+        return cached;
+    }
+    cachedFor = program;
+    cached.clear();
+    const std::filesystem::path binary(program);
+    const std::filesystem::path package = binary.parent_path();
+    const std::filesystem::path manifest =
+        package.parent_path().parent_path() / "share" / package.filename() / "package.xml";
+    if (std::FILE* file = std::fopen(manifest.c_str(), "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof(line), file) != nullptr) {
+            const char* open = std::strstr(line, "<version>");
+            const char* close = open != nullptr ? std::strstr(open, "</version>") : nullptr;
+            if (close != nullptr) {
+                cached.assign(open + 9, close);
+                break;
+            }
+        }
+        std::fclose(file);
+    }
+    return cached;
+}
+
+/// "lyrical · domain 0 · fastrtps" from the environment ROS 2 programs read: ROS_DISTRO,
+/// ROS_DOMAIN_ID (0 when unset, ROS 2's default) and RMW_IMPLEMENTATION (rmw_fastrtps_cpp when
+/// unset, Lyrical's default, CLAUDE.md §1a). `domain` overrides the domain (a test server's).
+/// Empty when no ROS 2 is sourced.
+std::string rosLine(const std::string& domain) {
+    const char* distro = std::getenv("ROS_DISTRO");
+    if (distro == nullptr || *distro == '\0') {
+        return {};
+    }
+    const char* id = std::getenv("ROS_DOMAIN_ID");
+    std::string rmw = std::getenv("RMW_IMPLEMENTATION") != nullptr
+                          ? std::getenv("RMW_IMPLEMENTATION")
+                          : "rmw_fastrtps_cpp";
+    if (rmw.starts_with("rmw_")) {
+        rmw = rmw.substr(4);
+    }
+    if (rmw.ends_with("_cpp")) {
+        rmw.resize(rmw.size() - 4);
+    }
+    const std::string shown =
+        !domain.empty() ? domain : (id != nullptr && *id != '\0' ? std::string(id) : "0");
+    return std::string(distro) + " · domain " + shown + " · " + rmw;
+}
+
 void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
     // Design (.sb): 24 px, bg1, 11 px text, items 16 px apart.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(10.0F), px(4.0F)));
@@ -649,24 +1536,52 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         widgets::Dot(dot);
         ImGui::SameLine(0.0F, px(6.0F));
         ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
-        ImGui::TextColored(c::t1, "%s",
-                           state == ConnectionState::Ready ? "Connected" : toString(state));
+        const bool builderShown = *context.workspace == Workspace::Builder;
+        if (builderShown && state != ConnectionState::Ready) {
+            // The Builder works without a server (SPEC state 5).
+            ImGui::TextColored(c::t1, "Not connected · building offline");
+        } else {
+            ImGui::TextColored(c::t1, "%s",
+                               state == ConnectionState::Ready ? "Connected" : toString(state));
+        }
         ImGui::PopFont();
-        if (!context.connection.serverName.empty()) {
+        // Building offline: the run readouts would be the last server's (a Test's after Back).
+        const bool offline = builderShown && state != ConnectionState::Ready;
+        if (offline) {
+            // The server a Test would start (SPEC state 5; the Launcher's wording when none).
+            ImGui::SameLine(0.0F, gap);
+            const std::string& program = context.launcher->localServer;
+            if (program.empty()) {
+                statusItem("test server", c::t2, "lagrange_server is not installed");
+            } else {
+                const std::string version = installedVersion(program);
+                statusItem("test server", c::t2, "lagrange_server%s%s · this machine",
+                           version.empty() ? "" : " ", version.c_str());
+            }
+        }
+        if (builderShown && context.builder->autosaveTime > 0.0) {
+            ImGui::SameLine(0.0F, gap);
+            statusItem("autosave", c::t1, "%.0f s ago",
+                       ImGui::GetTime() - context.builder->autosaveTime);
+        }
+        if (!offline && !context.connection.serverName.empty()) {
             ImGui::SameLine(0.0F, gap);
             statusItem("server", c::t2, "%s", context.connection.serverName.c_str());
         }
-        if (!context.connection.message.empty()) {
+        if (!offline && !context.connection.message.empty()) {
             ImGui::SameLine(0.0F, gap);
             statusItem(nullptr, c::warn, "%s", context.connection.message.c_str());
         }
-        ImGui::SameLine(0.0F, gap);
-        statusItem("signals", c::t1, "%u", context.status.signalCount);
-        ImGui::SameLine(0.0F, gap);
-        statusItem("deltas", c::t1, "%llu", static_cast<unsigned long long>(context.stats.deltas));
-        ImGui::SameLine(0.0F, gap);
-        statusItem("dropped", context.status.droppedDeltas == 0 ? c::t1 : c::warn, "%llu",
-                   static_cast<unsigned long long>(context.status.droppedDeltas));
+        if (!offline) {
+            ImGui::SameLine(0.0F, gap);
+            statusItem("signals", c::t1, "%u", context.status.signalCount);
+            ImGui::SameLine(0.0F, gap);
+            statusItem("deltas", c::t1, "%llu",
+                       static_cast<unsigned long long>(context.stats.deltas));
+            ImGui::SameLine(0.0F, gap);
+            statusItem("dropped", context.status.droppedDeltas == 0 ? c::t1 : c::warn, "%llu",
+                       static_cast<unsigned long long>(context.status.droppedDeltas));
+        }
         // The latest thing to tell the user: a file that loaded, a command that failed.
         if (!context.notice.text.empty()) {
             ImGui::SameLine(0.0F, gap);
@@ -685,18 +1600,40 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         char viewer[64];
         std::snprintf(viewer, sizeof(viewer), "%.1f ms · %.0f fps",
                       static_cast<double>(context.frameMs), static_cast<double>(fps));
+        // The ROS 2 a run would join (ui-conventions §1: distro, domain and RMW); a Test's
+        // server has a domain of its own.
+        const bool testing = builderShown && context.builder->mode != BuilderSession::Mode::Build;
+        std::string ros = rosLine(testing ? context.builder->testRosDomain : std::string{});
+        if (!ros.empty() && testing && !context.builder->testIntoRun &&
+            context.builder->testRosDomain.empty()) {
+            ros = "off for this test (--no-ros)";  // BuilderHost started it without ROS
+        }
         const theme::Fonts& fonts = theme::fonts();
         const float size = px(theme::kCaptionSize);
-        const float width = fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "GPU").x +
-                            fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "viewer").x +
-                            fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, gpu).x +
-                            fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, viewer).x +
-                            px(6.0F) * 2.0F + gap;
-        ImGui::SameLine();
-        widgets::AlignRight(width);
-        statusItem("GPU", c::t2, "%s", gpu);
+        const auto itemWidth = [&](const char* key, const char* value) {
+            return fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, key).x +
+                   fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, value).x + px(6.0F);
+        };
+        const float viewerWidth = itemWidth("viewer", viewer);
+        const float gpuWidth = itemWidth("GPU", gpu) + gap;
+        const float rosWidth = ros.empty() ? 0.0F : itemWidth("ROS 2", ros.c_str()) + gap;
         ImGui::SameLine(0.0F, gap);
+        // In a narrow window the right group keeps what fits beside the left one: the viewer's
+        // frame time always, then the GPU, then ROS 2.
+        const float room = ImGui::GetContentRegionAvail().x;
+        const bool showGpu = viewerWidth + gpuWidth <= room;
+        const bool showRos = !ros.empty() && showGpu && viewerWidth + gpuWidth + rosWidth <= room;
+        widgets::AlignRight(viewerWidth + (showGpu ? gpuWidth : 0.0F) +
+                            (showRos ? rosWidth : 0.0F));
+        if (showGpu) {
+            statusItem("GPU", c::t2, "%s", gpu);
+            ImGui::SameLine(0.0F, gap);
+        }
         statusItem("viewer", c::t2, "%s", viewer);
+        if (showRos) {
+            ImGui::SameLine(0.0F, gap);
+            statusItem("ROS 2", c::t2, "%s", ros.c_str());
+        }
     }
     ImGui::End();
 }
@@ -722,9 +1659,25 @@ bool drawDockSpaces(Workspace shown, ImGuiViewport* viewport, bool reset) {
             continue;
         }
         const ImGuiID id = ImGui::GetID(entry.dockspace);
+        // A layout made in the first frames is made again once the bars have taken their
+        // room (ImGui applies a side bar's room to the work area a frame late): the dock
+        // space shrinks then, and a split away from the central node (the Builder's 212 px
+        // Add) would shrink with it instead of keeping its design size.
+        struct Made {
+            ImVec2 size;
+            int frame{0};
+        };
+        static std::unordered_map<ImGuiID, Made> made;
+        constexpr int kSettleFrames = 3;
+        const auto found = made.find(id);
+        const bool unsettled = found != made.end() &&
+                               ImGui::GetFrameCount() - found->second.frame < kSettleFrames &&
+                               (found->second.size.x != size.x || found->second.size.y != size.y);
         // Lay out when there is no saved layout for this dock space, or on request.
-        if (ImGui::DockBuilderGetNode(id) == nullptr || (reset && entry.workspace == shown)) {
+        if (ImGui::DockBuilderGetNode(id) == nullptr || (reset && entry.workspace == shown) ||
+            unsettled) {
             buildLayout(entry.workspace, id, size);
+            made[id] = Made{size, ImGui::GetFrameCount()};
             built = true;
         }
         if (entry.workspace == shown) {
@@ -762,6 +1715,30 @@ bool drawDockSpaces(Workspace shown, ImGuiViewport* viewport, bool reset) {
     return built;
 }
 
+/// The window a user means by `name`, among those drawn this frame or the last (so not another
+/// workspace's): its full ImGui name ("Threads###PerformanceThreads") or its id
+/// ("###PerformanceThreads"), else its visible title,
+/// the name before "##" ("Threads"), so that --panel takes the tab titles the user reads.
+ImGuiWindow* windowTitled(std::string_view name) {
+    ImGuiWindow* titled = nullptr;
+    for (ImGuiWindow* window : GImGui->Windows) {
+        if (!window->Active && !window->WasActive) {
+            continue;
+        }
+        const std::string_view windowName(window->Name);
+        // An id alone ("###PerformanceMemory") names the window whose name ends in it.
+        const std::size_t id = windowName.find("###");
+        if (windowName == name || (name.starts_with("###") && id != std::string_view::npos &&
+                                   windowName.substr(id) == name)) {
+            return window;
+        }
+        if (titled == nullptr && windowName.substr(0, windowName.find("##")) == name) {
+            titled = window;
+        }
+    }
+    return titled;
+}
+
 }  // namespace
 
 const char* toString(Workspace workspace) {
@@ -774,12 +1751,19 @@ const char* toString(Workspace workspace) {
 }
 
 std::optional<Workspace> parseWorkspace(std::string_view name) {
+    // Case, spaces, '_' and '-' do not matter: "ROS 2", "ros2" and "ros_2" are one workspace.
+    const auto key = [](std::string_view text) {
+        std::string out;
+        for (const char ch : text) {
+            if (ch != ' ' && ch != '_' && ch != '-') {
+                out += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+        }
+        return out;
+    };
+    const std::string wanted = key(name);
     for (const WorkspaceEntry& entry : kWorkspaces) {
-        const std::string_view label = entry.label;
-        if (std::ranges::equal(name, label, [](char a, char b) {
-                return std::tolower(static_cast<unsigned char>(a)) ==
-                       std::tolower(static_cast<unsigned char>(b));
-            })) {
+        if (!wanted.empty() && key(entry.label) == wanted) {
             return entry.workspace;
         }
     }
@@ -791,6 +1775,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createViewportPanel());
     panels.push_back(createScenePanel());
     panels.push_back(createInspectorPanel());
+    for (std::unique_ptr<Panel>& panel : createSceneTabsPanels()) {
+        panels.push_back(std::move(panel));
+    }
     panels.push_back(createTimelinePanel());
     panels.push_back(createBookmarksPanel());
     panels.push_back(createConsolePanel());
@@ -799,6 +1786,11 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createSignalsPanel());
     panels.push_back(createCursorsPanel());
     panels.push_back(createStatisticsPanel());
+    for (std::unique_ptr<Panel>& panel : createSignalsTabPanels()) {
+        panels.push_back(std::move(panel));
+    }
+    // The Inspector before the Electrical panels: its tab before History (design).
+    panels.push_back(createElectricalInspectorPanel());
     for (std::unique_ptr<Panel>& panel : createElectricalPanels()) {
         panels.push_back(std::move(panel));
     }
@@ -808,29 +1800,38 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     for (std::unique_ptr<Panel>& panel : createPerformancePanels()) {
         panels.push_back(std::move(panel));
     }
+    panels.push_back(createReplayTimelinePanel());  // first: its tab before Events (design)
     for (std::unique_ptr<Panel>& panel : createReplayPanels()) {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createReplayBookmarksPanel());
-    panels.push_back(createReplayTimelinePanel());
+    for (std::unique_ptr<Panel>& panel : createReplayComparePanels()) {
+        panels.push_back(std::move(panel));
+    }
     for (auto* create : {createEnvironmentPanels, createRos2Panels, createWorldPanels}) {
         for (std::unique_ptr<Panel>& panel : create()) {
             panels.push_back(std::move(panel));
         }
     }
     panels.push_back(createRosConsolePanel());
-    panels.push_back(createElectricalInspectorPanel());
     panels.push_back(createDomainsPanel());
     for (std::unique_ptr<Panel>& panel : createWiringPanels()) {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createProfilePanel());
+    for (std::unique_ptr<Panel>& panel : createDomainsTabPanels()) {
+        panels.push_back(std::move(panel));
+    }
+    for (std::unique_ptr<Panel>& panel : createBuilderPanels()) {
+        panels.push_back(std::move(panel));
+    }
     return panels;
 }
 
 void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context) {
     if (context.launcher->active) {
         drawLauncher(context);  // the first screen: nothing else is shown until connected
+        drawCommandPalette(context);
         return;
     }
     context.profileSession->update(context.client,
@@ -847,8 +1848,12 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
             *context.workspace = entry.workspace;
         }
     }
-    // Run shortcuts of the design, when no text field has the keyboard.
-    if (!ImGui::GetIO().WantTextInput && context.connection.state == ConnectionState::Ready) {
+    // Run shortcuts of the design, when no text field has the keyboard. Not while building:
+    // a connected run is left alone there (RFC 0016 open question 7, R2).
+    const bool building = *context.workspace == Workspace::Builder &&
+                          context.builder->mode == BuilderSession::Mode::Build;
+    if (!ImGui::GetIO().WantTextInput && context.connection.state == ConnectionState::Ready &&
+        !building) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
             if (context.status.runState == RunState::Running) {
                 context.client.pause();
@@ -856,7 +1861,7 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
                 context.client.play();
             }
         }
-        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && !context.connection.canSeek) {
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && !replaying(context)) {
             context.client.setRecording(context.status.recordingPath.empty());
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Period, false) && context.connection.canStep &&
@@ -867,11 +1872,16 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
         context.selectedPrim = kNone;
     }
+    if (*context.workspace == Workspace::Builder &&
+        context.builder->prompt.kind == BuilderSession::Prompt::Kind::None) {
+        builderShortcuts(context);  // not under a question (its Esc is Cancel)
+    }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     bool resetLayout = false;
     context.resetLayout = &resetLayout;
     drawMenuBar(context);
+    drawCommandPalette(context);  // before the dock spaces: it may reset the layout
     drawWorkspaceBar(context, viewport);
     drawDomainStrip(context, viewport);
     drawStatusBar(context, viewport);
@@ -886,19 +1896,55 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
         // In a fresh layout the first tab of a group is the one in front.
         ImGui::SetWindowFocus("Console");
         ImGui::SetWindowFocus("Timeline");
+        ImGui::SetWindowFocus("Scene");
+        ImGui::SetWindowFocus("Inspector");
         ImGui::SetWindowFocus("Viewport");
     }
     if (built && shown == Workspace::Domains) {
+        // The first tab of each group in front: Domains, Schedule, Profile, Wiring.
+        ImGui::SetWindowFocus("Domains");
+        ImGui::SetWindowFocus("Schedule");
+        ImGui::SetWindowFocus("Profile");
         ImGui::SetWindowFocus("Wiring");
+    }
+    if (built && shown == Workspace::Replay) {
+        // Design: Recording, Timeline, Sim vs real and Validation in front of their groups.
+        for (const char* window :
+             {"Recording", "Timeline###ReplayTimeline", "Sim vs real", "Validation"}) {
+            ImGui::SetWindowFocus(window);
+        }
     }
     if (built && shown == Workspace::Electrical) {
         ImGui::SetWindowFocus("Schematic");
     }
-    // A panel asked for on the command line, in front once it exists.
-    if (context.focusPanel != nullptr && !context.focusPanel->empty() &&
-        ImGui::FindWindowByName(context.focusPanel->c_str()) != nullptr) {
-        ImGui::SetWindowFocus(context.focusPanel->c_str());
-        context.focusPanel->clear();
+    if (built && shown == Workspace::Environment) {
+        ImGui::SetWindowFocus("Overlays");  // design: Overlays in front of Field info
+    }
+    if (built && shown == Workspace::Builder) {
+        // The first tab of each group in front (SPEC: Robot, Add, Properties, Joints, catalog).
+        for (const char* window :
+             {builder_windows::kRobot, builder_windows::kAdd, builder_windows::kProperties,
+              builder_windows::kJoints, builder_windows::kCatalog, builder_windows::kView}) {
+            ImGui::SetWindowFocus(window);
+        }
+    }
+    // A panel asked for on the command line (its full name, its ###id or its tab title), in
+    // front once it exists, and again after a default layout is built (which puts the first
+    // tabs in front).
+    static std::string askedPanel;
+    if (context.focusPanel != nullptr && !context.focusPanel->empty()) {
+        if (ImGuiWindow* window = windowTitled(*context.focusPanel); window != nullptr) {
+            ImGui::FocusWindow(window);
+            askedPanel = *context.focusPanel;
+            context.focusPanel->clear();
+        }
+    } else if (built && !askedPanel.empty()) {
+        if (ImGuiWindow* window = windowTitled(askedPanel); window != nullptr) {
+            ImGui::FocusWindow(window);
+        }
+    }
+    if (shown == Workspace::Builder) {
+        builder_ui::drawPrompt(*context.builder);  // last: over every panel
     }
 }
 

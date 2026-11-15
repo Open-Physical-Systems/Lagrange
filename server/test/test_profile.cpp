@@ -3,6 +3,7 @@
 #include "lagrange/server/Server.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -73,6 +74,46 @@ TEST(Profile, TheServersOwnProfileIsValid) {
     EXPECT_EQ(check.settings->rigidBodyDtNs, 1'000'000);
 }
 
+// Jolt's sub-steps (rigid_body.md §8.1): a whole count from 1 to 64, given to the backend.
+TEST(Profile, RigidBodySubstepsReachTheSettings) {
+    const ProfileCheck check = checkProfile(
+        profile("{enabled: true, backend: jolt, dt: 0.001, substeps: 4}"), schema(), context());
+    EXPECT_TRUE(check.valid) << issues(check);
+    ASSERT_TRUE(check.settings);
+    EXPECT_EQ(check.settings->rigidBodySubsteps, 4);
+    EXPECT_FALSE(
+        checkProfile(profile("{enabled: true, backend: jolt, substeps: 0}"), schema(), context())
+            .valid);
+    EXPECT_FALSE(
+        checkProfile(profile("{enabled: true, backend: jolt, substeps: 2.5}"), schema(), context())
+            .valid);
+}
+
+// MuJoCo's noslip iterations (legged-contact spike §6): a whole count from 0 to 100, off by
+// default; another backend is warned that it ignores them.
+TEST(Profile, RigidBodyNoslipIterationsReachTheSettings) {
+    const ProfileCheck check = checkProfile(
+        profile("{enabled: true, backend: mujoco, noslip_iterations: 5}"), schema(), context());
+    EXPECT_TRUE(check.valid) << issues(check);
+    ASSERT_TRUE(check.settings);
+    EXPECT_EQ(check.settings->rigidBodyNoslip, 5);
+    EXPECT_TRUE(check.issues.empty()) << issues(check);
+    const ProfileCheck none = checkProfile(profile(), schema(), context());
+    ASSERT_TRUE(none.settings);
+    EXPECT_FALSE(none.settings->rigidBodyNoslip);
+    for (const char* bad :
+         {"{enabled: true, noslip_iterations: -1}", "{enabled: true, noslip_iterations: 101}",
+          "{enabled: true, noslip_iterations: 2.5}"}) {
+        EXPECT_FALSE(checkProfile(profile(bad), schema(), context()).valid) << bad;
+    }
+    const ProfileCheck jolt = checkProfile(
+        profile("{enabled: true, backend: jolt, noslip_iterations: 5}"), schema(), context());
+    EXPECT_TRUE(jolt.valid) << issues(jolt);
+    ASSERT_EQ(jolt.issues.size(), 1U) << issues(jolt);
+    EXPECT_FALSE(jolt.issues.front().error);
+    EXPECT_EQ(jolt.issues.front().pointer, "/domains/rigid_body/noslip_iterations");
+}
+
 TEST(Profile, DisablingADomainWithAModuleSubstitutesIt) {
     const ProfileCheck check = checkProfile(profile("{enabled: false, substitute: fixed}",
                                                     "{enabled: false, substitute: ground_truth}"),
@@ -91,6 +132,11 @@ TEST(Profile, RefusesWhatThisServerCannotRun) {
     ProfileCheck check = checkProfile(text, schema(), context());
     EXPECT_FALSE(check.valid);
     EXPECT_TRUE(hasIssue(check, "/domains/electrical/enabled")) << issues(check);
+    // It says why: the robot has no power system, and how to give it one (QA3 F5).
+    EXPECT_NE(issues(check).find("the robot has no power system"), std::string::npos)
+        << issues(check);
+    EXPECT_NE(issues(check).find("--overlay"), std::string::npos) << issues(check);
+    EXPECT_EQ(issues(check).find("no module in this server"), std::string::npos) << issues(check);
     // A substitute that does not exist for the domain here.
     check = checkProfile(profile("{enabled: false, substitute: replay, source: run.mcap}"),
                          schema(), context());
@@ -261,6 +307,54 @@ TEST(Profile, ALoadAProfileFollowsKeepsNotesTheProfileAnswers) {
     EXPECT_EQ(said.find("the rotors do not run"), std::string::npos) << said;
     ASSERT_TRUE(server.stepUntil(SimTime{4'000'000'000}).ok());
     EXPECT_GT(server.read("body/base_link/pose").at(2), 1.0) << "the profile's air carries it";
+}
+
+// Review 2 M3: downwash_model lbm on a robot with drag links but no rotors has no live air box
+// (it follows a multirotor), so its run stays deterministic: the server and AeroDrag answer the
+// same (AeroDrag::asksGpuAir). It used to be refused as "not deterministic".
+TEST(Profile, LiveAirOnARotorlessRobotKeepsTheRunDeterministic) {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "lagrange_test_profile_rotorless_lbm";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path urdf = dir / "kite.urdf";
+    std::ofstream(urdf) << R"(<?xml version="1.0"?><robot name="kite"><link name="body">
+<inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
+</inertial><collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision></link></robot>)";
+    const std::filesystem::path overlay = dir / "kite.overlay.yaml";
+    std::ofstream(overlay) << R"(schema_version: 1
+apply:
+  - prim: body
+    schemas:
+      AeroAPI_1:
+        aero:referenceArea: [0.04, 0.04, 0.04]
+        aero:dragCoeff: [1.0, 1.0, 1.0]
+)";
+    ServerOptions options;
+    options.robotPath = urdf.string();
+    options.overlayPath = overlay.string();
+    options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
+    options.ros = false;
+    options.demoDrive = false;
+    options.realTimeFactor = 0.0;
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    const std::string profile = "schema_version: 1\nstage: " + urdf.string() + R"(
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: false, substitute: ideal }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: true,  fidelity: drag, air_density: 1.225, downwash_model: lbm }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }
+)";
+    const Status applied = server.applyProfile(profile);
+    ASSERT_TRUE(applied.ok()) << applied.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{200'000'000}).ok());
+    EXPECT_EQ(server.read("body/body/wrench/aero").size(), 6U);
+    std::filesystem::remove_all(dir);
 }
 
 // `lagrange determinism` (roadmap 0.2-H2) steps two servers headless: the state must move on

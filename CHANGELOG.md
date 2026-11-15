@@ -5,6 +5,133 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.3.0...v1.4.0) (2026-11-15)
+
+The robot builder and everything merged into `dev` after 1.3.0 (#332–#423).
+
+### Breaking or behaviour changes
+
+- **ROS topics of built-in sensor kinds:** a kind's 0/1 `valid` output (the power kinds: battery_monitor, current_sensor, voltage_sensor, esc_telemetry, tension_sensor) is now published as `std_msgs/Bool`, like every other kind's; subscribers that expected `std_msgs/Float64` on `/<name>/valid` must change. The `sensor/<n>/contamination` input is no longer published (#370)
+- **Kind parameter ranges:** a number parameter outside the sensor catalog's `min`/`max` now refuses the run, naming the range; none is clamped or read as "not given" any more (`wheel_radius` 0, a negative `resolution`, `samples` 0): leave a parameter out for its default (#370)
+- **Sensor faults on Bool and Int quantities:** `bias`, `drift` or `noise` on one stops the start; with `nan` their dropped samples are held. A slow sensor's faults show from its first sample inside the window; `disconnect` with `nan=1` reads NaN from `at` (#370)
+- **One ground per run:** Lagrange adds its ground plane and slab only when neither the robot's nor the world's file has a floor of its own (1.3.0 added the plane over a file's floor too) (#369)
+- **Joint loops refused:** a URDF whose joints do not make one tree (a link with two parent joints, a loop off the root) is refused at load with the two joints named (#366)
+- **Demo drives:** the AMR's figure-eight is closed-loop, two 1.2 m loops that touch where it starts, so it keeps to its aisle; the sedan's demo backs away and tries again when held still for 2 s (#376)
+- **State hashes:** runs on MuJoCo whose world has static bodies (the sample AMR in the warehouse, the box pile) give new state hashes, since the static scenery is now MuJoCo world geometry; the box pile settles differently. The new demo drive changes the sample AMR's hashes too. Each run stays deterministic (#373, #376)
+- **Jolt friction per collider:** Jolt now gives each collider its own friction (the larger of the two at a contact, as MuJoCo does) instead of the largest of the body's colliders for all of them, and turns off manifold reduction on a body whose colliders differ. Jolt runs with mixed-friction bodies (feet of one friction on a body of another) give new state hashes and move differently; bodies with one friction on all their colliders are bit for bit the same (#393)
+- **MJCF helper masses:** the helper frame `lagrange_import` and the loader put between an MJCF body's joints (1 g each) now takes its mass, centre of mass and inertia out of its link when the link is heavy enough to give it, so an MJCF robot weighs what the MJCF says (it weighed 1 g more per helper); state hashes of such robots change (#393)
+- **Aerodynamics off:** with the aerodynamics domain off on a robot with `AeroAPI_1` links or rotors (and the site's air density given), its zero substitute `aerodynamics::ZeroAero` now runs: still air, zero `body/<b>/wrench/aero` and `env/wind/*`, `airspeed` the link's own speed; before, nothing wrote those signals (#395)
+- **ParallelEnvs:** rewritten over shared memory (no pickling per step). `reset()` and `step()` give what they gave; `reset(seed=)` also takes a list of seeds or None, a worker that raises or dies raises `WorkerError` with its traceback and closes all (it used to hang), workers must start within `start_timeout` (300 s), and `close()` or a `with` block ends them (#392)
+- **Sedan demo:** spawned away from its circle it heads for the junction; held still it backs away further on a second try in a row and then waits 3 s so the traffic that waited for it goes first. The car controller's saved state carries three more values (#396)
+- **Viewer text size:** text draws at the design's CSS size: the glyphs are 1.3 times larger than before (Dear ImGui had scaled IBM Plex's line height, 1.3 em, to the token size), at the same control heights; screenshots and golden images change (#399)
+- **`--panel`:** the viewer's `--panel` also takes a tab's visible title (`Threads`) or its `###id`, among the windows drawn this frame or the last (#396)
+- **`/spawn_entity`:** robot text spawned without a name is named by its own `<robot name>` (renamed on a clash), as the viewer's ImportRobot does, not after its temporary file (#395)
+- **Quadruped asset moved:** the trotting example's robot moved from `examples/lagrange_example_quadruped/robot/quadruped.urdf` to `assets/robots/quadruped/quadruped.urdf` (package `lagrange_assets`, `lagrange.sample_quadruped()`) (#397)
+- **Floor rule:** a file's level slab counts as its own floor (one ground per run, #369) only when its top is the lowest ground there is: within 0.1 m of z = 0 or below, not above the robots' lowest point and not above the foot of any other static scenery. A building's roof, a mezzanine or a bridge deck is no longer taken for the floor, so a robot beside or under it keeps Lagrange's plane; a file's own planes are never taken away (docs/guide/cli.md "Importing a robot") (#403)
+- **`CommandJoint` refusals:** `"voltage"` is refused for a joint whose motor is not in voltage mode, and a joint's target belongs to its robot: removing the robot or a reset forgets it, other robots coming and going keep it (protocol.md §4.5) (#403)
+- **`ImportRobot` with both `path` and `content`** is refused ("by path or content, not both"; before, the path was taken and the rest ignored). Inline text is written, created exclusively with mode 0600, into `$XDG_RUNTIME_DIR/lagrange` (else `<tmp>/lagrange-<uid>`), a 0700 folder of the server's user; any other folder there is refused (#403)
+- **Builder, unsaved work:** New, Open, a template or a dropped robot ask before replacing a document with unsaved edits (#402)
+- **Builder rename:** F2 (or the name field in Properties) renames the selection in its tree row; joints' parent and child, a sensor's link, a mimic leader, the overlay's entries and `<ros2_control>`/`<transmission>` references follow, a name in use is refused with the reason in Problems; a power part's name renames its prim and every connection to it, so the run's signals take the new name (`bus/<name>/voltage`) (#405)
+- **Builder Test into a world:** Test ▾ picks the empty world, a sample world of `lagrange_assets` (the button then names it) or a world file; a run the viewer is connected to plays on while you build unless View → Pause the run while building is ticked (#405). **Start at…** sets where the robot starts in that world (x, y, z, heading; `--spawn`), remembered per world in `builder_spawns.tsv`; a sample world starts where its sample run does (`tiled_town`, `amr_fms_warehouse`, `town`), any other at its origin (#406)
+- **`/spawn_entity` naming:** a robot is renamed on a clash only with `allow_renaming: true`; without it a name that is taken, the request's or the file's own (`<robot name>`, the file name), fails with `NAME_NOT_UNIQUE`, and text that names no robot fails with `NAME_INVALID`. A file that does not parse comes back as `RESOURCE_PARSE_ERROR` with urdfdom's own message, not a temporary file's path (docs/guide/cli.md "Spawning robots") (#408)
+- **Python `command_joint`:** returns a `lagrange.JointCommand` (true when the joint took the command, as the `bool` it returned) with `reason` (why it was refused), `value`, `clamped` and `limit`; `strict=True` raises `ValueError` with the reason. A velocity beyond the joint's velocity limit, an effort beyond its effort limit or a position outside its range from the robot file is clamped to it (the viewer's `CommandJoint` too; ROS `/joint_commands` is not clamped this way). It is refused, with the reason, while joint control is off (docs/guide/run-file.md) (#408)
+- **Replays of robots with cameras:** a recording of a run with cameras (or other image and point buffers) replays; before, it did not replay. Recordings hold no images, so a replayed camera shows no frame; the recorder and the replay log which buffers are left out (#408)
+- **Jolt sub-step forces averaged:** with `rigid_body.substeps` above 1, joint reactions, limit torques and the contact force left from them are the constraint impulses averaged over the step's N sub-steps, over Δt/N, not the last sub-step's (#403); a swinging pendulum no longer leaves part of its pull to "contact" (4 % of m·g at 4 sub-steps). Jolt runs with sub-steps report different joint reactions and contact forces (rigid_body.md §8.1) (#408)
+- **Profile refusals:** an enabled domain this robot or world gives nothing to run on says what is missing and what to do (a power profile on a robot without its overlay: "electrical cannot run here: the robot has no power system…"), not "has no module in this server yet" (#408)
+- **Builder, link named `world`:** a link may be named `world` only as a shapeless, massless root (a robot fixed to the ground); any other is an error in Problems and a rename to it is refused, and a new part from a mesh named `world.stl` is named `world_2` (#407)
+- **Builder Test after Pause the run while building:** the run the viewer paused while you built plays again when Test moves to its own server, without the UI thread sleeping; a command queued for one server never reaches the next. Start at… poses go to `--spawn` and `builder_spawns.tsv` exactly as typed, not rounded to six digits (#410)
+
+- **Saved states of 1.1 to 1.3:** `restoreState`/`restore_state()` reads the states Lagrange 1.1, 1.2 and 1.3 saved (format 1 and 2, formats.md §11) into a run of the same robot, world and profile, also when a module has since appended state or the run gained aerodynamics' zero substitute; the run goes on as the saved one did. Limit: a 1.1 to 1.3 state of a multicopter with the electrical domain off still does not restore (its bus layout differs: that run could not fly before the fix below), refused with the reason (#418)
+- **Ideal torque source order:** the electrical ideal substitute is back where 1.1 to 1.3 added it, after the robot's controllers, unless the robot has rotors, when it comes after every module so it sees the multicopter controller's torque commands; runs without rotors keep their 1.1 to 1.3 bus layout and state hashes (#418)
+- **Builder, closing:** closing the viewer (window button, or headless `--input N:close`) over unsaved edits asks Save, Discard or Cancel, as New and Open do; the builder's test server now ends with the viewer (#420)
+- **Builder, sensor rates:** two sensor rates the scheduler cannot line up are an error in Problems, with the nearest usual rate that does as the fix, not a warning (#420)
+- **Builder, new parts:** a catalog sensor is placed on the shape it is added to, a new robot is valid with aluminium (no Problems on first save), a new IMU reads 100 Hz (the catalog's 10 Hz default is of little use for an IMU), and a split collision's parts are written to `<file stem>_collision/` beside the robot, so two robots in one folder do not share one (#420)
+- **Test isolation:** each test process gets a private `TMPDIR`, ROS tests honour the caller's `ROS_DOMAIN_ID`, and the examples' launch files take `endpoint:=` (a socket per run), so suites and CI scripts run side by side (#413)
+
+### Features
+
+- **mod/vehicle_dynamics:** tyre forces in the road plane with the normal load along the road normal (scene rays return the surface normal); the brake holds as stick-slip friction, so a braked car stands on a slope (#422)
+
+- **viewer:** the robot builder (RFC 0016 phase 1 and Addendum A): a Builder workspace that builds a robot from shapes and meshes, joints and catalog sensors, tests it in a simulator of its own and saves it as URDF (`--workspace builder`, `--builder-open`, `--builder-save`, Ctrl B; docs/guide/builder.md) (#340, #343–#346, #348–#350, #356)
+- **viewer:** builder meshes (STL, OBJ, DAE, glTF) and the per-link collision choice: same as the mesh, split by CoACD, template shapes with Fit to mesh, or drawn (RFC 0016 Addendum A) (#352)
+- **viewer:** the Builder view's gizmos: Move, Rotate, Joint axis, Measure and size handles (#349)
+- **viewer:** the builder's power system (buses, batteries, motors) and overlay-only sensors (GNSS, magnetometer, barometer, radar) in `<robot>.overlay.yaml` (RFC 0016 phase 3) (#361)
+- **viewer:** the builder's loads, DC-DC converters, fuses, switches and diodes as forms (#365)
+- **proto:** `ImportRobot.content` (inline robot text) and `overlay_content`, `RemoveRobot`; the builder's Test *Into the connected run* (RFC 0016 §7.2) (#354)
+- **proto:** `CommandJoint`; the builder's joint sliders drive a tested robot (RFC 0016 §7.3) (#357)
+- **mod/sensors:** the sensor catalog `modules/sensors/catalog/sensor_catalog.yaml` and its two checks (#342); a catalog sensor's needs (what it reads from the robot) checked before Test (#366)
+- **viewer:** radar detections in the 3D view (Overlays → Radar detections, `--overlays radar`: boxes by RCS, colour by radial velocity, the field of view) and a Radar view in the Sensors workspace (#360)
+- **viewer:** the ROS 2 workspace's Services, Actions, Params and TF tree tabs (#377)
+- **viewer:** the Performance workspace's six KPI cards and its Threads, GPU passes and Memory tabs (the viewer's own GPU passes by Vulkan timestamp queries) (#378)
+- **server:** `ServerStats` marks the modules that run on the GPU and reports the GPU memory the server holds (#379)
+- **viewer:** the Replay workspace's Compare, Sim vs real and Validation tabs and the Source strip; `--compare OTHER.mcap [--suite FILE.yaml]` (#380)
+- **viewer:** the Domains workspace's Modules, Coupling, Diff and Schema tabs; the substitute picker has a domain before any click (#381)
+- **viewer:** the command palette (Ctrl K): fuzzy search over commands, prims, signals and topics (#375)
+- **viewer:** the Profile panel's YAML is the draft, edited both ways with the domain rows (#374)
+- **mod/rigid_body:** a profile's `rigid_body: {substeps: N}` (1–64) divides Jolt's step, and its joint energy loss, N times; a pendulum conformance check (#353)
+- **build:** `-DLAGRANGE_MUJOCO_PACKAGE=mujoco` takes MuJoCo's own CMake package instead of `mujoco_vendor` (opt-in, for the MuJoCo 4 spike) (#364)
+- **viewer:** the Signals workspace's Saved sets (`<config>/signal_sets.tsv`), Measure and FFT tabs (#384)
+- **viewer:** the Scene workspace's Layers and History tabs; sensor views as tabs beside the viewport, streamed only while in front (#386)
+- **viewer:** the launcher as its design: File, View, Tools and Help menus, links opened in the system's browser, sample cards that start their sample (#387)
+- **viewer:** the World workspace's Regions and Geodesy tabs (#388)
+- **viewer:** the Electrical workspace's Probes, + scope and History tabs; the Environment workspace's Viewport · fields and Field info (#390)
+- **python:** `ParallelEnvs` with `step_async`/`step_wait`, `send`/`recv` (each environment at its own pace), `envs_per_worker`, `spin_seconds`; `lagrange.envs.VectorEnv` (Gymnasium's VectorEnv, same-step autoreset); `sim.read_many`, `sim.command_joints` (#392)
+- **python:** `LagrangeEnv`, `ParallelEnvs` and `VectorEnv` take `world=`, `profile=` (a path or an example's name) and `overlay=`, the parallel ones a robot file with `env_options=` in place of `make`; `Simulation(overlay=)`; `lagrange.sample_quadruped()`, `sample_quadruped_overlay()`, profiles `quadruped_trot.yaml` and `quadruped_trot_powered.yaml` (#397)
+- **viewer:** the builder's Test ▾ → Start at…: where the robot starts in a world, per world (#406)
+- **mod/rigid_body:** a profile's `rigid_body: {noslip_iterations: N}` (0–100, default 0) runs MuJoCo's noslip post-solver, which stops soft contacts creeping on slopes at 30–60 % more per step (rigid_body.md §8.2); an MJCF joint's `armature` (and its actuators' `armature · gear²`) is the joint's armature (not written to USD) (#394)
+- **mod/tether:** the rotors' downwash blows the tether cable, the drone's own included: the aerodynamics domain writes `tether/<n>/downwash` (a velocity per cable mass, from `tether/<n>/nodes`) when the run has rotors and the tether domain; without rotors nothing changes (RFC 0011 step 6, rotor_aero.md §2.9, tether.md) (#416)
+- **io:** OpenDRIVE superelevation, lane heights and raised roads: roads are banked by their cross section, kerbs from lane `<height>`, and a raised road gets convex slab colliders (`ConvertOptions::colliderStep`, `colliderDepth`) so cars drive on banked curves, ramps and bridges; traffic agents ride at their lane's height, pitch and roll with it; sample `assets/worlds/banked_ring` (formats.md §3.11) (#417)
+
+### Fixes
+
+- **mod/traffic:** traffic vehicles see a robot by its footprint and where it is going, and wait at a junction's line while it crosses their lane; no traffic vehicle drives into the sedan in the city block (#423)
+
+- **server:** the quadcopter flies with the electrical domain off; the PX4/ArduPilot ESCs bound their torque then (#341, #359)
+- **core:** `convexHullOf` closes nearly flat point sets (#355)
+- **viewer:** builder polish and QA: cancelled drags, the world root, Back's bars, warnings, bad values from a file, files, edits, Test and the robot strip; closer to its reference image (#351, #358, #368)
+- **server:** catalog-required sensor needs checked before Test; the whole refusal in Problems; a hyperperiod refusal names the two steps that line up last (#366)
+- **mod/sensors:** v1.3 sensors QA: fisheye cutoff below fov/2 in USD, rosette timing, stereo depth held inside its range, faults, ROS kind topics, `battery_state` status and capacity (#370)
+- **io:** an overlay's radar (and IMU, GNSS, magnetometer, barometer) is a sensor of the run, as the builder writes it (#372)
+- **server:** viewer QA: every running domain reported with its module, preview substitutes, the World workspace lists traffic, other robots and people, measured domain costs, a weather preset rebuilds the run once (#374)
+- **viewer:** viewer QA: small windows, Launcher, Signals rows, names, overlays, Inspector, lows (#375)
+- **server:** replay moves the scene; no spurious replay warnings; the server log says why `--lidar auto` picks the CPU (#376)
+- **server:** EMI sources carry their scene prim, and the World message the run's region (around the scenery and robots, or the loaded tiles of a streamed world) (#391)
+- **mod/rigid_body:** Jolt friction per collider; MJCF helper frames' mass from their link; an MJCF robot's mass checked through USD (#393, #395)
+- **server:** QA round 2: test and run dependencies (`lagrange_collision_bake`, the viewer's tests), the builder's Check loads… when `lagrange` is found, the sedan demo among the town's traffic, `--panel` by tab title, the Domains substitute cards listing the modules that read the domain, cut text with an ellipsis and whole in a tooltip, Validation of a constant real signal by its RMSE (*const ref*), compiler warnings (#396)
+- **viewer:** text at the design's CSS size (#399)
+- **viewer:** the builder asks before replacing unsaved work; a safer runtime folder, and split and autosave files written atomically (#402)
+- **server:** code review: Jolt sub-step forces, raised slabs not floors, `CommandJoint`, temporary files, parameter ranges against NaN and infinity (#403)
+- **viewer:** wrapped text on the design's line heights, nothing clipped; the launcher by keyboard (#404)
+- **viewer:** builder small gaps: F2 rename, power part names, the same-bus outline, joint types that fit, Test into a world (#405)
+- **viewer:** QA round 3: no link named `world`, cut text with an ellipsis in every panel (Chrome, Console, Environment, Performance, Profile, Replay, Schedule, Sensors, Wiring, World), no overlapping readouts in the Builder view, distinct rows, compiler warnings (#407)
+- **server:** QA round 3: camera recordings replay, Jolt sub-step forces averaged, `/spawn_entity` naming and urdfdom's parse errors in the reply (console_bridge), domain refusals that say what is missing, `command_joint` reasons and clamping, compiler warnings (#408)
+- **server:** sanitizer findings: the live air box's `memcpy` from a null span with no rotors, the links of a refused URDF loop leaked, connection-limit and sensor-catalog test fixes, TSan suppressions in `tools/ci/tsan.supp` (#409)
+- **viewer:** a run paused while building plays again after Test, no UI-thread sleep, exact start poses; headless `--input FRAME:wait:ready` (#410)
+- **server:** states saved by Lagrange 1.1 to 1.3 restore and run on; the end-of-file and gersemi hooks pass repo-wide (#418)
+- **viewer:** scope legends fit their plot, the Signals toolbar wraps, lidar legend spacing, and a replay's sensor views say the recording holds no frames (#414)
+- **viewer:** builder QA round 4: closing asks over unsaved edits, the test server dies with the viewer, a sensor-rate clash is an error with its fix, sensors sit on the shape, a new robot is valid, a new IMU reads 100 Hz, split parts go to `<file stem>_collision/` (#420)
+- **test:** tests and CI scripts run side by side: a private temp directory per test process, ROS tests on the caller's domain, example sockets per run (#413); clang-format on the raster files and BASF in the typos allow-list (#419)
+
+### Performance
+
+- **core:** one-copy output commits on the signal bus (#359)
+- **mod/rigid_body:** MuJoCo reads only connected inputs and keeps a standing kinematic body's twist (#367); static scenery on MuJoCo's world body (#373)
+- **python:** `ParallelEnvs` over shared memory and semaphores: `send`/`recv` reaches about 90 % of independent processes on 12 workers (the legged spike's quadruped from 7,710 to 23,200 policy steps of 20 ms per second; `examples/lagrange_example_rl/README.md`) (#392)
+
+### Documentation
+
+- **rfcs:** RFC 0016, a robot builder in the viewer (accepted), and its Addendum A, meshes and collision (#332, #347)
+- **validation:** a measured comparison with Gazebo Jetty, MuJoCo and PyBullet (#338); the home page opens on the advanced features and that comparison (#336)
+- **plan:** the builder's phase 1 work plan (#337) and phase 4 plan with a draft RFC 0016 Addendum B (#371); the MuJoCo 4 spike and a draft RFC 0017 (#364)
+- **site:** the robot builder on the home page, a builder clip and its guide (#363); six v1.3 sensor clips (#362)
+- **guide:** the viewer's workspaces (`docs/guide/viewer.md`) (#382)
+- **rfcs:** RFC 0018, the radiation domain (Draft) (#383); RFC 0019, legged robots (Draft) (#385)
+- **plan:** the legged contact spike, RFC 0019 step 1 measured (`docs/plan/spikes/legged-contact.md`) (#389, #393, #394); the owner's decisions after 2026-11-15 in one place (`docs/plan/owner-decisions-2026-11-15.md`) (#400)
+- **docs:** the changelog, CLAUDE.md and progress through #400 (#401)
+- **guide:** `/spawn_entity` naming and errors (`cli.md`), Python `command_joint` results (`run-file.md`), the sedan demo among traffic (`docs/physics/vehicles.md`), Jolt sub-step forces (`rigid_body.md` §8.1) (#408); the changelog, CLAUDE.md and guide through #410
+- **docs:** screenshots of the viewer as it is (#415)
+- **examples:** the quadruped's time varies with the node's timing, not a regression (#398); `lagrange_example_rl` documents the parallel environments and their speed (#392, #397)
+
 ## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)
 
 

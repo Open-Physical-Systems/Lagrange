@@ -1,9 +1,10 @@
-// ROS 2 workspace: topics and their rates, the node graph, and the ros2_control interface
-// (docs/design/ui/09-ros2/SPEC.md). The viewer does not join the ROS domain: everything
-// comes from the simulation server's graph report.
+// ROS 2 workspace: topics, services, actions and parameters, the node graph and the TF tree,
+// and the ros2_control interface (docs/design/ui/09-ros2/SPEC.md). The viewer does not join
+// the ROS domain: everything comes from the simulation server's graph report and its scene.
 #include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/RosFrames.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -73,6 +75,26 @@ void bandwidth(double bitsPerSecond, char* out, std::size_t size) {
     }
 }
 
+std::string& requestedTopic();
+
+/// A hidden ROS name: one of its parts starts with "_" ("/points/_buf_cpu"). `ros2 topic list`
+/// leaves them out unless asked; so does this workspace.
+bool hiddenName(std::string_view name) {
+    for (std::size_t at = name.find('_'); at != std::string_view::npos;
+         at = name.find('_', at + 1)) {
+        if (at == 0 || name[at - 1] == '/') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// How many of `names` are not hidden.
+std::size_t shownCount(const std::vector<std::string>& names) {
+    return static_cast<std::size_t>(
+        std::ranges::count_if(names, [](const std::string& name) { return !hiddenName(name); }));
+}
+
 /// "sensor_msgs/msg/PointCloud2" -> "PointCloud2".
 const char* shortType(const std::string& type) {
     const std::size_t slash = type.rfind('/');
@@ -88,6 +110,12 @@ public:
     [[nodiscard]] Workspace workspace() const override { return Workspace::Ros2; }
 
     void draw(PanelContext& context) override {
+        if (!requestedTopic().empty()) {
+            *selected_ = std::move(requestedTopic());
+            requestedTopic().clear();
+            filter_[0] = '\0';
+            scope_ = 1;  // all: the palette lists every topic
+        }
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         const bool open = ImGui::Begin(title());
         ImGui::PopStyleVar();
@@ -135,7 +163,9 @@ public:
                 widgets::Caption("%s", name);
             }
             for (const RosGraphInfo::Topic& topic : graph->topics) {
-                if ((scope_ == 0 && !topic.fromBridge) ||
+                // Hidden topics (an action's, a buffer's) stay out, as `ros2 topic list`
+                // leaves them out; the Actions tab lists actions from theirs.
+                if (isHiddenRosName(topic.name) || (scope_ == 0 && !topic.fromBridge) ||
                     (filter_[0] != '\0' && !containsNoCase(topic.name, filter_))) {
                     continue;
                 }
@@ -239,9 +269,8 @@ public:
             if (!graph->note.empty()) {
                 // A server without a bridge says why; that is the whole content of the graph.
                 ImGui::SetCursorPosX(px(8.0F));
-                ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-                widgets::Pill(graph->note.c_str(), widgets::PillKind::Warn);
-                ImGui::PopTextWrapPos();
+                fit::pill(graph->note, widgets::PillKind::Warn,
+                          ImGui::GetContentRegionAvail().x - px(8.0F));
             }
             ImGui::EndChild();
             ImGui::End();
@@ -271,9 +300,13 @@ public:
         const float small = px(theme::kCaptionSize);
         for (std::size_t from = 0; from < graph->nodes.size(); ++from) {
             for (const std::string& topic : graph->nodes[from].publishes) {
+                if (hiddenName(topic)) {
+                    continue;
+                }
                 for (std::size_t to = 0; to < graph->nodes.size(); ++to) {
                     const auto& wanted = graph->nodes[to].subscribes;
-                    if (from == to || std::ranges::find(wanted, topic) == wanted.end()) {
+                    if (from == to || isHiddenRosName(topic) ||
+                        std::ranges::find(wanted, topic) == wanted.end()) {
                         continue;
                     }
                     const ImVec2 a(places_[from].x + nodeW, places_[from].y + nodeH * 0.5F);
@@ -319,8 +352,8 @@ public:
             if (!node.detail.empty()) {
                 std::snprintf(line, sizeof(line), "%s", node.detail.c_str());
             } else {
-                std::snprintf(line, sizeof(line), "pub %zu · sub %zu", node.publishes.size(),
-                              node.subscribes.size());
+                std::snprintf(line, sizeof(line), "pub %zu · sub %zu", shownCount(node.publishes),
+                              shownCount(node.subscribes));
             }
             draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), min.y + px(34.0F)),
                           u32(c::t2), line);
@@ -333,7 +366,7 @@ public:
             ImGui::SetCursorScreenPos(
                 ImVec2(origin.x + ImGui::GetScrollX() + px(10.0F),
                        origin.y + ImGui::GetScrollY() + visible.y - px(28.0F)));
-            widgets::Pill(graph->note.c_str(), widgets::PillKind::Warn);
+            fit::pill(graph->note, widgets::PillKind::Warn, visible.x - px(20.0F));
         }
         ImGui::EndChild();
         ImGui::End();
@@ -342,6 +375,336 @@ public:
 private:
     std::shared_ptr<std::string> selected_;
     std::vector<ImVec2> places_;
+};
+
+// --- services and parameters --------------------------------------------------------------
+
+/// A tab whose content the server's graph report (protocol v1's RosGraph) does not carry:
+/// it says so, and how to see the same thing from a terminal in the ROS domain.
+class UnreportedPanel final : public Panel {
+public:
+    UnreportedPanel(const char* title, const char* what, const char* command)
+        : title_(title), what_(what), command_(command) {}
+    [[nodiscard]] const char* title() const override { return title_; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Ros2; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        const std::shared_ptr<const RosGraphInfo> graph = graphOrHint(context);
+        if (graph) {
+            ImGui::PushTextWrapPos(0.0F);
+            widgets::Caption(
+                "This server's ROS 2 graph does not report %s: its report holds "
+                "topics, nodes and ros2_control.",
+                what_);
+            ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+            widgets::Caption("From a terminal in ROS domain %u:", graph->domainId);
+            widgets::Mono(c::t1, "%s", command_);
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::End();
+    }
+
+private:
+    const char* title_;
+    const char* what_;
+    const char* command_;
+};
+
+// --- actions ------------------------------------------------------------------------------
+
+/// "/a, /b" from a list of node names, or "-" for none.
+std::string joined(const std::vector<std::string>& names) {
+    std::string out;
+    for (const std::string& name : names) {
+        out += (out.empty() ? "" : ", ") + name;
+    }
+    return out.empty() ? "-" : out;
+}
+
+class ActionsPanel final : public Panel {
+public:
+    [[nodiscard]] const char* title() const override { return "Actions"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Ros2; }
+
+    void draw(PanelContext& context) override {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        const bool open = ImGui::Begin(title());
+        ImGui::PopStyleVar();
+        if (!open) {
+            ImGui::End();
+            return;
+        }
+        const ImVec2 top = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(ImVec2(top.x + px(8.0F), top.y + px(6.0F)));
+        const std::shared_ptr<const RosGraphInfo> graph = graphOrHint(context);
+        if (!graph) {
+            ImGui::End();
+            return;
+        }
+        // Worked out again only when a new graph arrives.
+        if (graph != source_) {
+            source_ = graph;
+            actions_ = rosActions(*graph);
+        }
+        widgets::SearchField("##filter", "Filter actions", filter_, sizeof(filter_),
+                             ImGui::GetContentRegionAvail().x - px(8.0F));
+        ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+        if (actions_.empty()) {
+            ImGui::SetCursorPosX(px(8.0F));
+            ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+            widgets::Caption(
+                "No action servers in the domain. Actions appear when a node "
+                "serves one (Nav2's navigate_to_pose, MoveIt's move_action).");
+            ImGui::PopTextWrapPos();
+            ImGui::End();
+            return;
+        }
+        const RosAction* chosen = nullptr;
+        if (ImGui::BeginTable("##actions", 3,
+                              ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoPadOuterX,
+                              ImVec2(0.0F, -px(150.0F)))) {
+            ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_None, 3.0F);
+            ImGui::TableSetupColumn("type", ImGuiTableColumnFlags_None, 2.2F);
+            ImGui::TableSetupColumn("server", ImGuiTableColumnFlags_None, 2.0F);
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, px(24.0F));
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, u32(c::bg2));
+            for (const char* name : {"action", "type", "server"}) {
+                ImGui::TableNextColumn();
+                widgets::Caption("  %s", name);
+            }
+            for (const RosAction& action : actions_) {
+                if (filter_[0] != '\0' && !containsNoCase(action.name, filter_)) {
+                    continue;
+                }
+                const bool selected = selected_ == action.name;
+                if (selected) {
+                    chosen = &action;
+                }
+                ImGui::PushID(action.name.c_str());
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, px(23.0F));
+                ImGui::TableNextColumn();
+                if (ImGui::Selectable(
+                        "##action", selected,
+                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+                    selected_ = action.name;
+                }
+                ImGui::SameLine(px(8.0F));
+                // An action nobody serves any more is written in the warning colour.
+                widgets::Mono(action.servers.empty() ? c::warn : c::t1, "%s", action.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", action.type.empty() ? "-" : shortType(action.type));
+                ImGui::TableNextColumn();
+                widgets::Mono(c::t2, "%s", joined(action.servers).c_str());
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (chosen == nullptr) {
+            ImGui::SetCursorPosX(px(8.0F));
+            widgets::Caption("Select an action to see its server and clients.");
+        } else if (widgets::SectionHeader(chosen->name.c_str(), chosen->type.empty()
+                                                                    ? nullptr
+                                                                    : shortType(chosen->type))) {
+            ImGui::Indent(px(8.0F));
+            widgets::PropertyRow("type", chosen->type.empty() ? "-" : chosen->type.c_str(),
+                                 nullptr);
+            widgets::PropertyRow("server", joined(chosen->servers).c_str(), nullptr);
+            widgets::PropertyRow("clients", joined(chosen->clients).c_str(), nullptr);
+            if (chosen->servers.empty()) {
+                widgets::Pill("no server", widgets::PillKind::Warn);
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        ImGui::End();
+    }
+
+private:
+    std::shared_ptr<const RosGraphInfo> source_;
+    std::vector<RosAction> actions_;
+    std::string selected_;
+    char filter_[96]{};
+};
+
+// --- TF tree ------------------------------------------------------------------------------
+
+const char* kindName(TfFrame::Kind kind) {
+    switch (kind) {
+        case TfFrame::Kind::Odom:
+            return "odometry";
+        case TfFrame::Kind::Link:
+            return "link";
+        case TfFrame::Kind::Sensor:
+            return "sensor";
+        case TfFrame::Kind::Optical:
+            return "optical";
+    }
+    return "";
+}
+
+class TfTreePanel final : public Panel {
+public:
+    [[nodiscard]] const char* title() const override { return "TF tree"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Ros2; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        const std::shared_ptr<const RosGraphInfo> graph = graphOrHint(context);
+        if (!graph) {
+            ImGui::End();
+            return;
+        }
+        if (!context.scene) {
+            widgets::Caption("Waiting for the scene ...");
+            ImGui::End();
+            return;
+        }
+        const bool running = context.status.runState == RunState::Running;
+        if (graph != source_ || context.scene->statics != statics_ || running != running_) {
+            source_ = graph;
+            statics_ = context.scene->statics;
+            running_ = running;
+            frames_ = tfFrames(*statics_, *graph, running);
+        }
+        if (frames_.empty()) {
+            widgets::Caption("The scene has no robot with bodies, so there is no TF tree.");
+            ImGui::End();
+            return;
+        }
+        std::size_t stale = 0;
+        std::size_t unpublished = 0;
+        for (const TfFrame& frame : frames_) {
+            stale += frame.stale ? 1 : 0;
+            unpublished += frame.topic.empty() && frame.kind != TfFrame::Kind::Odom ? 1 : 0;
+        }
+        // One line on the whole tree, then a warning for what is stale or not published.
+        widgets::Caption("%zu frames · /tf and /tf_static as the graph reports them",
+                         frames_.size());
+        if (stale > 0) {
+            ImGui::SameLine();
+            char text[48];
+            std::snprintf(text, sizeof(text), "%zu stale", stale);
+            widgets::Pill(text, widgets::PillKind::Error);
+        }
+        if (unpublished > 0) {
+            ImGui::SameLine();
+            char text[48];
+            std::snprintf(text, sizeof(text), "%zu not on /tf", unpublished);
+            widgets::Pill(text, widgets::PillKind::Warn);
+        }
+        const float details = px(170.0F);
+        ImGui::BeginChild("##tree", ImVec2(0.0F, -details));
+        int hiddenBelow = -1;
+        const TfFrame* chosen = nullptr;
+        for (std::size_t i = 0; i < frames_.size(); ++i) {
+            const TfFrame& frame = frames_[i];
+            if (hiddenBelow >= 0 && frame.depth > hiddenBelow) {
+                continue;
+            }
+            hiddenBelow = -1;
+            const bool hasChildren =
+                i + 1 < frames_.size() && frames_[i + 1].parent == static_cast<int>(i);
+            const bool folded = folded_.contains(frame.name);
+            if (folded) {
+                hiddenBelow = frame.depth;
+            }
+            // The type column: how it moves and at what rate.
+            char type[96];
+            if (frame.kind == TfFrame::Kind::Odom) {
+                std::snprintf(type, sizeof(type), "root");
+            } else if (frame.topic.empty()) {
+                std::snprintf(type, sizeof(type), "not published");
+            } else if (frame.rateKnown) {
+                std::snprintf(type, sizeof(type), "%s · %.0f Hz", frame.topic.c_str(),
+                              frame.rateHz);
+            } else {
+                std::snprintf(type, sizeof(type), "%s",
+                              frame.topic == "/tf_static" ? "static" : frame.topic.c_str());
+            }
+            widgets::TreeRowSpec row;
+            row.depth = frame.depth;
+            row.hasChildren = hasChildren;
+            row.folded = folded;
+            row.selected = selected_ == frame.name;
+            row.icon = frame.kind == TfFrame::Kind::Sensor || frame.kind == TfFrame::Kind::Optical
+                           ? widgets::Icon::Sensors
+                           : widgets::Icon::Frames;
+            row.name = frame.name.c_str();
+            row.strong = frame.kind == TfFrame::Kind::Odom || row.selected;
+            row.type = type;
+            row.error = frame.stale;
+            ImGui::PushID(static_cast<int>(i));
+            const widgets::TreeHit hit = widgets::TreeRow(frame.name.c_str(), row);
+            ImGui::PopID();
+            if (!frame.note.empty()) {
+                ImGui::SetItemTooltip("%s", frame.note.c_str());
+            }
+            if (hit == widgets::TreeHit::Caret) {
+                if (!folded_.erase(frame.name)) {
+                    folded_.insert(frame.name);
+                }
+            } else if (hit != widgets::TreeHit::None) {
+                selected_ = frame.name;
+                if (frame.prim != kNone) {
+                    context.selectedPrim = frame.prim;  // the same body in the Scene workspace
+                }
+            }
+        }
+        for (const TfFrame& frame : frames_) {
+            if (selected_ == frame.name) {
+                chosen = &frame;
+            }
+        }
+        ImGui::EndChild();
+        if (chosen == nullptr) {
+            widgets::Caption("Select a frame to see who publishes it.");
+        } else if (widgets::SectionHeader(chosen->name.c_str(), kindName(chosen->kind))) {
+            ImGui::Indent(px(8.0F));
+            widgets::PropertyRow(
+                "parent",
+                chosen->parent < 0 ? "-"
+                                   : frames_[static_cast<std::size_t>(chosen->parent)].name.c_str(),
+                nullptr);
+            widgets::PropertyRow("topic", chosen->topic.empty() ? "-" : chosen->topic.c_str(),
+                                 nullptr);
+            widgets::PropertyRow("published by",
+                                 chosen->publisher.empty() ? "-" : chosen->publisher.c_str(),
+                                 nullptr);
+            char text[48];
+            if (chosen->rateKnown) {
+                std::snprintf(text, sizeof(text), "%.1f", chosen->rateHz);
+                widgets::PropertyRow("rate", text, "Hz");
+            }
+            if (!chosen->note.empty()) {
+                ImGui::PushTextWrapPos(0.0F);
+                if (chosen->stale) {
+                    widgets::Pill("stale", widgets::PillKind::Error);
+                } else if (chosen->topic.empty()) {
+                    widgets::Pill("not published", widgets::PillKind::Warn);
+                }
+                widgets::Caption("%s", chosen->note.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::Unindent(px(8.0F));
+        }
+        ImGui::End();
+    }
+
+private:
+    std::shared_ptr<const RosGraphInfo> source_;
+    std::shared_ptr<const SceneStatics> statics_;
+    bool running_{false};
+    std::vector<TfFrame> frames_;
+    std::set<std::string, std::less<>> folded_;
+    std::string selected_;
 };
 
 // --- ros2_control and time ----------------------------------------------------------------
@@ -400,7 +763,12 @@ public:
                 for (const RosGraphInfo::Joint& joint : graph->joints) {
                     ImGui::TableNextRow(ImGuiTableRowFlags_None, px(23.0F));
                     ImGui::TableNextColumn();
-                    widgets::Mono(c::t1, "%s · %s", joint.name.c_str(), joint.interface.c_str());
+                    // Cut to its cell with an ellipsis, all of it on hover (it was clipped).
+                    std::snprintf(text, sizeof(text), "%s · %s", joint.name.c_str(),
+                                  joint.interface.c_str());
+                    ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                    fit::text(text, ImGui::GetContentRegionAvail().x);
+                    ImGui::PopFont();
                     ImGui::TableNextColumn();
                     std::snprintf(text, sizeof(text), "%.2f", joint.command);
                     rightMono(c::t1, text);
@@ -445,8 +813,11 @@ public:
             std::snprintf(text, sizeof(text), "%u", graph->domainId);
             widgets::PropertyRow("ROS_DOMAIN_ID", text, nullptr);
             widgets::PropertyRow("RMW", graph->rmw.c_str(), nullptr);
+            const auto topics = std::ranges::count_if(
+                graph->topics,
+                [](const RosGraphInfo::Topic& topic) { return !hiddenName(topic.name); });
             std::snprintf(text, sizeof(text), "%zu nodes · %zu topics", graph->nodes.size(),
-                          graph->topics.size());
+                          static_cast<std::size_t>(topics));
             widgets::PropertyRow("graph", text, nullptr);
             ImGui::Unindent(px(8.0F));
         }
@@ -456,11 +827,30 @@ public:
 
 }  // namespace
 
+namespace {
+
+/// A topic the command palette asked to show; the Topics panel takes it.
+std::string& requestedTopic() {
+    static std::string topic;
+    return topic;
+}
+
+}  // namespace
+
+void requestRosTopic(std::string name) {
+    requestedTopic() = std::move(name);
+}
+
 std::vector<std::unique_ptr<Panel>> createRos2Panels() {
     auto selected = std::make_shared<std::string>();  // the topic chosen in the table
     std::vector<std::unique_ptr<Panel>> panels;
     panels.push_back(std::make_unique<TopicsPanel>(selected));
+    panels.push_back(
+        std::make_unique<UnreportedPanel>("Services", "services", "ros2 service list -t"));
+    panels.push_back(std::make_unique<ActionsPanel>());
+    panels.push_back(std::make_unique<UnreportedPanel>("Params", "parameters", "ros2 param list"));
     panels.push_back(std::make_unique<NodeGraphPanel>(selected));
+    panels.push_back(std::make_unique<TfTreePanel>());
     panels.push_back(std::make_unique<ControlPanel>());
     return panels;
 }

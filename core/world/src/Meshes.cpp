@@ -1,6 +1,7 @@
 // Primitive meshes for the viewer, the same shapes and vertex layout as the mock server's
 // meshes.py, so a robot looks the same whichever server shows it.
 #include "lagrange/world/Model.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +48,410 @@ struct HullFace {
     Point normal;  // unit, outward
     double offset;
 };
+
+/// The work the careful hull may do over all its tries, in face × point visits (each round of
+/// settleSeen and each search for the farthest point costs about one face count times one point
+/// count): about a second. A nearly flat set of kMaxHullPoints points could otherwise cost tens
+/// of billions (review L10, 2026-11-15); past it no hull is made.
+constexpr std::uint64_t kHullWorkBudget = 1'000'000'000;
+
+struct HullBudget {
+    std::uint64_t left{kHullWorkBudget};
+    /// Spends `n`; false once spent out.
+    bool spend(std::uint64_t n) {
+        if (n > left) {
+            left = 0;
+            return false;
+        }
+        left -= n;
+        return true;
+    }
+    [[nodiscard]] bool out() const { return left == 0; }
+};
+
+/// An edge of the rim of the faces a new point sees, wound as in the seen face, and the face
+/// beyond it that stays.
+struct RimEdge {
+    std::uint32_t from;
+    std::uint32_t to;
+    std::size_t beyond;
+};
+
+/// Grows the faces point `p` sees (`seen`: at first those it is over the tolerance above) until
+/// replacing them by a fan from `p` keeps the hull a closed, convex surface: they are one piece
+/// with one rim loop, and no fan face is thinner than the tolerance or has a hull vertex more
+/// than the tolerance in front of it. The faces it adds are ones `p` is level with (within the
+/// tolerance of their planes), next to those seen: a point that sees one face of a nearly flat
+/// pair and lies over the other must replace both, or its fan folds back over the other. Fills
+/// `rim` in the order of the faces and their edges. False when no such region exists: `p` is
+/// then left out.
+bool settleSeen(const std::vector<HullFace>& faces, const std::vector<Point>& points,
+                std::uint32_t p, double tolerance, std::vector<char>& seen,
+                std::vector<RimEdge>& rim, HullBudget& budget) {
+    // Each directed edge and its face, to find the face beyond an edge.
+    std::vector<std::array<std::size_t, 3>> owners;
+    owners.reserve(3 * faces.size());
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        for (std::size_t e = 0; e < 3; ++e) {
+            owners.push_back({faces[i].v.at(e), faces[i].v.at((e + 1) % 3), i});
+        }
+    }
+    std::sort(owners.begin(), owners.end());
+    const auto beyondOf = [&](std::size_t i, std::size_t e) -> std::size_t {
+        const std::array<std::size_t, 3> key{faces[i].v.at((e + 1) % 3), faces[i].v.at(e), 0};
+        const auto it = std::lower_bound(owners.begin(), owners.end(), key);
+        if (it == owners.end() || (*it)[0] != key[0] || (*it)[1] != key[1]) {
+            return faces.size();
+        }
+        return (*it)[2];
+    };
+    std::vector<double> height(faces.size());
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        height[i] = dotOf(faces[i].normal, points[p]) - faces[i].offset;
+    }
+    // The faces joined by edges to `start` through faces that pass `through`.
+    const auto region = [&](std::size_t start, const auto& through) {
+        std::vector<char> reached(faces.size(), 0);
+        std::vector<std::size_t> queue{start};
+        reached[start] = 1;
+        while (!queue.empty()) {
+            const std::size_t i = queue.back();
+            queue.pop_back();
+            for (std::size_t e = 0; e < 3; ++e) {
+                const std::size_t j = beyondOf(i, e);
+                if (j < faces.size() && reached[j] == 0 && through(j)) {
+                    reached[j] = 1;
+                    queue.push_back(j);
+                }
+            }
+        }
+        return reached;
+    };
+    std::size_t top = faces.size();
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        if (seen[i] != 0 && (top == faces.size() || height[i] > height[top])) {
+            top = i;
+        }
+    }
+    if (top == faces.size()) {
+        return false;
+    }
+    // One piece: the seen faces joined to the one it is farthest above, through faces it sees
+    // or is level with. Every later step adds faces next to these, so it stays one piece.
+    {
+        const std::vector<char> joined =
+            region(top, [&](std::size_t j) { return seen[j] != 0 || height[j] > -tolerance; });
+        bool apart = false;
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            apart = apart || (seen[i] != 0 && joined[i] == 0);
+        }
+        if (apart) {
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                seen[i] = joined[i];
+            }
+        }
+    }
+    // Takes in the faces next to the seen ones that it is level with; false when there are none.
+    const auto takeLevelNeighbours = [&]() {
+        std::vector<std::size_t> add;
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (seen[i] == 0) {
+                continue;
+            }
+            for (std::size_t e = 0; e < 3; ++e) {
+                const std::size_t j = beyondOf(i, e);
+                if (j < faces.size() && seen[j] == 0 && height[j] > -tolerance) {
+                    add.push_back(j);
+                }
+            }
+        }
+        for (const std::size_t j : add) {
+            seen[j] = 1;
+        }
+        return !add.empty();
+    };
+    constexpr double kFoldSlack = 2.0;
+    std::vector<char> onHull(points.size(), 0);
+    for (std::size_t round = 0; round <= faces.size(); ++round) {
+        if (!budget.spend(static_cast<std::uint64_t>(faces.size()) * points.size())) {
+            return false;
+        }
+        rim.clear();
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (seen[i] == 0) {
+                continue;
+            }
+            for (std::size_t e = 0; e < 3; ++e) {
+                const std::size_t beyond = beyondOf(i, e);
+                if (beyond == faces.size()) {
+                    return false;  // not a closed surface
+                }
+                if (seen[beyond] == 0) {
+                    rim.push_back({faces[i].v.at(e), faces[i].v.at((e + 1) % 3), beyond});
+                }
+            }
+        }
+        if (rim.empty()) {
+            return false;  // it sees every face
+        }
+        // One rim loop: each rim vertex starts one edge, and following them goes round all.
+        std::vector<std::pair<std::uint32_t, std::size_t>> starts;
+        starts.reserve(rim.size());
+        for (std::size_t k = 0; k < rim.size(); ++k) {
+            starts.emplace_back(rim[k].from, k);
+        }
+        std::sort(starts.begin(), starts.end());
+        bool pinched = false;
+        for (std::size_t k = 1; k < starts.size(); ++k) {
+            pinched = pinched || starts[k].first == starts[k - 1].first;
+        }
+        std::size_t length = 0;
+        if (!pinched) {
+            std::size_t k = 0;
+            do {
+                const auto it =
+                    std::lower_bound(starts.begin(), starts.end(),
+                                     std::pair<std::uint32_t, std::size_t>{rim[k].to, 0});
+                if (it == starts.end() || it->first != rim[k].to) {
+                    break;
+                }
+                k = it->second;
+                ++length;
+            } while (k != 0 && length <= rim.size());
+        }
+        if (pinched || length != rim.size()) {
+            // Fill the holes: the faces cut off from the one it is farthest below.
+            std::size_t bottom = faces.size();
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                if (seen[i] == 0 && (bottom == faces.size() || height[i] < height[bottom])) {
+                    bottom = i;
+                }
+            }
+            const std::vector<char> outside =
+                region(bottom, [&](std::size_t j) { return seen[j] == 0; });
+            bool changed = false;
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                if (seen[i] == 0 && outside[i] == 0) {
+                    seen[i] = 1;
+                    changed = true;
+                }
+            }
+            if (!changed && !takeLevelNeighbours()) {
+                return false;
+            }
+            continue;
+        }
+        // No fan face thinner than the tolerance or folded over the face beyond its edge.
+        bool changed = false;
+        for (const RimEdge& edge : rim) {
+            const Point& a = points[edge.from];
+            const Point along = minus(points[edge.to], a);
+            const Point normal = crossOf(along, minus(points[p], a));
+            const double area = std::sqrt(dotOf(normal, normal));
+            bool grow = area <= tolerance * std::sqrt(dotOf(along, along));
+            for (const std::uint32_t w : faces[edge.beyond].v) {
+                grow = grow || dotOf(normal, minus(points[w], a)) > tolerance * area;
+            }
+            if (grow) {
+                seen[edge.beyond] = 1;
+                changed = true;
+            }
+        }
+        if (changed) {
+            continue;
+        }
+        // Nor one with any hull vertex in front of it: p sees a face only through the tilt of its
+        // plane far from it (a flat side with one corner a hair off), and its fan would cover
+        // the faces beside. Take in the faces next to the seen ones that it is level with.
+        std::fill(onHull.begin(), onHull.end(), 0);
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (seen[i] == 0) {
+                for (const std::uint32_t v : faces[i].v) {
+                    onHull[v] = 1;
+                }
+            }
+        }
+        double fold = 0.0;  // the most a hull vertex is in front of a fan face, m
+        for (const RimEdge& edge : rim) {
+            const Point& a = points[edge.from];
+            const Point normal = crossOf(minus(points[edge.to], a), minus(points[p], a));
+            const double area = std::sqrt(dotOf(normal, normal));
+            for (std::uint32_t w = 0; w < points.size(); ++w) {
+                if (onHull[w] != 0) {
+                    fold = std::max(fold, dotOf(normal, minus(points[w], a)) / area);
+                }
+            }
+        }
+        if (fold <= tolerance) {
+            return true;
+        }
+        if (!takeLevelNeighbours()) {
+            // Nothing level left to take in: a fold of a hair over the tolerance (four nearly
+            // coplanar points) is kept rather than leaving out a point that is far outside.
+            return fold <= kFoldSlack * tolerance;
+        }
+    }
+    return false;
+}
+
+/// A fan face from a rim edge to a new point, wound as the rim edge.
+HullFace fanFace(const std::vector<Point>& points, std::uint32_t p, std::uint32_t q,
+                 std::uint32_t r) {
+    Point n = crossOf(minus(points[q], points[p]), minus(points[r], points[p]));
+    const double length = std::sqrt(dotOf(n, n));
+    if (length > 0.0) {
+        n = {n[0] / length, n[1] / length, n[2] / length};
+    }
+    return HullFace{{p, q, r}, n, dotOf(n, points[p])};
+}
+
+/// The hull grown from `start` by each point in turn: the faces it is over the tolerance above
+/// are replaced by a fan from their rim, nothing checked. Empty once it has too many faces.
+std::vector<HullFace> growInOrder(const std::vector<Point>& points,
+                                  const std::vector<HullFace>& start, double tolerance) {
+    std::vector<HullFace> faces = start;
+    for (std::uint32_t p = 0; p < points.size(); ++p) {
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+        std::vector<HullFace> kept;
+        kept.reserve(faces.size());
+        for (const HullFace& f : faces) {
+            if (dotOf(f.normal, points[p]) - f.offset > tolerance) {
+                for (std::size_t e = 0; e < 3; ++e) {
+                    edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
+                }
+            } else {
+                kept.push_back(f);
+            }
+        }
+        if (edges.empty()) {
+            continue;
+        }
+        for (const auto& [from, to] : edges) {
+            if (std::find(edges.begin(), edges.end(), std::pair{to, from}) == edges.end()) {
+                kept.push_back(fanFace(points, from, to, p));
+            }
+        }
+        faces = std::move(kept);
+        if (faces.size() > 2 * points.size()) {
+            return {};  // more than a hull of these points has (2 V - 4): it went wrong
+        }
+    }
+    return faces;
+}
+
+/// The hull grown from `start` farthest point first (quickhull's order): the point farthest
+/// above a face replaces the faces it sees, grown by settleSeen into a region whose fan keeps
+/// the hull closed and convex, until no point is more than the tolerance above a face. A point
+/// no region fits is left out.
+std::vector<HullFace> growFarthestFirst(const std::vector<Point>& points,
+                                        const std::vector<HullFace>& start, double tolerance,
+                                        HullBudget& budget) {
+    std::vector<HullFace> faces = start;
+    std::vector<char> done(points.size(), 0);
+    for (const HullFace& f : faces) {
+        for (const std::uint32_t v : f.v) {
+            done[v] = 1;
+        }
+    }
+    std::vector<RimEdge> rim;
+    for (;;) {
+        if (!budget.spend(static_cast<std::uint64_t>(faces.size()) * points.size())) {
+            return {};
+        }
+        std::uint32_t farthest = 0;
+        double most = tolerance;
+        for (std::uint32_t q = 0; q < points.size(); ++q) {
+            if (done[q] != 0) {
+                continue;
+            }
+            for (const HullFace& f : faces) {
+                const double height = dotOf(f.normal, points[q]) - f.offset;
+                if (height > most) {
+                    most = height;
+                    farthest = q;
+                }
+            }
+        }
+        if (most <= tolerance) {
+            return faces;
+        }
+        const std::uint32_t p = farthest;
+        done[p] = 1;
+        std::vector<char> sees(faces.size(), 0);
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            sees[i] = dotOf(faces[i].normal, points[p]) - faces[i].offset > tolerance ? 1 : 0;
+        }
+        if (!settleSeen(faces, points, p, tolerance, sees, rim, budget)) {
+            if (budget.out()) {
+                return {};
+            }
+            continue;
+        }
+        std::vector<HullFace> kept;
+        kept.reserve(faces.size() + rim.size());
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (sees[i] == 0) {
+                kept.push_back(faces[i]);
+            }
+        }
+        for (const RimEdge& edge : rim) {
+            kept.push_back(fanFace(points, edge.from, edge.to, p));
+        }
+        faces = std::move(kept);
+    }
+}
+
+/// Whether `faces` close round the points: each edge once each way, a sphere (V - E + F = 2),
+/// every face a plane with every point behind it within a few times the tolerance, and a
+/// volume.
+bool isClosedConvexHull(const std::vector<HullFace>& faces, const std::vector<Point>& points,
+                        double tolerance) {
+    constexpr double kSlack = 3.0;  // a point skipped at the tolerance, under a later face
+    if (faces.size() < 4) {
+        return false;
+    }
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+    edges.reserve(3 * faces.size());
+    std::vector<char> used(points.size(), 0);
+    for (const HullFace& f : faces) {
+        if (std::abs(dotOf(f.normal, f.normal) - 1.0) > 1e-9) {
+            return false;  // a face without a plane
+        }
+        for (std::size_t e = 0; e < 3; ++e) {
+            edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
+            used[f.v.at(e)] = 1;
+        }
+    }
+    std::sort(edges.begin(), edges.end());
+    if (std::adjacent_find(edges.begin(), edges.end()) != edges.end()) {
+        return false;
+    }
+    for (const auto& [from, to] : edges) {
+        if (!std::binary_search(edges.begin(), edges.end(), std::pair{to, from})) {
+            return false;
+        }
+    }
+    const auto vertices = static_cast<std::ptrdiff_t>(std::count(used.begin(), used.end(), 1));
+    const auto edgeCount = static_cast<std::ptrdiff_t>(edges.size() / 2);
+    if (vertices - edgeCount + static_cast<std::ptrdiff_t>(faces.size()) != 2) {
+        return false;
+    }
+    for (const HullFace& f : faces) {
+        for (const Point& p : points) {
+            if (dotOf(f.normal, p) - f.offset > kSlack * tolerance) {
+                return false;
+            }
+        }
+    }
+    // Closed, outward and convex: the volume about any vertex is positive.
+    const Point& o = points[faces.front().v[0]];
+    double volume = 0.0;
+    for (const HullFace& f : faces) {
+        volume += dotOf(minus(points[f.v[0]], o),
+                        crossOf(minus(points[f.v[1]], o), minus(points[f.v[2]], o)));
+    }
+    return volume > 0.0;
+}
 
 /// The farthest vertex in each of kMaxHullPoints directions spread over the sphere (a Fibonacci
 /// lattice), in the order of the vertices. Measured in the points' bounding box scaled to a cube,
@@ -99,8 +504,14 @@ std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<dou
     std::vector<Point> points;
     points.reserve(mesh.positions.size() / 3);
     for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
-        points.push_back({mesh.positions[i] * scale[0], mesh.positions[i + 1] * scale[1],
-                          mesh.positions[i + 2] * scale[2]});
+        const Point p{mesh.positions[i] * scale[0], mesh.positions[i + 1] * scale[1],
+                      mesh.positions[i + 2] * scale[2]};
+        // A NaN or infinite vertex (or scale) has no place in a hull, and a NaN would make the
+        // sort and the searches below meaningless (out-of-range indices): no hull at all.
+        if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+            return std::nullopt;
+        }
+        points.push_back(p);
     }
     // A mesh repeats its vertices per face: once each, keeping the first's place.
     std::vector<Point> sorted = points;
@@ -195,31 +606,29 @@ std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<dou
     const auto ib = static_cast<std::uint32_t>(b);
     const auto ic = static_cast<std::uint32_t>(c);
     const auto id = static_cast<std::uint32_t>(d);
-    std::vector<HullFace> faces{face(ia, ib, ic), face(ia, ib, id), face(ia, ic, id),
-                                face(ib, ic, id)};
-    // Each point outside the hull so far replaces the faces it sees by a fan from their rim.
-    for (std::uint32_t p = 0; p < points.size(); ++p) {
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
-        std::vector<HullFace> kept;
-        kept.reserve(faces.size());
-        for (const HullFace& f : faces) {
-            if (dotOf(f.normal, points[p]) - f.offset > tolerance) {
-                for (std::size_t e = 0; e < 3; ++e) {
-                    edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
-                }
-            } else {
-                kept.push_back(f);
+    const std::vector<HullFace> start{face(ia, ib, ic), face(ia, ib, id), face(ia, ic, id),
+                                      face(ib, ic, id)};
+    // First as convexHullOf always has: each point in turn, outside the hull so far, replaces
+    // the faces it sees by a fan from their rim. Kept for the hulls it makes well, so that they
+    // stay the same to the bit; on a nearly flat set its fan can fold back over a face the point
+    // is level with, and the result is no hull at all (a CoACD part of the AMR_FMS swerve module
+    // came out open, with faces wound inward). Then the careful way: farthest point first, each fan
+    // checked (settleSeen), with a coarser tolerance while that still fails.
+    std::vector<HullFace> faces = growInOrder(points, start, tolerance);
+    if (!isClosedConvexHull(faces, points, tolerance)) {
+        constexpr std::array<double, 4> kCoarser{1.0, 4.0, 16.0, 64.0};
+        bool closed = false;
+        HullBudget budget;
+        for (const double coarser : kCoarser) {
+            faces = growFarthestFirst(points, start, coarser * tolerance, budget);
+            closed = isClosedConvexHull(faces, points, coarser * tolerance);
+            if (closed || budget.out()) {
+                break;
             }
         }
-        if (edges.empty()) {
-            continue;
+        if (!closed) {
+            return std::nullopt;
         }
-        for (const auto& [from, to] : edges) {
-            if (std::find(edges.begin(), edges.end(), std::pair{to, from}) == edges.end()) {
-                kept.push_back(face(from, to, p));
-            }
-        }
-        faces = std::move(kept);
     }
     // Only the points on the hull, in their order.
     std::vector<std::uint32_t> index(points.size(), kNoIndex);
@@ -411,6 +820,350 @@ void addGroundPrim(Model& model) {
     model.scene.prims.push_back(std::move(ground));
 }
 
+namespace {
+
+/// Bodies welded to the world: no joint other than fixed above them, not kinematic.
+std::vector<bool> staticBodies(const World& world) {
+    const std::size_t n = world.bodies.names.size();
+    std::vector<bool> jointed(n, false);
+    for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+        if (world.joints.type[j] != JointType::Fixed && world.joints.child[j].index < n) {
+            jointed[world.joints.child[j].index] = true;
+        }
+    }
+    std::vector<int> state(n, -1);  // -1 unknown, 0 moving, 1 static
+    for (std::size_t b = 0; b < n; ++b) {
+        // Up the tree to a body whose answer is known (or the world), then down again.
+        std::vector<std::size_t> chain;
+        std::size_t at = b;
+        int answer = 1;
+        while (true) {
+            if (state[at] >= 0) {
+                answer = state[at];
+                break;
+            }
+            if (jointed[at] || world.bodies.kinematic[at] || chain.size() > n) {
+                answer = 0;
+                chain.push_back(at);
+                break;
+            }
+            chain.push_back(at);
+            const BodyId parent = world.bodies.parent[at];
+            if (parent == kWorldBody || parent.index >= n) {
+                break;
+            }
+            at = parent.index;
+        }
+        for (const std::size_t c : chain) {
+            state[c] = answer;
+        }
+    }
+    std::vector<bool> out(n);
+    for (std::size_t b = 0; b < n; ++b) {
+        out[b] = state[b] == 1;
+    }
+    return out;
+}
+
+}  // namespace
+
+namespace {
+
+/// A collider's pose in the world at rest.
+Pose colliderPose(const Model& model, std::size_t i) {
+    const World::Colliders& c = model.world.colliders;
+    const BodyId body = c.body[i];
+    return body == kWorldBody || body.index >= model.bodyRestPose.size()
+               ? c.poseInBody[i]
+               : compose(model.bodyRestPose[body.index], c.poseInBody[i]);
+}
+
+/// How far a collider reaches below and above its pose's origin along world z (m), or nothing
+/// for the unbounded shapes (planes, height fields).
+std::optional<std::array<double, 2>> zReach(const Model& model, std::size_t i, const Pose& pose) {
+    const World::Colliders& c = model.world.colliders;
+    const std::array<double, 3>& size = c.size[i];
+    const auto zOf = [&](const std::array<double, 3>& local) {
+        return rotate(pose.orientation, local)[2];
+    };
+    switch (c.shape[i]) {
+        case ShapeType::Sphere:
+            return std::array<double, 2>{size[0], size[0]};
+        case ShapeType::Box: {
+            const double r = std::abs(zOf({size[0], 0, 0})) + std::abs(zOf({0, size[1], 0})) +
+                             std::abs(zOf({0, 0, size[2]}));
+            return std::array<double, 2>{r, r};
+        }
+        case ShapeType::Capsule:
+        case ShapeType::Cylinder: {
+            // Radius size[0], half length size[1] along the shape's z.
+            const double along = std::abs(zOf({0, 0, 1}));
+            const double across = c.shape[i] == ShapeType::Capsule
+                                      ? size[0]
+                                      : size[0] * std::sqrt(std::max(0.0, 1.0 - along * along));
+            const double r = along * size[1] + across;
+            return std::array<double, 2>{r, r};
+        }
+        case ShapeType::ConvexHull: {
+            if (c.hull[i] >= model.world.hulls.size() ||
+                model.world.hulls[c.hull[i]].points.empty()) {
+                return std::nullopt;
+            }
+            double low = 0.0;
+            double high = 0.0;
+            bool first = true;
+            for (const std::array<double, 3>& point : model.world.hulls[c.hull[i]].points) {
+                const double z = zOf(point);
+                low = first ? z : std::min(low, z);
+                high = first ? z : std::max(high, z);
+                first = false;
+            }
+            return std::array<double, 2>{-low, high};
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
+/// A collider's reach in world x and y about its pose's origin (m, half widths of its
+/// axis-aligned footprint), or nothing for the unbounded shapes (planes, height fields).
+std::optional<std::array<double, 2>> xyReach(const Model& model, std::size_t i, const Pose& pose) {
+    const World::Colliders& c = model.world.colliders;
+    const std::array<double, 3>& size = c.size[i];
+    const auto along = [&](const std::array<double, 3>& local) {
+        return rotate(pose.orientation, local);
+    };
+    switch (c.shape[i]) {
+        case ShapeType::Sphere:
+            return std::array<double, 2>{size[0], size[0]};
+        case ShapeType::Box: {
+            std::array<double, 2> r{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                std::array<double, 3> local{};
+                local[k] = size[k];
+                const std::array<double, 3> w = along(local);
+                r[0] += std::abs(w[0]);
+                r[1] += std::abs(w[1]);
+            }
+            return r;
+        }
+        case ShapeType::Capsule:
+        case ShapeType::Cylinder: {
+            // Radius size[0], half length size[1] along the shape's z.
+            const std::array<double, 3> axis = along({0, 0, 1});
+            std::array<double, 2> r{};
+            for (std::size_t k = 0; k < 2; ++k) {
+                const double a = std::abs(axis[k]);
+                const double across = c.shape[i] == ShapeType::Capsule
+                                          ? size[0]
+                                          : size[0] * std::sqrt(std::max(0.0, 1.0 - a * a));
+                r[k] = a * size[1] + across;
+            }
+            return r;
+        }
+        case ShapeType::ConvexHull: {
+            if (c.hull[i] >= model.world.hulls.size() ||
+                model.world.hulls[c.hull[i]].points.empty()) {
+                return std::nullopt;
+            }
+            std::array<double, 2> r{};
+            for (const std::array<double, 3>& point : model.world.hulls[c.hull[i]].points) {
+                const std::array<double, 3> w = along(point);
+                r[0] = std::max(r[0], std::abs(w[0]));
+                r[1] = std::max(r[1], std::abs(w[1]));
+            }
+            return r;
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
+}  // namespace
+
+std::optional<double> lowestMovingPoint(const Model& model) {
+    const World& w = model.world;
+    const World::Colliders& c = w.colliders;
+    const std::vector<bool> isStatic = staticBodies(w);
+    std::optional<double> lowest;
+    const auto take = [&lowest](double z) {
+        if (std::isfinite(z)) {
+            lowest = lowest ? std::min(*lowest, z) : z;
+        }
+    };
+    std::vector<bool> hasCollider(isStatic.size(), false);
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        const BodyId body = c.body[i];
+        if (body == kWorldBody || body.index >= isStatic.size() || isStatic[body.index]) {
+            continue;
+        }
+        hasCollider[body.index] = true;
+        const Pose pose = colliderPose(model, i);
+        if (const auto reach = zReach(model, i, pose)) {
+            take(pose.position[2] - (*reach)[0]);
+        }
+    }
+    for (std::size_t b = 0; b < isStatic.size() && b < model.bodyRestPose.size(); ++b) {
+        if (!isStatic[b] && !hasCollider[b]) {
+            take(model.bodyRestPose[b].position[2]);
+        }
+    }
+    return lowest;
+}
+
+bool hasOwnFloor(const Model& model, bool countPlanes, std::optional<double> standing) {
+    const World& w = model.world;
+    const World::Colliders& c = w.colliders;
+    const std::vector<bool> isStatic = staticBodies(w);
+    constexpr double kLevel = 1e-6;  // |z axis . world z| this close to 1 counts as level
+    const auto isStaticCollider = [&](std::size_t i) {
+        const BodyId body = c.body[i];
+        return body == kWorldBody || (body.index < isStatic.size() && isStatic[body.index]);
+    };
+    // A level slab wide enough for a floor: its top (world z), or nothing.
+    const auto slabTop = [&](std::size_t i, const Pose& pose) -> std::optional<double> {
+        if (c.shape[i] != ShapeType::Box) {
+            return std::nullopt;
+        }
+        const std::array<double, 3> up = rotate(pose.orientation, {0.0, 0.0, 1.0});
+        const double narrower = 2.0 * std::min(c.size[i][0], c.size[i][1]);
+        const double thickness = 2.0 * c.size[i][2];
+        if (std::abs(up[2]) > 1.0 - kLevel && narrower >= kFloorMinWidthM &&
+            thickness <= narrower / 4.0) {
+            return pose.position[2] + c.size[i][2];
+        }
+        return std::nullopt;
+    };
+    // What a floor must not be above: z = 0 (Lagrange's ground, where robots spawn), what
+    // stands on it, and the other static geometry over or under it (its footprint overlaps the
+    // slab's in x and y): a wall or pit sunk below z = 0 beside a floor does not unmake it.
+    const double ground =
+        std::min(0.0, standing ? *standing : lowestMovingPoint(model).value_or(0.0));
+    struct Footprint {
+        double x0, x1, y0, y1;
+    };
+    struct Other {
+        Footprint at;
+        double bottom;
+    };
+    const auto footprint = [&](std::size_t i, const Pose& pose) -> std::optional<Footprint> {
+        const auto r = xyReach(model, i, pose);
+        if (!r) {
+            return std::nullopt;
+        }
+        return Footprint{pose.position[0] - (*r)[0], pose.position[0] + (*r)[0],
+                         pose.position[1] - (*r)[1], pose.position[1] + (*r)[1]};
+    };
+    // Touching edges (within this, m) is beside, not over.
+    constexpr double kTouchM = 1e-6;
+    const auto overlaps = [](const Footprint& a, const Footprint& b) {
+        return a.x0 < b.x1 - kTouchM && b.x0 < a.x1 - kTouchM && a.y0 < b.y1 - kTouchM &&
+               b.y0 < a.y1 - kTouchM;
+    };
+    std::vector<std::optional<double>> tops(c.body.size());
+    std::vector<std::optional<Footprint>> slabs(c.body.size());
+    std::vector<Other> others;
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        if (!isStaticCollider(i)) {
+            continue;
+        }
+        const Pose pose = colliderPose(model, i);
+        tops[i] = slabTop(i, pose);
+        if (tops[i]) {
+            // another slab: a floor tile beside this one, or a floor of its own
+            slabs[i] = footprint(i, pose);
+            continue;
+        }
+        const auto reach = zReach(model, i, pose);
+        const auto at = footprint(i, pose);
+        if (reach && at) {
+            others.push_back({*at, pose.position[2] - (*reach)[0]});
+        }
+    }
+    const auto ceilingOver = [&](std::size_t i) {
+        double ceiling = ground;
+        for (const Other& o : others) {
+            if (!slabs[i] || overlaps(*slabs[i], o.at)) {
+                ceiling = std::min(ceiling, o.bottom);
+            }
+        }
+        return ceiling;
+    };
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        if (!isStaticCollider(i)) {
+            continue;
+        }
+        switch (c.shape[i]) {
+            case ShapeType::Plane:
+                if (countPlanes &&
+                    rotate(colliderPose(model, i).orientation, {0.0, 0.0, 1.0})[2] > 1.0 - kLevel) {
+                    return true;
+                }
+                break;
+            case ShapeType::HeightField:
+                return true;
+            case ShapeType::Box:
+                if (tops[i] && *tops[i] <= ceilingOver(i) + kFloorTopToleranceM) {
+                    return true;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+void addGroundPlane(Model& model, double friction) {
+    // The infinite plane first among the colliders, the slab last among the prims.
+    World::Colliders& c = model.world.colliders;
+    c.body.insert(c.body.begin(), kWorldBody);
+    c.shape.insert(c.shape.begin(), ShapeType::Plane);
+    c.size.insert(c.size.begin(), {0.0, 0.0, 1.0});
+    c.poseInBody.insert(c.poseInBody.begin(), Pose{});
+    c.friction.insert(c.friction.begin(), friction);
+    c.hull.insert(c.hull.begin(), kNoHull);
+    c.material.insert(c.material.begin(), kNoMaterial);
+    model.lagrangePlane = true;
+    addGroundPrim(model);
+}
+
+void removeGroundPlane(Model& model) {
+    World::Colliders& c = model.world.colliders;
+    if (model.lagrangePlane && !c.body.empty() && c.body.front() == kWorldBody &&
+        c.shape.front() == ShapeType::Plane) {
+        c.body.erase(c.body.begin());
+        c.shape.erase(c.shape.begin());
+        c.size.erase(c.size.begin());
+        c.poseInBody.erase(c.poseInBody.begin());
+        c.friction.erase(c.friction.begin());
+        c.material.erase(c.material.begin());
+        c.hull.erase(c.hull.begin());
+    }
+    model.lagrangePlane = false;
+    std::vector<ScenePrim>& prims = model.scene.prims;
+    for (std::size_t p = prims.size(); p-- > 0;) {
+        if (prims[p].name != "ground" || prims[p].parent != kNoIndex || prims[p].body != kNoIndex) {
+            continue;
+        }
+        const auto gone = static_cast<std::uint32_t>(p);
+        prims.erase(prims.begin() + static_cast<std::ptrdiff_t>(p));
+        const auto renumber = [gone](std::uint32_t& index) {
+            if (index != kNoIndex && index > gone) {
+                --index;
+            }
+        };
+        for (ScenePrim& prim : prims) {
+            renumber(prim.parent);
+        }
+        for (auto* list : {&model.bodyPrim, &model.jointPrim, &model.sensorPrim}) {
+            for (std::uint32_t& index : *list) {
+                renumber(index);
+            }
+        }
+    }
+}
+
 void appendModel(Model& model, const Model& other) {
     World& w = model.world;
     const World& o = other.world;
@@ -572,24 +1325,19 @@ void appendModel(Model& model, const Model& other) {
     for (const std::uint32_t p : other.sensorPrim) {
         model.sensorPrim.push_back(p == kNoIndex ? kNoIndex : primMap[p]);
     }
-    if (ground && other.groundPlane) {
+    // The joining file brings its own ground (terrain tiles, a floor slab, a height field): no
+    // infinite plane under it, a second floor at the top of its slab.
+    // What stands on the joining file's floor: the moving bodies of both.
+    std::optional<double> standing = lowestMovingPoint(model);
+    if (const std::optional<double> others = lowestMovingPoint(other)) {
+        standing = standing ? std::min(*standing, *others) : *others;
+    }
+    const bool ownFloor = !other.groundPlane || hasOwnFloor(other, false, standing.value_or(0.0));
+    if (ground && !ownFloor) {
         prims.push_back(std::move(*ground));
     }
-    if (!other.groundPlane) {
-        // The joining world brings its own ground: no infinite plane under its terrain.
-        World::Colliders& c = w.colliders;
-        for (std::size_t i = c.body.size(); i-- > 0;) {
-            if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane) {
-                const auto at = static_cast<std::ptrdiff_t>(i);
-                c.body.erase(c.body.begin() + at);
-                c.shape.erase(c.shape.begin() + at);
-                c.size.erase(c.size.begin() + at);
-                c.poseInBody.erase(c.poseInBody.begin() + at);
-                c.friction.erase(c.friction.begin() + at);
-                c.material.erase(c.material.begin() + at);
-                c.hull.erase(c.hull.begin() + at);
-            }
-        }
+    if (ownFloor) {
+        removeGroundPlane(model);
         model.groundPlane = false;
     }
 }

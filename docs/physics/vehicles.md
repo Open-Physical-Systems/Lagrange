@@ -32,8 +32,12 @@ $$
 
 Each spring is preloaded with its static share of the weight, by where the centre of mass sits
 between the axles, so the model's wheel positions are the ride height. An anti-roll bar moves load
-across an axle in proportion to the difference in travel. The ground is taken as level at the
-contact, since a ray gives no normal.
+across an axle in proportion to the difference in travel. The ray also returns the ground's
+normal $\hat n$ where it meets it, and the tyre works in the contact frame (the TYDEX W axes, ISO
+8855 with $z$ up): $\hat z = \hat n$, $\hat x$ where the wheel plane meets the road plane,
+$\hat y = \hat z \times \hat x$. The normal load $F_z$ acts along $\hat n$ and the tyre forces
+$F_x$, $F_y$ lie in the road plane, so a car parked on a slope of angle $\theta$ carries
+$m g \cos\theta$ on its tyres and holds $m g \sin\theta$ by their grip.
 
 **Slip.** At the contact, with $v_x$ and $v_y$ the ground speed along and across the wheel's
 heading and $\omega R$ the tread's speed, the slip comes from first-order relaxation states of
@@ -62,9 +66,11 @@ brakes and corners. The friction is the tyre's × the ground's × `env/friction_
 snow). The `linear` model instead takes $F_x = C_\kappa\,\kappa$, $F_y = -C_\alpha\,\alpha$,
 scaled back onto the friction ellipse of radius $\mu F_z$.
 
-**Brakes.** The pedal sets a torque per wheel, split between the axles by the brake bias, never
-more than stops the wheel within the step (a brake never reverses a wheel). Optional ABS starts
-to release at a slip ratio of 0.12 and releases fully 0.08 beyond it.
+**Brakes.** The pedal sets a torque per wheel, split between the axles by the brake bias. It
+acts as stick-slip friction (Karnopp): the torque that would stop the wheel within the step
+against the tyre's torque, up to what the pedal gives, so a held brake holds a parked car on a
+slope and never reverses a wheel. Optional ABS starts to release at a slip ratio of 0.12 and
+releases fully 0.08 beyond it.
 
 **Steering.** The bicycle model's angle $\delta$ is turned into each front wheel's Ackermann
 angle, so both wheels' axes meet on the rear axle's line:
@@ -86,6 +92,14 @@ efficiency; reverse is first gear backwards.
 **The driver.** Without a planner, `/cmd_vel` (speed and turn rate) goes through the car
 controller: throttle from a PI on the speed error, brake when too fast, the steering angle from
 the turn rate; with no command it drives a demo circle (5 m radius, 3 m/s) round the origin.
+When something holds the demo still for 2 s (a post at a corner, a stopped car of the traffic),
+it backs away for 3 s with the steering the other way round and tries again.
+The demo sees nothing: among traffic it can stand for 10 to 20 s at a time. A traffic car that
+has turned into the junction stops for the sedan when the sedan is in its lane ahead (traffic
+gives way to robots), while the sedan, held nose to nose by it, backs away along that same lane
+and so stays ahead of it; the car creeps on only as the sedan's retries take it out of the lane
+(measured in the city block: held from t ≈ 30 to 48 s). It is a demo, not a driver: give
+`/cmd_vel`, or `--traffic vehicles=0` for a circle nothing interrupts.
 
 ## Wheeled robots without a vehicle model
 

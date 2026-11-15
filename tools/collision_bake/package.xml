@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_collision_bake</name>
-  <version>1.3.0</version>
+  <version>1.4.0</version>
   <description>Collision bake: decomposes a USD stage's mesh colliders into convex hulls with CoACD (formats.md section 2).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -10,10 +10,15 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <buildtool_depend>lagrange_cmake</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- bake_urdf runs lagrange_server's lagrange_mesh_to_obj -->
+  <exec_depend>lagrange_server</exec_depend>
   <exec_depend>openusd_vendor</exec_depend>
   <exec_depend>python3-coacd-pip</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <!-- test_bake_urdf drives the baked robot with lagrange.Simulation -->
+  <test_depend>lagrange_python</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

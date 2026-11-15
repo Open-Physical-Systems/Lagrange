@@ -423,6 +423,12 @@ std::unique_ptr<IModule> createDetections(const World& world, std::uint32_t sens
             cam = s;
         }
     }
+    if (cam == kNoIndex && cameraName.empty()) {
+        return refuseKind(world, sensor,
+                          "detections " + me +
+                              ": names no camera; give `camera`, the camera sensor whose "
+                              "images it labels");
+    }
     if (cam == kNoIndex) {
         return refuseKind(
             world, sensor,

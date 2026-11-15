@@ -2,6 +2,7 @@
 |---|---|---|---|---|---|---|---|
 | Lagrange mujoco | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | -135.9 ppm | 0.916 mm | +0 ppm | 0.1078 mm |
 | Lagrange jolt | -4.898 mm | -0.02 ppm | -16.38 % (worst 16.39 %) | -4.0 ppm | 0.001 mm | -2.6e-09 ppm | 0.0002 mm |
+| Lagrange jolt, 4 substeps | -1.242 mm | -3.89 ppm | -5.26 % (worst 5.26 %) | -4.2 ppm | 0.001 mm | +0 ppm | 0.0002 mm |
 | Gazebo Jetty (gz-sim 10.5.0) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | -0.0 ppm | 0.000 mm | +0.1 ppm | 0.0000 mm |
 | MuJoCo 3.12.0 (standalone) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | +124.3 ppm | 1.282 mm | -7.4e-06 ppm | 0.1078 mm |
 | MuJoCo 4.0.1 (standalone) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | +124.3 ppm | 1.282 mm | -7.4e-06 ppm | 0.1078 mm |

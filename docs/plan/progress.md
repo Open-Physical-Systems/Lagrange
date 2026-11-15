@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: v1.4.0 released (the robot builder, the viewer's workspace tabs, the legged contact spike, faster parallel environments, downwash on tethers, OpenDRIVE banked roads, four QA rounds; #332–#423, docs/release/v1.4.0.md); what waits on the owner is in [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -42,11 +42,10 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   every finding with a repro, most fixed with a regression test (among them: 15/30 Hz sensors
   refused at start, spawned robots' sensors reading the first robot's parts, a second
   multicopter grounding the first, images lost on restore, ODR clash between kinds' helpers).
-- **Owed:** USD/SDFormat for lidar patterns and fisheye (schema addition by RFC); saved-state
-  format v2 refuses older saved states (recordings unaffected); several defaults marked
-  illustrative or `TODO(verify)` in §9; pre-commit's end-of-file and gersemi hooks fail on three
-  files untouched tonight (`docs/plan/spikes/0.2-C6-jolt.md`, `city_block_roads.usda`,
-  `vendor/jolt_vendor`).
+- **Owed:** USD/SDFormat for lidar patterns and fisheye (schema addition by RFC); several
+  defaults marked illustrative or `TODO(verify)` in §9. Done since: format 2 reads the format 1
+  states of 1.1 and 1.2 (`formats.md` §11, a fixture saved by the 1.2.0 packages), and the
+  end-of-file and gersemi hooks pass repo-wide (the USD writer ends its files with one newline).
 
 ## v1.3.0, the day after (#331, #333)
 
@@ -63,6 +62,77 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   attributes for lidar patterns and fisheye lenses), accepted by the owner on 2026-11-14 with the
   proposed answers; 0014's connection limits are in, its frame cap and 0015 follow. Until 0015, writing
   those sensors to USD is refused instead of written wrong.
+
+## 2026-11-15, on `dev` (#340–#400, unreleased)
+
+What merged (CHANGELOG "Unreleased" has every PR):
+
+- **Robot builder (RFC 0016)**, phase 1, Addendum A and phase 3: the Builder workspace (model,
+  URDF writer and reader, panels, Lit view and picking, sensor catalog, gizmos, Test, files,
+  acceptance test; #340, #342–#346, #348–#352, #356, #358, #368), meshes and the per-link collision
+  choice (#352), the power system and overlay sensors in `<robot>.overlay.yaml` (#361), loads,
+  converters, fuses, switches and diodes (#365), catalog sensor needs before Test (#366), Test
+  *Into the connected run* (`ImportRobot.content`/`overlay_content`, `RemoveRobot`; #354) and
+  joint sliders driving the tested robot (`CommandJoint`; #357). Guide `docs/guide/builder.md`,
+  clip and home page (#363). Phase 4 plan (USD, SDFormat) and a draft Addendum B (#371).
+- **Viewer workspaces**: radar detections in 3D and a Radar view (#360), ROS 2 Services, Actions,
+  Params and TF tree (#377), Performance KPI cards, Threads, GPU passes, Memory (#378, with the
+  server's `on_gpu` and GPU memory, #379), Replay Compare, Sim vs real, Validation and the Source
+  strip (#380), Domains Modules, Coupling, Diff, Schema (#381), two viewer QA passes (#374, #375:
+  command palette, editable profile YAML, World agents, measured costs). User guide page
+  `docs/guide/viewer.md`.
+- **Physics and sensors**: Jolt's pendulum energy loss explained, opt-in `rigid_body.substeps`
+  (#353); the quadcopter with electrical off (#341, #359); `convexHullOf` on flat sets (#355);
+  one ground per run (#369); joint loops refused (#366); v1.3 sensors QA: kind parameter ranges
+  refused, `valid` as Bool, faults on slow and Bool sensors, fisheye cutoff in USD, rosette
+  timing (#370); overlay radars as run sensors (#372); closed-loop demo drives, replay moving the
+  scene (#376).
+- **Speed**: one-copy bus commits (#359), MuJoCo reading only connected inputs (#367), static
+  scenery on MuJoCo's world body (#373; new state hashes for runs with static bodies,
+  `benchmarks.md`).
+- **MuJoCo 4**: spike `docs/plan/spikes/mujoco-4.md`, draft RFC 0017, opt-in
+  `-DLAGRANGE_MUJOCO_PACKAGE=mujoco` (#364).
+
+Later the same day (#382–#400):
+
+- **Viewer workspaces, continued**: Signals' Saved sets, Measure and FFT (#384); Scene's Layers
+  and History, sensor views beside the viewport (#386); the launcher as its design, with menus
+  and sample cards (#387); World's Regions and Geodesy (#388, with the region in the World
+  message, #391); Electrical's Probes, + scope and History, Environment's Viewport · fields and
+  Field info (#390). Text at the design's CSS size, 1.3× larger glyphs (#399).
+- **Legged robots**: RFC 0019 (Draft, #385) and its step 1, the legged contact spike
+  (`docs/plan/spikes/legged-contact.md`, #389): Jolt friction per collider and MJCF helper
+  frames' mass from their link (#393), MuJoCo `noslip_iterations` and MJCF joint armature
+  (#394), a sample quadruped in `assets/robots/quadruped` with profiles `quadruped_trot` and
+  `quadruped_trot_powered` (#397), the example's timing explained (#398).
+- **Learning**: `ParallelEnvs` over shared memory with `send`/`recv` (about 90 % of independent
+  processes on 12 workers) and a Gymnasium `VectorEnv` (#392); environments and `Simulation`
+  take a profile, an overlay and a world (#397).
+- **Fixes**: a zero aerodynamics substitute when the air is off, `/spawn_entity` naming by
+  `<robot name>`, an MJCF robot's mass checked through USD (#395); EMI sources with their prim
+  (#391); QA round 2: test dependencies, Check loads, the sedan demo among traffic, `--panel`
+  titles, Domains' readers, truncation, warnings (#396).
+- **Radiation**: RFC 0018 (Draft, #383).
+- **Docs**: the changelog, CLAUDE.md and a viewer guide for the morning's work (#382); the owner's
+  decisions in one place (#400).
+
+Owed, waiting on the owner:
+
+Every open decision, each with a proposed answer: [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). Among them:
+
+- **RFC 0017** (MuJoCo 4.x for the MuJoCo backend): Draft, the owner's decision.
+- **RFC 0018** (radiation) and **RFC 0019** (legged robots): Draft, the owner's decision.
+- **Builder phase 4** (USD and SDFormat robots): the open questions of
+  `docs/plan/builder-phase4-plan.md` §11, and the draft RFC 0016 Addendum B.
+- **Protocol additions** (1.x additive, owner approval): ROS 2 services and parameters in the
+  graph report (the Services and Params tabs point to the terminal until then); Performance's
+  per-module GPU time (`gpu_passes`), a determinism check and the server's threads in
+  `ServerStats`; Replay compare of a remote replay (`OpenRecording.compare_path`,
+  `RecordingInfo.compare`, `SignalInfo.compare`) and Re-simulate from here (`Command.resimulate`),
+  proposed in `docs/design/viewer.md` "Replay comparison".
+- **Design**: a colour token for radar detections (the view borrows the error colour map's ends,
+  `RadarScale.cpp`); the Launcher's 2×2 layout; where the builder's Power and Motor sections sit
+  in `docs/design/ui/12-builder/SPEC.md`.
 
 ## v0.2, item by item
 
@@ -252,8 +322,10 @@ fallback documented if Autoware is not available for Lyrical.
 5. `io/opendrive`: road network to USD meshes and lane tables (own reader) (**done** 2026-10-25:
    `lagrange_opendrive` and `lagrange_opendrive_import`, `RoadLaneAPI_1` (new `road` schema
    library), formats.md §3.11; the city block's roads from `city_block.xodr`, lanes checked to
-   meet end to start. Owed: superelevation, lane heights, objects and signals; driving on
-   elevated roads)
+   meet end to start. Superelevation, lane heights and `@level`, and driving on raised roads
+   (convex slabs per lane, traffic pitched and rolled with their lanes) **done** 2026-11-15:
+   formats.md §3.11, `assets/worlds/banked_ring`, `test_opendrive` Banked, `test_traffic`
+   BankedRoad, `test_server` BankedRing. Owed: objects and signals)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
    traffic lights, as kinematic bodies (**done** 2026-10-25: `lagrange_traffic`, traffic.md §8;
    kinematic bodies in MuJoCo and Jolt; `--traffic`; the city block runs 8 vehicles and 6

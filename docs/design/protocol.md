@@ -464,6 +464,8 @@ message Command {
     LoadStage load_stage = 30;
     ImportRobot import_robot = 31;
     OpenRecording open_recording = 32;
+    RemoveRobot remove_robot = 33;     // added after 1.0 (RFC 0016 §7.2)
+    CommandJoint command_joint = 34;   // added after 1.0 (RFC 0016 §7.3)
 
     ValidateProfile validate_profile = 40;
     ApplyProfile apply_profile = 41;
@@ -493,15 +495,43 @@ message ImportRobot {
   enum Format { FORMAT_UNSPECIFIED = 0; FORMAT_URDF = 1; FORMAT_XACRO = 2; FORMAT_SDF = 3; FORMAT_MJCF = 4; }
   Format format = 1;
   string path = 2;                     // path on the server's filesystem
-  DataRef content = 3;                 // or the file content, when the viewer is remote
-  string overlay_path = 4;
+  DataRef content = 3;                 // or the file content, inline, when the viewer is remote
+  string overlay_path = 4;             // on the server's filesystem
   repeated string xacro_args = 5;
+  DataRef overlay_content = 6;         // or the overlay's text, inline; added after 1.0
 }
 message OpenRecording { string path = 1; }
-// ImportRobot on lagrange_server (can_import): the robot at `path` is spawned into the running
+message RemoveRobot { string name = 1; } // added after 1.0 (RFC 0016 §7.2)
+message CommandJoint { string joint = 1; string mode = 2; double value = 3; } // after 1.0 (§7.3)
+// ImportRobot on lagrange_server (can_import): the robot is spawned into the running
 // simulation, as simulation_interfaces' spawn_entity does (docs/guide/cli.md "Spawning
-// robots"); the result carries the path in imported_stage_path. `content`, `overlay_path` and
-// `xacro_args` are refused for now.
+// robots"), at the origin of an empty run or 3 m beside the robots there are. By `path`, the
+// result carries the path in imported_stage_path. By `content` (inline only; blob and shm are
+// refused with "send the robot inline"), the text is written to a temporary file, the robot is
+// named by its own <robot name> (SDFormat: the first <model name>; MJCF: <mujoco model>),
+// renamed `name_2`, `name_3`… on a clash, and the result's imported_stage_path is its scene
+// path, "/name": the name RemoveRobot takes. A `format` other than FORMAT_UNSPECIFIED must
+// match the text. `overlay_path`, or `overlay_content` (inline YAML, or a SPICE netlist ending
+// in `.end`), is applied to that robot as --overlay is (formats.md §9). `xacro_args` and
+// FORMAT_XACRO are refused (run xacro first). The robot is passive (nothing drives it) when the
+// run already has one; else it is the robot ROS drives. Both `path` and `content` is refused
+// ("by path or content, not both"; older servers took the path and ignored the rest).
+// Inline text is written, created exclusively and 0600, into $XDG_RUNTIME_DIR/lagrange (else
+// <tmp>/lagrange-<uid>), a 0700 folder of the server's user; any other folder there is refused.
+// RemoveRobot: as /delete_entity (cli.md "Spawning robots"), by top prim name with or without
+// "/"; refused for the robot ros2_control drives and for scenery. A server older than these
+// additions answers an unknown command with ok = false and an error, so a viewer can try it.
+// CommandJoint: as /joint_commands under joint control (`lagrange_server --joint-control`),
+// onto Server::commandJoint: `mode` "position" (rad, m), "velocity" (rad/s, m/s),
+// "effort" (N·m, N) or "voltage" (V, a voltage-mode motor); the joint holds it until told
+// otherwise. Refused, with the reason in `error`, for a joint the run does not have (fixed
+// joints are merged at load), a mimic joint, a joint of a passive robot, an unknown mode, a
+// value that is not finite, a mode the joint's motor cannot follow ("voltage" needs a motor in
+// voltage mode), and a run without joint control or whose joints ros2_control or a vehicle or
+// multicopter controller drives. A target belongs to its robot: removing the robot (or a
+// reset) forgets it, and other robots coming and going keep it. The
+// builder's Joints sliders send it while testing, at most 30 times a second per joint (RFC 0016
+// §7.3); the mock server refuses it (a replay).
 
 message ValidateProfile { string yaml = 1; }
 message ApplyProfile { string yaml = 1; bool restart = 2; }
@@ -631,6 +661,19 @@ Rules that go with them:
   whole list with `complete = true`.
 - `ServerStats.estimated` says whether module costs are measured or estimated. The mock server
   sets it: it replays, so its module costs are the profile's estimates.
+- `ServerStats.Module.on_gpu` (and `Wiring.Node.on_gpu`) is true for a module whose step runs
+  on a hardware GPU: a sensor casting on `--lidar gpu`'s ray context (lidar, radar), a sensor
+  rendering on the cameras' device when that device is not a software one (cameras, thermal
+  cameras, event and stereo cameras, detections), and the aerodynamics with the live air box on
+  the GPU. Plugin modules are never marked. `cpu_ms_per_step` of such a module is the wall time
+  of its step, waiting for the GPU included; the HAL has no timestamp queries yet, so there is
+  no separate GPU time per module (that would need a new field, e.g. `gpu_ms_per_step`).
+- `ServerStats.gpu_memory_bytes` is the memory the server's hardware Vulkan devices hold
+  through the HAL's allocator (VMA's `blockBytes` over every heap,
+  `gpu::Device::hardwareMemoryInUse`): device-local images and buffers, and the host-visible
+  buffers the GPU reads and writes (the GPU lidar's rays live there). Exact for Lagrange's
+  allocations; the driver's own overhead (pipelines, descriptor pools) and other processes are
+  not in it. 0 when the server has only a software device (Tier 0) or none.
 - `Wiring` is sent whenever the profile text could be parsed, also when a unit check fails:
   a wire with `unit_ok = false` is what the user has to see (invariant 2).
 - `QuantityKind` gained `LinearAcceleration`, appended to the list (architecture §2).

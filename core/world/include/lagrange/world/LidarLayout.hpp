@@ -119,6 +119,21 @@ struct LidarLayout {
     /// Whether all beams fire at once (a flash lidar: no motion distortion within a scan).
     [[nodiscard]] bool simultaneous() const { return pattern == Pattern::Flash; }
 
+    /// Points the lidar fires in one scan period at `rateHz` scans per second: a rotating or
+    /// flash lidar's columns, a rosette's point_rate / rate (its scan is the last `samples` of
+    /// them, which is the whole period only when samples = point_rate / rate).
+    [[nodiscard]] double perPeriod(double rateHz) const {
+        return pattern == Pattern::Rosette ? rosette.pointRate / rateHz
+                                           : static_cast<double>(horizontal);
+    }
+    /// When column `column` fires, as a fraction of the scan period after the last scan's end
+    /// (1: at this scan's end, where the last column fires): columns come one period /
+    /// perPeriod() apart. Below 0 when a rosette's samples exceed point_rate / rate.
+    [[nodiscard]] double firedFraction(std::uint32_t column, double rateHz) const {
+        const double n = perPeriod(rateHz);
+        return (static_cast<double>(column) + 1.0 + (n - horizontal)) / n;
+    }
+
     [[nodiscard]] double azimuth(std::uint32_t column) const {
         if (pattern == Pattern::Flash && horizontal > 1) {
             return std::atan(flashSlope(minAngle, maxAngle, column, horizontal));

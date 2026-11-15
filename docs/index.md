@@ -2,8 +2,8 @@
 
 :::{container} lg-hero
 
-<p class="lg-new"><a href="release/v1.3.0.html"><span>New in v1.3</span> 37 more sensors, a 4D
-imaging radar, sensor faults, and runs 4 to 12 times faster →</a></p>
+<p class="lg-new"><a href="release/v1.4.0.html"><span>New in v1.4</span> build a robot in the viewer:
+parts, meshes, sensors and power, then test it in a world →</a></p>
 
 <p class="lg-tagline">Simulate the whole robot, not only its rigid bodies: its battery and motors,
 the heat in its parts, the air round its rotors, the weather on its sensors and the interference
@@ -29,8 +29,8 @@ and USD as they are · a native Vulkan viewer · a deterministic CPU mode, bit f
 </figure>
 
 <figure class="lg-tile">
-<video src="videos/drone_building.mp4" autoplay muted loop playsinline preload="auto" title="A quadcopter's wake beside a building and over its roof"></video>
-<figcaption><strong>Wakes that hit walls.</strong> By a wall the wake hugs it and the near rotors lose thrust, fitted to OpenFOAM. <a href="physics/downwash.html">How</a></figcaption>
+<video src="videos/builder.mp4" poster="imgs/builder-poster.jpg" autoplay muted loop playsinline preload="auto" title="The robot builder: parts, a revolute joint, sensors from the catalog, a mesh's hull, then Test"></video>
+<figcaption><strong>Build a robot in the viewer.</strong> Parts, joints and sensors from the catalog, one click to test it in a simulator, saved as URDF. <a href="guide/builder.html">How</a></figcaption>
 </figure>
 
 <figure class="lg-tile">
@@ -221,6 +221,7 @@ print(sim.read("body/base_link/pose"))
 | Install it | [Installing Lagrange](guide/install.md): from source, as debs or in a container |
 | Fly a drone, or test your own | [Tutorial: a quadcopter](guide/tutorial-drone.md), then [Test your own drone](guide/tutorial-custom-drone.md) |
 | Load your own robot | [The run file](guide/run-file.md) and [The `lagrange` command](guide/cli.md) |
+| Build a robot in the viewer | [The robot builder](guide/builder.md): links, joints, sensors from the catalog, Test, save as URDF |
 | Find a sensor, add it, read it, break it | [Sensors](guide/sensors.md): every sensor Lagrange simulates, by robot |
 | Drive a car, or run Autoware | [Tutorial: a car in a city block](guide/tutorial-cars.md), then [Autoware](guide/autoware.md) |
 | Heat, and a robot's own EMI | [Tutorial: heat in the parts and a robot's own interference](guide/tutorial-heat-and-emi.md) |
@@ -253,6 +254,8 @@ guide/tutorial-humans
 guide/tutorial-heat-and-emi
 guide/autoware
 guide/run-file
+guide/builder
+guide/viewer
 guide/concepts
 guide/profiles
 guide/sensors

@@ -17,11 +17,11 @@ from ament_index_python.packages import (
 )
 
 # Where things are at --size 1600x1000 (docs/design/ui/04-electrical): tabs over the middle dock.
-SCHEMATIC_TAB = "343,115"
-OVERLAY_TAB = "455,115"
-NETLIST_TAB = "511,115"
+SCHEMATIC_TAB = "350,115"
+OVERLAY_TAB = "485,115"
+NETLIST_TAB = "553,115"
 SCENE_WORKSPACE = "40,48"
-AUTO_LAYOUT = "1045,114"
+AUTO_LAYOUT = "1004,114"
 PACK_NODE = (420, 340)
 SAVE = "332,570"
 LIGHTS_BRANCH = "1000,330"

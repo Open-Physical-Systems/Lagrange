@@ -1,11 +1,13 @@
-// Sensors workspace: the sensor list, the lidar bird's-eye view, the IMU scopes and a summary
-// of the selected sensor (docs/design/ui/06-sensors/SPEC.md).
+// Sensors workspace: the sensor list, the lidar bird's-eye view, the radar's range-azimuth view,
+// the IMU scopes and a summary of the selected sensor (docs/design/ui/06-sensors/SPEC.md).
 //
 // Sensors are the stage's prims of a sensor type; their frames and signals are named after
 // those prims. Nothing here knows a particular robot.
+#include "PanelFormat.hpp"
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/RadarScale.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -14,8 +16,11 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <memory>
+#include <numbers>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -27,7 +32,7 @@ namespace {
 namespace c = theme::c;
 using widgets::px;
 
-constexpr double kRateWindowSeconds = 1.0;  // frame rates are measured over this long
+constexpr double kRateWindowSeconds = 1.0;  // frame rates are measured over this much sim time
 // Returns weaker than this are drawn as "attenuated" (design: two tones of the sensor colour).
 constexpr float kStrongIntensity = 0.12F;
 
@@ -38,11 +43,33 @@ ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
 }
 
-enum class Kind : std::uint8_t { Lidar, Camera, Imu, Other };
+/// A note over a sensor view (mono text in a dark box, design 06-sensors), at most `maxWidth`
+/// wide: its text cut with an ellipsis when longer. Returns the box's right edge.
+float overlayBox(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color,
+                 float maxWidth) {
+    ImFont* font = theme::fonts().mono;
+    const float size = px(theme::kMonoSize);
+    const float pad = px(8.0F);
+    std::string shown = text;
+    if (font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x + 2.0F * pad > maxWidth) {
+        shown = fit::cut(font, size, text, std::max(maxWidth - 2.0F * pad, 0.0F));
+    }
+    const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, shown.c_str()).x;
+    const ImVec2 max(min.x + width + 2.0F * pad, min.y + px(26.0F));
+    draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+    draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
+    draw->AddText(font, size, ImVec2(min.x + pad, min.y + px(6.0F)), u32(color), shown.c_str());
+    return max.x;
+}
+
+enum class Kind : std::uint8_t { Lidar, Camera, Imu, Radar, Other };
 
 Kind kindOf(const std::string& typeName) {
     if (typeName == "Lidar") {
         return Kind::Lidar;
+    }
+    if (typeName == "Radar") {
+        return Kind::Radar;
     }
     if (typeName == "Camera") {
         return Kind::Camera;
@@ -62,7 +89,8 @@ bool isSensorType(const std::string& typeName) {
 struct Sensor {
     std::uint32_t prim{kNone};
     Kind kind{Kind::Other};
-    std::shared_ptr<SensorStream> stream;  // sensors that send frames (lidar, camera)
+    std::shared_ptr<SensorStream> stream;  // sensors that send frames (lidar, camera, radar)
+    std::string streamName;                // what to watch for them; empty: none
     // A custom sensor's images (a built-in kind's left, right, depth, ...) by signal name, and
     // their quantities ("left") for the Camera panel's modes; a camera's depth and instance.
     std::vector<std::string> images;
@@ -79,7 +107,10 @@ struct Sensor {
 /// What the panels share: the stage's sensors, their streams and the IMU scopes.
 class SensorsState {
 public:
-    void follow(PanelContext& context) {
+    /// `watchAll`: start every sensor's frames (the Sensors workspace shows them all). The
+    /// Scene workspace's sensor tabs pass false and watch() the one they show while in front, so
+    /// that workspace streams no sensor frames until a sensor tab is opened.
+    void follow(PanelContext& context, bool watchAll = true) {
         const std::uint64_t scene = context.scene ? context.scene->statics->generation : 0;
         const std::uint64_t catalog = context.catalog ? context.catalog->generation : 0;
         if (scene != scene_ || catalog != catalog_) {
@@ -87,11 +118,22 @@ public:
             catalog_ = catalog;
             discover(context);
         }
+        if (watchAll) {
+            for (Sensor& sensor : sensors) {
+                watch(context, sensor);
+            }
+        }
         if (const int frame = ImGui::GetFrameCount(); frame != frame_) {
             frame_ = frame;
             scopes.update();
-            const double now = ImGui::GetTime();
+            // Frames per simulated second: what the sensor's rate means, whatever the real-time
+            // factor or the viewer's frame clock (a headless viewer ticks 1/60 s a frame) (L4).
+            const double now = static_cast<double>(context.status.simTimeNs) * 1e-9;
             for (Sensor& sensor : sensors) {
+                if (now < sensor.countedAt) {  // the run went back (reset, seek)
+                    sensor.countedAt = now;
+                    sensor.countedFrames = sensor.stream ? sensor.stream->frames() : 0;
+                }
                 if (sensor.stream && now - sensor.countedAt >= kRateWindowSeconds) {
                     const std::uint64_t frames = sensor.stream->frames();
                     sensor.rateHz = static_cast<double>(frames - sensor.countedFrames) /
@@ -110,7 +152,21 @@ public:
         selected = sensors.empty() ? 0 : std::min(selected, sensors.size() - 1);
     }
 
+    /// Starts receiving `sensor`'s frames, once (the subscription then stays, as the Sensors
+    /// workspace's do).
+    static void watch(PanelContext& context, Sensor& sensor) {
+        if (sensor.stream || sensor.streamName.empty()) {
+            return;
+        }
+        sensor.stream = context.client.watchSensor(sensor.streamName);
+        sensor.countedFrames = sensor.stream->frames();
+        sensor.countedAt = static_cast<double>(context.status.simTimeNs) * 1e-9;
+    }
+
     /// The first sensor of `kind`, preferring the selected one. Null if the stage has none.
+    [[nodiscard]] Sensor* first(Kind kind) {
+        return const_cast<Sensor*>(std::as_const(*this).first(kind));
+    }
     [[nodiscard]] const Sensor* first(Kind kind) const {
         if (selected < sensors.size() && sensors[selected].kind == kind) {
             return &sensors[selected];
@@ -129,8 +185,20 @@ public:
     ScopePlotter plotter;
 
 private:
+    /// Whether the catalog has sensor/<name>/<quantity>.
+    static bool hasSignal(const PanelContext& context, const std::string& name,
+                          const char* quantity) {
+        if (!context.catalog) {
+            return false;
+        }
+        const std::string wanted = "sensor/" + name + "/" + quantity;
+        return std::any_of(context.catalog->signals.begin(), context.catalog->signals.end(),
+                           [&wanted](const SignalInfo& info) { return info.name == wanted; });
+    }
+
     void discover(PanelContext& context) {
         sensors.clear();
+        std::vector<std::uint32_t> radarPrims;
         while (!scopes.traces().empty()) {
             scopes.remove(context.client, scopes.traces().size() - 1);
         }
@@ -146,7 +214,7 @@ private:
             sensor.prim = i;
             sensor.kind = kindOf(prims[i].typeName);
             sensor.custom = prims[i].typeName == "CustomSensor";
-            sensor.countedAt = ImGui::GetTime();
+            sensor.countedAt = static_cast<double>(context.status.simTimeNs) * 1e-9;
             if (context.catalog) {
                 // Its images, by name: what a custom sensor shows (sensors.md §9 "Images of
                 // kinds"), and a camera's other images. Not the delayed copies.
@@ -163,11 +231,20 @@ private:
             }
             if (sensor.custom && !sensor.images.empty()) {
                 sensor.kind = Kind::Camera;  // drawn in the Camera panel, by its images
-                sensor.stream = context.client.watchSensor(sensor.images.front());
-                sensor.countedFrames = sensor.stream->frames();
-            } else if (sensor.kind == Kind::Lidar || sensor.kind == Kind::Camera) {
-                sensor.stream = context.client.watchSensor(prims[i].path);
-                sensor.countedFrames = sensor.stream->frames();
+                sensor.streamName = sensor.images.front();
+            } else if (sensor.custom && hasSignal(context, prims[i].name, "detections")) {
+                // A custom sensor with detections and no image: an imaging radar, whose frames
+                // the server sends by its prim (a kind it does not send for sends nothing).
+                sensor.kind = Kind::Radar;
+            }
+            if (sensor.kind == Kind::Lidar || sensor.kind == Kind::Camera ||
+                sensor.kind == Kind::Radar) {
+                if (sensor.streamName.empty()) {
+                    sensor.streamName = prims[i].path;
+                }
+            }
+            if (sensor.kind == Kind::Radar) {
+                radarPrims.push_back(i);
             }
             if (context.catalog) {
                 for (const SignalInfo& info : context.catalog->signals) {
@@ -186,11 +263,41 @@ private:
             }
             sensors.push_back(std::move(sensor));
         }
+        if (!radarPrims.empty()) {
+            context.client.requestAttributesOf(radarPrims);  // their fields of view
+        }
     }
 
     std::uint64_t scene_{0};
     std::uint64_t catalog_{0};
     int frame_{-1};
+};
+
+/// Where a sensor view is drawn: in the Sensors workspace, or as a tab beside the Scene
+/// workspace's viewport (02-scene SPEC "Dock layout": sensor views as extra tabs). A Scene tab
+/// shows only while the stage has a sensor of its kind, so a stage without one has no empty tab.
+struct ViewHome {
+    Workspace workspace{Workspace::Sensors};
+    const char* id{""};  ///< the window's identity, after "###"; layouts dock it by this
+    bool onlyWhenPresent{false};
+    /// A tab that comes when the scene arrives does not take the front from the viewport.
+    [[nodiscard]] ImGuiWindowFlags flags() const {
+        return onlyWhenPresent ? ImGuiWindowFlags_NoFocusOnAppearing : ImGuiWindowFlags_None;
+    }
+};
+
+/// Whether a view is really in front: Begin() was true this frame and the one before. A tab
+/// that just appeared, and every window on the frame a layout is built, draws once before its
+/// tab bar hides it; that frame must not start a sensor's frames.
+class InFront {
+public:
+    bool update(bool open) {
+        run_ = open ? std::min(run_ + 1, 2) : 0;
+        return run_ >= 2;
+    }
+
+private:
+    int run_{0};
 };
 
 bool emptyState(const PanelContext& context, const SensorsState& state) {
@@ -242,10 +349,23 @@ public:
             return;
         }
         const std::vector<PrimData>& prims = context.scene->statics->prims;
+        // With the sensors domain off (as the server runs it, not as the draft says) the
+        // frames that arrive are the substitute's, empty: not "ok" (L5).
+        std::string substitute;
+        bool sensorsOff = false;
+        for (const DomainView& view : context.profileSession->domains()) {
+            if (view.name == "sensors" && view.enabled == view.pending) {
+                sensorsOff = true;
+                substitute = view.pending ? std::string() : view.mode;
+            }
+        }
+        char offPill[48];
+        std::snprintf(offPill, sizeof(offPill), "off%s%s", substitute.empty() ? "" : " → ",
+                      substitute.c_str());
         for (std::size_t i = 0; i < state_->sensors.size(); ++i) {
             const Sensor& sensor = state_->sensors[i];
-            const bool receiving =
-                sensor.stream ? sensor.stream->frames() != 0 : sensor.signals != 0;
+            const bool receiving = (sensor.stream && sensor.stream->frames() != 0) ||
+                                   (!sensor.stream && sensor.signals != 0);
             char detail[96];
             if (sensor.stream && sensor.kind == Kind::Camera) {
                 const std::shared_ptr<const SensorImage> image = sensor.stream->latestImage();
@@ -253,8 +373,9 @@ public:
                               image ? image->width : 0U, image ? image->height : 0U, sensor.rateHz);
             } else if (sensor.stream) {
                 const std::shared_ptr<const PointCloud> cloud = sensor.stream->latest();
-                std::snprintf(detail, sizeof(detail), "%.1f Hz  ·  %u pts", sensor.rateHz,
-                              cloud ? cloud->count : 0U);
+                std::snprintf(detail, sizeof(detail), "%.1f Hz  ·  %u %s", sensor.rateHz,
+                              cloud ? cloud->count : 0U,
+                              sensor.kind == Kind::Radar ? "det" : "pts");
             } else if (sensor.signals != 0) {
                 char hz[24];
                 rate(sensor.signalDtNs, hz, sizeof(hz));
@@ -262,8 +383,12 @@ public:
             } else {
                 std::snprintf(detail, sizeof(detail), "no data from this server");
             }
+            const widgets::PillKind kind = sensorsOff  ? widgets::PillKind::Neutral
+                                           : receiving ? widgets::PillKind::Ok
+                                                       : widgets::PillKind::Warn;
             if (row(static_cast<int>(i), prims[sensor.prim].name.c_str(), detail,
-                    receiving ? "ok" : "no data", receiving, state_->selected == i)) {
+                    sensorsOff ? offPill : (receiving ? "ok" : "no data"), kind,
+                    state_->selected == i)) {
                 state_->selected = i;
                 context.selectedPrim = sensor.prim;
             }
@@ -273,8 +398,8 @@ public:
 
 private:
     /// Design: status dot, name, a status pill, and a mono line with the configuration.
-    static bool row(int index, const char* name, const char* detail, const char* pill, bool ok,
-                    bool selected) {
+    static bool row(int index, const char* name, const char* detail, const char* pill,
+                    widgets::PillKind kind, bool selected) {
         const float width = ImGui::GetContentRegionAvail().x;
         const float height = px(52.0F);
         const ImVec2 min = ImGui::GetCursorScreenPos();
@@ -290,8 +415,10 @@ private:
             draw->AddRectFilled(min, max, u32(c::bg3));
         }
         draw->AddLine(ImVec2(min.x, max.y), max, u32(c::line));
-        draw->AddCircleFilled(ImVec2(min.x + px(14.0F), min.y + height * 0.5F), px(4.0F),
-                              u32(ok ? c::ok : c::warn));
+        const ImVec4 dot = kind == widgets::PillKind::Ok     ? c::ok
+                           : kind == widgets::PillKind::Warn ? c::warn
+                                                             : c::t3;
+        draw->AddCircleFilled(ImVec2(min.x + px(14.0F), min.y + height * 0.5F), px(4.0F), u32(dot));
         const theme::Fonts& fonts = theme::fonts();
         draw->AddText(fonts.sansMedium, px(theme::kBodySize),
                       ImVec2(min.x + px(28.0F), min.y + px(8.0F)), u32(c::t1), name);
@@ -300,7 +427,7 @@ private:
         const float pillWidth = widgets::PillWidth(pill);
         const ImVec2 after = ImGui::GetCursorScreenPos();
         ImGui::SetCursorScreenPos(ImVec2(max.x - pillWidth - px(10.0F), min.y + px(8.0F)));
-        widgets::Pill(pill, ok ? widgets::PillKind::Ok : widgets::PillKind::Warn);
+        widgets::Pill(pill, kind);
         ImGui::SetCursorScreenPos(after);
         ImGui::Dummy(ImVec2(0.0F, 0.0F));
         return clicked;
@@ -313,26 +440,43 @@ private:
 
 class LidarPanel final : public Panel {
 public:
-    explicit LidarPanel(std::shared_ptr<SensorsState> state) : state_(std::move(state)) {}
-    [[nodiscard]] const char* title() const override { return "Lidar"; }
-    [[nodiscard]] Workspace workspace() const override { return Workspace::Sensors; }
+    explicit LidarPanel(std::shared_ptr<SensorsState> state,
+                        ViewHome home = {Workspace::Sensors, "Lidar", false})
+        : state_(std::move(state)), home_(home) {}
+    [[nodiscard]] const char* title() const override { return home_.id; }
+    [[nodiscard]] Workspace workspace() const override { return home_.workspace; }
 
     void draw(PanelContext& context) override {
+        state_->follow(context, !home_.onlyWhenPresent);
+        Sensor* shownLidar = state_->first(Kind::Lidar);
+        if (home_.onlyWhenPresent && (shownLidar == nullptr || !context.scene)) {
+            front_.update(false);
+            return;
+        }
+        // Sensors: "Lidar · bird's-eye"; beside the viewport the design names the sensor:
+        // "lidar_front · BEV".
+        const std::string window =
+            home_.onlyWhenPresent
+                ? context.scene->statics->prims[shownLidar->prim].name + " · BEV###" + home_.id
+                : std::string("Lidar · bird's-eye###") + home_.id;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        const bool open = ImGui::Begin("Lidar · bird's-eye###Lidar");
+        const bool open = ImGui::Begin(window.c_str(), nullptr, home_.flags());
         ImGui::PopStyleVar();
         if (!open) {
+            front_.update(false);
             ImGui::End();
             return;
         }
-        state_->follow(context);
         if (widgets::BeginPanelTools("##lidar-tools", px(120.0F))) {
             static constexpr std::array<const char*, 2> kModes{"intensity", "range"};
             widgets::Segmented("##mode", kModes.data(), 2, &mode_);
             widgets::EndPanelTools();
         }
-        const Sensor* lidar = state_->first(Kind::Lidar);
-        if (lidar == nullptr) {
+        const Sensor* lidar = shownLidar;
+        if (lidar != nullptr && front_.update(true)) {
+            SensorsState::watch(context, *shownLidar);  // shown: its frames are wanted
+        }
+        if (lidar == nullptr || !lidar->stream) {  // a lidar always has a stream once watched
             ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context, *state_)) {
                 widgets::Caption("This stage has no lidar.");
@@ -405,26 +549,36 @@ public:
 
         // Overlays: what is drawn, and how much of it.
         const ImVec2 bottomLeft(origin.x + px(10.0F), origin.y + size.y - px(36.0F));
+        // A replay sends only what the recording holds, and it keeps no point buffers (#408):
+        // say so instead of the domain-off note, which is about live runs. The note and the
+        // box stack rather than overlap.
+        const bool replaying = context.status.replayEndNs > context.status.replayBeginNs;
+        const DomainView* sensorsDomain = context.profileSession->find("sensors");
+        const bool domainNote = !replaying && sensorsDomain != nullptr && !sensorsDomain->enabled;
         if (!cloud) {
-            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)),
-                "no frames from this sensor yet", c::t2);
+            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(domainNote ? 36.0F : 10.0F)),
+                replaying ? "the recording holds no frames of this sensor"
+                          : "no frames from this sensor yet",
+                c::t2, size.x - px(20.0F));
         } else {
             char count[64];
             std::snprintf(count, sizeof(count), "%u pts  ·  %.1f Hz", cloud->count, lidar->rateHz);
             const float width =
                 fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, count).x + px(16.0F);
-            box(draw, ImVec2(origin.x + size.x - width - px(10.0F), bottomLeft.y), count, c::t1);
-            if (mode_ == 0) {
-                legend(draw, bottomLeft, strong, cloud->count);
-            } else {
-                box(draw, bottomLeft, "colour: range, near to far", c::t2);
-            }
+            const float legendRight =
+                mode_ == 0 ? legend(draw, bottomLeft, strong, cloud->count)
+                           : box(draw, bottomLeft, "colour: range, near to far", c::t2);
+            // The count sits at the bottom right; in a narrow view, above the legend's row
+            // rather than over it.
+            const float countLeft = origin.x + size.x - width - px(10.0F);
+            const float countTop =
+                countLeft < legendRight + px(8.0F) ? bottomLeft.y - px(32.0F) : bottomLeft.y;
+            box(draw, ImVec2(countLeft, countTop), count, c::t1);
         }
-        if (const DomainView* view = context.profileSession->find("sensors");
-            view != nullptr && !view->enabled) {
+        if (domainNote) {
             ImGui::SetCursorScreenPos(ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)));
-            widgets::Pill("Sensors domain is off in the profile · this scan is synthetic",
-                          widgets::PillKind::Info);
+            fit::pill("Sensors domain is off in the profile · this scan is synthetic",
+                      widgets::PillKind::Info, size.x - px(20.0F));
         }
         ImGui::End();
     }
@@ -444,35 +598,371 @@ private:
                           a.z + (b.z - a.z) * blend, 1.0F));
     }
 
-    static void box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color) {
-        ImFont* font = theme::fonts().mono;
-        const float size = px(theme::kMonoSize);
-        const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
-        const ImVec2 max(min.x + width + px(16.0F), min.y + px(26.0F));
-        draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
-        draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
-        draw->AddText(font, size, ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(color), text);
+    /// Returns the box's right edge.
+    static float box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color,
+                     float maxWidth = FLT_MAX) {
+        return overlayBox(draw, min, text, color, maxWidth);
     }
 
-    static void legend(ImDrawList* draw, const ImVec2& min, std::uint32_t strong,
-                       std::uint32_t total) {
-        char text[96];
-        std::snprintf(text, sizeof(text), "strong %u     attenuated %u", strong, total - strong);
+    /// Design 06-sensors: each dot (6 px) 5 px before its own label, 12 px between the items.
+    /// Returns the legend's right edge.
+    static float legend(ImDrawList* draw, const ImVec2& min, std::uint32_t strong,
+                        std::uint32_t total) {
+        char strongText[48];
+        char weakText[48];
+        std::snprintf(strongText, sizeof(strongText), "strong %u", strong);
+        std::snprintf(weakText, sizeof(weakText), "attenuated %u", total - strong);
         ImFont* font = theme::fonts().sans;
         const float size = px(theme::kLabelSize);
-        const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
-        const ImVec2 max(min.x + width + px(44.0F), min.y + px(26.0F));
+        const float dot = px(6.0F);
+        const float gap = px(5.0F);
+        const float between = px(12.0F);
+        const float strongWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, strongText).x;
+        const float weakWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, weakText).x;
+        const float pad = px(8.0F);
+        const ImVec2 max(
+            min.x + pad + dot + gap + strongWidth + between + dot + gap + weakWidth + pad,
+            min.y + px(26.0F));
         draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
         draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
-        draw->AddCircleFilled(ImVec2(min.x + px(12.0F), min.y + px(13.0F)), px(3.5F), u32(kStrong));
-        draw->AddCircleFilled(ImVec2(min.x + px(24.0F), min.y + px(13.0F)), px(3.5F),
-                              u32(kAttenuated));
-        draw->AddText(font, size, ImVec2(min.x + px(34.0F), min.y + px(5.0F)), u32(c::t2), text);
+        const float middle = min.y + px(13.0F);
+        const float textY = min.y + px(5.0F);
+        float x = min.x + pad;
+        draw->AddCircleFilled(ImVec2(x + dot * 0.5F, middle), dot * 0.5F, u32(kStrong));
+        x += dot + gap;
+        draw->AddText(font, size, ImVec2(x, textY), u32(c::t2), strongText);
+        x += strongWidth + between;
+        draw->AddCircleFilled(ImVec2(x + dot * 0.5F, middle), dot * 0.5F, u32(kAttenuated));
+        x += dot + gap;
+        draw->AddText(font, size, ImVec2(x, textY), u32(c::t2), weakText);
+        return max.x;
     }
 
     std::shared_ptr<SensorsState> state_;
+    ViewHome home_;
+    InFront front_;  // the Scene tab variant: in front for two frames
     int mode_{0};
     float radius_{9.0F};  // metres from the sensor to the top of the view
+};
+
+// --- radar --------------------------------------------------------------------------------
+
+/// A radar's field of view and range from the attributes the server reports for its prim
+/// (RadarAPI_1's sensor:radar:*, an imaging radar's sensor:custom:param:*); 0 when not known.
+struct RadarView {
+    float rangeM{0.0F};
+    float azimuthFov{0.0F};
+};
+
+RadarView radarViewOf(const PanelContext& context, const Sensor& sensor) {
+    RadarView view;
+    const auto attributes = context.client.attributesOf();
+    const auto it = attributes->find(sensor.prim);
+    if (it == attributes->end()) {
+        return view;
+    }
+    for (const AttributeInfo& a : it->second.attributes) {
+        if (a.numbers.empty()) {
+            continue;
+        }
+        const auto value = static_cast<float>(a.numbers.front());
+        if (a.name == "sensor:radar:rangeMax" || a.name == "sensor:custom:param:max_range") {
+            view.rangeM = value;
+        } else if (a.name == "sensor:radar:azimuthFov" ||
+                   a.name == "sensor:custom:param:azimuth_fov") {
+            view.azimuthFov = value;
+        }
+    }
+    return view;
+}
+
+ImU32 velocityColour(float velocity, float span) {
+    const std::array<float, 4> c = radarVelocityColour(velocity, span);
+    return u32(ImVec4(c[0], c[1], c[2], 1.0F));
+}
+
+/// Design 06-sensors, a sensor view per kind: the radar's detections over range and azimuth,
+/// coloured by radial velocity (RadarScale.hpp), each dot sized by its RCS. Two modes: "fan",
+/// the field of view from above with the sensor at the bottom (x forward up the screen, as the
+/// lidar view), and "r–az", range up and azimuth across (a B-scope).
+class RadarPanel final : public Panel {
+public:
+    explicit RadarPanel(std::shared_ptr<SensorsState> state,
+                        ViewHome home = {Workspace::Sensors, "Radar", false})
+        : state_(std::move(state)), home_(home) {}
+    [[nodiscard]] const char* title() const override { return home_.id; }
+    [[nodiscard]] Workspace workspace() const override { return home_.workspace; }
+
+    void draw(PanelContext& context) override {
+        state_->follow(context, !home_.onlyWhenPresent);
+        Sensor* radar = state_->first(Kind::Radar);
+        if (home_.onlyWhenPresent && (radar == nullptr || !context.scene)) {
+            front_.update(false);
+            return;
+        }
+        const std::string name = radar != nullptr && context.scene
+                                     ? context.scene->statics->prims[radar->prim].name
+                                     : std::string("Radar");
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        const bool open =
+            ImGui::Begin((name + " · range-azimuth###" + home_.id).c_str(), nullptr, home_.flags());
+        ImGui::PopStyleVar();
+        if (!open) {
+            front_.update(false);
+            ImGui::End();
+            return;
+        }
+        if (widgets::BeginPanelTools("##radar-tools", px(100.0F))) {
+            static constexpr std::array<const char*, 2> kModes{"fan", "r–az"};
+            widgets::Segmented("##mode", kModes.data(), 2, &mode_);
+            widgets::EndPanelTools();
+        }
+        if (radar != nullptr && front_.update(true)) {
+            SensorsState::watch(context, *radar);  // shown: its frames are wanted
+        }
+        if (radar == nullptr) {
+            ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
+            if (!emptyState(context, *state_)) {
+                widgets::Caption("This stage has no radar.");
+            }
+            ImGui::End();
+            return;
+        }
+        const RadarView view = radarViewOf(context, *radar);
+        const std::shared_ptr<const PointCloud> cloud =
+            radar->stream ? radar->stream->latest() : nullptr;
+        const bool have = cloud && cloud->radar();
+        // What the view spans: the radar's own range and field of view, else what it detects.
+        float fov = view.azimuthFov > 0.0F ? view.azimuthFov : std::numbers::pi_v<float> * 0.5F;
+        float range = view.rangeM > 0.0F ? view.rangeM : 50.0F;
+        float fastest = 0.0F;
+        float farthest = 0.0F;
+        for (std::uint32_t i = 0; have && i < cloud->count; ++i) {
+            const float* p = &cloud->points[std::size_t{i} * kRadarFloats];
+            farthest = std::max(farthest, std::hypot(p[0], p[1], p[2]));
+            if (view.rangeM <= 0.0F) {
+                range = std::max(range, farthest);
+            }
+            if (view.azimuthFov <= 0.0F) {
+                fov = std::max(fov, 2.0F * std::abs(std::atan2(p[1], p[0])));
+            }
+            if (std::isfinite(p[3])) {
+                fastest = std::max(fastest, std::abs(p[3]));
+            }
+        }
+        const float span = radarVelocitySpan(fastest);
+        if (zoomOf_ != radar->prim) {
+            zoomOf_ = radar->prim;
+            zoom_ = 1.0F;
+        }
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const ImVec2 size = ImGui::GetContentRegionAvail();
+        ImGui::InvisibleButton("##canvas", ImVec2(std::max(size.x, 1.0F), std::max(size.y, 1.0F)));
+        if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0F) {
+            zoom_ = std::clamp(zoom_ * std::pow(0.88F, ImGui::GetIO().MouseWheel), 0.05F, 1.0F);
+        }
+        // Metres to the top of the view: what the scan reaches (in round steps, so that the view
+        // keeps still from scan to scan), up to the radar's range; the wheel zooms in from there.
+        constexpr float kLeastShownM = 20.0F;
+        const float reach = std::min(range, std::max(kLeastShownM, niceStep(farthest * 1.1F)));
+        const float shown = reach * zoom_;
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImVec2 end(origin.x + size.x, origin.y + size.y);
+        draw->PushClipRect(origin, end, true);
+        draw->AddRectFilled(origin, end, u32(c::bg0));
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float half = fov * 0.5F;
+        const float step = niceStep(shown / 4.0F);
+        // Where a detection at (range, azimuth) is drawn, and the frame of each mode.
+        ImVec2 sensorAt;
+        float scale = 1.0F;  // pixels per metre (fan) or per metre of range (r–az)
+        // Room for the count box above, and the legend and the azimuth labels below.
+        const float plotTop = origin.y + px(mode_ == 0 ? 28.0F : 46.0F);
+        const float plotBottom = end.y - px(mode_ == 0 ? 44.0F : 64.0F);
+        const float plotLeft = origin.x + px(44.0F);
+        const float plotRight = end.x - px(16.0F);
+        if (mode_ == 0) {
+            const float width = 2.0F * std::sin(std::min(half, std::numbers::pi_v<float> * 0.5F));
+            scale = std::min((plotBottom - plotTop) / shown,
+                             (plotRight - plotLeft) / std::max(width * shown, 1e-3F));
+            sensorAt = ImVec2((plotLeft + plotRight) * 0.5F, plotBottom);
+        } else {
+            scale = (plotBottom - plotTop) / shown;
+        }
+        const auto place = [&](float r, float azimuth) {
+            if (mode_ == 0) {
+                return ImVec2(sensorAt.x - r * std::sin(azimuth) * scale,
+                              sensorAt.y - r * std::cos(azimuth) * scale);
+            }
+            // Azimuth left (positive) on the left, as seen from behind the sensor.
+            const float t = (half - azimuth) / std::max(fov, 1e-3F);
+            return ImVec2(plotLeft + t * (plotRight - plotLeft), plotBottom - r * scale);
+        };
+        // Range marks, and the field of view's edges.
+        for (float r = step; r <= shown + 1e-3F; r += step) {
+            char label[16];
+            std::snprintf(label, sizeof(label), "%.0f m", static_cast<double>(r));
+            if (mode_ == 0) {
+                constexpr int kSegments = 48;
+                for (int k = 0; k < kSegments; ++k) {
+                    const float a0 = -half + fov * static_cast<float>(k) / kSegments;
+                    const float a1 = -half + fov * static_cast<float>(k + 1) / kSegments;
+                    draw->AddLine(place(r, a0), place(r, a1), u32(c::lineStrong));
+                }
+                // On the left edge, where the view has room for it.
+                const ImVec2 at = place(r, half);
+                const float w = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, label).x;
+                draw->AddText(fonts.mono, small, ImVec2(at.x - w - px(4.0F), at.y - small * 0.5F),
+                              u32(c::t3), label);
+            } else {
+                const float y = plotBottom - r * scale;
+                draw->AddLine(ImVec2(plotLeft, y), ImVec2(plotRight, y), u32(c::line));
+                draw->AddText(fonts.mono, small, ImVec2(origin.x + px(6.0F), y - small * 0.5F),
+                              u32(c::t3), label);
+            }
+        }
+        if (mode_ == 0) {
+            constexpr int kSegments = 48;  // the view's far edge
+            for (int k = 0; k < kSegments; ++k) {
+                draw->AddLine(place(shown, -half + fov * static_cast<float>(k) / kSegments),
+                              place(shown, -half + fov * static_cast<float>(k + 1) / kSegments),
+                              u32(c::line));
+            }
+            for (const float a : {-half, 0.0F, half}) {
+                draw->AddLine(sensorAt, place(shown, a), u32(a == 0.0F ? c::line : c::lineStrong));
+            }
+        } else {
+            draw->AddRect(ImVec2(plotLeft, plotTop), ImVec2(plotRight, plotBottom),
+                          u32(c::lineStrong));
+            const float degrees = 180.0F / std::numbers::pi_v<float>;
+            for (const float a : {half, 0.0F, -half}) {
+                char label[16];
+                std::snprintf(label, sizeof(label), "%+.0f°", static_cast<double>(a * degrees));
+                const ImVec2 at = place(0.0F, a);
+                const float w = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, label).x;
+                draw->AddLine(ImVec2(at.x, plotTop), ImVec2(at.x, plotBottom), u32(c::line));
+                draw->AddText(fonts.mono, small, ImVec2(at.x - w * 0.5F, plotBottom + px(3.0F)),
+                              u32(c::t3), label);
+            }
+        }
+        // The detections, smallest first so that strong ones stay on top.
+        std::uint32_t closing = 0;
+        std::uint32_t opening = 0;
+        if (have) {
+            order_.resize(cloud->count);
+            for (std::uint32_t i = 0; i < cloud->count; ++i) {
+                order_[i] = i;
+            }
+            std::sort(order_.begin(), order_.end(), [&cloud](std::uint32_t a, std::uint32_t b) {
+                return cloud->points[std::size_t{a} * kRadarFloats + 4] <
+                       cloud->points[std::size_t{b} * kRadarFloats + 4];
+            });
+            for (const std::uint32_t i : order_) {
+                const float* p = &cloud->points[std::size_t{i} * kRadarFloats];
+                const float r = std::hypot(p[0], p[1], p[2]);
+                const float azimuth = std::atan2(p[1], p[0]);
+                const ImVec2 at = place(r, azimuth);
+                if (r > shown || !std::isfinite(at.x) || !std::isfinite(at.y)) {
+                    continue;
+                }
+                const float radius = px(2.0F) + px(5.0F) * radarRcsFraction(p[4]);
+                draw->AddCircleFilled(at, radius, velocityColour(p[3], span), 12);
+                closing += p[3] < 0.0F ? 1U : 0U;
+                opening += p[3] > 0.0F ? 1U : 0U;
+            }
+        }
+        if (mode_ == 0) {
+            const float a = px(7.0F);  // the sensor: an accent arrow pointing forward
+            draw->AddTriangleFilled(ImVec2(sensorAt.x, sensorAt.y - a * 1.4F),
+                                    ImVec2(sensorAt.x - a, sensorAt.y + a),
+                                    ImVec2(sensorAt.x + a, sensorAt.y + a), u32(c::accent));
+        }
+        draw->PopClipRect();
+
+        // Overlays: the colour scale bottom left, the count bottom right.
+        const ImVec2 bottomLeft(origin.x + px(10.0F), end.y - px(36.0F));
+        // A replay sends only what the recording holds, and it keeps no point buffers (#408):
+        // say so instead of the domain-off note, which is about live runs. The note and the
+        // box stack rather than overlap.
+        const bool replaying = context.status.replayEndNs > context.status.replayBeginNs;
+        const DomainView* sensorsDomain = context.profileSession->find("sensors");
+        const bool domainNote = !replaying && sensorsDomain != nullptr && !sensorsDomain->enabled;
+        if (!have) {
+            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(domainNote ? 36.0F : 10.0F)),
+                replaying ? "the recording holds no frames of this sensor"
+                          : "no frames from this sensor yet",
+                c::t2, size.x - px(20.0F));
+        } else {
+            char count[96];
+            std::snprintf(count, sizeof(count), "%u det  ·  %u closing  ·  %u away  ·  %.1f Hz",
+                          cloud->count, closing, opening, radar->rateHz);
+            const float width =
+                fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, count).x + px(16.0F);
+            box(draw, ImVec2(end.x - width - px(10.0F), origin.y + px(10.0F)), count, c::t1);
+            legend(draw, bottomLeft, span);
+        }
+        if (domainNote) {
+            ImGui::SetCursorScreenPos(ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)));
+            fit::pill("Sensors domain is off in the profile · ground truth sends no detections",
+                      widgets::PillKind::Info, size.x - px(20.0F));
+        }
+        ImGui::End();
+    }
+
+private:
+    /// 1, 2 or 5 × 10ⁿ at or above `at least`.
+    static float niceStep(float atLeast) {
+        const float decade = std::pow(10.0F, std::floor(std::log10(std::max(atLeast, 1e-3F))));
+        for (const float k : {1.0F, 2.0F, 5.0F}) {
+            if (k * decade >= atLeast) {
+                return k * decade;
+            }
+        }
+        return 10.0F * decade;
+    }
+
+    static void box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color,
+                    float maxWidth = FLT_MAX) {
+        (void)overlayBox(draw, min, text, color, maxWidth);
+    }
+
+    /// The diverging scale: closing (blue) through at rest to moving away (orange), ± span.
+    static void legend(ImDrawList* draw, const ImVec2& min, float span) {
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float barWidth = px(120.0F);
+        char low[24];
+        char high[24];
+        std::snprintf(low, sizeof(low), "%+.0f", -static_cast<double>(span));
+        std::snprintf(high, sizeof(high), "%+.0f m/s", static_cast<double>(span));
+        const float lowWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, low).x;
+        const float highWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, high).x;
+        const ImVec2 max(min.x + lowWidth + barWidth + highWidth + px(32.0F), min.y + px(26.0F));
+        draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+        draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
+        draw->AddText(fonts.mono, small, ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(c::t2),
+                      low);
+        const float x = min.x + px(16.0F) + lowWidth;
+        constexpr int kSteps = 24;
+        for (int k = 0; k < kSteps; ++k) {
+            const float t = (static_cast<float>(k) + 0.5F) / kSteps;
+            draw->AddRectFilled(
+                ImVec2(x + barWidth * static_cast<float>(k) / kSteps, min.y + px(9.0F)),
+                ImVec2(x + barWidth * static_cast<float>(k + 1) / kSteps, min.y + px(17.0F)),
+                velocityColour((t * 2.0F - 1.0F) * span, span));
+        }
+        draw->AddText(fonts.mono, small, ImVec2(x + barWidth + px(8.0F), min.y + px(6.0F)),
+                      u32(c::t2), high);
+    }
+
+    std::shared_ptr<SensorsState> state_;
+    ViewHome home_;
+    InFront front_;  // the Scene tab variant: in front for two frames
+    int mode_{0};
+    float zoom_{1.0F};  // share of the radar's range shown
+    std::uint32_t zoomOf_{kNone};
+    std::vector<std::uint32_t> order_;
 };
 
 // --- IMU ----------------------------------------------------------------------------------
@@ -506,7 +996,15 @@ public:
         ImGui::AlignTextToFramePadding();
         char hz[24];
         rate(scopes.traces().front().buffer->dtNs(), hz, sizeof(hz));
-        widgets::Caption("%zu signals at %s  ·  one plot per unit", scopes.traces().size(), hz);
+        char caption[96];
+        std::snprintf(caption, sizeof(caption), "%zu signals at %s  ·  one plot per unit",
+                      scopes.traces().size(), hz);
+        // Cut with an ellipsis in a narrow panel, whole in a tooltip (QA3 F6).
+        ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+        ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+        fit::text(caption, ImGui::GetContentRegionAvail().x);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
         state_->plotter.draw(scopes);
         ImGui::End();
     }
@@ -519,23 +1017,33 @@ private:
 
 class CameraPanel final : public Panel {
 public:
-    explicit CameraPanel(std::shared_ptr<SensorsState> state) : state_(std::move(state)) {}
-    [[nodiscard]] const char* title() const override { return "Camera"; }
-    [[nodiscard]] Workspace workspace() const override { return Workspace::Sensors; }
+    explicit CameraPanel(std::shared_ptr<SensorsState> state,
+                         ViewHome home = {Workspace::Sensors, "Camera", false})
+        : state_(std::move(state)), home_(home) {}
+    [[nodiscard]] const char* title() const override { return home_.id; }
+    [[nodiscard]] Workspace workspace() const override { return home_.workspace; }
 
     void draw(PanelContext& context) override {
-        state_->follow(context);
-        const Sensor* camera = state_->first(Kind::Camera);
+        state_->follow(context, !home_.onlyWhenPresent);
+        Sensor* camera = state_->first(Kind::Camera);
+        if (home_.onlyWhenPresent && (camera == nullptr || !context.scene)) {
+            front_.update(false);
+            return;
+        }
         // Design: the tab names the camera.
         const std::string name = camera != nullptr && context.scene
                                      ? context.scene->statics->prims[camera->prim].name
                                      : std::string("Camera");
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        const bool open = ImGui::Begin((name + "###Camera").c_str());
+        const bool open = ImGui::Begin((name + "###" + home_.id).c_str(), nullptr, home_.flags());
         ImGui::PopStyleVar();
         if (!open) {
+            front_.update(false);
             ImGui::End();
             return;
+        }
+        if (camera != nullptr && front_.update(true)) {
+            SensorsState::watch(context, *camera);  // shown: its frames are wanted
         }
         // Modes: a camera's rgb, depth and labels; a custom sensor's images by quantity.
         static constexpr std::array<const char*, 3> kModes{"rgb", "depth", "labels"};
@@ -555,12 +1063,16 @@ public:
         const std::shared_ptr<SensorStream> stream = streamOf(context, camera);
         const std::shared_ptr<const SensorImage> image = stream ? stream->latestImage() : nullptr;
         if (camera == nullptr || !image) {
+            // A replay (the server reports the recording's time range) sends only what the
+            // recording holds, and a recording keeps no images (#408).
+            const bool replaying = context.status.replayEndNs > context.status.replayBeginNs;
             ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context, *state_)) {
                 ImGui::PushTextWrapPos(0.0F);
                 widgets::Caption("%s", camera == nullptr ? "This stage has no camera."
-                                       : !stream
-                                           ? "This server does not send this image."
+                                       : !stream         ? "This server does not send this image."
+                                       : replaying
+                                           ? "The recording holds no images for this camera."
                                            : "Waiting for the first image (the sensors domain "
                                              "may be on ground truth, which renders nothing).");
                 ImGui::PopTextWrapPos();
@@ -638,6 +1150,8 @@ private:
     }
 
     std::shared_ptr<SensorsState> state_;
+    ViewHome home_;
+    InFront front_;  // the Scene tab variant: in front for two frames
     int mode_{0};
     std::string watched_;                  // the image signal watched for this mode, if any
     std::shared_ptr<SensorStream> named_;  // its stream
@@ -668,12 +1182,55 @@ public:
         ImGui::PopFont();
         ImGui::SameLine(0.0F, px(8.0F));
         ImGui::TextDisabled("%s", prim.typeName.c_str());
-        widgets::Mono(c::t3, "%s", prim.path.c_str());
+        // A long path is cut in the middle (QA3 F6), whole in a tooltip.
+        ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+        ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+        fit::text(prim.path, ImGui::GetContentRegionAvail().x, true);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
 
         const std::shared_ptr<const PointCloud> cloud =
             sensor.stream ? sensor.stream->latest() : nullptr;
-        if (cloud && widgets::SectionHeader("This frame", "measured")) {
+        if (cloud && cloud->radar() && widgets::SectionHeader("This scan", "measured")) {
+            // A radar's detections, as they came: how many, how far, how fast, how strong.
+            float nearest = FLT_MAX;
+            float farthest = 0.0F;
+            float closing = 0.0F;
+            float away = 0.0F;
+            double snr = 0.0;
+            for (std::uint32_t i = 0; i < cloud->count; ++i) {
+                const float* p = &cloud->points[std::size_t{i} * kRadarFloats];
+                const float range = std::hypot(p[0], p[1], p[2]);
+                nearest = std::min(nearest, range);
+                farthest = std::max(farthest, range);
+                closing = std::min(closing, p[3]);
+                away = std::max(away, p[3]);
+                snr += static_cast<double>(p[5]);
+            }
+            char text[48];
+            ImGui::Indent(px(8.0F));
+            std::snprintf(text, sizeof(text), "%u", cloud->count);
+            widgets::PropertyRow("detections", text, nullptr);
+            std::snprintf(text, sizeof(text), "%.2f", cloud->count != 0 ? nearest : 0.0F);
+            widgets::PropertyRow("nearest", text, "m");
+            std::snprintf(text, sizeof(text), "%.2f", farthest);
+            widgets::PropertyRow("farthest", text, "m");
+            std::snprintf(text, sizeof(text), "%.2f", static_cast<double>(closing));
+            widgets::PropertyRow("fastest closing", text, "m/s");
+            std::snprintf(text, sizeof(text), "%.2f", static_cast<double>(away));
+            widgets::PropertyRow("fastest away", text, "m/s");
+            std::snprintf(
+                text, sizeof(text), "%.1f",
+                cloud->count != 0 && snr > 0.0 ? 10.0 * std::log10(snr / cloud->count) : 0.0);
+            widgets::PropertyRow("mean SNR", text, "dB");
+            std::snprintf(text, sizeof(text), "%.1f", sensor.rateHz);
+            widgets::PropertyRow("frame rate", text, "Hz");
+            // When the frame was taken, in simulation time (a time of day, not a duration).
+            format::clock(cloud->simTimeNs, text, sizeof(text));
+            widgets::PropertyRow("taken at", text, "sim t");
+            ImGui::Unindent(px(8.0F));
+        } else if (cloud && widgets::SectionHeader("This frame", "measured")) {
             // Measured from the points themselves: what the frame holds, not a model of why.
             float nearest = FLT_MAX;
             float farthest = 0.0F;
@@ -698,8 +1255,9 @@ public:
             widgets::PropertyRow("mean intensity", text, nullptr);
             std::snprintf(text, sizeof(text), "%.1f", sensor.rateHz);
             widgets::PropertyRow("frame rate", text, "Hz");
-            std::snprintf(text, sizeof(text), "%.3f", static_cast<double>(cloud->simTimeNs) * 1e-9);
-            widgets::PropertyRow("frame time", text, "s");
+            // When the frame was taken, in simulation time (a time of day, not a duration).
+            format::clock(cloud->simTimeNs, text, sizeof(text));
+            widgets::PropertyRow("taken at", text, "sim t");
             std::snprintf(text, sizeof(text), "%llu",
                           static_cast<unsigned long long>(sensor.stream->rejected()));
             widgets::PropertyRow("rejected frames", text, nullptr);
@@ -733,9 +1291,18 @@ std::vector<std::unique_ptr<Panel>> createSensorsPanels() {
     std::vector<std::unique_ptr<Panel>> panels;
     panels.push_back(std::make_unique<SensorListPanel>(state));
     panels.push_back(std::make_unique<LidarPanel>(state));
+    panels.push_back(std::make_unique<RadarPanel>(state));
     panels.push_back(std::make_unique<CameraPanel>(state));
     panels.push_back(std::make_unique<ImuPanel>(state));
     panels.push_back(std::make_unique<DegradationPanel>(state));
+    // The same views as tabs beside the Scene workspace's viewport, on the same state (so the
+    // same streams): the camera (a thermal camera too), the lidar's bird's-eye view, the radar.
+    panels.push_back(std::make_unique<CameraPanel>(
+        state, ViewHome{Workspace::Scene, scene_view_windows::kCamera, true}));
+    panels.push_back(std::make_unique<LidarPanel>(
+        state, ViewHome{Workspace::Scene, scene_view_windows::kLidar, true}));
+    panels.push_back(std::make_unique<RadarPanel>(
+        state, ViewHome{Workspace::Scene, scene_view_windows::kRadar, true}));
     return panels;
 }
 

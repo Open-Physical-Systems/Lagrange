@@ -254,7 +254,8 @@ private:
     void file() {
         const std::vector<std::string> problems = circuitProblems(draft_);
         netlist_ = netlistOf(draft_, "Lagrange circuit");
-        ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+        // 11 px mono on CSS-like lines (the design's .code blocks), through the code face.
+        ImGui::PushFont(theme::fonts().code, theme::codeLineFor(theme::kCaptionSize));
         ImGui::InputTextMultiline("##netlist", netlist_.data(), netlist_.size() + 1,
                                   ImVec2(-1.0F, px(kTextHeight)), ImGuiInputTextFlags_ReadOnly);
         ImGui::PopFont();

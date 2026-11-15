@@ -609,7 +609,8 @@ camera a fisheye (Kannala–Brandt; k1..k4 from `distortionModel = "equidistant"
 `distortionCoeffs`, or `"none"` for all zero; `"plumb_bob"` is refused): its angle across the
 width is `2 θ_d⁻¹(horizontalAperture / (2 focalLength))` through the lens's own mapping, so a
 200° fisheye has a positive focal length; `cutoffAngle` (at most π) defaults to the larger of
-half that angle and π/2. `UsdGeomCamera.projection` stays `perspective` (the only other token
+half that angle and π/2, and may be below half that angle (the pixels beyond it are black, as from
+URDF). `UsdGeomCamera.projection` stays `perspective` (the only other token
 OpenUSD allows is `orthographic`). The stage writer writes all of it, so URDF → `lagrange_import`
 → USD → run gives the same beams bit for bit and the same lens (to the float precision of
 `focalLength`). A file using them, opened by Lagrange 1.2 or older, runs as a grid lidar and a
@@ -707,14 +708,34 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
 **OpenDRIVE import** (v0.6). An own reader covers the subset that carries geometry and lanes:
 - **Reference lines:** line, arc, spiral (clothoid, by Gauss–Legendre integration), poly3 and
   paramPoly3 (both by arc length).
-- **Roads:** elevation, lane offset, lane sections with width polynomials, road marks.
+- **Roads:** elevation, superelevation (`<lateralProfile><superelevation>`, after 1.x), lane
+  offset, lane sections with width polynomials, lane heights (`<height>`) and `@level`, road
+  marks.
 - **Links:** lane, road and junction links.
 
-Superelevation, lane heights, objects and signals are not read yet. Road surfaces become meshes
-per lane type, road marks become thin meshes (broken marks are 3 m on and 6 m off,
-illustrative), and every driving, biking, parking or sidewalk lane becomes a `RoadLaneAPI_1`
-prim with its links. The surfaces have no colliders: they lie 1 cm above the ground plane that
-the loader adds, so roads with elevation are drawn but not yet driven on.
+**Cross section.** Superelevation is the roll of the cross section about the reference line, a
+cubic in s (rad), positive falling to the right (ASAM OpenDRIVE 1.8 §10.5.2). t is measured
+along the banked t axis: a point at t lies t·cos φ to the side of the reference line and
+t·sin φ above its elevation, so a lane keeps its width and its projected width shrinks. A lane's
+`<height>` raises its surface along h, the banked cross section's normal (§11.6.3), linear from
+`inner` at its inner border to `outer` at its outer one (the standard gives only the two border
+values); a sidewalk with `inner="0.15" outer="0.15"` is a kerb, its face drawn where it meets
+the lane inside it. A lane with `@level="true"` (and every lane outside it, as the standard
+requires) stays level at the height of the first level lane's inner border. Road surfaces, kerb
+faces, road marks and the lanes' `lane:centreLine` (its z) all follow the cross section, and the
+meshes' normals are the surface's.
+
+Objects and signals are not read yet. Road surfaces become meshes per lane type, road marks
+become thin meshes (broken marks are 3 m on and 6 m off, illustrative), and every driving,
+biking, parking or sidewalk lane becomes a `RoadLaneAPI_1` prim with its links. A road on the
+ground (no elevation, superelevation or lane height) has no colliders: its surfaces lie 1 cm
+above the ground plane that the loader adds, and its import is unchanged. A raised road (any of
+those) also collides: each drawn lane gets a convex slab every 2 m along s, its top the drawn
+surface and 0.3 m thick (`ConvertOptions::colliderStep`, `colliderDepth`), written under
+`/<root>/colliders`, so cars stand on banked curves, ramps and bridges and traffic sees a ramp
+in its lanes' heights. A raised road below z = 0 is under the ground plane, which is hit first:
+lift such a network with its elevation. Sample: `assets/worlds/banked_ring` (a 5 m ring 1.5 m
+up, 5° of bank falling to the inside, a 0.15 m kerb).
 
 ### 3.12 `schemas/tether/schema.usda`
 
@@ -1246,6 +1267,8 @@ and requires a whole number of nanoseconds (architecture §2).
       "properties": {
         "backend": { "enum": ["physx", "mujoco", "jolt"] },
         "solver_iterations": { "type": "integer", "minimum": 1 },
+        "substeps": { "type": "integer", "minimum": 1, "maximum": 64, "default": 1, "description": "Jolt steps per rigid-body step: each divides Jolt's joint energy loss and multiplies its cost (rigid_body.md §8.1)." },
+        "noslip_iterations": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0, "description": "MuJoCo's noslip post-solver iterations (mjOption.noslip_iterations); 0 is off. Stops soft contacts creeping on slopes at more cost per step and changes transients where feet must slip (docs/plan/spikes/legged-contact.md §6). Other backends ignore it." },
         "gpu": { "type": "boolean", "default": false },
         "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }
       },
@@ -1642,7 +1665,10 @@ scene as the URDF loader, and `lagrange_import` writes any of the three as USD
 and MJCF (the URDF loader reads them through `lagrange_meshes`), cameras and other
 sensors without a Lagrange model, URDF planar joints, and MJCF
 tendons, flex, servo actuators (their joints take torque commands instead) and equalities other than one joint copying another. Each is listed in
-the import report. MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
+the import report. An MJCF hinge's or slide's `armature` (with a joint actuator's `armature`
+times its gear squared) is the joint's armature in the world tables, as the motors' rotor
+inertia is (§3.1), but USD has no joint attribute for it yet, so `lagrange_import` drops it (a
+`joint:armature` on `JointDynamicsAPI_1` would need the owner, RFC 0007). MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
 
 Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
 **overlay** file that applies our API schemas by link or joint name:
@@ -1670,8 +1696,30 @@ apply:
 declaration in `io/stage/include/lagrange/stage/Stage.hpp`); `lagrange_server --overlay` and
 `lagrange_import --overlay` use it, and the stage writer writes the instances, so an imported
 robot keeps them in USD. Values are checked as the stage loader checks a stage, and every
-problem is reported together. Overlays add schema instances; they do not yet create simulated
-sensors, so lidars on an MJCF robot still need USD for now.
+problem is reported together. Overlays add schema instances, and a `create_child` prim with
+`SensorAPI_1` and one of `ImuAPI_1`, `GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` or
+`RadarAPI_1` becomes a simulated sensor on that link, read as the stage reader reads it in USD
+(the schema's fallbacks; `sensor:rate` and the radar's `rangeMax`, `azimuthFov`, `elevationFov`,
+`txPower` and `noiseFloor` required and positive; at the link's origin, an overlay has no mount
+pose). These are the catalog's `overlay_only` sensors, which the robot builder writes into
+`<robot>.overlay.yaml`:
+
+```yaml
+  - prim: base_link
+    create_child: front_radar
+    schemas:
+      SensorAPI_1: { sensor:rate: 20 }
+      RadarAPI_1:
+        sensor:radar:rangeMax: 60          # m
+        sensor:radar:azimuthFov: 1.2       # rad
+        sensor:radar:elevationFov: 0.2     # rad
+        sensor:radar:txPower: 0.01         # W
+        sensor:radar:noiseFloor: 1.0e-13   # W
+```
+
+Any other sensor type (a camera or a lidar) is refused with a message naming the prim, never
+dropped: it belongs in the robot file's own `<sensor>` or its USD, so lidars on an MJCF robot
+still need USD for now.
 
 ### 9.1 A SPICE netlist as an overlay
 
@@ -1762,6 +1810,7 @@ between the two formats; libsdformat warns that it copies them.
 | Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major; new channels and fields only within 1.x | `migrate_recording` (`lagrange_migrate`): checks the version, refuses newer files; a step comes with version 2 |
 | Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` (1.0 at v1.0) | append only within a major (RFC 0007): `core/plugin_abi/test/test_abi_layout.c` pins sizes and offsets, `tools/ci/abi_check.sh` runs `abidiff` against the 1.0 baseline | none |
 | FMU map files | `schema_version` | as profiles | `migrate_profile --fmu-map` (not built: no FMU map files exist yet) |
+| Saved states | scheduler state version after the magic `LGST` (§11) | 1.x reads every saved state of 1.1 and later into a run of the same robot, world and profile | none: read in place |
 
 Loader behaviour: `core/stage/` supports the current and the previous version of each schema
 family. An older version loads with a warning that names the migration command. Two versions of
@@ -1781,3 +1830,79 @@ migration so that it is proven before it is needed: the family `ExampleMotorAPI`
 file uses (`tools/migrate/test/test_schema.py`). The stage loader notes a prim that applies an
 older version of a registered family with the command that migrates it, and refuses two versions
 of one family on one prim.
+
+## 11. Saved states
+
+`Server::saveState` (Python `save_state()`) returns the run's state as bytes for
+`restoreState` (`restore_state()`) in the same build of the same run: the robot, world and
+profile it was saved from. Within 1.x they also restore in later releases (RFC 0007).
+
+Layout: the site (`Server.cpp`, `saveSite`: gravity, ambient temperature, air density, the
+aerodynamics and weather settings, the local gravity vector), then the scheduler's state
+(`Scheduler.cpp`): the magic `LGST`, a format version, time, tick, each module's state as
+`(label, step index, length, bytes)` in execution order, then the signal bus.
+
+| Format | Written by | What it holds |
+|---|---|---|
+| 1 | 1.1, 1.2 | site, modules, bus values, handles and timing |
+| 2 | 1.3 and later | format 1, then the bus's published buffers (each image's sequence and bytes) |
+
+1.0 had no `saveState` in its API, so no 1.0 state exists to read.
+
+A format 1 state restores as follows: no buffers, so the restored run reads no image until each
+sensor's next frame (as it did in 1.2); each handle slot numbers on from the newest handle the
+state holds, the last its saved run published, so the run continues with the saved run's handles,
+and once the bus's four kept buffers have been replaced, its `state_hash()` equals the saved run's
+(`test_scheduler` `RestoresAFormatOneStateWithoutItsImages`).
+
+A module's own state grows only by appending, and a module reads the shorter layouts of earlier
+releases, filling what they lacked with what they implied:
+
+| Module | Appended in | An older state means |
+|---|---|---|
+| multicopter controller | 1.2: stand height, set point ramp, leash | no surface known (it stands at its start's height), the ramp at rest, the leash free |
+| car controller (`CarDrive`) | after 1.3: backing away when held up | driving, never held up or backing away |
+| demo drive command (`DiffDrive`) | after 1.3: the figure eight | the eight starts afresh where the robot stands |
+
+A later release may also add a module to the same run: aerodynamics' zero substitute (after 1.3)
+joins every run whose aerodynamics is off while the site's air density is given, and with it the
+wind and drag signals and the sums of them that `core/wrench_sum` writes. A state from before has
+neither, and its bus holds no place for them. `Server::restoreState` then asks the scheduler which
+of the run's modules the state lacks (`Scheduler::addedSince`); when every one keeps no state, it
+builds the run again without them (`Scheduler::leaveOut`), which is the saved run's composition,
+logs that the run goes on without them, and restores. The run goes on as the saved one did (the
+zero substitute's outputs are the defaults its readers read without it). It stays without them
+until a state that has them is restored; a module that keeps state and is missing from the state
+is refused by name, since it cannot start in the middle of a run.
+
+The bus is stored in the order the modules declare their signals, which is the order the server
+adds them. The electrical ideal substitute stays where 1.1 to 1.3 added it, after the robot's
+controllers, unless the robot has rotors: then it comes after every module, so that it sees the
+multicopter controller's torque commands (the layout of those runs changed after 1.3, see below).
+
+A module may also read more than it did (after 1.3 the demo drive reads the robot's pose to drive
+its eight). The saved run's outputs, their timing and every module's state are then restored
+exactly, and the inputs are read again from the outputs at each reader's next step; what is lost
+is a window average's partial window at the moment of the save, which starts again from its
+writer's last value, so the run goes on within that difference of the saved one, and the same on
+every restore (`test_scheduler` `RestoresAStateFromBeforeAModuleReadMore`).
+
+`python/test/test_lagrange.py` restores a state the released 1.2.0 packages saved
+(`python/test/data/quad_x500_hover_1.2.0.state`, the sample quadcopter hovering at 3 s) and
+checks the run goes on deterministically and that it saved again in format 2 continues the same.
+
+Checked by hand against the 1.2.0 packages (`localhost/lagrange:1.2.0`): the sample AMR (no
+world, CPU lidar, saved at 1 s) and the sample sedan restore and run on deterministically; the
+AMR's state (740 kB, mostly lidar ranges on the bus) is too large to commit as a fixture.
+
+What does not restore, with the reason in the message: a state of a different run (a module
+that keeps state is missing from it, or the module count or a label differs: `saved state does
+not match: ...: a state restores into a run of the same robot, world and profile`), one a module
+cannot read, or one whose run's modules now write other signals than they did (`signal bus
+layout`): among the samples, a 1.1 to 1.3 state of a multicopter with the electrical domain off
+(the run in which it could not fly, fixed after 1.3 by moving the ideal substitute); for a format 1 state the message adds that it was
+written by 1.1 or 1.2 and points here. Every module state that changed after 1.1 is in the table
+above (the layouts that changed between 1.0 and 1.1, in electrical, Jolt, lidar, traffic and
+weather, never reached a saved state, since 1.0 could not save one). A bare scheduler state
+(`Scheduler::saveState`, starting with `LGST`) given to `Server::restoreState` is refused as one
+without its site.

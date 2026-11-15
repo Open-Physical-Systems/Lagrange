@@ -3,6 +3,7 @@
 #include "lagrange/viewer/Icons.hpp"
 
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 #include <imgui.h>
@@ -30,6 +31,30 @@ void Caption(const char* format, ...) IM_FMTARGS(1);
 void Strong(const char* format, ...) IM_FMTARGS(1);
 /// Puts the next item so that it ends at the right edge of the content region.
 void AlignRight(float itemWidth);
+
+/// The line height of wrapped text at a design font size, both in logical pixels: the CSS
+/// line heights of reference.html (body 13 px on 18 px lines, `.xs` 11 px on 14 px; 12 px text
+/// keeps the body's 18 px; larger text 1.4 em). Dear ImGui wraps at the font size (1.0 em).
+[[nodiscard]] float ParagraphLineHeight(float fontSize);
+/// Wrapped text drawn line by line `lineHeight` apart (logical px; 0: ParagraphLineHeight of
+/// the current font), each line centred in its line box as CSS does. In the current font and
+/// text colour. Wraps at the pushed TextWrapPos, else at the content region's right edge, or
+/// at `wrapWidth` (pixels from the cursor) when it is positive. One item, so IsItemHovered and
+/// IsItemClicked follow it, and SameLine continues at its first line, as after TextWrapped.
+void Paragraph(std::string_view text, float lineHeight = 0.0F, float wrapWidth = 0.0F);
+/// Paragraph with printf formatting and a font, size (logical px) and colour of its own.
+void ParagraphF(ImFont* font, float size, const ImVec4& color, const char* format, ...)
+    IM_FMTARGS(4);
+/// The same into a draw list, at `at`, `wrapWidth` wide; `size` in pixels as AddText takes it
+/// (`lineHeight` stays logical): no item. Lines that would end
+/// below `maxY` are left out. Returns true when some were left out (the caller may show all of
+/// it in a tooltip).
+bool DrawParagraph(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
+                   std::string_view text, float wrapWidth, float lineHeight = 0.0F,
+                   float maxY = 3.0e38F);
+/// The height (pixels) a paragraph takes: lines × line height (`size` in pixels).
+[[nodiscard]] float ParagraphHeight(ImFont* font, float size, std::string_view text,
+                                    float wrapWidth, float lineHeight = 0.0F);
 
 // --- controls -----------------------------------------------------------------------------
 enum class PillKind { Neutral, Ok, Warn, Error, Info, Accent };
@@ -67,7 +92,8 @@ void ToolBarFrame(int count, bool vertical);
 
 /// A boxed read-only value in a toolbar: small key, mono value, optional small text after.
 void Readout(const char* key, const char* value, const char* after = nullptr,
-             const ImVec4& color = ImVec4(0.902F, 0.922F, 0.949F, 1.0F));
+             const ImVec4& color = ImVec4(0.902F, 0.922F, 0.949F, 1.0F),
+             const ImVec4& afterColor = ImVec4(0.506F, 0.565F, 0.651F, 1.0F));
 [[nodiscard]] float ReadoutWidth(const char* key, const char* value, const char* after = nullptr);
 
 /// A keyboard shortcut hint ("Ctrl K").
@@ -78,8 +104,11 @@ bool SearchField(const char* id, const char* hint, char* buffer, std::size_t siz
 
 enum class ChipState { On, Substitute, Off, Pending, Error };
 /// One domain on the domain strip: colour dot, name, mono detail. Returns true when clicked.
+/// A fully transparent `color` draws a neutral chip without a dot (the Builder's Robot strip).
 bool DomainChip(const char* id, const ImVec4& color, const char* name, const char* detail,
                 ChipState state);
+/// The width DomainChip takes with this name and detail (empty strings leave them out).
+[[nodiscard]] float DomainChipWidth(const char* name, const char* detail);
 
 /// A selectable card with a title and one line of description. Returns true when clicked.
 bool OptionCard(const char* id, const char* title, const char* description, bool selected,
@@ -92,10 +121,15 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen = true,
 
 /// A workspace tab: icon and label, accent underline when active. `available` is false for a
 /// workspace that is not built yet; it is drawn dimmer.
-bool BarTab(const char* label, Icon icon, bool active, bool available);
+/// `compact` draws the icon alone (a small window), with the label in a tooltip.
+bool BarTab(const char* label, Icon icon, bool active, bool available, bool compact = false);
+/// The width BarTab takes.
+[[nodiscard]] float BarTabWidth(const char* label, bool compact = false);
 
 /// A row of exclusive choices (time windows, level filters). Returns true when it changed.
 bool Segmented(const char* id, const char* const* options, int count, int* index);
+/// The width Segmented takes with these options.
+[[nodiscard]] float SegmentedWidth(const char* const* options, int count);
 
 /// One row of a key/value grid: label column (112 px), then a read-only value field with the
 /// unit right-aligned inside it. `link` draws the value as a reference to a prim or file.
@@ -155,5 +189,58 @@ void Swatch(const ImVec4& color);
 
 /// A filled dot, vertically centred on the current line. Advances the cursor.
 void Dot(const ImVec4& color, bool filled = true);
+
+// --- robot builder (12-builder: "New in this screen") -----------------------------------------
+// Fields that apply when committed: there is no Apply in the Builder (SPEC "Properties"), so a
+// field changes the document when the user presses Enter or Tab or leaves it, never per key.
+
+/// A typed field, `width` wide at the cursor (the 22 px `.fld` on bg0, the unit inside on the
+/// right; `edited` gives it the accent border). `*text` is shown while the field is not being
+/// typed in; returns true when the user committed a change, with the new text in `*text`.
+bool CommitField(const char* id, std::string* text, const char* unit, bool edited, float width,
+                 bool numeric = true);
+/// CommitField in a PropertyRow's grid (112 px label column). `monoLabel`: the label is a
+/// parameter path in 11 px mono (design: `.k.mono`).
+bool CommitEdit(const char* label, std::string* text, const char* unit, bool edited,
+                const char* tooltip = nullptr, bool numeric = true, bool monoLabel = false);
+/// Three typed number fields with the X / Y / Z labels of Vec3Field (which is read-only).
+/// `value` is updated on commit; returns a mask of the axes committed (bit 0 x, 1 y, 2 z).
+int Vec3Edit(const char* label, double value[3], const char* format = "%.3f");
+
+/// A field that opens a list (design `.fld.dd`): the value in mono, an optional unit, and the
+/// small down triangle. Returns true when clicked; the caller opens its popup.
+bool DropdownField(const char* id, const char* value, const char* unit, float width);
+/// DropdownField in the 112 px label grid.
+bool DropdownRow(const char* label, const char* value, const char* unit = nullptr);
+
+/// The joint preview slider (12-builder `JointSlider`): a 4 px bg4 track from `lower` to
+/// `upper`, filled #3A4F6E from zero to the knob, a 1 × 12 px tick at zero and a 14 px knob.
+/// `wrap` draws the dashed track of a continuous joint (the value wraps). Without `knob` (a
+/// mimic joint) it only shows. Returns true while the value changes.
+bool JointSlider(const char* id, double* value, double lower, double upper, bool wrap, bool knob,
+                 float width);
+
+/// A 56 × 54 tile of the Add panel (12-builder `ShapeTile`): a 20 px icon over an 11 px label.
+bool ShapeTile(const char* id, Icon icon, const char* label);
+
+/// One 22 px row of a tree (00-design-system `TreeRow`): caret, icon, name, a type in t3, and
+/// badges on the right; selected rows have the weak accent and a 2 px accent bar.
+struct TreeRowSpec {
+    int depth{0};
+    bool hasChildren{false};
+    bool folded{false};
+    bool selected{false};
+    Icon icon{Icon::Count};
+    const char* name{""};
+    bool strong{false};  ///< medium weight (the root row, the selection)
+    const char* type{""};
+    const ImVec4* badges{nullptr};  ///< domain dots on the right
+    int badgeCount{0};
+    bool error{false};  ///< a red dot badge (an item with an error)
+};
+enum class TreeHit { None, Row, Caret, Type };
+/// Returns where the row was clicked: on the caret, on the type text, or elsewhere on it. The
+/// row is the last item, so drag and drop and tooltips can follow.
+TreeHit TreeRow(const char* id, const TreeRowSpec& row);
 
 }  // namespace lagrange::viewer::widgets

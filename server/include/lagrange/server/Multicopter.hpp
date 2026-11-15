@@ -30,6 +30,15 @@ namespace lagrange::server {
 /// aerodynamic torque as feed-forward, writing joint/<j>/torque_command. Mass, inertia and
 /// propeller coefficients come from the world (RotorAPI_1), the air density from the config
 /// ("air_density", as rotor_aero).
+///
+/// With config "ideal_motors" true (the electrical domain off: its ideal torque source delivers
+/// the command exactly) each rotor's torque command is bounded by what its drive could give: the
+/// propeller's torque at the rotor's loaded top speed (mavlink::rotorTopSpeed; with a motor, its
+/// current limit or its voltage at full charge). Unbounded, the speed loop's kick at a change of
+/// set point (22 N·m on a 25 g propeller) reaches the frame as the motors' reaction, and the
+/// yaw-rate loop through it rings at every step; for the same reason the rotors' speed gain is
+/// cut until that loop's gain per step is 0.5 (the drives' current loops keep it down when the
+/// electrical domain runs).
 class MulticopterController final : public IModule {
 public:
     struct Settings {
@@ -105,12 +114,14 @@ private:
         double thrustPerOmega2{0.0};       // N per (rad/s)²
         double torquePerOmega2{0.0};       // N·m per (rad/s)²
         double speedLimit{0.0};            // rad/s it may ask for; 0: none
+        double torqueLimit{0.0};           // N·m it may command (ideal motors); 0: none
         SignalId velocity, command;
     };
 
     Settings settings_;
     std::vector<Rotor> rotors_;
     std::vector<std::array<double, 4>> mixer_;  // per rotor: thrust from (T, τx, τy, τz)
+    double speedGain_{0.0};  // N·m per rad/s: settings_.speedGain, cut for ideal motors
     double mass_{0.0};
     std::array<double, 3> inertia_{};  // base, principal, kg·m²
     std::array<double, 3> home_{};

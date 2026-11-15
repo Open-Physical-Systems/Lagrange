@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<robot name="joint_revolute">
+  <material name="builder_color_1">
+    <color rgba="0.5 0.5 0.5 1"/>
+  </material>
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="2"/>
+      <inertia ixx="0.013333333333333336" ixy="0" ixz="0" iyy="0.013333333333333336" iyz="0" izz="0.013333333333333336"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.2 0.2 0.2"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.2 0.2 0.2"/></geometry>
+    </collision>
+  </link>
+  <link name="child_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.0008333333333333335" ixy="0" ixz="0" iyy="0.0008333333333333335" iyz="0" izz="0.0008333333333333335"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </collision>
+  </link>
+  <link name="follower_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="0.2"/>
+      <inertia ixx="8.333333333333336e-05" ixy="0" ixz="0" iyy="8.333333333333336e-05" iyz="0" izz="8.333333333333336e-05"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.05 0.05 0.05"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.05 0.05 0.05"/></geometry>
+    </collision>
+  </link>
+  <joint name="child_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="child_link"/>
+    <origin xyz="0.15 0 0.05" rpy="0 0 0.3"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.5" upper="1.5" effort="3" velocity="2"/>
+    <dynamics damping="0.01" friction="0.02"/>
+  </joint>
+  <joint name="follower_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="follower_link"/>
+    <origin xyz="-0.15 0 0.05" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.5" upper="1.5" effort="3" velocity="2"/>
+    <mimic joint="child_joint" multiplier="-1" offset="0.1"/>
+  </joint>
+</robot>

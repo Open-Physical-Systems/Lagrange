@@ -452,13 +452,68 @@ void SignalBus::allocate(std::uint32_t batchCount) {
         slot.hold = slot.spec.hold;
         slot.feedback = slot.spec.feedback;
     }
-    // Which signals' previous values a reader uses; commitAll keeps only those up to date.
-    needsPrevious_.assign(signals_.size(), 0);
+    // What commitAll needs of each signal, in one small record: where its values are, whether
+    // it commits as a plain copy, and whether a reader uses its previous value (a feedback
+    // input, an extrapolation; previous_ of the others is not kept up to date).
+    commitInfo_.assign(signals_.size(), {});
+    for (std::size_t i = 0; i < signals_.size(); ++i) {
+        const SignalRecord& record = signals_[i];
+        CommitInfo& info = commitInfo_[i];
+        info.offset = static_cast<std::uint32_t>(record.offset);
+        info.count = static_cast<std::uint32_t>(record.components * batchCount_);
+        info.plain = record.components != 0 && windowReaders_[i].empty() ? 1 : 0;
+    }
     for (const InputSlot& slot : inputs_) {
         if (slot.signal != kNoModule &&
             (slot.spec.feedback || slot.spec.hold == Hold::LinearExtrapolate)) {
-            needsPrevious_[slot.signal] = 1;
+            commitInfo_[slot.signal].needsPrevious = 1;
         }
+    }
+    // Per writing module: whether its outputs are plain values with consecutive ids (and so
+    // one stretch of storage), for commitDense; with the stretches of those whose previous
+    // value is read, merged.
+    densePlans_.clear();
+    denseRanges_.clear();
+    for (std::uint32_t i = 0; i < signals_.size(); ++i) {
+        const std::uint32_t writer = signals_[i].writer;
+        if (writer == kNoModule) {
+            continue;
+        }
+        if (writer >= densePlans_.size()) {
+            densePlans_.resize(writer + 1);
+        }
+        DensePlan& plan = densePlans_[writer];
+        if (plan.count == 0) {
+            plan.first = i;
+            plan.valueFrom = commitInfo_[i].offset;
+            plan.valueTo = plan.valueFrom;
+        }
+        if (plan.first + plan.count != i || commitInfo_[i].plain == 0 ||
+            commitInfo_[i].offset != plan.valueTo) {
+            plan.dense = false;
+        }
+        ++plan.count;
+        plan.valueTo = commitInfo_[i].offset + commitInfo_[i].count;
+    }
+    for (DensePlan& plan : densePlans_) {
+        if (!plan.dense) {
+            plan = DensePlan{};  // count 0: never dense
+            continue;
+        }
+        plan.previousBegin = static_cast<std::uint32_t>(denseRanges_.size());
+        for (std::uint32_t i = plan.first; i < plan.first + plan.count; ++i) {
+            const CommitInfo& info = commitInfo_[i];
+            if (info.needsPrevious == 0) {
+                continue;
+            }
+            if (denseRanges_.size() > plan.previousBegin &&
+                denseRanges_.back().second == info.offset) {
+                denseRanges_.back().second = info.offset + info.count;
+            } else {
+                denseRanges_.emplace_back(info.offset, info.offset + info.count);
+            }
+        }
+        plan.previousEnd = static_cast<std::uint32_t>(denseRanges_.size());
     }
     // Unconnected optional inputs keep their default for the whole run.
     for (const InputSlot& slot : inputs_) {
@@ -515,81 +570,121 @@ void SignalBus::commit(std::uint32_t signal, SimTime stamp, std::uint64_t tick,
     }
 }
 
+bool SignalBus::commitDense(std::span<const std::uint32_t> signals, SimTime stamp,
+                            std::uint64_t tick) {
+    // A module whose outputs are plain values in one stretch of storage (DensePlan, allocate())
+    // and that wrote them all, none held: the electrical network at 10 to 20 kHz, the physics.
+    // Its commit is a copy of the stretch and a pass over the timings, without the per-signal
+    // checks of the general case (which gives the same result for it).
+    if (signals.empty()) {
+        return false;
+    }
+    const std::uint32_t writer = signals_[signals.front()].writer;
+    if (writer >= densePlans_.size()) {
+        return false;
+    }
+    const DensePlan& plan = densePlans_[writer];
+    if (plan.count == 0 || plan.first != signals.front() || plan.count != signals.size()) {
+        return false;
+    }
+    const std::uint8_t* const held = held_.data() + plan.first;
+    std::uint8_t* const dirty = dirty_.data() + plan.first;
+    unsigned allDirty = 1;
+    unsigned anyHeld = 0;
+    for (std::uint32_t k = 0; k < plan.count; ++k) {
+        allDirty &= dirty[k];
+        anyHeld |= held[k];
+    }
+    if (allDirty == 0 || anyHeld != 0) {
+        return false;
+    }
+    for (std::uint32_t r = plan.previousBegin; r < plan.previousEnd; ++r) {
+        const auto [from, to] = denseRanges_[r];
+        std::copy(committed_.data() + from, committed_.data() + to, previous_.data() + from);
+    }
+    std::copy(pending_.data() + plan.valueFrom, pending_.data() + plan.valueTo,
+              committed_.data() + plan.valueFrom);
+    std::fill_n(dirty, plan.count, std::uint8_t{0});
+    Timing* const timings = timing_.data() + plan.first;
+    for (std::uint32_t k = 0; k < plan.count; ++k) {
+        Timing& timing = timings[k];
+        timing.previousStamp = timing.stamp;
+        timing.stamp = stamp;
+        timing.commitTick = tick;
+        timing.commits = std::min<std::uint32_t>(timing.commits + 1, 2);
+    }
+    return true;
+}
+
 void SignalBus::commitAll(std::span<const std::uint32_t> signals, SimTime stamp, std::uint64_t tick,
                           Duration writerStep) {
-    // A signal that is plain values, not held and read by no window average commits as a copy;
-    // runs of them that sit next to each other in storage copy at once.
-    const auto plain = [this](std::uint32_t signal) {
-        return held_[signal] == 0 && signals_[signal].components != 0 &&
-               windowReaders_[signal].empty();
+    // One pass over the module's outputs, from the compact commitInfo_ (not the signal records,
+    // a cache line each). A signal that is plain values, not held and read by no window average
+    // commits as a copy of its pending value, and only when written since its last commit (the
+    // others' pending values equal their committed ones). Written signals that sit next to each
+    // other in storage copy at once, across a short clean stretch of this module's own plain
+    // signals too (copying an equal value is harmless and saves a call); never across another
+    // module's storage.
+    if (commitDense(signals, stamp, tick)) {
+        return;
+    }
+    constexpr std::size_t kMergeGap = 32;  // values
+    constexpr std::size_t kNoRun = ~std::size_t{0};
+    // Raw pointers in locals: the byte stores to dirty_ may alias anything, so members read
+    // through `this` would be loaded again after each one.
+    const CommitInfo* const infos = commitInfo_.data();
+    const std::uint8_t* const held = held_.data();
+    std::uint8_t* const dirty = dirty_.data();
+    Timing* const timings = timing_.data();
+    const double* const pending = pending_.data();
+    double* const committed = committed_.data();
+    double* const previous = previous_.data();
+    std::size_t runEnd = kNoRun;  // end of the last plain signal's storage: the run goes on there
+    std::size_t copyFrom = 0;
+    std::size_t copyTo = 0;
+    bool open = false;
+    const auto flush = [pending, committed, &open, &copyFrom, &copyTo] {
+        if (open) {
+            std::copy(pending + copyFrom, pending + copyTo, committed + copyFrom);
+            open = false;
+        }
     };
-    std::size_t i = 0;
-    while (i < signals.size()) {
-        const std::uint32_t first = signals[i];
-        if (!plain(first)) {
-            commit(first, stamp, tick, writerStep);
-            ++i;
+    for (const std::uint32_t signal : signals) {
+        const CommitInfo info = infos[signal];
+        if (info.plain == 0 || held[signal] != 0) {
+            runEnd = kNoRun;
+            commit(signal, stamp, tick, writerStep);
             continue;
         }
-        const std::size_t begin = signals_[first].offset;
-        std::size_t end = begin + (signals_[first].components * batchCount_);
-        std::size_t j = i + 1;
-        while (j < signals.size() && plain(signals[j]) && signals_[signals[j]].offset == end) {
-            end += signals_[signals[j]].components * batchCount_;
-            ++j;
+        const std::size_t from = info.offset;
+        const std::size_t to = from + info.count;
+        if (from != runEnd) {
+            flush();  // a new run of storage
         }
-        // The previous value only where a reader uses it (a feedback input, an extrapolation).
-        for (std::size_t k = i; k < j; ++k) {
-            if (needsPrevious_[signals[k]] != 0) {
-                const SignalRecord& record = signals_[signals[k]];
-                const auto at = static_cast<std::ptrdiff_t>(record.offset);
-                const auto count = static_cast<std::ptrdiff_t>(record.components * batchCount_);
-                std::copy(committed_.begin() + at, committed_.begin() + at + count,
-                          previous_.begin() + at);
-            }
+        runEnd = to;
+        // The previous value only where a reader uses it (a feedback input, an extrapolation),
+        // before the committed one is overwritten (the copy below is deferred to the flush).
+        if (info.needsPrevious != 0) {
+            std::copy(committed + from, committed + to, previous + from);
         }
-        // The written ones; the others' pending values equal their committed ones, so copying
-        // a short clean stretch between two written signals is harmless and saves a call.
-        constexpr std::size_t kMergeGap = 32;  // values
-        std::size_t copyFrom = 0;
-        std::size_t copyTo = 0;
-        bool open = false;
-        const auto copyOut = [this](std::size_t from, std::size_t to) {
-            std::copy(pending_.begin() + static_cast<std::ptrdiff_t>(from),
-                      pending_.begin() + static_cast<std::ptrdiff_t>(to),
-                      committed_.begin() + static_cast<std::ptrdiff_t>(from));
-        };
-        for (std::size_t k = i; k < j; ++k) {
-            const std::uint32_t signal = signals[k];
-            if (dirty_[signal] == 0) {
-                continue;
-            }
-            dirty_[signal] = 0;
-            const std::size_t from = signals_[signal].offset;
-            const std::size_t to = from + (signals_[signal].components * batchCount_);
+        if (dirty[signal] != 0) {
+            dirty[signal] = 0;
             if (open && from - copyTo <= kMergeGap) {
                 copyTo = to;
-                continue;
+            } else {
+                flush();
+                copyFrom = from;
+                copyTo = to;
+                open = true;
             }
-            if (open) {
-                copyOut(copyFrom, copyTo);
-            }
-            copyFrom = from;
-            copyTo = to;
-            open = true;
         }
-        if (open) {
-            copyOut(copyFrom, copyTo);
-        }
-        for (std::size_t k = i; k < j; ++k) {
-            Timing& timing = timing_[signals[k]];
-            timing.previousStamp = timing.stamp;
-            timing.stamp = stamp;
-            timing.commitTick = tick;
-            timing.commits = std::min<std::uint32_t>(timing.commits + 1, 2);
-        }
-        i = j;
+        Timing& timing = timings[signal];
+        timing.previousStamp = timing.stamp;
+        timing.stamp = stamp;
+        timing.commitTick = tick;
+        timing.commits = std::min<std::uint32_t>(timing.commits + 1, 2);
     }
+    flush();
 }
 
 void SignalBus::prepareInput(std::uint32_t slotIndex, SimTime readerTime, std::uint64_t tick) {

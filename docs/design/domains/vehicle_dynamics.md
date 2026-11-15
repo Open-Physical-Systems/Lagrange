@@ -104,7 +104,24 @@ is settled for now: the model is our own, with no PhysX vehicle SDK.
   act along it.
   - The model's wheel positions are the ride height: each spring is preloaded with its static
     share of the weight, by the centre of mass between the axles.
-  - The ground is taken as level at the contact, since a ray gives no normal.
+  - Each ray returns the surface's outward normal where it meets the ground
+    (`services::RayHit::normal`, from `sensors::ShapeCaster::ray`), and the tyre works in the
+    contact frame: z along that normal, x where the wheel plane meets the road plane, y = z × x
+    (the TYDEX W-axis system; ISO 8855 with z up; Pacejka, *Tire and Vehicle Dynamics*,
+    TODO(verify) the section). The normal load acts along the normal and the MF-Tyre
+    longitudinal and lateral forces lie in the road plane, so slopes and banks are felt as they
+    are. A hit whose normal is more than about 84° from the chassis's up (a wall) is taken as
+    level ground, as is a query that gives no normal. The rays stand on whatever collides, so a
+    car drives on raised and banked OpenDRIVE roads, whose lanes become convex slabs
+    (formats.md §3.11). On the sample `assets/worlds/banked_ring` (a 5 m ring 1.5 m up, 5° of
+    bank) the sedan's demo circle keeps its base within 2.2 cm of its ride height above the
+    banked surface and its roll within 0.018 rad of the bank over 14 s at 3 m/s (`test_server`
+    BankedRing); the normal loads the tyres report are within 0.8 % of the weight of
+    m·(g cos β + a sin β) on average there (1.3 % with the forces in the level plane).
+  - Parked with its brakes on a 10° slope, the test saloon stands still and its tyres carry
+    m·g·sin θ along the road and m·g·cos θ across it to 1e-7 of each (`test_vehicle_dynamics`
+    ParkedOnASlope; with the forces in the level plane the loads read m·g / cos θ, 3 % over,
+    and it crept at 13 cm/s).
   - Anti-roll bars move load across an axle in proportion to the travel difference.
 - **Tyres** (`Tyre.hpp`).
   - `pacejka` (default): MF-Tyre 5.2 pure slip with load dependence and its combined-slip
@@ -114,8 +131,9 @@ is settled for now: the model is our own, with no PhysX vehicle SDK.
   - Slip comes from first-order relaxation states integrated exactly over the step, with
     damping blended in below 3 m/s.
   - μ = the tyre's × the ground shape's friction × `env/friction_scale`.
-- **Brakes.** Torque per wheel by the axle bias, never more than stops the wheel within the
-  step, optional slip-limiting ABS.
+- **Brakes.** Torque per wheel by the axle bias, as stick-slip friction (Karnopp): the torque
+  that stops the wheel within the step against the tyre's, up to what the brake gives, so a
+  held brake holds the car on a slope and never reverses the wheel; optional slip-limiting ABS.
 - **Steering.** Ackermann road-wheel angles from the bicycle angle (rate limit, first-order
   lag). The steering joints are turned by a PD at 15 Hz; they are visual, since the tyre forces
   use the computed angles.
@@ -136,5 +154,4 @@ is settled for now: the model is our own, with no PhysX vehicle SDK.
   - a comparison with a published MF parameter set (no openly licensed `.tir` was found; the
     sample `assets/tyres/generic_205_55R16.tir` is illustrative);
   - the ISO manoeuvres as scenarios;
-  - sloped ground;
   - the kinematic suspension.

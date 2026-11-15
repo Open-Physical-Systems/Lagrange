@@ -19,6 +19,7 @@ enum class Icon : int {
     Ros2,
     World,
     Performance,
+    Builder,  // RFC 0016: a wrench (docs/design/ui/12-builder)
     // Run controls.
     Reset,
     Pause,
@@ -50,6 +51,21 @@ enum class Icon : int {
     // Launcher.
     Folder,
     Download,
+    // Builder (12-builder: "New in this screen").
+    Undo,
+    Redo,
+    Save,
+    JointAxis,
+    Collision,
+    CentreOfMass,
+    Names,
+    Box,
+    Cylinder,
+    Sphere,
+    Mesh,
+    ChevronUp,
+    Duplicate,
+    Delete,
     Count,
 };
 

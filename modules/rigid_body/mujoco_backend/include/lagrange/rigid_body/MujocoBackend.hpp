@@ -1,7 +1,9 @@
 #pragma once
 
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/world/World.hpp"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -11,12 +13,23 @@ struct mjData_;
 
 namespace lagrange::rigid_body {
 
+/// How the MuJoCo backend builds static scenery (MujocoBackend.cpp), per world body: its geoms
+/// on MuJoCo's world body (`toWorld`), the body itself left out of the model (`omitted`), and
+/// every body's rest pose in the world.
+struct StaticScenery {
+    std::vector<bool> toWorld;
+    std::vector<bool> omitted;
+    std::vector<Pose> rest;
+};
+[[nodiscard]] StaticScenery staticScenery(const World& world);
+
 /// The rigid-body domain on MuJoCo 3.12 (docs/design/domains/rigid_body.md, spike 0.2-C1).
 ///
 /// init() builds a MuJoCo model from the world tables (bodies, joints, colliders): no MJCF file
 /// and no USD are involved, so the stage stays the only source of the robot (invariant 5).
 /// Settings from the validation spike: elliptic friction cone, implicitfast integrator.
 /// Bodies of one articulated tree do not collide with each other (Gazebo's self_collide false).
+/// Static scenery (staticScenery) is MuJoCo world geometry: its geoms are on the world body.
 ///
 /// Every hinge and slide joint `j` outputs joint/j/position and velocity (rad or m). Actuated
 /// joints add (prismatic joints use N, m, m/s, m/s², kg):
@@ -82,6 +95,7 @@ private:
     };
 
     void writeOutputs(SignalBus& bus) const;
+    void applyFixedWrenches();
     void sumContactForces();
     void setupKinematicCulling();
     void cullKinematicContacts(bool all);
@@ -109,6 +123,15 @@ private:
 
     std::vector<JointSignals> joints_;
     std::vector<BodySignals> bodies_;
+    // Indices into bodies_ of the inputs that have a writer, read every step; the unconnected
+    // external wrenches with their defaults, put in place once (init, restoreState).
+    std::vector<std::uint32_t> wrenchInputs_;
+    std::vector<std::uint32_t> poseInputs_;
+    struct FixedWrench {
+        int mujocoBody{0};
+        std::array<double, 6> wrench{};
+    };
+    std::vector<FixedWrench> fixedWrenches_;
     std::vector<double> contactForces_;  // N, world frame, 3 per MuJoCo body, the last step's
     // Kinematic bodies' poses at the previous output, for their twist (MuJoCo's mocap bodies
     // have no velocity of their own).
@@ -121,6 +144,9 @@ private:
     // restored state and a shifted origin, when every value is written.
     static constexpr std::size_t kWrittenPerBody = 16;
     mutable std::vector<double> written_;
+    // Per body: a kinematic body that has not moved in the last step, so its last twist was
+    // worked out from two equal poses. Meaningful only while writtenValid_.
+    mutable std::vector<std::uint8_t> still_;
     mutable bool writtenValid_{false};
     double dt_{0.001};
     SignalId frictionScale_;

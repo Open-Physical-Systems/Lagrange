@@ -11,7 +11,7 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v1.3.0, stable** ([release notes](docs/release/v1.3.0.md); documentation at
+**Status: v1.4.0, stable** ([release notes](docs/release/v1.4.0.md); documentation at
 [open-physical-systems.github.io/Lagrange](https://open-physical-systems.github.io/Lagrange/)). The USD schemas, the
 plugin C ABI, the viewer protocol, profiles and recordings are frozen for 1.x and change only by
 addition ([RFC 0007](rfcs/0007-v1-freeze.md)); 1.x is supported on `release/1.x` until ROS 2
@@ -168,10 +168,11 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (21)</summary>
+<details><summary>User guide (23)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
+- [The robot builder](docs/guide/builder.md)
 - [The `lagrange` command](docs/guide/cli.md)
 - [Concepts](docs/guide/concepts.md)
 - [Installing Lagrange](docs/guide/install.md)
@@ -189,6 +190,7 @@ recorded to MCAP and replayed.
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
 - [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
 - [Tutorial: a robot's power system from a schematic](docs/guide/tutorial-power.md)
+- [The viewer's workspaces](docs/guide/viewer.md)
 - [Writing a module](docs/guide/writing-a-module.md)
 - [Writing a plugin](docs/guide/writing-a-plugin.md)
 
@@ -263,8 +265,8 @@ recorded to MCAP and replayed.
 - [10 · World (huge worlds): SPEC](docs/design/ui/10-world/SPEC.md)
 - [Lagrange UI · 11 · Performance](docs/design/ui/11-performance/README.md)
 - [11 · Performance: SPEC](docs/design/ui/11-performance/SPEC.md)
-- [Lagrange UI · 12 · Builder workspace (draft)](docs/design/ui/12-builder/README.md)
-- [12 · Builder workspace: SPEC (draft, RFC 0016)](docs/design/ui/12-builder/SPEC.md)
+- [Lagrange UI · 12 · Builder workspace](docs/design/ui/12-builder/README.md)
+- [12 · Builder workspace: SPEC (RFC 0016)](docs/design/ui/12-builder/SPEC.md)
 - [Lagrange viewer UI design](docs/design/ui/README.md)
 - [Lagrange viewer: shared UI conventions](docs/design/ui/shared/ui-conventions.md)
 
@@ -284,14 +286,17 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (20)</summary>
+<details><summary>Plan and evaluation (25)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
+- [Robot builder: phase 1 and 1b work plan (RFC 0016)](docs/plan/builder-phase1-plan.md)
+- [Robot builder: phase 4 work plan, USD round trip and SDFormat (RFC 0016)](docs/plan/builder-phase4-plan.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
 - [EMI from motors, heat conduction, thermal sensors: work queue](docs/plan/emi-thermal-queue.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
+- [Owner decisions, 2026-11-15](docs/plan/owner-decisions-2026-11-15.md)
 - [Progress](docs/plan/progress.md)
 - [QA pass, 2026-11-12 (v1.2.1)](docs/plan/qa-2026-11-12.md)
 - [Sensors QA, 2026-11-12: the built-in kinds, faults, images](docs/plan/qa-sensors-2026-11-12.md)
@@ -304,12 +309,14 @@ recorded to MCAP and replayed.
 - [Spike 0.2-C6: a second rigid-body backend on Jolt Physics](docs/plan/spikes/0.2-C6-jolt.md)
 - [Spike 0.2-F7: `rosidl::Buffer` (desk study)](docs/plan/spikes/0.2-F7-rosidl-buffer.md)
 - [Spike 0.2-H8: packaging trial](docs/plan/spikes/0.2-H8-packaging.md)
+- [Spike: legged contact, measured first (RFC 0019 step 1)](docs/plan/spikes/legged-contact.md)
+- [Spike: MuJoCo 3.12 → 4.x](docs/plan/spikes/mujoco-4.md)
 - [Usability and sensor physics queue](docs/plan/usability-physics-queue.md)
 - [Verification record](docs/plan/verification.md)
 
 </details>
 
-<details><summary>Release notes (12)</summary>
+<details><summary>Release notes (13)</summary>
 
 - [v0.2.0 compared with Gazebo Jetty: the sample AMR](docs/release/v0.2.0-comparison.md)
 - [Lagrange v0.2.0: simulation core and AMR (release notes, draft)](docs/release/v0.2.0.md)
@@ -323,6 +330,7 @@ recorded to MCAP and replayed.
 - [Lagrange v1.2.0: cables, heat in the parts, a robot's own interference (release notes)](docs/release/v1.2.0.md)
 - [Lagrange v1.2.1: one command to install (release notes)](docs/release/v1.2.1.md)
 - [Lagrange v1.3.0: 37 new sensors, a faster simulator, hardened protocol (release notes)](docs/release/v1.3.0.md)
+- [Lagrange v1.4.0: build a robot in the viewer (release notes)](docs/release/v1.4.0.md)
 
 </details>
 
@@ -339,7 +347,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (16)</summary>
+<details><summary>Design proposals (RFCs) (19)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -357,6 +365,9 @@ recorded to MCAP and replayed.
 - [RFC 0014: Protocol frame limits before the handshake](rfcs/0014-pre-handshake-limits.md)
 - [RFC 0015: USD attributes for lidar scan patterns and fisheye lenses](rfcs/0015-lidar-patterns-fisheye-usd.md)
 - [RFC 0016: A robot builder in the viewer](rfcs/0016-robot-builder.md)
+- [RFC 0017: MuJoCo 4.x for the MuJoCo backend](rfcs/0017-mujoco-4.md)
+- [RFC 0018: The radiation domain (ionizing radiation)](rfcs/0018-radiation.md)
+- [RFC 0019: Legged robots as a supported robot class](rfcs/0019-legged-robots.md)
 
 </details>
 

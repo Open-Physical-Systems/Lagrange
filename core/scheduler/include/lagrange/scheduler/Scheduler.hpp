@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -147,7 +148,18 @@ public:
     /// buffers that handle-typed signals (images, point clouds) refer to are saved with it, so a
     /// restored run reads its last image at once and publishes the same handles after.
     Status saveState(StateWriter& writer) const;
+    /// Reads saveState's bytes: format 2, and format 1 of Lagrange 1.1 and 1.2 (no buffers;
+    /// docs/design/formats.md §11). The run must have the state's modules, in its order.
     Status restoreState(StateReader& reader);
+    /// The modules of this run a saved state (saveState's bytes) lacks: ones a later release
+    /// added to the same run, such as a substitute standing in for a domain that ran with nothing
+    /// before. Fails when one of them keeps state (it cannot start mid-run) or the bytes are no
+    /// scheduler state. A run built again without them (leaveOut) restores the state.
+    [[nodiscard]] Expected<std::vector<std::string>, Status> addedSince(
+        std::span<const std::byte> state) const;
+    /// Before wire(): drops the modules added so far whose "domain/name" is in `labels`; returns
+    /// those dropped.
+    std::vector<std::string> leaveOut(const std::set<std::string>& labels);
     /// One module's state taken out of a run, to carry into a rebuilt one (robots spawned or
     /// deleted): `signature` is what it reads and writes, its step and its name.
     struct CarriedModule {
@@ -202,6 +214,7 @@ private:
     };
 
     void checkSteps(std::vector<WiringError>& errors);
+    [[nodiscard]] std::string hyperperiodMessage() const;  // names the pair (RFC 0005)
     void connect(std::vector<WiringError>& errors);
     void checkContracts(const WorldView& world, std::vector<WiringError>& errors);
     void order(std::vector<WiringError>& errors);

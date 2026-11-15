@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -293,7 +294,19 @@ Expected<Wind, std::string> AeroDrag::windOf(const ModuleConfig& config) {
 }
 
 ModuleInfo AeroDrag::info() const {
-    return {"aerodynamics", "drag", 0, 1, false, true, CapabilityTier::Tier0};
+    // With the live air box running on the GPU (LiveAir, rotor_aero.md §8) the step is a GPU
+    // path and not bit-reproducible (invariant 7); the server reports it as on the GPU. Before
+    // init, what the config given at construction asks for (the scheduler asks before it
+    // declares); after, whether the box started on the GPU. With the fitted downwash or the CPU
+    // reference box it is deterministic.
+    const bool gpuAir = initialised_ ? live_ != nullptr && !lbmCpu_ : gpuAsked_;
+    return {"aerodynamics", "drag", 0, 1, false, !gpuAir, CapabilityTier::Tier0};
+}
+
+bool AeroDrag::asksGpuAir(const ModuleConfig& config, bool rotors) {
+    return rotors && config.get<bool>("downwash").value_or(true) &&
+           config.get<std::string>("downwash_model").value_or("fitted") == "lbm" &&
+           !config.get<bool>("downwash_lbm_cpu").value_or(false);
 }
 
 Duration AeroDrag::preferredStep() const {
@@ -390,6 +403,36 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         }
     }
     groupCount_ = groups;
+    // Tether cables (RFC 0011 step 6, rotor_aero.md §2.7): the rotors' air at each node of each
+    // cable the server names, with its node count ("<name>=<nodes>"), read from the tether
+    // domain's tether/<n>/nodes and written back as tether/<n>/downwash.
+    cables_.clear();
+    if (const auto* named = config.find<std::vector<std::string>>("tether_nodes");
+        named != nullptr && !rotors_.empty()) {
+        for (const std::string& entry : *named) {
+            const std::size_t eq = entry.rfind('=');
+            const long long nodes =
+                eq == std::string::npos ? 0 : std::strtoll(entry.c_str() + eq + 1, nullptr, 10);
+            if (eq == std::string::npos || eq == 0 || nodes < 2 || nodes > (1 << 20)) {
+                return Status::error(
+                    StatusCode::InvalidConfig,
+                    "aerodynamics.tether_nodes: '" + entry + "' is not <tether>=<nodes>");
+            }
+            const std::string base = "tether/" + entry.substr(0, eq) + "/";
+            const auto length = static_cast<std::uint32_t>(3 * nodes);
+            SignalSpec at = spec(base + "nodes", SignalType::ScalarArray, units::m, "world_local");
+            at.arrayLength = length;
+            at.optional = true;
+            SignalSpec out =
+                spec(base + "downwash", SignalType::ScalarArray, units::m_per_s, "world_local");
+            out.arrayLength = length;
+            TetherNodes cable;
+            cable.nodes = d.input(at);
+            cable.downwash = d.output(out);
+            cable.values.assign(length, std::numeric_limits<double>::quiet_NaN());
+            cables_.push_back(std::move(cable));
+        }
+    }
     if (hasGround_) {
         downwash_.setGround(groundPoint_, groundNormal_);
     } else {
@@ -496,6 +539,10 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     if (dustOut_.valid()) {
         bus.write(dustOut_, 0.0);
     }
+    for (TetherNodes& cable : cables_) {
+        std::ranges::fill(cable.values, std::numeric_limits<double>::quiet_NaN());
+        bus.writeN(cable.downwash, cable.values);
+    }
     downwash_.update({});
     others_.update({});
     live_.reset();
@@ -521,6 +568,7 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
                          why.c_str());
         }
     }
+    initialised_ = true;
     return {};
 }
 
@@ -676,6 +724,22 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
         return downwash_.velocityAt(at, group);
     };
+    // Every robot's wake at each tether node, its own drone's too: the cable is not the rotors'
+    // body (the rotor data leave out only what the rotors do to their own airframe).
+    for (TetherNodes& cable : cables_) {
+        const std::span<const double> at = bus.readN(cable.nodes);
+        std::ranges::fill(cable.values, std::numeric_limits<double>::quiet_NaN());
+        for (std::size_t i = 0; 3 * i + 2 < at.size() && 3 * i + 2 < cable.values.size(); ++i) {
+            const Vec3 x{at[3 * i], at[3 * i + 1], at[3 * i + 2]};
+            if (!std::isfinite(x[0]) || !std::isfinite(x[1]) || !std::isfinite(x[2])) {
+                break;
+            }
+            const Vec3 w = wakeAt(x, Downwash::kNoGroup);
+            std::copy(w.begin(), w.end(),
+                      cable.values.begin() + static_cast<std::ptrdiff_t>(3 * i));
+        }
+        bus.writeN(cable.downwash, cable.values);
+    }
     // The fountain under each low multirotor: a push up its thrust axis on its first link.
     std::vector<Vec3> fountain(groupCount_, Vec3{});
     for (const Downwash::Group& g : downwash_.groups()) {
@@ -733,8 +797,8 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             air[k] += wake[k];
         }
         // Drag in the body frame: −½·ρ·|v|·(Cd ∘ A ∘ v), v the link's velocity through the air.
-        const Vec3 relative{velocity[0] - air[0], velocity[1] - air[1], velocity[2] - air[2]};
-        const Vec3 local = rotate(conjugate(q), relative);
+        const Vec3 through{velocity[0] - air[0], velocity[1] - air[1], velocity[2] - air[2]};
+        const Vec3 local = rotate(conjugate(q), through);
         const double speed = std::hypot(local[0], local[1], local[2]);
         Vec3 force{};
         for (std::size_t k = 0; k < 3; ++k) {
@@ -860,6 +924,66 @@ Status AeroDrag::restoreState(StateReader& reader) {
         }
         link.turbulence.setState(s);
     }
+    return {};
+}
+
+ModuleInfo ZeroAero::info() const {
+    return {"aerodynamics", "zero", 0, 1, true, true, CapabilityTier::Tier0};
+}
+
+Duration ZeroAero::preferredStep() const {
+    return 1_ms;  // as AeroDrag's
+}
+
+Status ZeroAero::declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) {
+    links_.clear();
+    const World::Bodies& bodies = world.bodies();
+    const std::vector<bool> moving = movingBodies(world.raw());
+    for (const SchemaInstance* s : world.instancesOf("AeroAPI_1")) {
+        const auto b =
+            static_cast<std::size_t>(std::ranges::find(bodies.prim, s->prim) - bodies.prim.begin());
+        if (b >= bodies.prim.size() || !moving[b] ||
+            s->token("aero:model").value_or("drag_box") == "none") {
+            continue;
+        }
+        const std::string base = "body/" + std::string(world.signalInstanceName(s->prim)) + "/";
+        Link link;
+        SignalSpec twist = spec(base + "twist", SignalType::Wrench, units::m_per_s, "world_local");
+        twist.feedback = true;
+        link.twist = d.input(twist);
+        link.wrench =
+            d.output(spec(base + "wrench/aero", SignalType::Wrench, units::N, "world_local"));
+        link.airspeed = d.output(spec(base + "airspeed", SignalType::Scalar, units::m_per_s));
+        links_.push_back(link);
+    }
+    gust_ = d.output(spec("env/wind/gust", SignalType::Vec3, units::m_per_s, "world_local"));
+    wind_ = d.output(spec("env/wind/velocity", SignalType::Vec3, units::m_per_s, "world_local"));
+    return {};
+}
+
+Status ZeroAero::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
+    for (const Link& link : links_) {
+        bus.writeN(link.wrench, std::array<double, 6>{});
+        bus.write(link.airspeed, 0.0);
+    }
+    bus.writeN(gust_, Vec3{});
+    bus.writeN(wind_, Vec3{});
+    return {};
+}
+
+Status ZeroAero::step(const StepContext&, SignalBus& bus) {
+    for (const Link& link : links_) {
+        const std::span<const double> t = bus.readN(link.twist);
+        bus.write(link.airspeed, std::hypot(t[0], t[1], t[2]));  // still air: its own speed
+    }
+    return {};
+}
+
+Status ZeroAero::saveState(StateWriter&) const {
+    return {};
+}
+
+Status ZeroAero::restoreState(StateReader&) {
     return {};
 }
 

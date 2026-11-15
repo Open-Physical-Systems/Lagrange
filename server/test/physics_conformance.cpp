@@ -185,6 +185,67 @@ TEST_P(Conformance, APendulumSwingsWithItsPeriod) {
     EXPECT_NEAR(measured, expected, 0.005 * expected) << "within 0.5 %";
 }
 
+// A pendulum released from 1 rad, swinging free for 60 s at the 1 ms step: its period is the
+// exact one of a physical pendulum, T = 4 √(I / (m g d)) K(sin(θ₀/2)) with K the complete elliptic
+// integral of the first kind (no small-angle series), and its energy ½ I ω² + m g d (1 − cos θ)
+// never grows and keeps at least 80 % of its start. The bound is the backends' contract, not a
+// goal: MuJoCo, in joint coordinates, keeps it within 0.1 %; Jolt, joints as constraints between
+// free bodies, loses (ω Δt)² of the kinetic energy each step, 16 % here (rigid_body.md §8.1;
+// domains.rigid_body.substeps divides it).
+TEST_P(Conformance, APendulumKeepsItsPeriodAndEnergy) {
+    constexpr double kMass = 1.0;       // kg
+    constexpr double kDistance = 1.0;   // m, pivot to centre of mass
+    constexpr double kBob = 1.6e-4;     // kg·m², a 1 kg sphere of 2 cm radius about its centre
+    constexpr double kAmplitude = 1.0;  // rad, released from rest
+    constexpr double kG = 9.80665;      // m/s², the world's
+    const double inertia = kMass * kDistance * kDistance + kBob;
+    std::ostringstream urdf;
+    urdf << R"(<?xml version="1.0"?><robot name="pendulum"><link name="world"/>)"
+         << R"(<link name="bob"><inertial><origin xyz="0 0 -1"/><mass value="1"/>)"
+         << R"(<inertia ixx="0.00016" iyy="0.00016" izz="0.00016" ixy="0" ixz="0" iyz="0"/>)"
+         << R"(</inertial></link><joint name="pivot" type="continuous">)"
+         << R"(<parent link="world"/><child link="bob"/><origin xyz="0 0 2" rpy="0 )" << kAmplitude
+         << R"( 0"/><axis xyz="0 1 0"/></joint></robot>)";
+    Server server(options(write("energy_pendulum.urdf", urdf.str()), ""));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    const auto energy = [&] {
+        const double theta = kAmplitude + server.read("joint/pivot/position").at(0);
+        const double omega = server.read("joint/pivot/velocity").at(0);
+        return 0.5 * inertia * omega * omega + kMass * kG * kDistance * (1.0 - std::cos(theta));
+    };
+    const double start = energy();
+    double gain = 0.0;
+    std::vector<double> turns;  // where the velocity turns from negative to positive
+    double previous = server.read("joint/pivot/velocity").at(0);
+    for (std::int64_t t = 1; t <= 60'000; ++t) {
+        ASSERT_TRUE(server.stepUntil(SimTime{t * 1'000'000}).ok());
+        const double velocity = server.read("joint/pivot/velocity").at(0);
+        if (previous < 0.0 && velocity >= 0.0 && turns.size() < 6) {
+            turns.push_back((static_cast<double>(t - 1) + -previous / (velocity - previous)) *
+                            1e-3);
+        }
+        previous = velocity;
+        if (t % 10 == 0) {
+            gain = std::max(gain, energy() / start - 1.0);
+        }
+    }
+    const double drift = energy() / start - 1.0;
+    ASSERT_GE(turns.size(), 6U);
+    const double period = (turns.back() - turns.front()) / static_cast<double>(turns.size() - 1);
+    const double exact = 4.0 * std::sqrt(inertia / (kMass * kG * kDistance)) *
+                         std::comp_ellint_1(std::sin(kAmplitude / 2.0));
+    std::printf(
+        "period %.6f s (exact %.6f s, %+.1f ppm); energy after 60 s %+.4f %%, most "
+        "above the start %+.4f %%\n",
+        period, exact, (period / exact - 1.0) * 1e6, drift * 100.0, gain * 100.0);
+    // The first five swings, 10 s: a backend that loses energy swings a little shorter (Jolt's
+    // amplitude falls 0.02 rad there, 0.15 % of the period).
+    EXPECT_NEAR(period, exact, 0.0025 * exact) << "within 0.25 %";
+    EXPECT_LT(gain, 0.005) << "a free pendulum never gains energy (0.5 % for the integrator)";
+    EXPECT_GT(drift, -0.20) << "keeps at least 80 % of its energy over 60 s";
+}
+
 // A box on a slope (friction coefficient 1 on both) holds at 30° (tan 30° < 1) and slides
 // at 60° (tan 60° > 1).
 TEST_P(Conformance, ABoxOnASlopeHoldsOrSlidesByItsFriction) {
@@ -314,7 +375,7 @@ TEST_P(Conformance, APivotCarriesTheSwingAtTheBottom) {
 // The sample AMR's demo loop (articulated wheels, casters, a motor torque controller) drives
 // the distance it does on MuJoCo, the reference backend, within 5 %, and ends within 10 % of the
 // distance driven from where it ends there. Engines with other contact and friction models drift
-// in heading over a loop (Jolt, with friction per body: 5.3 % on its 5.4 m in 10 s).
+// in heading over a loop (Jolt: 5.3 % on its 5.4 m in 10 s).
 TEST_P(Conformance, TheSampleAmrDrivesItsLoopAsOnTheReference) {
     const auto run = [this](const std::string& backend, const std::string& plugin,
                             double& travelled) {
@@ -524,6 +585,63 @@ TEST_P(Conformance, AFrictionlessBoxSlidesAtGSinTheta) {
     const double slid = std::hypot(b[0] - a[0], b[2] - a[2]);
     const double expected = 0.5 * 9.80665 * std::sin(theta) * (1.1 * 1.1 - 0.1 * 0.1);
     EXPECT_NEAR(slid, expected, 0.15 * expected);
+}
+
+// A body touches with each collider's own friction: a 1 kg body box of friction 1, held above
+// the ramp on four small feet of friction 0.3 (the ramp's too), holds at 10° (tan 10° < 0.3) and
+// slides at 25° at g (sin θ − 0.3 cos θ), as the feet say. Combined as MuJoCo does, the larger
+// of the two colliders' (Jolt once took the largest of the whole body's, and held at 25°).
+TEST_P(Conformance, EachColliderTouchesWithItsOwnFriction) {
+    constexpr double kFeetMu = 0.3;
+    constexpr double kBodyMu = 1.0;
+    constexpr double kFootDrop = 0.09;  // m, link origin to the feet's soles
+    const auto collider = [](const std::string& name, double x, double y, double z,
+                             const std::string& size, double mu) {
+        std::ostringstream out;
+        out << "<collision name=\"" << name << "\"><pose>" << x << " " << y << " " << z
+            << " 0 0 0</pose><geometry><box><size>" << size << "</size></box></geometry>"
+            << "<surface><friction><ode><mu>" << mu << "</mu></ode></friction></surface>"
+            << "</collision>";
+        return out.str();
+    };
+    for (const double degrees : {10.0, 25.0}) {
+        const double theta = degrees * std::numbers::pi / 180.0;
+        const double lift = 0.1 + kFootDrop + 0.001;  // ramp half-thickness, feet, a gap
+        std::string ramp = box("ramp", 0.0, 0.0, 2.5, theta, true, "4 2 0.2");
+        const std::string at = "</geometry>";
+        ramp.insert(ramp.find(at) + at.size(),
+                    "<surface><friction><ode><mu>0.3</mu></ode></friction></surface>");
+        std::ostringstream walker;
+        walker << "<model name=\"walker\"><pose>" << lift * std::sin(theta) << " 0 "
+               << 2.5 + lift * std::cos(theta) << " 0 " << theta << " 0</pose>"
+               << "<link name=\"link\"><inertial><mass>1</mass><inertia><ixx>0.004</ixx>"
+               << "<iyy>0.008</iyy><izz>0.01</izz></inertia></inertial>"
+               << collider("body", 0, 0, 0, "0.3 0.2 0.1", kBodyMu);
+        for (const double x : {-0.12, 0.12}) {
+            for (const double y : {-0.07, 0.07}) {
+                walker << collider("foot_" + std::to_string(x) + "_" + std::to_string(y), x, y,
+                                   -0.07, "0.04 0.04 0.04", kFeetMu);
+            }
+        }
+        walker << "</link></model>\n";
+        Server server(options("", world("feet", ramp + walker.str())));
+        const Status loaded = server.load();
+        ASSERT_TRUE(loaded.ok()) << loaded.message;
+        ASSERT_TRUE(server.stepUntil(SimTime{100'000'000}).ok());
+        const std::vector<double> a = pose(server, "walker");
+        ASSERT_TRUE(server.stepUntil(SimTime{1'100'000'000}).ok());
+        const std::vector<double> b = pose(server, "walker");
+        const double slid = std::hypot(b[0] - a[0], b[2] - a[2]);
+        if (degrees < 15.0) {
+            EXPECT_LT(slid, 0.01) << degrees << "° holds on the feet's friction";
+        } else {
+            // From rest at about 0.1 s (it starts sliding at once): ½ a (1.1² − 0.1²).
+            const double accel = 9.80665 * (std::sin(theta) - kFeetMu * std::cos(theta));
+            const double expected = 0.5 * accel * (1.1 * 1.1 - 0.1 * 0.1);
+            EXPECT_NEAR(slid, expected, 0.10 * expected)
+                << degrees << "° slides on the feet's friction, not the body's";
+        }
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(Backends, Conformance, ::testing::ValuesIn(backends()),

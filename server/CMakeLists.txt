@@ -33,6 +33,7 @@ find_package(lagrange_importers REQUIRED)
 find_package(lagrange_ros2_control REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
+find_package(console_bridge REQUIRED)
 find_package(tinyxml2 REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
@@ -111,6 +112,7 @@ target_link_libraries(
         lagrange_importers::lagrange_importers
         lagrange_ros2_control::lagrange_ros2_control
         urdfdom::urdfdom_model
+        console_bridge::console_bridge
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp
         mcap_vendor::mcap
@@ -278,12 +280,14 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_ADULT_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/humans/adult.usda"
             LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
             LAGRANGE_TEST_AMR_FMS_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_fms/amr_fms.urdf"
+            LAGRANGE_TEST_AMR_FMS_WAREHOUSE="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/amr_fms_warehouse/warehouse.sdf"
             LAGRANGE_TEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
             LAGRANGE_TEST_PROFILES="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples"
             LAGRANGE_TEST_WAREHOUSE_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.urdf"
             LAGRANGE_TEST_TILED_TOWN="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/tiled_town/tiled_town.usda"
             LAGRANGE_TEST_AMR_SDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.sdf"
             LAGRANGE_TEST_AMR_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.xml"
+            LAGRANGE_TEST_HEXAPOD_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../docs/plan/spikes/legged/models/hexapod.xml"
             LAGRANGE_TEST_ARM_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/primitives_arm/primitives_arm.urdf"
             LAGRANGE_TEST_AMR_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.usda"
             LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
@@ -294,6 +298,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_SEDAN_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/sedan/sedan.usda"
             LAGRANGE_TEST_CUT_IN="${CMAKE_CURRENT_SOURCE_DIR}/../assets/scenarios/cut_in.xosc"
             LAGRANGE_TEST_CITY_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/city_block/city_block.usda"
+            LAGRANGE_TEST_BANKED_RING_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/banked_ring/banked_ring.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
@@ -428,7 +433,6 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_ros_topics
         test/test_ros_topics.cpp
-        ENV ROS_DOMAIN_ID=88
         TIMEOUT 120
     )
     target_link_libraries(
@@ -443,12 +447,27 @@ if(BUILD_TESTING)
         PRIVATE LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
     lagrange_target_defaults(test_ros_topics)
+    # simulation_interfaces' /spawn_entity names a robot given as text by its <robot name>.
+    find_package(simulation_interfaces REQUIRED)
+    ament_add_gtest(
+        test_spawn_service
+        test/test_spawn_service.cpp
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        TIMEOUT 120
+    )
+    target_link_libraries(
+        test_spawn_service
+        lagrange_server
+        rclcpp::rclcpp
+        ${simulation_interfaces_TARGETS}
+    )
+    lagrange_target_defaults(test_spawn_service)
     # The built-in kinds' default topics end to end (sensors.md §9), with no --ros-topics map.
     find_package(nav_msgs REQUIRED)
     ament_add_gtest(
         test_kind_topics
         test/test_kind_topics.cpp
-        ENV ROS_DOMAIN_ID=77 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 120
     )
     target_link_libraries(
@@ -465,6 +484,20 @@ if(BUILD_TESTING)
     )
     lagrange_target_defaults(test_kind_topics)
     lagrange_target_defaults(test_server)
+    # Each run in a temporary directory of its own and, for the ROS tests, on $ROS_DOMAIN_ID
+    # when set (else the default here), so that runs on one machine do not collide.
+    lagrange_test_private_tmpdir(
+        test_server
+        test_connection_limits
+        test_arm
+        test_ros_topics
+        test_spawn_service
+        test_kind_topics
+    )
+    lagrange_test_ros_domain(test_ros_topics 88)
+    lagrange_test_ros_domain(test_spawn_service 87)
+    lagrange_test_ros_domain(test_kind_topics 77)
+    lagrange_test_ros_domain(test_arm 86)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot
         --robot
@@ -501,13 +534,44 @@ if(BUILD_TESTING)
         lagrange_cli_determinism
         PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
     )
+    # The legged sample (RFC 0019): its profile, bare and with its power-system overlay.
+    set(_lagrange_quadruped
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quadruped/quadruped.urdf
+    )
+    set(_lagrange_quadruped_overlay
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quadruped/quadruped.overlay.yaml
+    )
+    add_test(
+        NAME lagrange_cli_determinism_quadruped
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> determinism
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/quadruped_trot.yaml
+            --robot ${_lagrange_quadruped} --seconds 3
+    )
+    set_tests_properties(
+        lagrange_cli_determinism_quadruped
+        PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
+    )
+    add_test(
+        NAME lagrange_cli_determinism_quadruped_powered
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> determinism
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/quadruped_trot_powered.yaml
+            --robot ${_lagrange_quadruped} --overlay
+            ${_lagrange_quadruped_overlay} --seconds 3
+    )
+    set_tests_properties(
+        lagrange_cli_determinism_quadruped_powered
+        PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
+    )
     # QA 2026-11-12: heat took its ambient only from --ambient-temperature, determinism ran
     # without its profile.
     add_test(
         NAME lagrange_cli_heat_profile_ambient
         COMMAND
             $<TARGET_FILE:lagrange_cli> heat
-            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/led_heatsink.yaml --robot
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/led_heatsink.yaml
+            --robot
             ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/led_heatsink/led_heatsink.urdf
     )
     set_tests_properties(

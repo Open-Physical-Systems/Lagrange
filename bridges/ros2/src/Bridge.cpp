@@ -958,8 +958,13 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             lidar.minRange = get("min_range", 0.1);
             lidar.maxRange = get("max_range", 30.0);
             lidar.rateHz = sensors.rateHz[i];
+            // From the first column's firing to one column past the last: the period for a
+            // rotating lidar, samples / point_rate for a rosette (sensors QA F3), as the module
+            // casts them (LidarLayout::firedFraction).
             lidar.sweep = get("motion_distortion", 1.0) != 0.0 && !lidar.layout.simultaneous()
-                              ? 1.0 / lidar.rateHz
+                              ? (lidar.layout.timeVarying()
+                                     ? lidar.layout.horizontal / lidar.layout.rosette.pointRate
+                                     : 1.0 / lidar.rateHz)
                               : 0.0;
             // Reuse the publisher across attach() calls: a new one would drop subscribers.
             for (const Impl::Lidar& old : s.lidars) {

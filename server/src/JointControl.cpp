@@ -41,6 +41,12 @@ void JointTargets::replace(std::map<std::string, JointTarget> targets) {
     version_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void JointTargets::keepIf(const std::function<bool(const std::string& joint)>& keep) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::erase_if(targets_, [&](const auto& entry) { return !keep(entry.first); });
+    version_.fetch_add(1, std::memory_order_relaxed);
+}
+
 std::map<std::string, JointTarget> JointTargets::all() const {
     const std::lock_guard<std::mutex> lock(mutex_);
     return targets_;

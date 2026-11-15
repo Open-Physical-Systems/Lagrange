@@ -1,0 +1,43 @@
+# The sample plugin lagrange_tof's kind `tof` (tof_sensor.c), for the robot builder's sensor
+# catalog (RFC 0016 §5): installed under the ament resource lagrange_sensor_catalog.
+schema_version: 1
+plugin: lagrange_tof
+kinds:
+  tof:
+    name: Time-of-flight sensor
+    category: range_and_contact
+    description: One ray, or a 5 x 5 grid over a square field of view, along +x; the nearest distance.
+    doc: docs/guide/writing-a-plugin.md
+    references: []
+    renders: false
+    params:
+      - path: range/min
+        type: number
+        unit: m
+        default: 0.02
+        min: 0
+        meaning: 'nearer: nothing'
+      - path: range/max
+        type: number
+        unit: m
+        default: 4.0
+        meaning: 'farther: +inf'
+      - path: fov
+        type: number
+        unit: rad
+        default: 0.0
+        min: 0
+        meaning: 'square field of view of the 5 x 5 grid; 0: one ray'
+      - path: noise/stddev
+        type: number
+        unit: m
+        default: 0.0
+        min: 0
+        meaning: Gaussian, 1σ
+    signals:
+      - name: range
+        type: scalar
+        unit: m
+      - name: valid
+        type: scalar
+        unit: '1'

@@ -246,12 +246,12 @@ Status Water::declare(const WorldView& world, const ModuleConfig& config, Signal
     const double g = std::hypot(gravity_[0], gravity_[1], gravity_[2]);
     wavenumbers_.assign(waters_.size(), 0.0);
     for (std::size_t w = 0; w < waters_.size() && waveOmega_ > 0.0 && g > 0.0; ++w) {
-        const double d = waters_[w].depth;
+        const double depth = waters_[w].depth;
         double k = waveOmega_ * waveOmega_ / g;
         for (int i = 0; i < 50; ++i) {
-            const double t = std::tanh(k * d);
+            const double t = std::tanh(k * depth);
             const double f = g * k * t - waveOmega_ * waveOmega_;
-            const double slope = g * t + g * k * d * (1.0 - t * t);
+            const double slope = g * t + g * k * depth * (1.0 - t * t);
             const double step = f / slope;
             k -= step;
             if (std::abs(step) < 1e-12 * k) {
@@ -296,10 +296,13 @@ Status Water::declare(const WorldView& world, const ModuleConfig& config, Signal
                             box.lo[1] + (box.hi[1] - box.lo[1]) * (j + 0.5) / kCells,
                             box.lo[2] + (box.hi[2] - box.lo[2]) * (k + 0.5) / kCells};
                         if (inside(type, size, q, hull)) {
-                            cells.push_back(
-                                {compose(raw.colliders.poseInBody[c], Pose{q, {1.0, 0.0, 0.0, 0.0}})
-                                     .position,
-                                 0.0, (box.hi[2] - box.lo[2]) / kCells});
+                            // Volume and area are shared out below.
+                            cells.push_back({.at = compose(raw.colliders.poseInBody[c],
+                                                           Pose{q, {1.0, 0.0, 0.0, 0.0}})
+                                                       .position,
+                                             .volume = 0.0,
+                                             .area = 0.0,
+                                             .height = (box.hi[2] - box.lo[2]) / kCells});
                         }
                     }
                 }

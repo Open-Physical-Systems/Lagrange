@@ -248,6 +248,11 @@ So a drone of your own needs no tuning here; set the autopilot's hover thrust (`
 both learn it in flight. Thrust goes with the speed squared, and both autopilots count hover in
 thrust (PX4 with `THR_MDL_FAC 1`, ArduPilot with `MOT_THST_EXPO 1`).
 
+With the electrical domain off (`--domain electrical=off`) nothing stands between this speed
+loop and the rotor, so the ESCs bound each rotor's torque by what its drive could give at that top
+speed and lower their speed gain to what the bridge's step allows; both are logged per rotor
+(`ideal motor, torque command bounded to ...`).
+
 A motor's KV (rpm per volt) gives its constants as `Ke = 60 / (2π · KV · √3)` V·s/rad and
 `Kt = 1.5 · Ke` N·m/A: KV is measured against the bus voltage, which is the line-to-line peak
 back-EMF, while Lagrange's motor model counts the phase peak, √3 smaller, so that the no-load speed

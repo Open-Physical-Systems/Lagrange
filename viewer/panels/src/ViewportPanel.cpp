@@ -1,8 +1,10 @@
 // Scene workspace, centre: the 3D viewport with its overlays (docs/design/ui/02-scene/SPEC.md).
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/FlowLegend.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Picking.hpp"
+#include "lagrange/viewer/RadarScale.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -39,6 +41,9 @@ ImU32 u32(const ImVec4& color) {
 }
 
 /// A text box drawn over the image: raised surface, thin border, mono text.
+/// The overlay bar at the top right: eight 24 px buttons with 2 px around each (logical px).
+constexpr float kOverlayBarWidth = 24.0F * 8.0F + 2.0F * 9.0F;
+
 void overlayBox(ImDrawList* draw, const ImVec2& min, const char* first, const char* second,
                 const ImVec4& border = c::lineStrong, const ImVec4& text = c::t1) {
     ImFont* font = theme::fonts().mono;
@@ -175,14 +180,52 @@ public:
         if (char* detail = std::strstr(tier, " (")) {
             *detail = '\0';  // "Tier 2 (full, hardware ray tracing)" -> "Tier 2"
         }
+        // It stops short of the overlay bar at the top right (kOverlayBarWidth): in a narrow
+        // viewport the tier goes first, then the draw count, then the frame time.
+        const float readoutRoom =
+            available.x - px(10.0F) - px(kOverlayBarWidth) - px(8.0F) - px(10.0F) - px(16.0F);
+        const char* camera = context.renderOptions->follow ? "Follow" : "Perspective";
+        const double frameMs = static_cast<double>(context.frameMs);
         char text[160];
-        std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws   %s",
-                      context.renderOptions->follow ? "Follow" : "Perspective",
-                      shadingName(context), static_cast<double>(context.frameMs), context.drawCalls,
-                      tier);
+        for (int parts = 4; parts >= 1; --parts) {
+            switch (parts) {
+                case 4:
+                    std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws   %s", camera,
+                                  shadingName(context), frameMs, context.drawCalls, tier);
+                    break;
+                case 3:
+                    std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws", camera,
+                                  shadingName(context), frameMs, context.drawCalls);
+                    break;
+                case 2:
+                    std::snprintf(text, sizeof(text), "%s · %s   %.1f ms", camera,
+                                  shadingName(context), frameMs);
+                    break;
+                default:
+                    std::snprintf(text, sizeof(text), "%s · %s", camera, shadingName(context));
+                    break;
+            }
+            if (theme::fonts().mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x <=
+                readoutRoom) {
+                break;
+            }
+        }
+        // Narrower still (a 1024 px window, QA3 F7): the shading alone, cut with an ellipsis,
+        // so that the readout always stops before the overlay bar.
+        if (theme::fonts().mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x >
+            readoutRoom) {
+            const std::string shown = fit::cut(theme::fonts().mono, px(theme::kMonoSize),
+                                               shadingName(context), std::max(readoutRoom, 0.0F));
+            std::snprintf(text, sizeof(text), "%s", shown.c_str());
+        }
         thermal(context, draw, origin, available);
         flowLegend(context, draw, origin, available);
         airflowLegend(context, draw, origin, available);
+        radarLegend(
+            context, draw, origin, available,
+            legends_.size() +
+                (context.renderOptions->airflow && context.renderOptions->airflowMax > 0.0F ? 1U
+                                                                                            : 0U));
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
         // Bottom left: the frame's axes as the camera sees them, its convention, and how far
@@ -503,6 +546,53 @@ private:
                       text);
     }
 
+    /// The radar detections' colour scale (RadarScale.hpp): radial velocity on the diverging
+    /// map, approaching to receding, ± the span the app picked for the frame. Above the airflow
+    /// and wind tunnel scales when those are shown too.
+    static void radarLegend(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                            const ImVec2& size, std::size_t below) {
+        const RenderOptions& options = *context.renderOptions;
+        const float span = options.radarVelocitySpan;
+        if (!options.radar || span <= 0.0F) {
+            return;
+        }
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        const float top = origin.y + size.y - px(58.0F) - px(56.0F) * static_cast<float>(below);
+        const ImVec2 min(origin.x + size.x - width - px(10.0F), top);
+        const ImVec2 max(min.x + width, min.y + px(48.0F));
+        draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+        draw->AddRect(min, max, u32(c::line), px(4.0F));
+        draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                      "radar · radial velocity · m/s");
+        const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+        const float barWidth = width - px(16.0F);
+        constexpr int kSteps = 32;
+        for (int k = 0; k < kSteps; ++k) {
+            const float t = (static_cast<float>(k) + 0.5F) / kSteps;
+            const std::array<float, 4> colour = radarVelocityColour((t * 2.0F - 1.0F) * span, span);
+            const float x0 = bar.x + barWidth * static_cast<float>(k) / kSteps;
+            const float x1 = bar.x + barWidth * static_cast<float>(k + 1) / kSteps;
+            draw->AddRectFilled(ImVec2(x0, bar.y), ImVec2(x1, bar.y + barHeight),
+                                u32(ImVec4(colour[0], colour[1], colour[2], 1.0F)));
+        }
+        char text[32];
+        std::snprintf(text, sizeof(text), "%+.0f closing", -static_cast<double>(span));
+        draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+        const float centre = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, "0").x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth * 0.5F - centre * 0.5F, bar.y + barHeight + px(3.0F)),
+                      u32(c::t3), "0");
+        std::snprintf(text, sizeof(text), "away %+.0f", static_cast<double>(span));
+        const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+    }
+
     std::vector<FlowLegend> legends_;
     std::uint64_t legendsOf_{~0ULL};
     static constexpr float kMinimumSpanK = 10.0F;
@@ -582,6 +672,7 @@ private:
         overlays += context.renderOptions->grid ? 1 : 0;
         overlays += context.renderOptions->axes ? 1 : 0;
         overlays += context.renderOptions->sensors ? 1 : 0;
+        overlays += context.renderOptions->radar ? 1 : 0;
         char overlayLabel[40];
         std::snprintf(overlayLabel, sizeof(overlayLabel), "Overlays · %d###overlays", overlays);
         const char* camera =
@@ -672,6 +763,7 @@ private:
             ImGui::MenuItem("Grid", nullptr, &context.renderOptions->grid);
             ImGui::MenuItem("Frame axes", nullptr, &context.renderOptions->axes);
             ImGui::MenuItem("Sensor frustums", nullptr, &context.renderOptions->sensors);
+            ImGui::MenuItem("Radar detections", nullptr, &context.renderOptions->radar);
             // These need data that the server does not send yet.
             for (const char* overlay : {"Contacts and forces", "Planned path", "Field overlays",
                                         "Electrical overlay", "Weather effects"}) {
@@ -733,7 +825,7 @@ private:
             {"##weather", widgets::Icon::Environment, "Weather effects: no data from this server",
              nullptr},
         }};
-        const float width = px(24.0F) * 8.0F + px(2.0F) * 9.0F;
+        const float width = px(kOverlayBarWidth);
         ImGui::SetCursorScreenPos(ImVec2(topRight.x - width, topRight.y));
         widgets::ToolBarFrame(static_cast<int>(kOverlays.size()), false);
         float x = ImGui::GetCursorScreenPos().x;

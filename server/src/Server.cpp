@@ -5,6 +5,7 @@
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/gpu/Device.hpp"
 #include "lagrange/humans/Body.hpp"
 #include "lagrange/humans/Humans.hpp"
 #include "lagrange/hydrodynamics/Water.hpp"
@@ -55,6 +56,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -79,6 +81,7 @@
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <tinyxml2.h>
 #include <tuple>
 #include <unistd.h>
@@ -509,6 +512,127 @@ constexpr std::array<DomainRow, 15> kDomains{{
     {"tether", "zero", "constant"},
 }};
 
+/// Writes a robot given as text to a temporary file the loaders read (defined below).
+Expected<std::string, std::string> writeResource(const std::string& text);
+
+/// The name a robot's text gives itself: URDF's <robot name>, SDFormat's first <model name>,
+/// MJCF's <mujoco model>; made a valid entity name (letters, digits and _, not first a
+/// digit). Empty when the text names none.
+std::string modelNameOf(const std::string& text) {
+    tinyxml2::XMLDocument document;
+    if (document.Parse(text.c_str(), text.size()) != tinyxml2::XML_SUCCESS ||
+        document.RootElement() == nullptr) {
+        return "";
+    }
+    const tinyxml2::XMLElement* root = document.RootElement();
+    const std::string_view kind = root->Name();
+    const char* given = nullptr;
+    if (kind == "robot") {
+        given = root->Attribute("name");
+    } else if (kind == "mujoco") {
+        given = root->Attribute("model");
+    } else if (kind == "sdf") {
+        const tinyxml2::XMLElement* model = root->FirstChildElement("model");
+        if (model == nullptr && root->FirstChildElement("world") != nullptr) {
+            model = root->FirstChildElement("world")->FirstChildElement("model");
+        }
+        given = model != nullptr ? model->Attribute("name") : nullptr;
+    }
+    if (given == nullptr) {
+        return "";
+    }
+    std::string name;
+    for (const char c : std::string_view(given)) {
+        name += std::isalnum(static_cast<unsigned char>(c)) != 0 ? c : '_';
+    }
+    if (!name.empty() && std::isdigit(static_cast<unsigned char>(name[0])) != 0) {
+        name = "robot_" + name;
+    }
+    return name;
+}
+
+/// The folder for files the server writes from text it was sent (an inline robot or overlay):
+/// $XDG_RUNTIME_DIR/lagrange, or <tmp>/lagrange-<uid>, made 0700. Refused when it is a symbolic
+/// link, not a folder, someone else's, or open to others (another user could swap the files
+/// between writing and loading).
+Expected<std::filesystem::path, std::string> privateRuntimeDir() {
+    std::filesystem::path dir;
+    if (const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+        runtime != nullptr && runtime[0] == '/') {
+        dir = std::filesystem::path(runtime) / "lagrange";
+    } else {
+        dir = std::filesystem::temp_directory_path() / ("lagrange-" + std::to_string(::getuid()));
+    }
+    if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
+        return Unexpected{"cannot make " + dir.string() + ": " + std::strerror(errno)};
+    }
+    struct stat info{};
+    if (::lstat(dir.c_str(), &info) != 0) {
+        return Unexpected{"cannot look at " + dir.string() + ": " + std::strerror(errno)};
+    }
+    if (!S_ISDIR(info.st_mode) || info.st_uid != ::getuid() || (info.st_mode & 077) != 0) {
+        return Unexpected{dir.string() +
+                          " is not a private folder of this user (a link, someone else's, or "
+                          "open to others): not writing the robot there"};
+    }
+    return dir;
+}
+
+/// Writes `text` to a new file of its own (mkstemps: created exclusively, 0600, never through a
+/// link) in privateRuntimeDir, named lagrange-spawn-XXXXXX<extension>.
+Expected<std::string, std::string> writeTemporary(const std::string& text,
+                                                  const std::string& extension) {
+    const auto dir = privateRuntimeDir();
+    if (!dir) {
+        return Unexpected{dir.error()};
+    }
+    std::string name = (*dir / ("lagrange-spawn-XXXXXX" + extension)).string();
+    const int fd = ::mkstemps(name.data(), static_cast<int>(extension.size()));
+    if (fd < 0) {
+        return Unexpected{"cannot write in " + dir->string() + ": " + std::strerror(errno)};
+    }
+    std::size_t done = 0;
+    while (done < text.size()) {
+        const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            ::close(fd);
+            std::error_code ignored;
+            std::filesystem::remove(name, ignored);
+            return Unexpected{"cannot write " + name};
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    if (::close(fd) != 0) {
+        std::error_code ignored;
+        std::filesystem::remove(name, ignored);
+        return Unexpected{"cannot write " + name};
+    }
+    return name;
+}
+
+/// Writes an overlay given as text (formats.md §9: YAML, or a SPICE netlist §9.1) to a
+/// temporary file, with the extension applyOverlay tells them apart by.
+Expected<std::string, std::string> writeOverlay(const std::string& text) {
+    // A netlist ends with .end (SPICE); YAML has no such line.
+    bool netlist = false;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t end = std::min(text.find('\n', start), text.size());
+        std::string line = text.substr(start, end - start);
+        std::ranges::transform(line, line.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back())) != 0) {
+            line.pop_back();
+        }
+        netlist = netlist || line == ".end";
+        start = end + 1;
+    }
+    return writeTemporary(text, netlist ? ".cir" : ".yaml");
+}
+
 }  // namespace
 
 struct Server::Impl {
@@ -666,8 +790,14 @@ struct Server::Impl {
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
         const bool rendering = cameraScene != nullptr && !off("sensors");
+        // So is one whose air the live box computes on the GPU (aerodynamics.downwash_model:
+        // lbm without downwash_lbm_cpu; rotor_aero.md §8).
+        ModuleConfigData asked;
+        asked.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+        const bool gpuAir = !off("aerodynamics") &&
+                            aerodynamics::AeroDrag::asksGpuAir(ModuleConfig(asked), hasRotors());
         auto next = std::make_unique<Scheduler>(
-            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering &&
+            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering && !gpuAir &&
                                               !options.px4Port && !options.ardupilotPort});
         // What plugin modules get from the host (ABI 1.1): the run's colliders for their ray and
         // overlap queries, placed at the bus's body poses when they ask.
@@ -707,6 +837,12 @@ struct Server::Impl {
             if (settings.rigidBodyDtNs) {
                 physics.dt = Duration{*settings.rigidBodyDtNs};
             }
+            if (settings.rigidBodySubsteps) {  // Jolt's (rigid_body.md §8.1); MuJoCo has none
+                physics.values["substeps"] = *settings.rigidBodySubsteps;
+            }
+            if (settings.rigidBodyNoslip) {  // MuJoCo's (rigid_body.md §8.1); others ignore it
+                physics.values["noslip_iterations"] = *settings.rigidBodyNoslip;
+            }
             if (physics.backend == "jolt") {
                 next->add(std::make_unique<rigid_body::JoltBackend>(), ModuleConfig(physics));
             } else if (physics.backend == "mujoco") {
@@ -742,6 +878,7 @@ struct Server::Impl {
             }
             DriveCommand::Settings demo;
             demo.demo = options.demoDrive;
+            demo.basePose = drivenBasePose();  // the figure-eight keeps to its own floor
             auto drive = std::make_unique<DriveCommand>(demo, external);
             if (driveOut != nullptr) {
                 *driveOut = drive.get();
@@ -883,7 +1020,13 @@ struct Server::Impl {
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
         // (domains/electrical.md §5).
-        if (hasPowerSystem() && !off("electrical")) {
+        const bool electricalNetwork = hasPowerSystem() && !off("electrical");
+        // The ideal substitute passes on the torque commands declared before it. Here, where
+        // 1.1 to 1.3 added it, it sees every controller's but a multicopter's (added after the
+        // rotors' air), and the run keeps their bus layout, so that their saved states restore
+        // (RFC 0007, formats.md §11); with rotors it comes after every module instead.
+        const bool idealTorqueLast = hasRotors();
+        if (electricalNetwork) {
             ModuleConfigData power;
             power.fidelity = settings.electricalFidelity.value_or("averaged");
             // The physics step the joint speeds arrive at: speed prediction and the stability
@@ -906,7 +1049,7 @@ struct Server::Impl {
                     next->add(std::make_unique<electrical::FmuComponent>(std::move(binding)));
                 }
             }
-        } else if (!addPluginSubstitute("electrical")) {
+        } else if (!idealTorqueLast && !addPluginSubstitute("electrical")) {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
         // Thermal, after electrical: it reads the losses. It needs the site's ambient
@@ -1003,8 +1146,7 @@ struct Server::Impl {
         // aerodynamics config's own density, else rotor_aero's.
         // Rotors too: the domain carries their downwash (rotor_aero.md §2).
         bool downwashInRun = false;
-        if ((!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) &&
-            !off("aerodynamics")) {
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) {
             ModuleConfigData aero;
             aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
             aero.values["weather"] = weatherInRun;    // its wind grid, if any
@@ -1015,10 +1157,33 @@ struct Server::Impl {
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }
-            if (aero.values.contains("air_density")) {
+            // The rotors' downwash on the tethers (RFC 0011 step 6): each cable's node count,
+            // so the domain can read its nodes and write the air at them.
+            if (hasTethers() && !off("tether") && hasRotors()) {
+                std::string problem;
+                std::vector<std::string> nodes;
+                for (const tether::TetherSpec& t :
+                     tether::tethersOf(WorldView(robot.world), problem)) {
+                    nodes.push_back(t.name + "=" +
+                                    std::to_string(tether::Cable::capacityFor(t.params)));
+                }
+                if (!nodes.empty()) {
+                    aero.values["tether_nodes"] = std::move(nodes);
+                }
+            }
+            if (!aero.values.contains("air_density")) {
+                // the domain does not run without the site's air density
+            } else if (off("aerodynamics") && addPluginSubstitute("aerodynamics", aero)) {
+                // the plugin stands in for the air
+            } else if (off("aerodynamics")) {
+                // Still air (invariant 3, aerodynamics.md §5): no drag, no wind; the rotors
+                // fly in no wind or downwash from it.
+                next->add(std::make_unique<aerodynamics::ZeroAero>(), ModuleConfig(aero));
+            } else {
                 downwashInRun =
                     hasRotors() && ModuleConfig(aero).get<bool>("downwash").value_or(true);
-                next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+                next->add(std::make_unique<aerodynamics::AeroDrag>(ModuleConfig(aero), hasRotors()),
+                          ModuleConfig(aero));
                 windInRun = true;
             }
         }
@@ -1054,6 +1219,7 @@ struct Server::Impl {
                 ardupilot.airDensity = *settings.airDensityKgM3;
                 ardupilot.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
                 ardupilot.thrustLimit = options.thrustLimit;
+                ardupilot.idealMotors = !electricalNetwork;  // as the built-in controller's
                 next->add(mavlink::createArduPilotJson(ardupilot, ardupilotLink));
             } else if (options.px4Port) {
                 if (!px4Link) {
@@ -1068,6 +1234,7 @@ struct Server::Impl {
                 px4.airDensity = *settings.airDensityKgM3;
                 px4.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
                 px4.thrustLimit = options.thrustLimit;
+                px4.idealMotors = !electricalNetwork;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
             } else if (!controllers && !jointControlled() &&
                        MulticopterController::canFly(WorldView(robot.world))) {
@@ -1100,9 +1267,14 @@ struct Server::Impl {
                 // The ground under it, so that it can fly off a bridge or a roof and land below.
                 auto [below, friction] = groundQuery();
                 (void)friction;
+                ModuleConfigData flown = air;
+                if (!electricalNetwork) {
+                    // The ideal torque source: the controller bounds what it asks of the rotors.
+                    flown.values.emplace("ideal_motors", true);
+                }
                 next->add(std::make_unique<MulticopterController>(flight, std::move(commands),
                                                                   std::move(below)),
-                          ModuleConfig(air));
+                          ModuleConfig(flown));
             }
         }
         // EMI (domains/emi.md) when the stage has sources or victims: before the sensors, which
@@ -1175,8 +1347,15 @@ struct Server::Impl {
         if (sensors::DelayLine::needed(WorldView(robot.world))) {
             next->add(std::make_unique<sensors::DelayLine>());
         }
+        // With rotors, the electrical substitute passes on the torque_command of every module
+        // above (IdealTorqueSource reads them from declaredOutputs), so it comes after them all:
+        // the multicopter controller and the MAVLink bridges are added after the rotors' air.
+        if (!electricalNetwork && idealTorqueLast && !addPluginSubstitute("electrical")) {
+            next->add(std::make_unique<electrical::IdealTorqueSource>());
+        }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());
+        next->leaveOut(leftOut);
         Clock::time_point wireStart = Clock::now();
         auto wired = next->wire(WorldView(robot.world));
         timing("wire", wireStart);
@@ -1207,6 +1386,8 @@ struct Server::Impl {
         settings.substituted = options.substituted;
         settings.rigidBodyDtNs = rigidBodyDtNs;
         settings.rigidBodyBackend = rigidBodyBackend;
+        settings.rigidBodySubsteps = rigidBodySubsteps;
+        settings.rigidBodyNoslip = rigidBodyNoslip;
         settings.electricalDtNs = electricalDtNs;
         settings.thermalDtNs = thermalDtNs;
         settings.speedPrediction = speedPrediction;
@@ -1246,6 +1427,9 @@ struct Server::Impl {
     // Of the robot itself: a passive car spawned beside an arm takes nothing from the arm.
     bool jointControllable{true};
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
+    // Stateless modules ("domain/name") left out of the run because the state restored last was
+    // saved before a later release added them (Scheduler::addedSince, formats.md §11).
+    std::set<std::string> leftOut;
     std::optional<double> appliedGravity;  // m/s², downward (setSite); else the file's
 
     /// Stores one site value for the next build. An error names what can be set.
@@ -1296,8 +1480,19 @@ struct Server::Impl {
     /// Changes the site in a running simulation. Same modules: the run's whole state carries
     /// over. Others (the first air density brings the rotors): time and poses do.
     Status setSite(const std::string& name, double value) {
+        const std::vector<Status> each = setSites({{name, value}});
+        return each.front();
+    }
+
+    /// Several site values at once (a weather preset): every value is stored, then the run is
+    /// rebuilt once, so it restarts at most once. One status per value: a value the server
+    /// refuses is left out; a rebuild that fails takes them all back.
+    std::vector<Status> setSites(const std::vector<std::pair<std::string, double>>& values) {
+        std::vector<Status> each(values.size());
         if (replay) {
-            return Status::error(StatusCode::Unsupported, "a replay shows what was recorded");
+            std::ranges::fill(
+                each, Status::error(StatusCode::Unsupported, "a replay shows what was recorded"));
+            return each;
         }
         // A change the run cannot take is taken back.
         const auto before =
@@ -1308,12 +1503,38 @@ struct Server::Impl {
                      appliedWeather, options.ambientTemperatureK, robot.world.gravityLocal) =
                 before;
         };
-        if (Status status = storeSite(name, value); !status.ok()) {
-            return status;
+        std::string name;  // what the log says
+        double value = 0.0;
+        bool stored = false;
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (Status status = storeSite(values[i].first, values[i].second); !status.ok()) {
+                each[i] = status;
+                continue;
+            }
+            if (values[i].first == "gravity") {
+                robot.world.gravityLocal = {0.0, 0.0, -values[i].second};
+            }
+            name += (name.empty() ? "" : ", ") + values[i].first;
+            value = values[i].second;
+            stored = true;
         }
-        if (name == "gravity") {
-            robot.world.gravityLocal = {0.0, 0.0, -value};
+        if (!stored) {
+            return each;
         }
+        const Status built = rebuildForSite(name, value, values.size() == 1, takeBack);
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (each[i].ok()) {
+                each[i] = built;
+            }
+        }
+        return each;
+    }
+
+    /// The run rebuilt on the site just stored, its state carried over when the modules are the
+    /// same; `takeBack` restores the site when the run cannot be built on it.
+    template <class TakeBack>
+    Status rebuildForSite(const std::string& name, double value, bool single,
+                          const TakeBack& takeBack) {
         const Carried carried = carry();
         StateWriter saved;
         const bool savedOk = scheduler->saveState(saved).ok();
@@ -1352,15 +1573,29 @@ struct Server::Impl {
                     session->sensors.clear();
                     session->send(catalog());
                     session->send(snapshot(*session));
-                    session->send(profileState({}));
+                    session->send(profileState());
                 }
             }
         }
         owedNs = 0;
         lastWall = Clock::now();
-        char line[96];
-        std::snprintf(line, sizeof line, "%s = %g", name.c_str(), value);
-        log(v1::LOG_LEVEL_INFO, "site", line);
+        if (single) {
+            char line[96];
+            std::snprintf(line, sizeof line, "%s = %g", name.c_str(), value);
+            log(v1::LOG_LEVEL_INFO, "site", line);
+        } else {
+            log(v1::LOG_LEVEL_INFO, "site", "set together: " + name);
+        }
+        // Wind with nothing to blow on: the aerodynamics domain does not run (M9).
+        if (name.find("wind_speed") != std::string::npos && !aeroRuns()) {
+            if (const auto it = appliedAerodynamics.find("wind_speed");
+                it != appliedAerodynamics.end() && std::holds_alternative<double>(it->second) &&
+                std::get<double>(it->second) > 0.0) {
+                log(v1::LOG_LEVEL_WARN, "site",
+                    "the wind is set but the aerodynamics domain does not run, so it pushes "
+                    "nothing: it needs AeroAPI_1 links or rotors and the site's air density");
+            }
+        }
         broadcast(environmentState());
         return {};
     }
@@ -1485,6 +1720,7 @@ struct Server::Impl {
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
+    bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
@@ -1603,6 +1839,8 @@ struct Server::Impl {
     std::optional<std::string> rigidBodyReplay;                  // --bench, or an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;                   // from an applied profile
     std::optional<std::string> rigidBodyBackend;                 // from an applied profile
+    std::optional<std::int64_t> rigidBodySubsteps;               // from an applied profile
+    std::optional<std::int64_t> rigidBodyNoslip;                 // from an applied profile
     std::optional<std::string> appliedTireModel;                 // vehicle_dynamics.tire_model
     std::optional<openscenario::Scenario> scenario;              // --scenario
     std::vector<PluginModule> plugins;                           // --plugin (RFC 0008)
@@ -1678,6 +1916,18 @@ struct Server::Impl {
     }
 
     /// Wheel radius and track of a two-wheel robot, from its wheel colliders and positions.
+    /// The pose signal of the body the two driven wheels hang from, or "" without one.
+    std::string drivenBasePose() const {
+        const World& world = robot.world;
+        for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+            if (world.joints.names[j] == robot.actuatedJoints[0] &&
+                world.joints.parent[j] != kWorldBody) {
+                return "body/" + world.bodies.names[world.joints.parent[j].index] + "/pose";
+            }
+        }
+        return {};
+    }
+
     DiffDriveController::Settings driveSettings() const {
         DiffDriveController::Settings settings;
         settings.leftJoint = robot.actuatedJoints[0];
@@ -1722,6 +1972,11 @@ struct Server::Impl {
             });
             if (table.type[s] == SensorType::Camera && watched) {
                 sendImage(s, path);
+            }
+            if (watched &&
+                (table.type[s] == SensorType::Radar ||
+                 (table.type[s] == SensorType::Custom && table.kind[s] == "imaging_radar"))) {
+                sendRadar(s, path);
             }
             if (table.type[s] != SensorType::Lidar) {
                 continue;
@@ -1779,6 +2034,73 @@ struct Server::Impl {
         }
     }
     std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
+
+    /// A viewer that starts watching a sensor gets its latest frame now, not at its next scan:
+    /// a paused run takes none (a viewer connecting to it drew no radar, sensors QA F9), and a
+    /// slow sensor's next one may be seconds away. Others watching it get the frame again.
+    void resendSensorFrame(const std::string& sensor) {
+        if (!scheduler || scheduler->now().ns == 0) {
+            return;  // nothing taken yet: the first step sends it
+        }
+        namedImageSent.erase(sensor);
+        const World::Sensors& table = robot.world.sensors;
+        for (std::size_t k = 0; k < table.names.size() && k < lidarSent.size(); ++k) {
+            if (k < robot.sensorPrim.size() &&
+                robot.scene.prims[robot.sensorPrim[k]].path == sensor) {
+                lidarSent[k] = SimTime{-1};  // no sample has this stamp
+            }
+        }
+        sendSensorFrames();
+    }
+
+    /// A radar's latest scan (RadarAPI_1, or an imaging_radar), once per new scan: its
+    /// detections (sensor/<n>/detections: range, azimuth, elevation, radial velocity, RCS, SNR;
+    /// NaN beyond the count) as points in the sensor frame (x forward, z up) with fields x, y, z,
+    /// velocity (m/s, positive receding), rcs (m²) and snr (linear). An empty scan is sent too:
+    /// the viewer then clears what it drew.
+    void sendRadar(std::size_t s, const std::string& path) {
+        constexpr std::size_t kFields = 6;  // per detection, as Radar.hpp kRadarFields
+        const SignalBus& bus = scheduler->bus();
+        const SignalId id = shownSignal(robot.world.sensors.names[s], "detections");
+        const SimTime sampled = shownStamp(robot.world.sensors.names[s], id);
+        if (!id.valid() || sampled == lidarSent[s]) {
+            return;
+        }
+        lidarSent[s] = sampled;
+        const std::span<const double> values = bus.readN(id);
+        std::vector<float> points;
+        for (std::size_t k = 0; k + kFields <= values.size(); k += kFields) {
+            const double range = values[k];
+            const double azimuth = values[k + 1];
+            const double elevation = values[k + 2];
+            if (!std::isfinite(range) || !std::isfinite(azimuth) || !std::isfinite(elevation)) {
+                continue;  // past the count
+            }
+            const double across = range * std::cos(elevation);
+            points.insert(
+                points.end(),
+                {static_cast<float>(across * std::cos(azimuth)),
+                 static_cast<float>(across * std::sin(azimuth)),
+                 static_cast<float>(range * std::sin(elevation)), static_cast<float>(values[k + 3]),
+                 static_cast<float>(values[k + 4]), static_cast<float>(values[k + 5])});
+        }
+        v1::Envelope envelope;
+        v1::SensorFrame& frame = *envelope.mutable_sensor_frame();
+        frame.set_sensor(path);
+        frame.mutable_sim_time()->set_ns(sampled.ns);
+        v1::PointCloudData& cloud = *frame.mutable_points();
+        cloud.set_count(static_cast<std::uint32_t>(points.size() / kFields));
+        cloud.set_stride(static_cast<std::uint32_t>(kFields * sizeof(float)));
+        for (const char* field : {"x", "y", "z", "velocity", "rcs", "snr"}) {
+            cloud.add_fields(field);
+        }
+        setInline(*cloud.mutable_data(), points);
+        for (auto& session : sessions) {
+            if (session->greeted && session->sensors.contains(path) && !session->congested()) {
+                session->send(envelope);
+            }
+        }
+    }
 
     /// Images by signal name (sensors.md §9 "Images of kinds"): a viewer that subscribes
     /// (SubscribeSensor) to an image signal's name, "sensor/<n>/<q>", rather than to a sensor
@@ -1957,11 +2279,11 @@ struct Server::Impl {
             const Clock::time_point ticked = Clock::now();
             tickNs.push_back(nanosSince(tickStart, ticked));
             capture();
-            const Clock::time_point captured = Clock::now();
-            captureNs += nanosSince(ticked, captured);
+            const Clock::time_point capturedAt = Clock::now();
+            captureNs += nanosSince(ticked, capturedAt);
             record();
             const Clock::time_point recorded = Clock::now();
-            recordNs += nanosSince(captured, recorded);
+            recordNs += nanosSince(capturedAt, recorded);
             if (Status status = worldUpdate(false); !status.ok()) {
                 return status;
             }
@@ -2063,10 +2385,15 @@ struct Server::Impl {
         signals.set_generation(1);
         recordedId.assign(scheduler->bus().signalCount(), kNoIndex);
         std::vector<std::string> left;
+        std::vector<std::string> buffers;
         for (const v1::SignalInfo& info : full.catalog().signals()) {
             if (info.components() > options.recordMaxComponents) {
                 left.push_back(info.name());
                 continue;
+            }
+            if (isHandle(static_cast<SignalType>(std::max(0, static_cast<int>(info.type()) - 1)))) {
+                // In the catalog, so a replay declares it, but with no samples: a buffer.
+                buffers.push_back(info.name());
             }
             recordedId[info.id()] = static_cast<std::uint32_t>(signals.signals_size());
             v1::SignalInfo& kept = *signals.add_signals();
@@ -2101,6 +2428,12 @@ struct Server::Impl {
         for (const std::string& name : left) {
             log(v1::LOG_LEVEL_INFO, "recorder",
                 name + " is not recorded: larger than --record-max-components");
+        }
+        for (const std::string& name : buffers) {
+            log(v1::LOG_LEVEL_INFO, "recorder",
+                name +
+                    " is a buffer (an image or points) and is not recorded: a replay of this "
+                    "file shows no frame for it");
         }
         return {};
     }
@@ -2301,7 +2634,9 @@ struct Server::Impl {
         std::string data;
         for (std::uint32_t i = 0; i < robot.scene.prims.size(); ++i) {
             const ScenePrim& prim = robot.scene.prims[i];
-            if (prim.body == kNoIndex || !bodyPose[prim.body].valid()) {
+            // A replay has no bodies: its prims move by their recorded pose signals.
+            const bool replayed = i < replayPose.size() && replayPose[i].valid();
+            if (!replayed && (prim.body == kNoIndex || !bodyPose[prim.body].valid())) {
                 continue;  // static: never changes
             }
             d.add_transform_prims(i);
@@ -2800,8 +3135,16 @@ struct Server::Impl {
         // benchmarks.md) and keep the run deterministic. --lidar gpu takes the compute kernel.
         if (!hasLidar || options.lidar != Lidar::Gpu) {
             if (hasLidar) {
+                // Said whatever the machine's tier: on a Tier 1 or 2 GPU the CPU is chosen, not
+                // fallen back to (QA 2026-11-14: "auto picks the CPU on Tier 2").
                 log(v1::LOG_LEVEL_INFO, "sensors",
-                    "lidar on the CPU (Tier 0: exact casts, Embree culling, all cores)");
+                    options.lidar == Lidar::Auto
+                        ? "lidar on the CPU (--lidar auto, on any GPU: the exact caster with "
+                          "Embree culling on all cores is faster than the GPU kernel's round "
+                          "trip for scans of this size and keeps the run deterministic, "
+                          "docs/design/benchmarks.md; --lidar gpu casts on the GPU)"
+                        : "lidar on the CPU (--lidar cpu: exact casts, Embree culling, all "
+                          "cores)");
             }
             return {};
         }
@@ -3025,6 +3368,13 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "humans" && hasHumans()) {
+                yaml += substituted("humans") ? "  humans: {enabled: false, substitute: zero}\n"
+                                              : "  humans: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "hydrodynamics" && hasWater()) {
+                yaml += substituted("hydrodynamics")
+                            ? "  hydrodynamics: {enabled: false, substitute: zero}\n"
+                            : "  hydrodynamics: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -3041,21 +3391,104 @@ struct Server::Impl {
         return yaml;
     }
 
-    v1::Envelope profileState(const std::vector<ModuleCost>& costs) const {
+    /// The domains whose rows profileState describes by hand; the rest are described from the
+    /// modules in the run (describeDomain).
+    static bool isCoreDomain(std::string_view domain) {
+        return domain == "rigid_body" || domain == "electrical" || domain == "thermal" ||
+               domain == "sensors";
+    }
+
+    /// A domain other than the core four, as the run has it: on when a module of it (not its
+    /// substitute) is in the run, switchable when the stage gives it something to do.
+    void describeDomain(const DomainRow& row, const ProfileContext& context,
+                        v1::DomainState& d) const {
+        const std::string_view domain = row.domain;
+        const ScheduledModule* real = nullptr;
+        const ScheduledModule* any = nullptr;
+        if (scheduler != nullptr) {
+            for (const ScheduledModule& m : scheduler->plan()) {
+                const ModuleInfo info = m.module->info();
+                if (info.domain != domain) {
+                    continue;
+                }
+                any = any != nullptr ? any : &m;
+                if (!info.isSubstitute && real == nullptr) {
+                    real = &m;
+                }
+            }
+        }
+        const bool off = substituted(domain);
+        const bool running = real != nullptr && !off;
+        // What switching it back on needs: the domain's prims, and for the air its density.
+        const bool density = appliedAirDensity.has_value() || options.airDensityKgM3.has_value() ||
+                             appliedAerodynamics.contains("air_density");
+        const bool switchable = context.modules.contains(std::string(domain)) &&
+                                (domain != "aerodynamics" || density) && domain != "weather";
+        const bool available = running || any != nullptr || (off && switchable);
+        d.set_enabled(running);
+        d.set_available(available);
+        d.set_substituted(!running);
+        d.set_active_module(running ? std::string(real->module->info().name)
+                                    : std::string(row.substitute));
+        if (running) {
+            // The domains it reads from, by the wires into its modules.
+            std::set<std::string> reads;
+            for (const Connection& c : scheduler->connections()) {
+                const std::string_view reader =
+                    std::string_view(c.reader).substr(0, std::string_view(c.reader).find('/'));
+                const std::string_view writer =
+                    std::string_view(c.writer).substr(0, std::string_view(c.writer).find('/'));
+                if (reader == domain && writer != domain &&
+                    std::ranges::any_of(
+                        kDomains, [writer](const DomainRow& r) { return writer == r.domain; })) {
+                    reads.emplace(writer);
+                }
+            }
+            for (const std::string& from : reads) {
+                d.add_depends_on(from);
+            }
+        }
+        v1::SubstituteOption& option = *d.add_substitutes();
+        option.set_token(row.substitute);
+        option.set_kind(row.substituteKind);
+        if (available) {
+            return;
+        }
+        const bool rotors = hasRotors();
+        d.set_unavailable_reason(
+            domain == "aerodynamics" &&
+                    (rotors || !WorldView(robot.world).instancesOf("AeroAPI_1").empty())
+                ? "needs the site's air density: --air-density or aerodynamics.air_density"
+            : domain == "aerodynamics" ? "no AeroAPI_1 links or rotors in the stage"
+            : domain == "weather"
+                ? "needs the site's temperature, pressure and humidity: --weather, a "
+                  "WeatherAPI_1 prim, the profile or an Environment preset"
+            : domain == "emi"     ? "no EMI sources or victims in the stage"
+            : domain == "comms"   ? "no radio links or CAN buses in the stage"
+            : domain == "traffic" ? "no traffic: the world has no RoadLaneAPI_1 lanes (--traffic)"
+            : domain == "humans"  ? "no people in the stage (HumanAPI_1, --humans N)"
+            : domain == "vehicle_dynamics" ? "not used by this robot (no VehicleAPI_1)"
+            : domain == "rotor_aero" && rotors
+                ? "needs the site's air density: --air-density or rotor_aero.air_density"
+            : domain == "rotor_aero"    ? "not used by this robot (no RotorAPI_1)"
+            : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
+            : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
+                                        : "no module in this build yet; the substitute stands in");
+    }
+
+    /// Measured CPU per simulated second of each domain (ms), from the last statistics report:
+    /// sendStats takes the scheduler's costs, so the profile reuses what it measured.
+    std::map<std::string, double> domainCostMs;
+
+    v1::Envelope profileState() const {
         v1::Envelope envelope;
         v1::ProfileState& p = *envelope.mutable_profile_state();
         p.set_yaml(profileYaml());
         p.set_schema_version(1);
         p.set_json_schema(schemaText);
         p.set_restart_required(pending.has_value());  // applied, waiting for the next reset
-        // Measured cost per simulated second, summed over each domain's modules.
-        std::map<std::string, double> cost;
-        for (const ModuleCost& c : costs) {
-            if (c.steps > 0) {
-                cost[c.domain] += static_cast<double>(c.totalNs) / 1e6 /
-                                  (static_cast<double>(c.steps) * c.dt.seconds());
-            }
-        }
+        std::map<std::string, double> cost = domainCostMs;
+        const ProfileContext context = profileContext();
         for (const DomainRow& row : kDomains) {
             v1::DomainState& d = *p.add_domains();
             d.set_domain(row.domain);
@@ -3073,6 +3506,11 @@ struct Server::Impl {
                 option.set_token(recorded ? "replay" : row.substitute);
                 option.set_kind(recorded ? "replay" : row.substituteKind);
                 d.set_unavailable_reason("a replay of " + replay->path + ": nothing is simulated");
+                continue;
+            }
+            if (!isCoreDomain(row.domain)) {
+                describeDomain(row, context, d);  // the rest, from the modules that run
+                d.set_cpu_ms_per_sim_s(cost[row.domain]);
                 continue;
             }
             const bool physics = std::string_view(row.domain) == "rigid_body";
@@ -3201,7 +3639,7 @@ struct Server::Impl {
             session.send(recordingInfo());
         }
 
-        session.send(profileState({}));
+        session.send(profileState());
         session.send(catalog());
         session.send(statusEnvelope());
         session.send(environmentState());
@@ -3346,7 +3784,7 @@ struct Server::Impl {
                 session.send(snapshot(session));
                 break;
             case v1::Command::kGetProfile:
-                session.send(profileState(scheduler->takeCosts()));
+                session.send(profileState());
                 break;
             case v1::Command::kGetAttributes:
                 attributes(command.get_attributes(), *r.mutable_attributes());
@@ -3389,24 +3827,27 @@ struct Server::Impl {
                 r.set_error("moving prims is not supported by this server yet");
                 break;
             case v1::Command::kImportRobot: {
-                const v1::ImportRobot& request = command.import_robot();
-                if (request.path().empty()) {
+                auto imported = importRobot(command.import_robot());
+                if (!imported) {
                     r.set_ok(false);
-                    r.set_error("name the robot file by its path on the server's machine");
-                    break;
-                }
-                if (!request.overlay_path().empty() || !request.xacro_args().empty()) {
-                    r.set_ok(false);
-                    r.set_error("overlays and xacro arguments are not taken when importing yet");
-                    break;
-                }
-                const ros2::SpawnOutcome outcome =
-                    spawn(request.path(), "", true, importPose(), false);
-                if (outcome.outcome.result != ros2::SimResult::Ok) {
-                    r.set_ok(false);
-                    r.set_error(outcome.outcome.message);
+                    r.set_error(imported.error());
                 } else {
-                    r.set_imported_stage_path(request.path());
+                    r.set_imported_stage_path(*imported);
+                }
+                break;
+            }
+            case v1::Command::kCommandJoint: {
+                if (std::string refused = commandJoint(command.command_joint()); !refused.empty()) {
+                    r.set_ok(false);
+                    r.set_error(refused);
+                }
+                break;
+            }
+            case v1::Command::kRemoveRobot: {
+                const ros2::SimOutcome outcome = remove(command.remove_robot().name());
+                if (outcome.result != ros2::SimResult::Ok) {
+                    r.set_ok(false);
+                    r.set_error(outcome.message);
                 }
                 break;
             }
@@ -3436,6 +3877,7 @@ struct Server::Impl {
             case v1::Command::kSubscribeSensor:
                 if (command.subscribe_sensor().enabled()) {
                     session.sensors.insert(command.subscribe_sensor().sensor());
+                    resendSensorFrame(command.subscribe_sensor().sensor());
                 } else {
                     session.sensors.erase(command.subscribe_sensor().sensor());
                 }
@@ -3469,7 +3911,7 @@ struct Server::Impl {
                 // Everyone sees the profile that is now in force (or pending).
                 for (auto& other : sessions) {
                     if (other->greeted) {
-                        other->send(profileState(scheduler->takeCosts()));
+                        other->send(profileState());
                     }
                 }
                 statusChanged = true;
@@ -3585,6 +4027,9 @@ struct Server::Impl {
             session->sensors.clear();
             session->send(catalog());
             session->send(recordingInfo());
+            // The domain strip follows: every domain now stands in by its replay.
+            session->send(profileState());
+            session->send(environmentState());
             session->send(snapshot(*session));
             session->send(statusEnvelope());
         }
@@ -3939,6 +4384,14 @@ struct Server::Impl {
         if (scenePrim >= robot.scene.prims.size()) {
             return kNoIndex;
         }
+        // A sensor's own world prim (scenePrimOf's inverse): its world path need not be the
+        // scene's (a robot's prims are named by their own names in the world tables).
+        const World& world = robot.world;
+        for (std::size_t n = 0; n < world.sensors.prim.size() && n < robot.sensorPrim.size(); ++n) {
+            if (robot.sensorPrim[n] == scenePrim && world.sensors.prim[n].index != kNoIndex) {
+                return world.sensors.prim[n].index;
+            }
+        }
         const std::string& path = robot.scene.prims[scenePrim].path;
         const auto& paths = robot.world.prims.paths;
         const auto it = std::find(paths.begin(), paths.end(), path);
@@ -4094,6 +4547,18 @@ struct Server::Impl {
         bool primary{false};    // spawned into a run without a robot: the one ROS drives
         bool temporary{false};  // `path` was written from a resource string: removed with it
         bool human{false};      // a file of people (RFC 0009 §8): never the robot
+        std::string overlay;    // applied to it as --overlay is to the --robot file; or empty
+        bool overlayTemporary{false};  // `overlay` was written from text: removed with it
+        /// Removes the files written for it from text.
+        void removeTemporaries() const {
+            std::error_code ignored;
+            if (temporary) {
+                std::filesystem::remove(path, ignored);
+            }
+            if (overlayTemporary) {
+                std::filesystem::remove(overlay, ignored);
+            }
+        }
     };
     std::vector<Spawned> spawned;
     std::optional<Model> scenarioRoads;  // the scenario's road network, when it is the world
@@ -4142,6 +4607,11 @@ struct Server::Impl {
                 return invalid(primary->name + ": " + loaded.error());
             }
             model = std::move(*loaded);
+            if (!primary->overlay.empty()) {
+                if (auto applied = stage::applyOverlay(model, primary->overlay); !applied) {
+                    return invalid(primary->name + ": " + applied.error());
+                }
+            }
             renameRobot(model, primary->name);
         } else if (!options.robotPath.empty()) {
             auto loaded = loadModel(options.robotPath, {.spawn = options.spawn});
@@ -4200,6 +4670,11 @@ struct Server::Impl {
             auto other = loadModel(passive.path, {.spawn = passive.spawn});
             if (!other) {
                 return invalid(passive.name + ": " + other.error());
+            }
+            if (!passive.overlay.empty()) {
+                if (auto applied = stage::applyOverlay(*other, passive.overlay); !applied) {
+                    return invalid(passive.name + ": " + applied.error());
+                }
             }
             prefixModel(*other, passive.name, true);
             appendModel(model, *other);
@@ -4585,7 +5060,37 @@ struct Server::Impl {
 
     /// Rebuilds the run from its files after the robots changed, where it was. On failure the
     /// change is undone by `undo` and the run rebuilt as it was.
+    /// Each joint's robot, by name: whose a joint target is.
+    [[nodiscard]] std::map<std::string, std::string> jointOwners() const {
+        std::map<std::string, std::string> out;
+        const World& w = robot.world;
+        for (std::size_t j = 0; j < w.joints.names.size(); ++j) {
+            const BodyId child = w.joints.child[j];
+            if (child.index >= w.bodies.robot.size()) {
+                continue;
+            }
+            const std::uint32_t r = w.bodies.robot[child.index];
+            out[w.joints.names[j]] = r < w.robots.size() ? w.robots[r] : std::string();
+        }
+        return out;
+    }
+
+    /// After a rebuild: the targets of joints still in the run on the same robot stay; those
+    /// of a robot taken away go with it, so a robot imported again (the builder's Test) starts
+    /// uncommanded instead of jumping to its predecessor's target.
+    void keepTargetsOf(const std::map<std::string, std::string>& before) {
+        const std::map<std::string, std::string> now = jointOwners();
+        // One locked filter: a /joint_commands target set meanwhile is kept or dropped by the
+        // same rule, never lost between a read and a replace (review 2 L3).
+        jointTargets->keepIf([&](const std::string& joint) {
+            const auto was = before.find(joint);
+            const auto is = now.find(joint);
+            return was != before.end() && is != now.end() && was->second == is->second;
+        });
+    }
+
     Status recompose(const std::function<void()>& undo) {
+        const std::map<std::string, std::string> owners = jointOwners();
         const Carried carried = carry();
         // The modules' own state (controllers, filters, odometry, batteries), by label: a module
         // that reads and writes the same signals in the new run goes on where it was (QA
@@ -4633,6 +5138,7 @@ struct Server::Impl {
             }
             return status;
         }
+        keepTargetsOf(owners);
         composedMidRun = true;
         error.clear();
         owedNs = 0;
@@ -4646,7 +5152,7 @@ struct Server::Impl {
             session->sensors.clear();
             session->send(catalog());
             session->send(snapshot(*session));
-            session->send(profileState({}));  // its stage and domains follow the robots
+            session->send(profileState());  // its stage and domains follow the robots
         }
         broadcast(statusEnvelope());
         return {};
@@ -4666,13 +5172,19 @@ struct Server::Impl {
     }
 
     /// spawnRobot, with the simulation_interfaces result code.
+    /// `overlay`: a file applied to the robot as --overlay is (formats.md §9), or empty.
     ros2::SpawnOutcome spawn(const std::string& path, std::string name, bool allowRenaming,
-                             const Pose& at, bool temporary) {
+                             const Pose& at, bool temporary, const std::string& overlay = {},
+                             bool overlayTemporary = false) {
         using ros2::SimResult;
         const auto refuse = [&](SimResult code, std::string message) {
-            if (temporary) {
-                std::filesystem::remove(path);
-            }
+            Spawned{.name = {},
+                    .path = path,
+                    .spawn = {},
+                    .temporary = temporary,
+                    .overlay = overlay,
+                    .overlayTemporary = overlayTemporary}
+                .removeTemporaries();
             return ros2::SpawnOutcome{{code, std::move(message)}, ""};
         };
         if (replay) {
@@ -4684,6 +5196,9 @@ struct Server::Impl {
         }
         if (!std::filesystem::is_regular_file(path)) {
             return refuse(SimResult::ResourceParseError, "no file " + path);
+        }
+        if (!overlay.empty() && !std::filesystem::is_regular_file(overlay)) {
+            return refuse(SimResult::ResourceParseError, "no overlay file " + overlay);
         }
         if (importers::formatOf(path) == importers::Format::Unknown && !isUsd(path)) {
             return refuse(SimResult::UnsupportedFormat,
@@ -4708,6 +5223,11 @@ struct Server::Impl {
                     base = "robot_" + base;
                 }
             }
+            if (!allowRenaming && nameTaken(base)) {
+                return refuse(SimResult::NameNotUnique,
+                              "an entity is already named " + base +
+                                  " (the file's own name): give another name or allow renaming");
+            }
             name = base;
             for (int n = 2; nameTaken(name); ++n) {
                 name = base + "_" + std::to_string(n);
@@ -4719,11 +5239,9 @@ struct Server::Impl {
             human = !humans::takeSpecs(*file).empty();
         }
         const bool primary = !human && primaryPath().empty();
-        spawned.push_back({name, path, at, primary, temporary, human});
+        spawned.push_back({name, path, at, primary, temporary, human, overlay, overlayTemporary});
         if (Status status = recompose([this] {
-                if (spawned.back().temporary) {
-                    std::filesystem::remove(spawned.back().path);
-                }
+                spawned.back().removeTemporaries();
                 spawned.pop_back();
             });
             !status.ok()) {
@@ -4735,6 +5253,225 @@ struct Server::Impl {
                  : primary ? " (the robot: ROS drives it)"
                            : " (passive: nothing drives it)"));
         return {{}, "/" + name};
+    }
+
+    /// The viewer's ImportRobot (protocol.md "Commands"). A file on this machine by `path`, or
+    /// the robot's text as `content` (inline: the builder's Test into the connected run, RFC
+    /// 0016 §7.2), named by its own <robot name> and renamed on a clash; an overlay by
+    /// `overlay_path` or inline `overlay_content`. Gives what the result's imported_stage_path
+    /// carries: the path for a file, the robot's scene path ("/name") for content.
+    /// Server::commandJoint with its reason: empty when the joint takes the command, else why
+    /// not, in one line.
+    /// Server::commandJointChecked: a refusal's reason, or the value taken, held within the
+    /// joint's limits from the robot file.
+    Server::JointCommandResult commandJointChecked(const std::string& joint,
+                                                   const std::string& mode, double value) {
+        Server::JointCommandResult out;
+        out.value = value;
+        out.refused = commandJoint(joint, mode, out.value, &out.limit);
+        out.clamped = out.refused.empty() && out.value != value;
+        return out;
+    }
+
+    /// `value` is held within the joint's limits (a velocity within its velocity limit, a
+    /// position within its range, an effort within its effort limit, when the robot file gives
+    /// them; a voltage motor's effort is volts, held by its drive); `limit`, when given, says
+    /// which limit held it.
+    std::string commandJoint(const std::string& joint, const std::string& mode, double& value,
+                             std::string* limit = nullptr) {
+        // A joint that copies another takes no commands, and a motor only what its mode follows.
+        const World::Joints& joints = robot.world.joints;
+        const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
+        if (named == joints.names.end()) {
+            return "the run has no joint " + joint;
+        }
+        if (!std::isfinite(value)) {
+            return "the value for " + joint + " is not a finite number";
+        }
+        if (mode != "position" && mode != "velocity" && mode != "effort" && mode != "voltage") {
+            return "no mode " + mode + ": position, velocity, effort or voltage";
+        }
+        const auto index = static_cast<std::size_t>(named - joints.names.begin());
+        if (joints.mimic[index] != kNoMimic) {
+            return joint + " copies another joint (mimic): command that one";
+        }
+        if (!options.jointControl) {
+            return "joint control is off in this run: nothing takes joint commands "
+                   "(Simulation(..., joint_control=True), lagrange_server --joint-control)";
+        }
+        // The motor's mode (electrical::driveModes; none while the electrical domain is
+        // substituted: then every joint takes torque).
+        std::string driveMode = "torque";
+        if (!options.substituted.contains("electrical")) {
+            if (!driveModesCache) {
+                driveModesCache = electrical::driveModes(WorldView(robot.world));
+            }
+            if (const auto drive = driveModesCache->find(joint); drive != driveModesCache->end()) {
+                driveMode = drive->second;
+            }
+        }
+        if (driveMode != "torque") {
+            const bool fits = driveMode == "voltage" ? mode == "voltage" || mode == "effort"
+                                                     : mode == "velocity" || mode == "position";
+            if (!fits) {
+                return joint + "'s motor follows a " + driveMode + ": it takes " +
+                       (driveMode == "voltage" ? "voltage or effort (volts)"
+                                               : "position or velocity");
+            }
+        } else if (mode == "voltage") {
+            // Joint control turns torque into the joint itself; volts would leave it limp.
+            return joint + " has no motor in voltage mode: it takes position, velocity or effort";
+        }
+        const bool slide = joints.type[index] == JointType::Prismatic;
+        const auto number = [](double x) {
+            std::array<char, 32> text{};
+            std::snprintf(text.data(), text.size(), "%g", x);
+            return std::string(text.data());
+        };
+        const auto hold = [&](double low, double high, const std::string& what) {
+            if (value < low || value > high) {
+                value = std::clamp(value, low, high);
+                if (limit != nullptr) {
+                    *limit = what;
+                }
+            }
+        };
+        if (mode == "velocity" && std::isfinite(joints.velocityLimit[index]) &&
+            joints.velocityLimit[index] > 0.0) {
+            const double v = joints.velocityLimit[index];
+            hold(-v, v, "its velocity limit, " + number(v) + (slide ? " m/s" : " rad/s"));
+        } else if (mode == "effort" && driveMode != "voltage" &&
+                   std::isfinite(joints.effortLimit[index]) && joints.effortLimit[index] > 0.0) {
+            // (On a voltage motor the effort field carries volts, not a torque: the drive holds
+            // them within its bus voltage, so the effort limit does not apply.)
+            const double e = joints.effortLimit[index];
+            hold(-e, e, "its effort limit, " + number(e) + (slide ? " N" : " N·m"));
+        } else if (mode == "position" && (joints.type[index] == JointType::Revolute || slide) &&
+                   std::isfinite(joints.lowerLimit[index]) &&
+                   std::isfinite(joints.upperLimit[index]) &&
+                   joints.lowerLimit[index] < joints.upperLimit[index]) {
+            hold(joints.lowerLimit[index], joints.upperLimit[index],
+                 "its range, " + number(joints.lowerLimit[index]) + " to " +
+                     number(joints.upperLimit[index]) + (slide ? " m" : " rad"));
+        }
+        JointTarget target;
+        target.value = value;
+        target.mode = mode == "position"   ? JointTarget::Mode::Position
+                      : mode == "velocity" ? JointTarget::Mode::Velocity
+                      : mode == "effort"   ? JointTarget::Mode::Effort
+                                           : JointTarget::Mode::Voltage;
+        jointTargets->set(joint, target);
+        return {};
+    }
+
+    /// The viewer's CommandJoint (protocol.md "Commands"; RFC 0016 §7.3): as /joint_commands,
+    /// only while joint control drives the run's robot, and only for its own moving joints.
+    std::string commandJoint(const v1::CommandJoint& request) {
+        if (controllers) {
+            return "ros2_control drives the joints of this run: command them through its "
+                   "controllers";
+        }
+        if (!options.jointControl) {
+            return "joint control is off in this run: start lagrange_server with --joint-control";
+        }
+        if (!jointControllable) {
+            return "this robot's wheels or rotors belong to its vehicle or multicopter "
+                   "controller: joint control does not drive it";
+        }
+        const World::Joints& joints = robot.world.joints;
+        const auto named = std::ranges::find(joints.names, request.joint());
+        if (named != joints.names.end() &&
+            !joints.actuated[static_cast<std::size_t>(named - joints.names.begin())] &&
+            joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] == kNoMimic) {
+            return request.joint() +
+                   " takes no commands: it is fixed, or of a passive robot (only the robot ROS "
+                   "drives takes joint commands)";
+        }
+        double value = request.value();
+        return commandJoint(request.joint(), request.mode(), value);
+    }
+
+    Expected<std::string, std::string> importRobot(const v1::ImportRobot& request) {
+        if (!request.xacro_args().empty() || request.format() == v1::ImportRobot::FORMAT_XACRO) {
+            return Unexpected{std::string("xacro is not taken when importing: run xacro first")};
+        }
+        if (!request.path().empty() && request.has_content()) {
+            return Unexpected{std::string("give the robot by path or content, not both")};
+        }
+        const auto inlineText = [](const v1::DataRef& ref,
+                                   const char* what) -> Expected<std::string, std::string> {
+            if (ref.location_case() != v1::DataRef::kInline) {
+                return Unexpected{std::string("send the ") + what +
+                                  " inline: blob and shared-memory content are not taken"};
+            }
+            return ref.inline_();
+        };
+        std::string overlay = request.overlay_path();
+        bool overlayTemporary = false;
+        if (request.has_overlay_content()) {
+            if (!overlay.empty()) {
+                return Unexpected{std::string("give the overlay by path or content, not both")};
+            }
+            auto text = inlineText(request.overlay_content(), "overlay");
+            if (!text) {
+                return Unexpected{text.error()};
+            }
+            auto written = writeOverlay(*text);
+            if (!written) {
+                return Unexpected{written.error()};
+            }
+            overlay = *written;
+            overlayTemporary = true;
+        }
+        const auto dropOverlay = [&] {
+            if (overlayTemporary) {
+                std::error_code ignored;
+                std::filesystem::remove(overlay, ignored);
+            }
+        };
+        if (!request.path().empty()) {
+            const ros2::SpawnOutcome outcome =
+                spawn(request.path(), "", true, importPose(), false, overlay, overlayTemporary);
+            if (outcome.outcome.result != ros2::SimResult::Ok) {
+                return Unexpected{outcome.outcome.message};
+            }
+            return request.path();
+        }
+        if (!request.has_content()) {
+            dropOverlay();
+            return Unexpected{std::string(
+                "name the robot file by its path on the server's machine, or send its content")};
+        }
+        auto text = inlineText(request.content(), "robot");
+        if (!text) {
+            dropOverlay();
+            return Unexpected{text.error()};
+        }
+        auto written = writeResource(*text);
+        if (!written) {
+            dropOverlay();
+            return Unexpected{written.error()};
+        }
+        const std::string extension = std::filesystem::path(*written).extension().string();
+        const char* expected = request.format() == v1::ImportRobot::FORMAT_URDF   ? ".urdf"
+                               : request.format() == v1::ImportRobot::FORMAT_SDF  ? ".sdf"
+                               : request.format() == v1::ImportRobot::FORMAT_MJCF ? ".xml"
+                                                                                  : nullptr;
+        if (expected != nullptr && extension != expected) {
+            std::error_code ignored;
+            std::filesystem::remove(*written, ignored);
+            dropOverlay();
+            return Unexpected{"the content is not " +
+                              std::string(v1::ImportRobot::Format_Name(request.format()))
+                                  .substr(std::string_view("FORMAT_").size()) +
+                              " (it reads as " + extension.substr(1) + ")"};
+        }
+        const ros2::SpawnOutcome outcome = spawn(*written, modelNameOf(*text), true, importPose(),
+                                                 true, overlay, overlayTemporary);
+        if (outcome.outcome.result != ros2::SimResult::Ok) {
+            return Unexpected{outcome.outcome.message};
+        }
+        return outcome.entityName;
     }
 
     /// removeRobot, with the simulation_interfaces result code.
@@ -4767,9 +5504,7 @@ struct Server::Impl {
                 !status.ok()) {
                 return {SimResult::Failed, status.message};
             }
-            if (removed.temporary) {
-                std::filesystem::remove(removed.path);
-            }
+            removed.removeTemporaries();
         } else if (extraAt != options.extraRobots.end()) {
             const ServerOptions::ExtraRobot removed = *extraAt;
             const auto index = extraAt - options.extraRobots.begin();
@@ -4828,6 +5563,7 @@ struct Server::Impl {
             fail(status);
             return status;
         }
+        jointTargets->replace({});  // back to t = 0: nothing commanded yet
         state = wasRunning ? v1::RUN_STATE_RUNNING : v1::RUN_STATE_PAUSED;
         error.clear();
         owedNs = 0;
@@ -5044,6 +5780,8 @@ struct Server::Impl {
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
         rigidBodyBackend = settings.rigidBodyBackend;
+        rigidBodySubsteps = settings.rigidBodySubsteps;
+        rigidBodyNoslip = settings.rigidBodyNoslip;
         appliedTireModel = settings.tireModel;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
@@ -5087,6 +5825,8 @@ struct Server::Impl {
             options.substituted = previous.substituted;
             rigidBodyDtNs = previous.rigidBodyDtNs;
             rigidBodyBackend = previous.rigidBodyBackend;
+            rigidBodySubsteps = previous.rigidBodySubsteps;
+            rigidBodyNoslip = previous.rigidBodyNoslip;
             electricalDtNs = previous.electricalDtNs;
             thermalDtNs = previous.thermalDtNs;
             speedPrediction = previous.speedPrediction;
@@ -5113,7 +5853,15 @@ struct Server::Impl {
             node.set_module(std::string(label.substr(0, slash)));
             node.set_domain(std::string(label.substr(0, slash)));
             node.set_detail(std::string(label.substr(slash + 1)));
+            // A substitute stands in for its domain (SPEC 03: a dashed node). A sensor's ground
+            // truth keeps the sensor's name, so say which substitute it is.
+            const ModuleInfo info = module.module->info();
+            node.set_substitute(info.isSubstitute);
+            if (info.isSubstitute && info.domain == "sensors") {
+                node.set_detail("ground_truth · " + std::string(label.substr(slash + 1)));
+            }
             node.set_dt_ns(module.dt.ns);
+            node.set_on_gpu(runsOnGpu(module));
             smallest = smallest == 0 ? module.dt.ns : std::min(smallest, module.dt.ns);
         }
         // One wire per (writer, reader, signal pattern): "joint/left_wheel_joint/torque" and
@@ -5271,6 +6019,10 @@ struct Server::Impl {
         };
         const bool weather = weatherRuns() && !substituted("weather");
         env.set_gravity_m_per_s2(-robot.world.gravityLocal[2]);
+        // The run has no time of day and no sun (the weather's irradiance is a constant): NaN
+        // says "not modelled", which the viewer shows as a dash rather than midnight.
+        env.set_local_time_hours(std::numeric_limits<double>::quiet_NaN());
+        env.set_sun_elevation_deg(std::numeric_limits<double>::quiet_NaN());
         if (const auto t = ambient() ? ambient() : number("temperature")) {
             env.set_ambient_temperature_k(*t);
         }
@@ -5327,7 +6079,7 @@ struct Server::Impl {
             for (const emi::Source& s : emiSources()) {
                 v1::EnvironmentState::EmiSource& out = *env.add_emi_sources();
                 out.set_name(s.name);
-                out.set_prim(0xFFFF'FFFFU);
+                out.set_prim(emiSourcePrim(s));
                 out.set_frequency_hz(s.frequency);
                 out.set_current_a(emiState(s).current);
                 out.set_power_w(s.radiatedPower);
@@ -5349,6 +6101,18 @@ struct Server::Impl {
             emiSourcesRead = true;
         }
         return cachedEmiSources;
+    }
+
+    /// A source's scene prim, for the viewer to show it with its prim: the EmiSourceAPI_1
+    /// instance of the same name (emi::sourcesOf names each by its prim). kNoIndex if none.
+    [[nodiscard]] std::uint32_t emiSourcePrim(const emi::Source& s) const {
+        const WorldView world(robot.world);
+        for (const SchemaInstance* inst : world.instancesOf("EmiSourceAPI_1")) {
+            if (world.signalInstanceName(inst->prim) == s.name) {
+                return scenePrimOf(inst->prim);
+            }
+        }
+        return kNoIndex;
     }
 
     /// A source's pose and current now, from the bus (its body's pose, its motor's current).
@@ -5386,9 +6150,14 @@ struct Server::Impl {
         return now;
     }
 
-    /// Whether the aerodynamics domain runs (its gust signal is on the bus).
+    /// Whether the aerodynamics domain runs (its gust signal is on the bus), not its zero
+    /// substitute (still air).
     bool aeroRuns() const {
-        return scheduler != nullptr && scheduler->bus().find("env/wind/gust").valid();
+        return scheduler != nullptr && scheduler->bus().find("env/wind/gust").valid() &&
+               std::ranges::any_of(scheduler->plan(), [](const ScheduledModule& m) {
+                   const ModuleInfo info = m.module->info();
+                   return info.domain == "aerodynamics" && !info.isSubstitute;
+               });
     }
 
     /// The rotors' wakes now, from the rotor signals on the bus (Downwash, rotor_aero.md §2),
@@ -5859,6 +6628,8 @@ struct Server::Impl {
             agent.set_active_radius_m(
                 active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM));
         }
+        otherAgents(world, region);
+        runRegion(world, region);
         v1::WorldState::FloatingOrigin& origin = *world.mutable_floating_origin();
         origin.set_anchor(robot.name);
         origin.set_recenter_threshold_m(kRebaseDistanceM);
@@ -5869,6 +6640,129 @@ struct Server::Impl {
         origin.mutable_last_recenter()->set_ns(lastRebase.ns);
         return envelope;
     }
+
+    /// Everything else that moves on its own, for the World workspace: other robots (spawned,
+    /// --add-robot), traffic vehicles and pedestrians, scenario entities and people. One agent
+    /// per root body: a robot's root has joints below it, a person is their pelvis.
+    void otherAgents(v1::WorldState& world, const std::array<double, 3>& region) const {
+        const World& w = robot.world;
+        const SignalBus& bus = scheduler->bus();
+        std::vector<bool> hasChild(w.bodies.names.size(), false);
+        for (std::size_t j = 0; j < w.joints.parent.size(); ++j) {
+            const BodyId parent = w.joints.parent[j];
+            if (parent != kWorldBody && parent.index < hasChild.size()) {
+                hasChild[parent.index] = true;
+            }
+        }
+        for (std::size_t b = 1; b < w.bodies.names.size() && b < bodyPose.size(); ++b) {
+            if (w.bodies.parent[b] != kWorldBody || !bodyPose[b].valid()) {
+                continue;  // a link of a robot, or the fixed scenery
+            }
+            const std::string& name = w.bodies.names[b];
+            std::string label = name;
+            std::string kind;
+            if (name.starts_with("traffic_vehicle_") || name.starts_with("scenario_")) {
+                kind = "vehicle";
+            } else if (name.starts_with("traffic_pedestrian_")) {
+                kind = "pedestrian";
+            } else if (name.starts_with("human_") && name.ends_with("_pelvis")) {
+                kind = "pedestrian";
+                label = name.substr(6, name.size() - 6 - 7);  // human_<name>_pelvis
+            } else if (!w.bodies.kinematic[b] && hasChild[b]) {
+                kind = "robot";
+            } else {
+                continue;  // a loose box, a lamp, a person's other segments
+            }
+            v1::WorldState::Agent& agent = *world.add_agents();
+            agent.set_name(label);
+            agent.set_prim(b < robot.bodyPrim.size() ? robot.bodyPrim[b] : kNoIndex);
+            agent.set_kind(kind);
+            const std::span<const double> pose = bus.readN(bodyPose[b]);
+            agent.set_x(pose[0] + region[0]);
+            agent.set_y(pose[1] + region[1]);
+            if (const SignalId twist = bus.find("body/" + name + "/twist");
+                twist.valid() && !w.bodies.kinematic[b]) {
+                const std::span<const double> v = bus.readN(twist);
+                agent.set_speed_m_per_s(std::hypot(v[0], v[1]));
+            } else {
+                // A kinematic body is moved by its pose command, without a twist: its speed is
+                // how far it went since the last report.
+                const std::int64_t now = scheduler->now().ns;
+                auto& [at, x, y, speed] = agentTrack[b];
+                if (now < at) {
+                    speed = 0.0;  // the run went back (a reset): start again
+                } else if (now > at && at > 0) {
+                    speed = std::hypot(pose[0] - x, pose[1] - y) /
+                            (static_cast<double>(now - at) * 1e-9);
+                }
+                if (now != at) {
+                    at = now;
+                    x = pose[0];
+                    y = pose[1];
+                }
+                agent.set_speed_m_per_s(speed);
+            }
+            agent.set_status(w.bodies.kinematic[b] ? "kinematic" : "active");
+        }
+    }
+    /// The run's one active region (huge-worlds.md §3; a served run is one region, RegionHost's
+    /// several are headless only), in world ENU: its loaded tiles, its fixed scenery and its
+    /// agents, so the viewer's Regions tab counts them all inside it.
+    void runRegion(v1::WorldState& world, const std::array<double, 3>& region) const {
+        std::array<double, 4> box{
+            std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+        const auto grow = [&box](double x0, double y0, double x1, double y1) {
+            box[0] = std::min(box[0], x0);
+            box[1] = std::min(box[1], y0);
+            box[2] = std::max(box[2], x1);
+            box[3] = std::max(box[3], y1);
+        };
+        if (tileSelector) {
+            const std::vector<streaming::TileInfo>& tiles = tileSelector->tiles();
+            for (const auto& [id, content] : tileContent) {
+                (void)content;
+                const streaming::TileInfo& t = tiles.at(id);
+                grow(t.boundsMin[0], t.boundsMin[1], t.boundsMax[0], t.boundsMax[1]);
+            }
+        }
+        const World& w = robot.world;
+        const std::vector<bool> moving = movingBodies(w);
+        for (std::size_t c = 0; c < w.colliders.body.size(); ++c) {
+            const BodyId owner = w.colliders.body[c];
+            if (owner != kWorldBody && moving[owner.index]) {
+                continue;  // a moving body's: its agent stands for it
+            }
+            const double r = sensors::boundingRadius(w.colliders.shape[c], w.colliders.size[c]);
+            if (!std::isfinite(r)) {
+                continue;  // the ground plane
+            }
+            const std::array<double, 3> p =
+                owner == kWorldBody
+                    ? w.colliders.poseInBody[c].position
+                    : compose(robot.bodyRestPose.at(owner.index), w.colliders.poseInBody[c])
+                          .position;
+            grow(p[0] + region[0] - r, p[1] + region[1] - r, p[0] + region[0] + r,
+                 p[1] + region[1] + r);
+        }
+        constexpr double kAgentMarginM = 1.0;  // an agent on the edge is still inside
+        for (const v1::WorldState::Agent& agent : world.agents()) {
+            grow(agent.x() - kAgentMarginM, agent.y() - kAgentMarginM, agent.x() + kAgentMarginM,
+                 agent.y() + kAgentMarginM);
+        }
+        if (!(box[0] <= box[2])) {
+            return;
+        }
+        v1::WorldState::Region& out = *world.add_regions();
+        out.set_name("R1");
+        out.set_min_x(box[0]);
+        out.set_min_y(box[1]);
+        out.set_max_x(box[2]);
+        out.set_max_y(box[3]);
+    }
+
+    /// Per kinematic agent body: when and where the last world report saw it, and its speed.
+    mutable std::map<std::size_t, std::tuple<std::int64_t, double, double, double>> agentTrack;
 
     /// The streamed tiles for the World workspace, on the grid of the finest tiles: loaded
     /// collision tiles are level of detail 0 (physics and sensors), loaded tiles without
@@ -6129,9 +7023,47 @@ struct Server::Impl {
         }
     }
 
+    /// Whether `module`'s step runs on a hardware GPU (ServerStats.Module.on_gpu, Wiring.Node):
+    /// a sensor that casts on --lidar gpu's ray context (lidar, radar) or renders on the
+    /// cameras' raster device (cameras, thermal cameras, event and stereo cameras, detections)
+    /// when that device is not a software one, and the aerodynamics' live air box on the GPU.
+    /// Every such module says so by not being deterministic (invariant 7); plugins' modules are
+    /// never counted, since a plugin may be non-deterministic for other reasons.
+    [[nodiscard]] bool runsOnGpu(const ScheduledModule& module) const {
+        const ModuleInfo info = module.module->info();
+        if (info.deterministic || info.isSubstitute) {
+            return false;
+        }
+        if (std::ranges::any_of(plugins, [&](const PluginModule& plugin) {
+                return plugin.domain == info.domain && plugin.name == info.name;
+            })) {
+            return false;
+        }
+        if (info.domain == "aerodynamics") {
+            return true;  // AeroDrag: the live air box, which starts only on a hardware GPU
+        }
+        if (info.domain != "sensors") {
+            return false;
+        }
+        const std::string_view name = info.name;
+        if (name.starts_with("lidar_") || name.starts_with("radar_") ||
+            name.starts_with("imaging_radar_")) {
+            return rayContext != nullptr && rayContext->tier() >= 1;
+        }
+        return cameraScene != nullptr && !cameraScene->raster->isSoftware();
+    }
+
     void sendStats(Clock::time_point now) {
         const double wallS = static_cast<double>(nanosSince(lastStats, now)) * 1e-9;
         const std::vector<ModuleCost> costs = scheduler->takeCosts();
+        // Each domain's cost per simulated second, for the Domains table (profileState).
+        domainCostMs.clear();
+        for (const ModuleCost& c : costs) {
+            if (c.steps > 0 && c.dt.ns > 0) {
+                domainCostMs[c.domain] += static_cast<double>(c.totalNs) / 1e6 /
+                                          (static_cast<double>(c.steps) * c.dt.seconds());
+            }
+        }
         v1::Envelope envelope;
         v1::ServerStats& stats = *envelope.mutable_server_stats();
         stats.mutable_sim_time()->set_ns(scheduler->now().ns);
@@ -6149,6 +7081,18 @@ struct Server::Impl {
             stats.set_tick_ms_max(static_cast<double>(most) / 1e6);
         }
         stats.set_memory_bytes(residentBytes());
+        // What this process's hardware Vulkan devices (cameras, --lidar gpu, the live air box)
+        // hold, as the HAL's allocator counts it (Device::hardwareMemoryInUse): device-local
+        // images and buffers and the host-visible buffers the GPU works in; exact for Lagrange's
+        // allocations, without the driver's own overhead. 0 when only a software device (Tier 0)
+        // or none is open.
+        stats.set_gpu_memory_bytes(gpu::Device::hardwareMemoryInUse());
+        std::set<std::string> onGpu;
+        for (const ScheduledModule& module : scheduler->plan()) {
+            if (runsOnGpu(module)) {
+                onGpu.insert(module.label);
+            }
+        }
         // Viewers that have been greeted (RFC 0014, open question 4): connections still waiting
         // for their handshake are not viewers yet.
         stats.set_viewers(static_cast<std::uint32_t>(
@@ -6163,6 +7107,7 @@ struct Server::Impl {
             m.set_domain(cost.domain);
             m.set_dt_ns(cost.dt.ns);
             m.set_steps_per_second(wallS > 0.0 ? static_cast<double>(cost.steps) / wallS : 0.0);
+            m.set_on_gpu(onGpu.contains(cost.label));
             if (cost.steps > 0) {
                 m.set_cpu_ms_per_step(static_cast<double>(cost.totalNs) / 1e6 /
                                       static_cast<double>(cost.steps));
@@ -6346,9 +7291,44 @@ struct Server::Impl {
         }
     }
 
+    /// A site value from the Environment panel: SetAttribute "site:<name>" on no prim.
+    static bool isSiteCommand(const v1::Envelope& envelope) {
+        return envelope.has_command() && envelope.command().has_set_attribute() &&
+               envelope.command().set_attribute().prim() == kNoIndex &&
+               envelope.command().set_attribute().attribute().name().starts_with("site:");
+    }
+
+    /// Site values that arrived together (a weather preset sends a whole weather) are set
+    /// together: the run is rebuilt once for all of them, not once per value. Empties `sites`.
+    void setSitesOf(Session& session, std::vector<v1::Command>& sites) {
+        if (sites.size() == 1) {
+            command(session, sites.front());
+        } else if (!sites.empty()) {
+            std::vector<std::pair<std::string, double>> values;
+            values.reserve(sites.size());
+            for (const v1::Command& c : sites) {
+                const v1::Attribute& site = c.set_attribute().attribute();
+                values.emplace_back(site.name().substr(5), site.real());
+            }
+            const std::vector<Status> each = setSites(values);
+            for (std::size_t i = 0; i < sites.size(); ++i) {
+                v1::Envelope result;
+                v1::CommandResult& r = *result.mutable_command_result();
+                r.set_request_id(sites[i].request_id());
+                r.set_ok(each[i].ok());
+                if (!each[i].ok()) {
+                    r.set_error(each[i].message);
+                }
+                session.send(result);
+            }
+        }
+        sites.clear();
+    }
+
     void serve(Session& session) {
         std::error_code ec;
         const proto::IoStatus received = session.connection.receive(ec);
+        std::vector<v1::Command> sites;  // site values received together
         for (;;) {
             const proto::FrameReader::Result frame = session.connection.next();
             if (frame.status == proto::FrameReader::Status::Error) {
@@ -6383,10 +7363,14 @@ struct Server::Impl {
                     session.connection.close();
                     return;
                 }
+            } else if (isSiteCommand(envelope)) {
+                sites.push_back(envelope.command());  // taken together below
             } else {
+                setSitesOf(session, sites);
                 dispatch(session, envelope);
             }
         }
+        setSitesOf(session, sites);
         if (received == proto::IoStatus::Closed || received == proto::IoStatus::Error) {
             session.connection.close();
         }
@@ -6422,16 +7406,7 @@ Expected<std::string, std::string> writeResource(const std::string& text) {
                               "> is not URDF, SDFormat or MJCF (xacro: run xacro first)"};
         }
     }
-    static int written = 0;
-    const std::filesystem::path path =
-        std::filesystem::temp_directory_path() / ("lagrange-spawn-" + std::to_string(::getpid()) +
-                                                  "-" + std::to_string(++written) + extension);
-    std::ofstream out(path);
-    out << text;
-    if (!out) {
-        return Unexpected{"cannot write " + path.string()};
-    }
-    return path.string();
+    return writeTemporary(text, extension);
 }
 
 class SimulationControl final : public ros2::SimulationHandler {
@@ -6560,6 +7535,10 @@ public:
         }
         std::string path;
         bool temporary = false;
+        std::string name = request.name;
+        // An empty name is the file's own (simulation_interfaces SpawnEntity): renamed on a clash
+        // only when allow_renaming says so.
+        const bool allowRenaming = request.allowRenaming;
         if (!request.uri.empty()) {
             auto resolved =
                 meshes::resolveMeshUri(request.uri, std::filesystem::current_path().string());
@@ -6574,11 +7553,35 @@ public:
             }
             path = *written;
             temporary = true;
+            // Unnamed text is named by its own <robot name>, as the viewer's ImportRobot does,
+            // not after its temporary file.
+            if (name.empty()) {
+                name = modelNameOf(request.resource);
+                if (name.empty()) {
+                    if (!allowRenaming) {
+                        std::error_code ignored;
+                        std::filesystem::remove(path, ignored);
+                        return {{SimResult::NameInvalid,
+                                 "no name given and resource_string names none: give a name or "
+                                 "allow renaming"},
+                                ""};
+                    }
+                    name = "robot";
+                }
+            }
         } else {
             return {{SimResult::NoResource, "give the robot file as uri or resource_string"}, ""};
         }
-        return s_.spawn(path, request.name, request.allowRenaming || request.name.empty(), at,
-                        temporary);
+        ros2::SpawnOutcome outcome = s_.spawn(path, name, allowRenaming, at, temporary);
+        if (temporary) {
+            // The text's temporary file means nothing to the caller: it sent the text.
+            std::string& message = outcome.outcome.message;
+            for (std::size_t found = message.find(path); found != std::string::npos;
+                 found = message.find(path, found)) {
+                message.replace(found, path.size(), "resource_string");
+            }
+        }
+        return outcome;
     }
 
     ros2::SimOutcome remove(const std::string& name) override { return s_.remove(name); }
@@ -6712,10 +7715,7 @@ Server::~Server() {
         impl_->stopRecording("the server stopped");
     }
     for (const Impl::Spawned& robot : impl_->spawned) {
-        if (robot.temporary) {
-            std::error_code ignored;
-            std::filesystem::remove(robot.path, ignored);
-        }
+        robot.removeTemporaries();
     }
 }
 
@@ -7001,11 +8001,50 @@ Status Server::restoreState(std::span<const std::byte> state) {
     if (!impl_->scheduler) {
         return Status::error(StatusCode::Internal, "restoreState() before load()");
     }
+    // A bare scheduler state ("LGST" first) has no site: Server::saveState always wrote one
+    // (since 1.1, when it came in), so this came from Scheduler::saveState, not from here.
+    constexpr std::array<std::byte, 4> kSchedulerMagic{std::byte{'L'}, std::byte{'G'},
+                                                       std::byte{'S'}, std::byte{'T'}};
+    if (state.size() >= kSchedulerMagic.size() &&
+        std::equal(kSchedulerMagic.begin(), kSchedulerMagic.end(), state.begin())) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "a scheduler state without the site that Server::saveState puts "
+                             "before it: restore it with Scheduler::restoreState");
+    }
     StateReader reader(state);
     if (Status status = impl_->restoreSite(reader); !status.ok()) {
         return status;
     }
-    return impl_->scheduler->restoreState(reader);
+    // A state saved before a later release added a stateless module to this run (aerodynamics'
+    // zero substitute after 1.3) restores into the run built without it: the saved run's own
+    // composition, whose bus the state holds (RFC 0007, formats.md §11).
+    const std::span<const std::byte> schedulerState =
+        state.subspan(state.size() - reader.remaining());
+    Impl& s = *impl_;
+    if (!s.leftOut.empty()) {
+        s.leftOut.clear();
+        if (Status status = s.build(); !status.ok()) {
+            return status;
+        }
+    }
+    const auto added = s.scheduler->addedSince(schedulerState);
+    if (!added) {
+        return added.error();
+    }
+    if (!added->empty()) {
+        s.leftOut.insert(added->begin(), added->end());
+        std::string names;
+        for (const std::string& label : *added) {
+            names += (names.empty() ? "" : ", ") + label;
+        }
+        services::log(services::LogLevel::Info, "server",
+                      "the saved state comes from a run without " + names +
+                          ", which this release adds: the run goes on without them");
+        if (Status status = s.build(); !status.ok()) {
+            return status;
+        }
+    }
+    return s.scheduler->restoreState(reader);
 }
 
 Status Server::setSite(const std::string& name, double value) {
@@ -7016,43 +8055,12 @@ Status Server::setSite(const std::string& name, double value) {
 }
 
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {
-    // A joint that copies another takes no commands, and a motor only what its mode follows.
-    const World::Joints& joints = world().joints;
-    const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
-    if (named == joints.names.end() || !std::isfinite(value)) {
-        return false;  // no such joint, or no value to hold
-    }
-    if (joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
-        return false;
-    }
-    if (!impl_->options.substituted.contains("electrical")) {
-        if (!impl_->driveModesCache) {
-            impl_->driveModesCache = electrical::driveModes(WorldView(world()));
-        }
-        const auto& modes = *impl_->driveModesCache;
-        if (const auto drive = modes.find(joint); drive != modes.end()) {
-            const bool fits = drive->second == "voltage" ? mode == "voltage" || mode == "effort"
-                                                         : mode == "velocity" || mode == "position";
-            if (!fits) {
-                return false;
-            }
-        }
-    }
-    JointTarget target;
-    target.value = value;
-    if (mode == "position") {
-        target.mode = JointTarget::Mode::Position;
-    } else if (mode == "velocity") {
-        target.mode = JointTarget::Mode::Velocity;
-    } else if (mode == "effort") {
-        target.mode = JointTarget::Mode::Effort;
-    } else if (mode == "voltage") {
-        target.mode = JointTarget::Mode::Voltage;
-    } else {
-        return false;
-    }
-    impl_->jointTargets->set(joint, target);
-    return true;
+    return impl_->commandJoint(joint, mode, value).empty();
+}
+
+Server::JointCommandResult Server::commandJointChecked(const std::string& joint,
+                                                       const std::string& mode, double value) {
+    return impl_->commandJointChecked(joint, mode, value);
 }
 
 Expected<std::string, Status> Server::spawnRobot(const std::string& path, const std::string& name,
@@ -7060,7 +8068,8 @@ Expected<std::string, Status> Server::spawnRobot(const std::string& path, const 
     if (!impl_->scheduler) {
         return Unexpected{Status::error(StatusCode::Internal, "spawnRobot() before load()")};
     }
-    const ros2::SpawnOutcome outcome = impl_->spawn(path, name, false, spawn, false);
+    // Without a name, the file's (numbered on a clash); a given name must be free.
+    const ros2::SpawnOutcome outcome = impl_->spawn(path, name, name.empty(), spawn, false);
     if (outcome.outcome.result != ros2::SimResult::Ok) {
         return Unexpected{Status::error(StatusCode::InvalidConfig, outcome.outcome.message)};
     }
@@ -7083,6 +8092,10 @@ SimTime Server::now() const {
 
 const World& Server::world() const {
     return impl_->robot.world;
+}
+
+const std::vector<std::string>& Server::importNotes() const {
+    return impl_->robot.notes;
 }
 
 Expected<std::uint64_t, Status> Server::stateHash() const {
@@ -7188,10 +8201,14 @@ Status Server::start() {
                               : "multicopter: the built-in controller waits on the ground until "
                                 "/cmd_vel asks it to climb, and lands when brought down") +
                   (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
-    } else if (!s.primaryPath().empty()) {
-        s.log(v1::LOG_LEVEL_WARN, "controller",
-              "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
-                  std::to_string(s.robot.actuatedJoints.size()));
+    } else if (!s.replay && !s.jointControlled() && !s.robot.actuatedJoints.empty()) {
+        // A replay drives nothing, joint control drives every joint, and a robot without
+        // actuated joints has nothing to drive: only a robot with motors a demo cannot use.
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "no demo driver: a demo drives two actuated wheel joints, swerve modules, a car "
+              "or a multicopter; the robot has " +
+                  std::to_string(s.robot.actuatedJoints.size()) +
+                  " actuated joints (drive them with --joint-control or ros2_control)");
     }
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;

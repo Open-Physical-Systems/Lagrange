@@ -1,0 +1,74 @@
+{
+  "module": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-envprof/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py",
+  "rounds": 15,
+  "block": 300,
+  "parallel_steps": 3000,
+  "cases": {
+    "bare": [
+      {
+        "processes": 1,
+        "policy_steps_per_s": 1375.8830359428002,
+        "policy_steps_per_cpu_s": 1375.472801008828,
+        "rounds_min_max": [
+          877.2969215911949,
+          1462.7790531663059
+        ],
+        "load": 13.455
+      },
+      {
+        "processes": 4,
+        "policy_steps_per_s": 4871.821993904585,
+        "load": 12.905000000000001
+      },
+      {
+        "processes": 8,
+        "policy_steps_per_s": 9474.852397498069,
+        "load": 13.16
+      }
+    ],
+    "ideal": [
+      {
+        "processes": 1,
+        "policy_steps_per_s": 1388.9881050967515,
+        "policy_steps_per_cpu_s": 1388.626245663696,
+        "rounds_min_max": [
+          842.2341149393715,
+          1518.551183161337
+        ],
+        "load": 13.455
+      },
+      {
+        "processes": 4,
+        "policy_steps_per_s": 5316.512184177016,
+        "load": 12.91
+      },
+      {
+        "processes": 8,
+        "policy_steps_per_s": 10840.585239839322,
+        "load": 13.32
+      }
+    ],
+    "electrical": [
+      {
+        "processes": 1,
+        "policy_steps_per_s": 417.16302228764533,
+        "policy_steps_per_cpu_s": 417.0334151193313,
+        "rounds_min_max": [
+          294.0837608230777,
+          538.1872686973702
+        ],
+        "load": 13.455
+      },
+      {
+        "processes": 4,
+        "policy_steps_per_s": 1595.1224812653138,
+        "load": 12.955
+      },
+      {
+        "processes": 8,
+        "policy_steps_per_s": 3819.1890263427317,
+        "load": 13.545
+      }
+    ]
+  }
+}

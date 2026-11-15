@@ -1,0 +1,44 @@
+# The sample plugin lagrange_tof's kind `ultrasonic` (tof_sensor.c), for the robot builder's
+# sensor catalog (RFC 0016 §5): installed under the ament resource lagrange_sensor_catalog.
+schema_version: 1
+plugin: lagrange_tof
+kinds:
+  ultrasonic:
+    name: Ultrasonic sensor (plugin)
+    category: range_and_contact
+    description: A wide cone with a dead zone inside which it reads nothing, as a sonar's ringing
+      hides what is close.
+    doc: docs/guide/writing-a-plugin.md
+    references: []
+    renders: false
+    params:
+      - path: range/min
+        type: number
+        unit: m
+        default: 0.2
+        min: 0
+        meaning: the dead zone
+      - path: range/max
+        type: number
+        unit: m
+        default: 4.0
+        meaning: 'farther: +inf'
+      - path: fov
+        type: number
+        unit: rad
+        default: 0.5
+        min: 0
+        meaning: square field of view of the 5 x 5 grid
+      - path: noise/stddev
+        type: number
+        unit: m
+        default: 0.0
+        min: 0
+        meaning: Gaussian, 1σ
+    signals:
+      - name: range
+        type: scalar
+        unit: m
+      - name: valid
+        type: scalar
+        unit: '1'

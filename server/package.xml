@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_server</name>
-  <version>1.3.0</version>
+  <version>1.4.0</version>
   <description>The Lagrange simulation server: loads a robot, runs the modules on the scheduler against the wall clock, and serves the viewer protocol.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -42,10 +42,12 @@
   <depend>lagrange_ros2_control</depend>
   <depend>rclcpp</depend>
   <depend>urdfdom</depend>
+  <depend>libconsole-bridge-dev</depend>
   <depend>tinyxml2</depend>
   <depend>ament_index_cpp</depend>
   <test_depend>sensor_msgs</test_depend>
   <test_depend>std_msgs</test_depend>
+  <test_depend>simulation_interfaces</test_depend>
   <depend>yaml-cpp</depend>
   <depend>libjsoncons-dev</depend>
   <depend>mcap_vendor</depend>

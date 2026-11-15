@@ -1,10 +1,10 @@
-# Lagrange UI · 12 · Builder workspace (draft)
+# Lagrange UI · 12 · Builder workspace
 
-Design for the robot builder of `rfcs/0016-robot-builder.md` (Draft, for the owner). Unlike
-00–11 this screen was not drawn by the owner: it was made from the design system's own
-stylesheet (the `<style>` block of `02-scene/reference.html`, copied unchanged, plus a short
-block of builder additions marked at its end) and waits for the owner's review. Native C++20 ·
-Vulkan · Dear ImGui docking; the HTML is a picture of the target, never code to ship.
+Design for the robot builder of `rfcs/0016-robot-builder.md` (accepted by the owner on
+2026-11-14). Unlike 00–11 this screen was not drawn by the owner: it was made from the design
+system's own stylesheet (the `<style>` block of `02-scene/reference.html`, copied unchanged,
+plus a short block of builder additions marked at its end). Native C++20 · Vulkan · Dear ImGui
+docking; the HTML is a picture of the target, never code to ship.
 
 ## Contents
 | File | What it is |

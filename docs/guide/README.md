@@ -16,6 +16,7 @@
 | [Tutorial: heat in the parts, and a robot's own interference](tutorial-heat-and-emi.md) | LEDs heating a board and its heat sink, thermometers, the same in OpenFOAM, and battery leads disturbing a compass |
 | [Autoware with a simulated car](autoware.md) | The vehicle interface (`lagrange_autoware`), building it with the Autoware messages, the sedan launch, and what to do while Autoware is not on Lyrical |
 | [The run file](run-file.md) | One YAML file for a whole run: robot, world, what to simulate, the site. Start here for your own robot |
+| [The viewer's workspaces](viewer.md) | What each workspace offers: the command palette, Domains' tabs, radar drawing, Replay comparison, ROS 2 actions and TF tree, Performance |
 | [Concepts](concepts.md) | Domains and substitutes, signals and units, the multirate scheduler, capability tiers, determinism, coordinates |
 | [Sensors](sensors.md) | Every sensor Lagrange simulates, grouped by robot; adding one in URDF or USD, reading it from Python, ROS 2 and the viewer, faults, limits |
 | [Profiles](profiles.md) | The YAML that says what a run simulates; what v0.2 applies; the errors |

@@ -9,9 +9,12 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <memory>
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -35,11 +38,19 @@ public:
                const std::optional<std::string>& profile, const std::string& lidar,
                const std::optional<std::vector<double>>& spawn,
                const std::optional<std::array<int, 3>>& traffic, bool jointControl,
-               const std::vector<std::string>& sensorFaults) {
+               const std::vector<std::string>& sensorFaults,
+               const std::optional<std::string>& overlay) {
         lagrange::server::ServerOptions options;
         options.jointControl = jointControl;
         options.sensorFaults = sensorFaults;     // checked by load(), as --sensor-fault
         options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
+        // An overlay YAML or SPICE netlist on the robot (formats.md section 9), as --overlay.
+        if (overlay) {
+            if (!robot) {
+                throw std::invalid_argument("an overlay needs a robot to apply to");
+            }
+            options.overlayPath = *overlay;
+        }
         if (spawn) {
             options.spawn = poseOf(*spawn, "spawn");
         }
@@ -74,6 +85,10 @@ public:
         server_ = std::make_unique<lagrange::server::Server>(options);
         if (const lagrange::Status status = server_->load(); !status.ok()) {
             throw std::runtime_error(status.message);
+        }
+        // What the loader took its own way, as the CLI prints it (sensors QA F8); also notes().
+        for (const std::string& note : server_->importNotes()) {
+            std::fprintf(stderr, "[import] %s\n", note.c_str());
         }
         if (profile) {
             if (const lagrange::Status status = server_->applyProfile(yaml); !status.ok()) {
@@ -126,6 +141,36 @@ public:
             throw nb::key_error(("no signal " + name).c_str());
         }
         return values;
+    }
+
+    /// Several signals' components one after another, as one float64 numpy array: what an
+    /// environment observes at every step, in one call instead of one per signal.
+    [[nodiscard]] nb::object readMany(const std::vector<std::string>& names) const {
+        std::vector<double> values;
+        for (const std::string& name : names) {
+            const std::vector<double> one = read(name);  // KeyError, TypeError as read()
+            values.insert(values.end(), one.begin(), one.end());
+        }
+        nb::object out =
+            nb::module_::import_("numpy").attr("empty")(values.size(), "dtype"_a = "float64");
+        auto view = nb::cast<nb::ndarray<double, nb::ndim<1>, nb::c_contig>>(out);
+        if (!values.empty()) {
+            std::memcpy(view.data(), values.data(), values.size() * sizeof(double));
+        }
+        return out;
+    }
+
+    /// command_joint for several joints in one mode, in order; true when every one took it.
+    bool commandJoints(const std::vector<std::string>& joints, const std::string& mode,
+                       const std::vector<double>& values) {
+        if (joints.size() != values.size()) {
+            throw std::invalid_argument("command_joints needs one value per joint");
+        }
+        bool all = true;
+        for (std::size_t i = 0; i < joints.size(); ++i) {
+            all = server_->commandJoint(joints[i], mode, values[i]) && all;
+        }
+        return all;
     }
 
     /// The signal's components, or nullopt for an unknown name (0 for an image).
@@ -187,8 +232,15 @@ public:
                                  " has no numpy layout here");
     }
 
-    bool commandJoint(const std::string& joint, const std::string& mode, double value) {
-        return server_->commandJoint(joint, mode, value);
+    lagrange::server::Server::JointCommandResult commandJoint(const std::string& joint,
+                                                              const std::string& mode, double value,
+                                                              bool strict) {
+        lagrange::server::Server::JointCommandResult result =
+            server_->commandJointChecked(joint, mode, value);
+        if (strict && !result.taken()) {
+            throw std::invalid_argument(result.refused);
+        }
+        return result;
     }
 
     [[nodiscard]] nb::bytes saveState() const {
@@ -212,6 +264,8 @@ public:
             throw std::runtime_error(status.message);
         }
     }
+
+    [[nodiscard]] std::vector<std::string> notes() const { return server_->importNotes(); }
 
     [[nodiscard]] nb::list signals() const {
         nb::list out;
@@ -286,17 +340,56 @@ private:
 
 NB_MODULE(_lagrange, m) {
     m.doc() = "Lagrange simulator, headless (roadmap 0.2-H5)";
+    using JointCommand = lagrange::server::Server::JointCommandResult;
+    nb::class_<JointCommand>(m, "JointCommand",
+                             "What command_joint did: true when the joint took the command. "
+                             "reason says why not; value is what it took, clamped (then "
+                             "limit says by which limit) when the value asked was beyond the "
+                             "joint's velocity limit, effort limit or range.")
+        .def("__bool__", &JointCommand::taken)
+        // command_joint returned a bool in 1.3.0 and before: `== True` and `== False` still
+        // compare by whether the joint took it (`is True` no longer holds; CHANGELOG). Anything
+        // else gets NotImplemented (is_operator), so Python compares by identity.
+        .def(
+            "__eq__", [](const JointCommand& c, bool b) { return c.taken() == b; },
+            nb::is_operator())
+        .def(
+            "__ne__", [](const JointCommand& c, bool b) { return c.taken() != b; },
+            nb::is_operator())
+        .def("__hash__", [](const JointCommand& c) { return c.taken() ? 1 : 0; })
+        .def_prop_ro("taken", &JointCommand::taken, "Whether the joint took the command.")
+        .def_ro("reason", &JointCommand::refused, "Why it was refused; empty when taken.")
+        .def_ro("value", &JointCommand::value,
+                "The value taken (rad, m, rad/s, m/s, N·m, N or V), within the joint's limits.")
+        .def_ro("clamped", &JointCommand::clamped,
+                "The value asked was beyond the joint's limit and was held at it.")
+        .def_ro("limit", &JointCommand::limit,
+                "The limit that held a clamped value, with its value; empty otherwise.")
+        .def("__repr__", [](const JointCommand& c) {
+            if (!c.taken()) {
+                return "JointCommand(refused: " + c.refused + ")";
+            }
+            std::ostringstream text;
+            text << "JointCommand(taken, value=" << c.value;
+            if (c.clamped) {
+                text << ", clamped to " << c.limit;
+            }
+            text << ")";
+            return text.str();
+        });
     nb::class_<Simulation>(m, "Simulation",
                            "A run without ROS or viewers, stepped from Python. The robot and "
-                           "world are URDF, SDFormat, MJCF or USD files.")
+                           "world are URDF, SDFormat, MJCF or USD files; overlay= adds a power "
+                           "system to the robot (an overlay YAML or a SPICE netlist, as "
+                           "--overlay).")
         .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&,
                       const std::optional<std::array<int, 3>>&, bool,
-                      const std::vector<std::string>&>(),
+                      const std::vector<std::string>&, const std::optional<std::string>&>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
              "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false,
-             "sensor_faults"_a = std::vector<std::string>{})
+             "sensor_faults"_a = std::vector<std::string>{}, "overlay"_a = nb::none())
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
@@ -305,14 +398,16 @@ NB_MODULE(_lagrange, m) {
         .def("delete", &Simulation::removeRobot, "name"_a, "Take a robot out of the run.")
         .def("step_until", &Simulation::stepUntil, "seconds"_a,
              "Advance to this simulated time (s), as fast as possible.")
-        .def(
-            "command_joint",
-            [](Simulation& sim, const std::string& joint, const std::string& mode, double value) {
-                return sim.commandJoint(joint, mode, value);
-            },
-            "joint"_a, "mode"_a, "value"_a,
-            "With joint_control=True: hold a joint at this position, velocity or effort. False "
-            "if it takes no such command.")
+        .def("command_joint", &Simulation::commandJoint, "joint"_a, "mode"_a, "value"_a,
+             "strict"_a = false,
+             "With joint_control=True: hold a joint at this position, velocity or effort. "
+             "Returns a JointCommand, false when the joint takes no such command (its reason "
+             "says why; strict=True raises ValueError with it instead); a value beyond the "
+             "joint's velocity limit, effort limit or range from the robot file is clamped to "
+             "it (clamped, value and limit say so).")
+        .def("command_joints", &Simulation::commandJoints, "joints"_a, "mode"_a, "values"_a,
+             "command_joint for each joint with its value, all in one mode, in one call. False "
+             "if any of them takes no such command (the others still take theirs).")
         .def("save_state", &Simulation::saveState,
              "The whole state as bytes: restore_state goes back to it and the run repeats.")
         .def("restore_state", &Simulation::restoreState, "state"_a)
@@ -321,11 +416,18 @@ NB_MODULE(_lagrange, m) {
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")
+        .def("read_many", &Simulation::readMany, "names"_a,
+             "The latest values of several signals, every component of each in order, as one "
+             "float64 numpy array. KeyError for an unknown name.")
         .def("image", &Simulation::image, "name"_a,
              "Latest frame of an image signal (a camera's sensor/<n>/image or depth, a sensor "
              "kind's sensor/<n>/<q>) as a numpy array: rgba8 (height, width, 4) uint8, r32f "
              "(height, width) float32, r32u uint32, ... None before the first frame (the "
              "sensors domain on ground truth renders nothing). KeyError for an unknown name.")
+        .def("notes", &Simulation::notes,
+             "What the loader noted about the robot's files and took its own way (an unknown "
+             "lidar pattern, a lens it does not draw, ...), as printed to stderr with [import] "
+             "when the Simulation is made.")
         .def("signals", &Simulation::signals,
              "Every signal on the bus: dicts with name, unit and components.")
         .def("bodies", &Simulation::bodies)

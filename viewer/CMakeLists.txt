@@ -7,27 +7,86 @@ find_package(lagrange_proto REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 find_package(imgui_vendor REQUIRED)
 find_package(SDL3 REQUIRED)
+find_package(tinyxml2 REQUIRED)
+find_package(yaml-cpp REQUIRED)
+# Reading recordings to compare them (Replay: Compare, Sim vs real, Validation).
+find_package(mcap_vendor REQUIRED)
+# Mesh files for the builder (RFC 0016 open question 8, Addendum A): the server's own reader.
+find_package(lagrange_meshes REQUIRED)
 
 # Protocol client and scene store. No Vulkan, no ImGui: testable without a display.
 add_library(
     lagrange_viewer_client
     STATIC
     client/src/ProfileDraft.cpp
+    client/src/ProfileExtras.cpp
     client/src/ProfileSession.cpp
     client/src/RecentList.cpp
+    client/src/RosFrames.cpp
+    client/src/RunHistory.cpp
     client/src/SceneStore.cpp
     client/src/ScopeBuffer.cpp
     client/src/ScopeSession.cpp
     client/src/ViewerClient.cpp
     client/src/Circuit.cpp
+    client/src/CompareLog.cpp
     client/src/FlowLegend.cpp
+    client/src/RadarScale.cpp
     client/src/SchematicLayout.cpp
+    client/src/SignalList.cpp
+    client/src/SignalAnalysis.cpp
+    client/src/SignalSets.cpp
+    client/src/LabelLayout.cpp
+    client/src/Fuzzy.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
 target_include_directories(lagrange_viewer_client PUBLIC client/include)
 target_link_libraries(
     lagrange_viewer_client
     PUBLIC lagrange_proto::lagrange_proto_transport
+    PRIVATE mcap_vendor::mcap yaml-cpp::yaml-cpp
+    PRIVATE yaml-cpp::yaml-cpp
+)
+
+# The robot builder's model (RFC 0016): document, mass, kinematics, validation, undo, URDF,
+# sensor catalog, primitives, scene adapter, test server, meshes and collision. No ImGui, no
+# Vulkan, no simulation module (invariant 14); lagrange_viewer_client only for the SceneFrame
+# types. lagrange_meshes (and through it lagrange_core, a library) is linked here only, privately,
+# so the builder reads a mesh and makes its hull as the server does (open question 8, accepted);
+# no builder header includes it, so the panels stay free of core.
+add_library(
+    lagrange_viewer_builder
+    STATIC
+    builder/src/Collision.cpp
+    builder/src/CollisionSplit.cpp
+    builder/src/Document.cpp
+    builder/src/Edits.cpp
+    builder/src/Files.cpp
+    builder/src/Gizmo.cpp
+    builder/src/History.cpp
+    builder/src/Kinematics.cpp
+    builder/src/MassProperties.cpp
+    builder/src/Materials.cpp
+    builder/src/MeshShapes.cpp
+    builder/src/Overlay.cpp
+    builder/src/Primitives.cpp
+    builder/src/SceneAdapter.cpp
+    builder/src/SensorCatalog.cpp
+    builder/src/SensorNeeds.cpp
+    builder/src/TestServer.cpp
+    builder/src/TestSpawn.cpp
+    builder/src/Urdf.cpp
+    builder/src/Validation.cpp
+)
+lagrange_target_defaults(lagrange_viewer_builder)
+target_include_directories(lagrange_viewer_builder PUBLIC builder/include)
+target_link_libraries(
+    lagrange_viewer_builder
+    PUBLIC lagrange_viewer_client
+    PRIVATE
+        tinyxml2::tinyxml2
+        yaml-cpp::yaml-cpp
+        lagrange_meshes::lagrange_meshes
 )
 
 # Scene renderer on the GPU layer, with the shared Slang shaders.
@@ -108,6 +167,7 @@ add_library(
     app/theme/src/Fonts.cpp
     app/widgets/src/Icons.cpp
     app/widgets/src/Widgets.cpp
+    app/widgets/src/TextFit.cpp
 )
 lagrange_target_defaults(lagrange_viewer_widgets)
 target_include_directories(
@@ -119,7 +179,18 @@ target_link_libraries(lagrange_viewer_widgets PUBLIC imgui_vendor::imgui)
 add_library(
     lagrange_viewer_panels
     STATIC
+    panels/src/BuilderAdd.cpp
+    panels/src/BuilderGizmo.cpp
+    panels/src/BuilderJoints.cpp
+    panels/src/BuilderPanels.cpp
+    panels/src/BuilderView.cpp
+    panels/src/BuilderPower.cpp
+    panels/src/BuilderProblems.cpp
+    panels/src/BuilderProperties.cpp
+    panels/src/BuilderTree.cpp
+    panels/src/BuilderTest.cpp
     panels/src/Chrome.cpp
+    panels/src/CommandPalette.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
@@ -132,30 +203,51 @@ add_library(
     panels/src/PerformancePanels.cpp
     panels/src/ProfilePanel.cpp
     panels/src/ReplayPanels.cpp
+    panels/src/ReplayCompare.cpp
     panels/src/Ros2Panels.cpp
     panels/src/ScenePanel.cpp
+    panels/src/SceneTabsPanels.cpp
     panels/src/ScheduleChart.cpp
     panels/src/ScopePanel.cpp
     panels/src/ScopePlots.cpp
+    panels/src/SensorCatalogPanel.cpp
     panels/src/SensorsPanels.cpp
     panels/src/SignalsPanel.cpp
+    panels/src/SignalsTabs.cpp
     panels/src/TimelinePanel.cpp
+    panels/src/ViewerSelf.cpp
     panels/src/ViewportPanel.cpp
     panels/src/WiringPanels.cpp
+    panels/src/DomainsTabs.cpp
+    panels/src/YamlText.cpp
     panels/src/WorldPanels.cpp
 )
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)
+# The version the launcher and Help show: this package's, from package.xml.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/package.xml" _package_xml)
+string(REGEX MATCH "<version>([^<]+)</version>" _ "${_package_xml}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS package.xml)
+target_compile_definitions(
+    lagrange_viewer_panels
+    PRIVATE LAGRANGE_VIEWER_VERSION="${CMAKE_MATCH_1}"
+)
 target_link_libraries(
     lagrange_viewer_panels
     PUBLIC
+        lagrange_viewer_builder
         lagrange_viewer_client
         lagrange_viewer_render
         lagrange_viewer_widgets
         imgui_vendor::imgui
 )
 
-add_executable(lagrange_viewer app/src/main.cpp app/src/App.cpp)
+add_executable(
+    lagrange_viewer
+    app/src/main.cpp
+    app/src/App.cpp
+    app/src/BuilderHost.cpp
+)
 lagrange_target_defaults(lagrange_viewer)
 lagrange_target_vulkan_warnings(lagrange_viewer)
 target_link_libraries(
@@ -188,43 +280,206 @@ install(
     PATTERN "OFL.txt"
 )
 
+# The profile schema (profiles/schema.json): lagrange_profiles owns it; the viewer build-depends
+# on that package for this data file only and installs a copy, which the Domains workspace's
+# Schema tab shows, so a viewer-only install still has it.
+set(_lagrange_profile_schema "")
+foreach(_candidate "${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json")
+    if(NOT _lagrange_profile_schema AND EXISTS "${_candidate}")
+        set(_lagrange_profile_schema "${_candidate}")
+    endif()
+endforeach()
+string(REPLACE ":" ";" _lagrange_schema_prefixes "$ENV{AMENT_PREFIX_PATH}")
+foreach(_prefix IN LISTS _lagrange_schema_prefixes)
+    set(_candidate "${_prefix}/share/lagrange_profiles/schema.json")
+    if(NOT _lagrange_profile_schema AND EXISTS "${_candidate}")
+        set(_lagrange_profile_schema "${_candidate}")
+    endif()
+endforeach()
+if(_lagrange_profile_schema)
+    install(
+        FILES "${_lagrange_profile_schema}"
+        DESTINATION share/${PROJECT_NAME}/profiles
+    )
+endif()
+
+# The sensor catalog (RFC 0016 §5, R11): lagrange_sensors owns it; the viewer build-depends on
+# that package for this data file only (no find_package, no library) and installs a copy, so a
+# viewer-only install still has it.
+set(_lagrange_sensor_catalog "")
+string(REPLACE ":" ";" _lagrange_prefixes "$ENV{AMENT_PREFIX_PATH}")
+foreach(_prefix IN LISTS _lagrange_prefixes)
+    set(_candidate
+        "${_prefix}/share/lagrange_sensors/catalog/sensor_catalog.yaml"
+    )
+    if(NOT _lagrange_sensor_catalog AND EXISTS "${_candidate}")
+        set(_lagrange_sensor_catalog "${_candidate}")
+    endif()
+endforeach()
+if(_lagrange_sensor_catalog)
+    message(STATUS "Sensor catalog: ${_lagrange_sensor_catalog}")
+    install(
+        FILES "${_lagrange_sensor_catalog}"
+        DESTINATION share/${PROJECT_NAME}/catalog
+    )
+else()
+    message(
+        STATUS
+        "Sensor catalog: not installed by lagrange_sensors yet; the builder's is empty"
+    )
+endif()
+
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(Threads REQUIRED)
     ament_add_gtest(
         test_viewer_client
         client/test/test_circuit.cpp
+        client/test/test_compare_log.cpp
         client/test/test_flow_legend.cpp
         client/test/test_schematic_layout.cpp
         client/test/test_profile_draft.cpp
+        client/test/test_profile_extras.cpp
         client/test/test_profile_session.cpp
+        client/test/test_radar_scale.cpp
         client/test/test_recent_list.cpp
+        client/test/test_ros_frames.cpp
+        client/test/test_run_history.cpp
         client/test/test_scene_store.cpp
         client/test/test_scene_fuzz.cpp
         client/test/test_scope_buffer.cpp
         client/test/test_scope_session.cpp
+        client/test/test_signal_analysis.cpp
+        client/test/test_text_layout.cpp
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
         render/test/test_picking.cpp
         render/test/test_thermal.cpp
+        panels/src/ViewerSelf.cpp
+        panels/test/test_viewer_self.cpp
         TIMEOUT 120
     )
+    target_include_directories(test_viewer_client PRIVATE panels/include)
     target_link_libraries(
         test_viewer_client
         lagrange_viewer_client
         lagrange_viewer_render
+        lagrange_viewer_widgets
+        mcap_vendor::mcap
         Threads::Threads
     )
     target_compile_definitions(
         test_viewer_client
         PRIVATE
             LAGRANGE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../proto/test/golden"
+            LAGRANGE_PROFILE_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
     )
     lagrange_target_defaults(test_viewer_client)
+    lagrange_test_private_tmpdir(test_viewer_client)
+
+    # The Geodesy tab's WGS84 <-> ENU, a header of the viewer's own, against the core's
+    # coords that the server uses. lagrange_core in this test only: the client and panels do not.
+    find_package(lagrange_core REQUIRED)
+    # The design's font sizes are CSS em sizes (app/theme/src/Fonts.cpp).
+    ament_add_gtest(test_viewer_fonts app/theme/test/test_fonts.cpp TIMEOUT 60)
+    target_link_libraries(test_viewer_fonts lagrange_viewer_widgets)
+    target_compile_definitions(
+        test_viewer_fonts
+        PRIVATE LAGRANGE_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
+    )
+    lagrange_target_defaults(test_viewer_fonts)
+
+    ament_add_gtest(test_geodesy client/test/test_geodesy.cpp TIMEOUT 60)
+    target_link_libraries(
+        test_geodesy
+        lagrange_viewer_client
+        lagrange_core::lagrange_core
+    )
+    lagrange_target_defaults(test_geodesy)
+
+    # The robot builder's model (RFC 0016): each work package adds its test files here.
+    ament_add_gtest(
+        test_viewer_builder
+        builder/test/test_builder_smoke.cpp
+        builder/test/test_history.cpp
+        builder/test/test_kinematics.cpp
+        builder/test/test_mass_properties.cpp
+        builder/test/test_validation.cpp
+        builder/test/test_scene_adapter.cpp
+        builder/test/test_urdf.cpp
+        builder/test/test_edits.cpp
+        builder/test/test_files.cpp
+        builder/test/test_sensor_catalog_loader.cpp
+        builder/test/test_gizmo.cpp
+        builder/test/test_test_server.cpp
+        builder/test/test_test_spawn.cpp
+        builder/test/test_scene_renderer_statics.cpp
+        builder/test/test_mesh_shapes.cpp
+        builder/test/test_overlay.cpp
+        # test_scene_renderer_statics draws on a Vulkan device (cmake/lagrange_cmake-extras.cmake).
+        ENV ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+        TIMEOUT 600
+    )
+    target_link_libraries(
+        test_viewer_builder
+        lagrange_viewer_builder
+        lagrange_viewer_render
+        lagrange_meshes::lagrange_meshes
+    )
+    target_compile_definitions(
+        test_viewer_builder
+        PRIVATE
+            LAGRANGE_BUILDER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/builder"
+            LAGRANGE_THERMAL_MATERIALS_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../modules/thermal/conduction/src/Materials.cpp"
+            LAGRANGE_BUILDER_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots"
+            LAGRANGE_SCHEMAS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schemas"
+            LAGRANGE_SENSOR_CATALOG_YAML="${CMAKE_CURRENT_SOURCE_DIR}/../modules/sensors/catalog/sensor_catalog.yaml"
+            LAGRANGE_PLUGIN_CATALOG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/catalog"
+    )
+    lagrange_target_defaults(test_viewer_builder)
+    lagrange_test_private_tmpdir(test_viewer_builder)
+    # Read and write a URDF from the command line, and make the templates (WP-B); not installed.
+    add_executable(builder_urdf_tool builder/test/urdf_tool.cpp)
+    target_link_libraries(builder_urdf_tool PRIVATE lagrange_viewer_builder)
+    lagrange_target_defaults(builder_urdf_tool)
 
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_signals_tabs test/test_signals_tabs.py TIMEOUT 300)
+    ament_add_pytest_test(test_launcher_input test/test_launcher_input.py TIMEOUT 300)
+    ament_add_pytest_test(test_profile_editor test/test_profile_editor.py TIMEOUT 180)
+    ament_add_pytest_test(test_performance_tabs test/test_performance_tabs.py TIMEOUT 900)
+    ament_add_pytest_test(test_domains_tabs test/test_domains_tabs.py TIMEOUT 300)
+    ament_add_pytest_test(test_world_tabs test/test_world_tabs.py TIMEOUT 600)
+    ament_add_pytest_test(test_elec_env_tabs test/test_elec_env_tabs.py TIMEOUT 600)
+    ament_add_pytest_test(test_radar_view test/test_radar_view.py TIMEOUT 600)
+    ament_add_pytest_test(test_scene_tabs test/test_scene_tabs.py TIMEOUT 600)
+    ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_test test/test_builder_test.py TIMEOUT 600)
+    ament_add_pytest_test(test_builder_into_run test/test_builder_into_run.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_acceptance test/test_builder_acceptance.py TIMEOUT 600)
+    ament_add_pytest_test(test_builder_joint_drive test/test_builder_joint_drive.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_power test/test_builder_power.py TIMEOUT 600)
+    ament_add_pytest_test(test_builder_files test/test_builder_files.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_prompts test/test_builder_prompts.py TIMEOUT 600)
+    ament_add_pytest_test(test_builder_rename test/test_builder_rename.py TIMEOUT 300)
+    ament_add_pytest_test(
+        test_builder_roundtrip
+        test/test_builder_roundtrip.py
+        TIMEOUT 300
+        ENV
+        LAGRANGE_BUILDER_URDF_TOOL=$<TARGET_FILE:builder_urdf_tool>
+    )
+    ament_add_pytest_test(
+        test_ros2_tabs
+        test/test_ros2_tabs.py
+        TIMEOUT 300
+        ENV
+        LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
+    )
     ament_add_pytest_test(
         test_headless
         test/test_headless.py
@@ -232,6 +487,14 @@ if(BUILD_TESTING)
         ENV
         LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
         ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    # Replay: two runs recorded by lagrange_server, replayed and compared.
+    ament_add_pytest_test(
+        test_replay_compare
+        test/test_replay_compare.py
+        TIMEOUT 300
+        ENV
+        LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
     )
 endif()
 

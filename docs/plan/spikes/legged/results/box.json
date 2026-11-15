@@ -1,0 +1,44 @@
+{
+  "mujoco 0.5 ms": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "creep_0_2s_mm": 1.135162037439183,
+    "creep_2_4s_mm": 0.8874998782501088
+  },
+  "mujoco 1 ms": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "creep_0_2s_mm": 1.13146461074904,
+    "creep_2_4s_mm": 0.8874999849744225
+  },
+  "mujoco 2 ms": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "creep_0_2s_mm": 1.124079866693085,
+    "creep_2_4s_mm": 0.8875000004396568
+  },
+  "jolt 0.5 ms": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "creep_0_2s_mm": 0.0877073532490542,
+    "creep_2_4s_mm": 0.0
+  },
+  "jolt 1 ms": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "creep_0_2s_mm": 0.08450799513994794,
+    "creep_2_4s_mm": 0.0
+  },
+  "jolt 2 ms": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "creep_0_2s_mm": 0.07853117882007225,
+    "creep_2_4s_mm": 0.0
+  },
+  "_meta": {
+    "wall_s": 0.14849362400127575,
+    "load_start": 8.3,
+    "load_end": 8.3,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-legspike/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}

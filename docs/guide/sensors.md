@@ -189,7 +189,11 @@ print(sim.read("sensor/wheel_odom/pose"))  # x, y, z, then the quaternion
 `sim.image("sensor/<name>/<quantity>")`
 returns an image (a camera's `image`, `depth` and `instance`, a stereo camera's `left`, `right` and
 `depth`, an event camera's `image`, `detections`' `semantic`) as a numpy array, or None before the
-first frame. `sim.signals()` lists the names.
+first frame. `sim.signals()` lists every signal as a dict `{"name", "unit", "components"}`
+(`[s["name"] for s in sim.signals() if s["name"].startswith("sensor/")]` for the sensors' names).
+What the loader noted about your files and took its own way (an unknown lidar pattern, a lens it
+does not draw) is printed to stderr as `[import] ...` when the `Simulation` is made, as the command
+line prints it, and `sim.notes()` returns those lines.
 
 **ROS 2**: the built-in types publish their own topics (`/scan`, `/points`, `/imu`,
 `/<name>/image_raw`, `/<name>/fix`, ...; see [the command line](cli.md)). A kind's images go out
@@ -241,6 +245,24 @@ forms are in [Sensor faults](cli.md#sensor-faults); the model in
 For perfect sensors instead, switch the domain to its substitute: `--domain sensors=off` (or the
 profile's `sensors: {enabled: false, substitute: ground_truth}`) gives exact values at the right
 times, and draws no images.
+
+## See them run
+
+Short clips of real runs, recorded by `tools/videos/make_videos.py` (all the clips:
+[feature videos](../videos/README.md)):
+
+- [radar_4d.mp4](../videos/radar_4d.mp4): the sedan's 4D imaging radar in the town, its detections
+  in the 3D view (Overlays → Radar detections) and in the Sensors workspace's radar view, coloured
+  by radial velocity.
+- [sensor_faults.mp4](../videos/sensor_faults.mp4): the AMR's gyro biased, then stuck, against the
+  true yaw rate.
+- [lidar_patterns.mp4](../videos/lidar_patterns.mp4): a channel table, a flash lidar and a
+  Livox-style rosette in the same room.
+- [fisheye.mp4](../videos/fisheye.mp4): a 90° pinhole and a 220° equidistant fisheye on the AMR.
+- [event_camera.mp4](../videos/event_camera.mp4): a camera and an event camera with the same
+  pixels.
+- [amr_sensor_kinds.mp4](../videos/amr_sensor_kinds.mp4): the safety AMR's scanner entering its
+  warning field at a rack, and a wheel's torque.
 
 ## What is not modelled
 

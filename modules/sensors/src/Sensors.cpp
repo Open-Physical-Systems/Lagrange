@@ -13,6 +13,7 @@
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/sensors/ThermalCamera.hpp"
 #include "lagrange/sensors/WeatherEffects.hpp"
+#include "lagrange/services/Log.hpp"
 #include "lagrange/thermal/Materials.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -23,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <span>
 #include <string>
 #include <string_view>
@@ -400,8 +402,12 @@ public:
         maxRange_ = setting(sensors, sensor_, "max_range", 30.0);
         noise_ = setting(sensors, sensor_, "range_noise", 0.0);
         distort_ = setting(sensors, sensor_, "motion_distortion", 1.0) != 0.0 && !groundTruth_;
+        rateHz_ = sensors.rateHz[sensor_];
         if (samples_ == 0) {
             return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + " has no samples");
+        }
+        if (std::string problem = patternProblem(sensors.settings[sensor_]); !problem.empty()) {
+            return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + ": " + problem);
         }
         if (Status ok = declarePattern(d); !ok.ok()) {
             return ok;
@@ -682,6 +688,41 @@ public:
     }
 
 private:
+    /// What is wrong with the pattern's own parameters, or empty (sensors QA F7: a channel at
+    /// 2.5 rad, a rosette cone of 4 rad, a negative prism ratio or prisms at one speed were
+    /// taken without a word).
+    [[nodiscard]] std::string patternProblem(const LidarLayout::Settings& settings) const {
+        constexpr double kRightAngle = std::numbers::pi / 2.0;
+        for (std::size_t ring = 0; ring < layout_.ringElevations.size(); ++ring) {
+            if (!(std::abs(layout_.ringElevations[ring]) <= kRightAngle)) {
+                return "channel elevations must lie within ±π/2 rad (the channel table has " +
+                       std::to_string(layout_.ringElevations[ring]) + ")";
+            }
+        }
+        if (layout_.pattern != LidarLayout::Pattern::Rosette) {
+            return {};
+        }
+        const auto given = [&settings](const char* key, double fallback) {
+            const auto it = settings.find(key);
+            return it == settings.end() ? fallback : it->second;
+        };
+        const double fov = given("rosette_fov", LidarLayout::kRosetteFov);
+        if (!(fov > 0.0 && fov <= std::numbers::pi)) {
+            return "rosette fov (the full cone) must be above 0 and at most π rad, not " +
+                   std::to_string(fov);
+        }
+        if (!(given("rosette_prism_ratio", 1.0) >= 0.0)) {
+            return "rosette prism_ratio (δ2 / δ1) must be at least 0";
+        }
+        const double s1 = layout_.rosette.speed1;
+        const double s2 = layout_.rosette.speed2;
+        if (!std::isfinite(s1) || !std::isfinite(s2) || s1 == s2) {
+            return "rosette speed_1 and speed_2 must be numbers that differ (at one speed the "
+                   "prisms turn together and the beam draws one circle, or stands still)";
+        }
+        return {};
+    }
+
     /// The opt-in scan patterns (LidarLayout): a flash lidar fires all beams at once, so its scan
     /// has no motion distortion; a rosette's beams move on every scan and go out as
     /// sensor/<name>/directions (unit vectors in the sensor frame, x y z per beam) for whoever
@@ -703,6 +744,22 @@ private:
             if (!(layout_.rosette.pointRate > 0.0)) {
                 return Status::error(StatusCode::InvalidConfig,
                                      "rosette lidar " + name_ + ": rosette_point_rate must be > 0");
+            }
+            // The scan holds the last `samples` points fired, 1 / point_rate apart: the whole
+            // period only when samples = point_rate / update_rate (sensors.md, Rosette).
+            const double perScan = layout_.perPeriod(rateHz_);
+            if (std::abs(perScan - samples_) >= 1.0) {
+                services::log(
+                    services::LogLevel::Warning, "sensors",
+                    "rosette lidar " + name_ + ": " + std::to_string(samples_) +
+                        " samples per scan, but it fires " + std::to_string(std::llround(perScan)) +
+                        " points per scan at point_rate / update_rate; " +
+                        (perScan > samples_
+                             ? "each scan holds only the last " + std::to_string(samples_) +
+                                   " points of its period"
+                             : "its scans overlap, their first points fired before the last "
+                               "scan's end") +
+                        " (give samples = point_rate / update_rate for the real picture)");
             }
             SignalSpec out =
                 spec("sensor/" + name_ + "/directions", SignalType::ScalarArray, units::one);
@@ -752,7 +809,10 @@ private:
         const double angle = std::acos(std::min(dot, 1.0));
         moving_ = angle != 0.0 || scanEnd_.position != sensor.position;
         for (std::uint32_t c = 0; c < columns; ++c) {
-            const double f = static_cast<double>(c + 1) / columns;
+            // A rotating lidar's columns spread over the period; a rosette's points come
+            // 1 / point_rate apart, the last at the scan's end (sensors QA F3). A point fired
+            // before the last scan's end (samples > point_rate / rate) takes its pose.
+            const double f = std::max(layout_.firedFraction(c, rateHz_), 0.0);
             Pose& pose = columnPose_[c];
             for (std::size_t k = 0; k < 3; ++k) {
                 pose.position.at(k) =
@@ -901,6 +961,7 @@ private:
     LidarLayout layout_;
     std::uint32_t samples_{0};  // beams, all rings
     double minRange_{0.0}, maxRange_{0.0}, noise_{0.0};
+    double rateHz_{10.0};  // scans per second
     std::vector<Pose> rest_;
     std::vector<SignalId> poses_;
     std::vector<Shape> shapes_;

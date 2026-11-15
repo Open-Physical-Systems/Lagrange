@@ -162,6 +162,12 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 /// outwash keeps in the air there; site parameters, no defaults) it writes env/dust/downwash
 /// (kg/m³) once the outwash's friction velocity passes Bagnold's threshold for those grains.
 ///
+/// Tethers (config "tether_nodes", a list of "<tether>=<nodes>" the server fills when the tether
+/// domain runs; rotor_aero.md §2.7): with rotors and the downwash on, it reads each cable's
+/// tether/<n>/nodes (m, 3 per node, NaN past the last) and writes tether/<n>/downwash (m/s,
+/// world, the same layout): every robot's wake at each node, its own drone's included, without
+/// the wind and gust the tether already takes from env/wind/velocity.
+///
 /// Config "downwash_model": "fitted" (the default, above) or "lbm" (rotor_aero.md §8): the first
 /// multirotor's air is computed live in a lattice Boltzmann box that follows it (LiveAir, on a
 /// hardware GPU; config "downwash_lbm_cell", m, default 0.04; "downwash_lbm_cpu": the CPU
@@ -171,6 +177,17 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 /// stays. Without a hardware GPU the fitted model runs instead.
 class AeroDrag final : public IModule {
 public:
+    AeroDrag() = default;
+    /// With the config it will run with and whether the world has rotors (RotorAPI_1), so
+    /// info() is right before init: a run that asks for the live air box on the GPU is not
+    /// deterministic (invariant 7) until init finds no GPU.
+    AeroDrag(const ModuleConfig& config, bool rotors) : gpuAsked_(asksGpuAir(config, rotors)) {}
+    /// Whether a run with `config` would compute its air in the live box on a hardware GPU:
+    /// the world has rotors (the box follows a multirotor; without one there is no box),
+    /// downwash on, model lbm, not downwash_lbm_cpu. The server asks the same for the run's
+    /// determinism, so the two never disagree.
+    [[nodiscard]] static bool asksGpuAir(const ModuleConfig& config, bool rotors);
+
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
     Status declare(const WorldView& world, const ModuleConfig& config,
@@ -192,6 +209,10 @@ private:
         Dryden turbulence;
         std::size_t group{Downwash::kNoGroup};  // its robot, when that robot has rotors
     };
+    struct TetherNodes {  // a tether's nodes in, the rotors' air at them out
+        SignalId nodes, downwash;
+        std::vector<double> values;
+    };
     struct RotorLink {
         double radius{0.0};
         std::size_t group{0};
@@ -209,6 +230,7 @@ private:
     SignalId densityIn_, rainIn_, snowIn_;  // the weather's, when it runs
     bool downwashOn_{true};
     std::vector<RotorLink> rotors_;
+    std::vector<TetherNodes> cables_;
     std::size_t groupCount_{0};
     Downwash downwash_;
     std::array<double, 3> groundNormal_{0.0, 0.0, 1.0};
@@ -225,6 +247,31 @@ private:
     bool lbmWanted_{false};
     double lbmCell_{0.04};
     bool lbmCpu_{false};
+    bool gpuAsked_{false};  // by the config given at construction (info() before init)
+    bool initialised_{false};
+};
+
+/// The aerodynamics domain's zero substitute (invariant 3; aerodynamics.md §5): still air. For
+/// the stage's AeroAPI_1 links no aerodynamic wrench and the airspeed the link's own speed; no
+/// gust and no wind. It stands in for AeroDrag in the run and in a profile's preview wiring.
+class ZeroAero final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override;
+    [[nodiscard]] Duration preferredStep() const override;
+    Status declare(const WorldView& world, const ModuleConfig& config,
+                   SignalDeclarer& declarer) override;
+    Status init(const WorldView& world, const ModuleConfig& config, SignalBus& bus) override;
+    Status step(const StepContext& context, SignalBus& bus) override;
+    // Stateless: its outputs are zero or the links' own speed, read again every step.
+    Status saveState(StateWriter& writer) const override;
+    Status restoreState(StateReader& reader) override;
+
+private:
+    struct Link {
+        SignalId twist, wrench, airspeed;
+    };
+    std::vector<Link> links_;
+    SignalId gust_, wind_;
 };
 
 }  // namespace lagrange::aerodynamics

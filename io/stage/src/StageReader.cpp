@@ -884,14 +884,17 @@ private:
         if (cutoff && !(*cutoff > 0.0 && *cutoff <= FisheyeLens::kPi)) {
             return Unexpected{path + ": sensor:camera:cutoffAngle must lie in (0, π]"};
         }
-        // Unauthored, the cutoff follows the field of view (FisheyeLens::from): invert up to π.
-        // A lens that folds back is refused where the camera starts, as from URDF.
-        lens.cutoff = cutoff.value_or(FisheyeLens::kPi);
+        // The angle across the width is the lens's, whatever the cutoff: a cutoff below half of
+        // it leaves the pixels beyond it black, as from URDF and SDFormat (and Gazebo). So
+        // invert up to π; unauthored, the cutoff then follows the field of view
+        // (FisheyeLens::from). A lens that folds back is refused where the camera starts, as from
+        // URDF.
+        lens.cutoff = FisheyeLens::kPi;
         const std::optional<double> half = lens.undistorted(aperture / 2.0 / focal);
         if (!half || !(*half > 0.0)) {
             return Unexpected{path +
-                              ": the fisheye cannot reach horizontalAperture / (2 focalLength) "
-                              "before its cutoff angle"};
+                              ": the fisheye's θ_d never reaches horizontalAperture / "
+                              "(2 focalLength) within π off its axis"};
         }
         settings["horizontal_fov"] = 2.0 * *half;
         settings["projection"] = 1.0;
@@ -1099,7 +1102,7 @@ private:
                   std::pair{"tx_power", "sensor:radar:txPower"},
                   std::pair{"noise_floor", "sensor:radar:noiseFloor"}}) {
                 const auto value = real(attribute);
-                if (!value || *value <= 0.0) {
+                if (!value || !std::isfinite(*value) || *value <= 0.0) {
                     errors_.push_back(path + ": " + attribute + " is required and positive");
                     return {};
                 }
@@ -1611,17 +1614,9 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         return Unexpected{path + ": tile " + options.tile +
                           " holds rigid bodies; a tile holds static scenery only"};
     }
-    if (options.addGround && !reader.hasPlane() && model.groundPlane) {
+    if (options.addGround && !reader.hasPlane() && model.groundPlane && !hasOwnFloor(model)) {
         // As the URDF loader: the infinite plane first among the colliders, the slab last.
-        World& w = model.world;
-        w.colliders.body.insert(w.colliders.body.begin(), kWorldBody);
-        w.colliders.shape.insert(w.colliders.shape.begin(), ShapeType::Plane);
-        w.colliders.size.insert(w.colliders.size.begin(), {0.0, 0.0, 1.0});
-        w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
-        w.colliders.friction.insert(w.colliders.friction.begin(), options.groundFriction);
-        w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
-        w.colliders.material.insert(w.colliders.material.begin(), kNoMaterial);
-        addGroundPrim(model);
+        addGroundPlane(model, options.groundFriction);
     }
     const UsdPrim root = stage->GetDefaultPrim();
     model.name =

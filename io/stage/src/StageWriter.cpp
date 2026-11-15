@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <numbers>
 #include <set>
@@ -750,8 +751,9 @@ private:
                     table.mimic[j] != kNoMimic) {
                     UsdPrim prim = joint.GetPrim();
                     prim.ApplyAPI(TfToken("JointDynamicsAPI_1"));
-                    const auto real = [&prim](const char* name, double value) {
-                        prim.CreateAttribute(TfToken(name), SdfValueTypeNames->Double).Set(value);
+                    const auto real = [&prim](const char* attribute, double value) {
+                        prim.CreateAttribute(TfToken(attribute), SdfValueTypeNames->Double)
+                            .Set(value);
                     };
                     real("joint:damping", table.damping[j]);
                     real("joint:friction", table.friction[j]);
@@ -931,7 +933,25 @@ Expected<void, std::string> writeStage(const Model& model, const std::string& pa
         stage->SetDefaultPrim(stage->GetPrimAtPath(
             SdfPath::AbsoluteRootPath().AppendChild(TfToken(primName(model.scene.prims[0].name)))));
     }
-    if (!stage->GetRootLayer()->Export(path)) {
+    if (std::filesystem::path(path).extension() != ".usda") {
+        if (!stage->GetRootLayer()->Export(path)) {
+            return Unexpected{"cannot write " + path};
+        }
+        return {};
+    }
+    // USD's text ends with a blank line; the file ends with one newline, as the repository's
+    // end-of-file hook (pre-commit) wants of the samples written here.
+    std::string text;
+    if (!stage->GetRootLayer()->ExportToString(&text)) {
+        return Unexpected{"cannot write " + path};
+    }
+    while (text.ends_with("\n\n")) {
+        text.pop_back();
+    }
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+    out.close();
+    if (!out) {
         return Unexpected{"cannot write " + path};
     }
     return {};

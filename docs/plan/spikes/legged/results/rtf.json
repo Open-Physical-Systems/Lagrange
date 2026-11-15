@@ -1,0 +1,56 @@
+{
+  "mujoco 0.5 ms": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "rtf": 36.856204115794974,
+    "steps_per_s": 73712.40823158994,
+    "base_z": 0.16324067483672328,
+    "load": 7.79
+  },
+  "mujoco 1 ms": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "rtf": 71.33836864398353,
+    "steps_per_s": 71338.36864398353,
+    "base_z": 0.16324071915490215,
+    "load": 7.79
+  },
+  "mujoco 2 ms": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "rtf": 137.19017724953744,
+    "steps_per_s": 68595.08862476872,
+    "base_z": 0.16324068158880733,
+    "load": 7.79
+  },
+  "jolt 0.5 ms": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "rtf": 22.343917973834444,
+    "steps_per_s": 44687.835947668886,
+    "base_z": 0.17452557384967804,
+    "load": 7.79
+  },
+  "jolt 1 ms": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "rtf": 46.19869769491369,
+    "steps_per_s": 46198.69769491369,
+    "base_z": 0.17438757419586182,
+    "load": 7.79
+  },
+  "jolt 2 ms": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "rtf": 88.74720496705089,
+    "steps_per_s": 44373.60248352545,
+    "base_z": 0.17397138476371765,
+    "load": 7.79
+  },
+  "_meta": {
+    "wall_s": 1.3543199530104175,
+    "load_start": 7.79,
+    "load_end": 7.79,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-legspike/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}

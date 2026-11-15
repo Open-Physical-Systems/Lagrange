@@ -61,7 +61,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_ros2_control
         test/test_ros2_control.cpp
-        ENV ROS_DOMAIN_ID=74 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
         TIMEOUT 120
     )
     target_link_libraries(
@@ -77,6 +77,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_PARAMS="${CMAKE_CURRENT_SOURCE_DIR}/test/wheel_controllers.yaml"
     )
     lagrange_target_defaults(test_ros2_control)
+    lagrange_test_ros_domain(test_ros2_control 74)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

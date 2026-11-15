@@ -1,6 +1,7 @@
 // ViewerClient against a scripted server built from the same transport classes.
 
 #include "lagrange/proto/Connection.hpp"
+#include "lagrange/viewer/ScopeBuffer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
@@ -654,6 +656,58 @@ TEST(ViewerClient, OpenFileSendsTheRightCommandAndReportsTheOutcome) {
     client.stop();
 }
 
+// RFC 0016 §7.2: the builder sends its robot's text and later removes it by the name the
+// server answered; both answers are kept for the UI by request id.
+TEST(ViewerClient, ImportRobotTextAndRemoveRobotRoundTrip) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+
+    const std::string urdf = R"(<robot name="crate"><link name="body"/></robot>)";
+    const std::uint64_t importId = client.importRobotText(urdf, "schema_version: 1\n");
+    ASSERT_TRUE(server.pump([&] { return server.countCommands(v1::Command::kImportRobot) == 1; }));
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_import_robot()) {
+            const v1::ImportRobot& sent = e.command().import_robot();
+            EXPECT_EQ(e.command().request_id(), importId);
+            EXPECT_EQ(sent.format(), v1::ImportRobot::FORMAT_URDF);
+            EXPECT_TRUE(sent.path().empty());
+            EXPECT_EQ(sent.content().inline_(), urdf);
+            EXPECT_EQ(sent.content().size(), urdf.size());
+            EXPECT_EQ(sent.overlay_content().inline_(), "schema_version: 1\n");
+        }
+    }
+    EXPECT_EQ(client.outcome(importId), nullptr) << "not answered yet";
+    v1::Envelope imported;
+    imported.mutable_command_result()->set_request_id(importId);
+    imported.mutable_command_result()->set_ok(true);
+    imported.mutable_command_result()->set_imported_stage_path("/crate_2");
+    server.send(imported);
+    ASSERT_TRUE(server.pump([&] { return client.outcome(importId) != nullptr; }));
+    EXPECT_TRUE(client.outcome(importId)->ok);
+    EXPECT_EQ(client.outcome(importId)->importedStagePath, "/crate_2");
+
+    const std::uint64_t removeId = client.removeRobot("crate_2");
+    ASSERT_TRUE(server.pump([&] { return server.countCommands(v1::Command::kRemoveRobot) == 1; }));
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_remove_robot()) {
+            EXPECT_EQ(e.command().request_id(), removeId);
+            EXPECT_EQ(e.command().remove_robot().name(), "crate_2");
+        }
+    }
+    // An older server does not know the command: a generic refusal, kept as the outcome.
+    v1::Envelope refused;
+    refused.mutable_command_result()->set_request_id(removeId);
+    refused.mutable_command_result()->set_error("not supported by lagrange_server");
+    server.send(refused);
+    ASSERT_TRUE(server.pump([&] { return client.outcome(removeId) != nullptr; }));
+    EXPECT_FALSE(client.outcome(removeId)->ok);
+    EXPECT_EQ(client.outcome(removeId)->error, "not supported by lagrange_server");
+    EXPECT_TRUE(client.outcome(importId)->ok) << "earlier answers are kept";
+    client.stop();
+}
+
 TEST(ViewerClient, LogLinesFillTheConsoleBookAndOldOnesFallOut) {
     FakeServer server;
     ViewerClient client(server.endpoint());
@@ -795,6 +849,48 @@ TEST(ViewerClient, WatchedSensorReceivesPointCloudsAndRejectsMalformedOnes) {
     ASSERT_TRUE(server.pump([&] { return stream->rejected() == 2; }));
     EXPECT_EQ(stream->frames(), 1U);
     EXPECT_EQ(stream->latest(), cloud);  // the good frame is still the one shown
+    client.stop();
+}
+
+TEST(ViewerClient, RadarFramesKeepVelocityRcsAndSnr) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    const auto stream = client.watchSensor("/sedan/base_link/front_radar");
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kSubscribeSensor) == 1; }));
+    const auto frame = [](std::uint32_t count, std::uint32_t stride,
+                          std::initializer_list<const char*> fields,
+                          const std::vector<float>& values) {
+        v1::Envelope envelope;
+        v1::SensorFrame* out = envelope.mutable_sensor_frame();
+        out->set_sensor("/sedan/base_link/front_radar");
+        out->mutable_sim_time()->set_ns(7);
+        out->mutable_points()->set_count(count);
+        out->mutable_points()->set_stride(stride);
+        for (const char* field : fields) {
+            out->mutable_points()->add_fields(field);
+        }
+        out->mutable_points()->mutable_data()->set_inline_(
+            std::string(reinterpret_cast<const char*>(values.data()),  // NOLINT
+                        values.size() * sizeof(float)));
+        return envelope;
+    };
+    const std::vector<float> two{20, 1, 0, -3.5F, 10, 400, 40, -2, 0.5F, 6, 1, 25};
+    server.send(frame(2, 24, {"x", "y", "z", "velocity", "rcs", "snr"}, two));
+    ASSERT_TRUE(server.pump([&] { return stream->frames() == 1; }));
+    const auto cloud = stream->latest();
+    ASSERT_NE(cloud, nullptr);
+    EXPECT_TRUE(cloud->radar());
+    EXPECT_EQ(cloud->floats, 6U);
+    EXPECT_EQ(cloud->count, 2U);
+    EXPECT_EQ(cloud->points, two);
+    // Six floats do not fit a 16-byte stride; unknown fields are not guessed at.
+    server.send(frame(1, 16, {"x", "y", "z", "velocity", "rcs", "snr"}, {1, 2, 3, 4}));
+    server.send(frame(1, 24, {"x", "y", "z", "doppler", "rcs", "snr"}, {1, 2, 3, 4, 5, 6}));
+    ASSERT_TRUE(server.pump([&] { return stream->rejected() == 2; }));
+    EXPECT_EQ(stream->latest(), cloud);
     client.stop();
 }
 
@@ -1031,6 +1127,173 @@ TEST(ViewerClient, EnvironmentFieldsRosGraphAndWorldArePublished) {
     ASSERT_EQ(client.world()->tiles.size(), 3U);
     EXPECT_EQ(client.world()->tiles[2].y, -2);
     EXPECT_EQ(client.world()->tiles[2].lod, 3U);
+    client.stop();
+}
+
+// RFC 0016 R7: the Builder's cost rule. Quiet unsubscribes everything a panel asked for, with
+// existing messages, and leaving it asks for all of it again.
+TEST(ViewerClient, QuietSendsEmptySubscriptionsAndRestores) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    const auto a = client.subscribe("a");
+    ASSERT_NE(a, nullptr);
+    client.setRosGraphWanted(true);
+    client.setWorldWanted(true);
+    (void)client.watchSensor("/robot/lidar");
+    (void)client.watchField("emi/flux_density", 0.1);
+    const auto lastSubscribe = [&]() -> const v1::Subscribe* {
+        const v1::Subscribe* found = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            found = e.body_case() == v1::Envelope::kSubscribe ? &e.subscribe() : found;
+        }
+        return found;
+    };
+    // Everything asked for has arrived: the signal, the sensor, the field, graph and world on.
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 1 &&
+               server.countCommands(v1::Command::kSubscribeSensor) == 1 &&
+               server.countCommands(v1::Command::kSubscribeField) == 1 &&
+               server.countCommands(v1::Command::kSetWorld) == 2;
+    }));
+    const auto lastCommand = [&](v1::Command::CommandCase kind) -> const v1::Command* {
+        const v1::Command* found = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            if (e.body_case() == v1::Envelope::kCommand && e.command().command_case() == kind) {
+                found = &e.command();
+            }
+        }
+        return found;
+    };
+
+    client.setQuiet(true);
+    client.setQuiet(true);  // no change: nothing more is sent
+    EXPECT_TRUE(client.quiet());
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 0 &&
+               server.countCommands(v1::Command::kSubscribeSensor) == 2 &&
+               server.countCommands(v1::Command::kSubscribeField) == 2 &&
+               server.countCommands(v1::Command::kSetWorld) == 3;
+    }));
+    // The last Unsubscribe names the signal that was wanted.
+    const v1::Envelope* unsubscribe = nullptr;
+    for (const v1::Envelope& e : server.received()) {
+        unsubscribe = e.body_case() == v1::Envelope::kUnsubscribe ? &e : unsubscribe;
+    }
+    ASSERT_NE(unsubscribe, nullptr);
+    ASSERT_EQ(unsubscribe->unsubscribe().signals_size(), 2);
+    EXPECT_FALSE(lastCommand(v1::Command::kSubscribeSensor)->subscribe_sensor().enabled());
+    EXPECT_FALSE(lastCommand(v1::Command::kSubscribeField)->subscribe_field().enabled());
+    EXPECT_FALSE(lastCommand(v1::Command::kSetWorld)->set_world().enabled());
+    EXPECT_FALSE(lastCommand(v1::Command::kSetRosGraph)->set_ros_graph().enabled());
+
+    // A sensor asked for while quiet is not sent until quiet ends; a block that still arrives
+    // for "a" is not delivered.
+    (void)client.watchSensor("/robot/camera");
+    server.send(signalBlock(1, 0, 1, 100'000, 0, 10));
+    server.send(snapshot(3, 1.5));
+    ASSERT_TRUE(server.pump([&] { return sceneX(client) == 1.5; }));  // the scene still comes
+    EXPECT_EQ(a->totalSamples(), 0U);
+    EXPECT_EQ(server.countCommands(v1::Command::kSubscribeSensor), 2);
+
+    client.setQuiet(false);
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 1 &&
+               server.countCommands(v1::Command::kSubscribeSensor) == 4 &&
+               server.countCommands(v1::Command::kSubscribeField) == 3 &&
+               server.countCommands(v1::Command::kSetWorld) == 4;
+    }));
+    EXPECT_TRUE(lastCommand(v1::Command::kSubscribeSensor)->subscribe_sensor().enabled());
+    EXPECT_TRUE(lastCommand(v1::Command::kSubscribeField)->subscribe_field().enabled());
+    EXPECT_TRUE(lastCommand(v1::Command::kSetWorld)->set_world().enabled());
+    EXPECT_TRUE(lastCommand(v1::Command::kSetRosGraph)->set_ros_graph().enabled());
+    server.send(signalBlock(1, 0, 1, 100'000, 10, 10));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 10; }));
+    client.stop();
+}
+
+// RFC 0016 §7.3: the Builder's joint sliders. CommandJoint goes out with its request id and the
+// answer (a refusal too) is kept by it; watchSignal() streams a readout while quiet, alone.
+TEST(ViewerClient, CommandJointRoundTripAndAReadoutWhileQuiet) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+
+    const std::uint64_t first = client.commandJoint("pan_joint", "position", 0.75);
+    const std::uint64_t second = client.commandJoint("tilt_joint", "velocity", -1.5);
+    ASSERT_TRUE(server.pump([&] { return server.countCommands(v1::Command::kCommandJoint) == 2; }));
+    std::vector<v1::CommandJoint> sent;
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_command_joint()) {
+            sent.push_back(e.command().command_joint());
+            EXPECT_EQ(e.command().request_id(), sent.size() == 1 ? first : second);
+        }
+    }
+    ASSERT_EQ(sent.size(), 2U);
+    EXPECT_EQ(sent[0].joint(), "pan_joint");
+    EXPECT_EQ(sent[0].mode(), "position");
+    EXPECT_DOUBLE_EQ(sent[0].value(), 0.75);
+    EXPECT_EQ(sent[1].joint(), "tilt_joint");
+    EXPECT_EQ(sent[1].mode(), "velocity");
+    EXPECT_DOUBLE_EQ(sent[1].value(), -1.5);
+    v1::Envelope ok;
+    ok.mutable_command_result()->set_request_id(first);
+    ok.mutable_command_result()->set_ok(true);
+    server.send(ok);
+    v1::Envelope refused;
+    refused.mutable_command_result()->set_request_id(second);
+    refused.mutable_command_result()->set_error(
+        "joint control is off in this run: start lagrange_server with --joint-control");
+    server.send(refused);
+    ASSERT_TRUE(server.pump([&] { return client.outcome(second) != nullptr; }));
+    ASSERT_NE(client.outcome(first), nullptr);
+    EXPECT_TRUE(client.outcome(first)->ok);
+    EXPECT_FALSE(client.outcome(second)->ok);
+    EXPECT_NE(client.outcome(second)->error.find("--joint-control"), std::string::npos);
+
+    // Quiet: "a" (a scope's) is dropped, "b" (a readout) stays subscribed and fed.
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    const auto scope = client.subscribe("a");
+    const auto readout = client.watchSignal("b", 2);
+    ASSERT_NE(scope, nullptr);
+    ASSERT_NE(readout, nullptr);
+    EXPECT_EQ(client.watchSignal("no such signal"), nullptr);
+    EXPECT_LT(readout->capacity(), lagrange::viewer::ScopeBuffer::kDefaultCapacity)
+        << "a small buffer";
+    const auto lastSubscribe = [&]() -> const v1::Subscribe* {
+        const v1::Subscribe* found = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            found = e.body_case() == v1::Envelope::kSubscribe ? &e.subscribe() : found;
+        }
+        return found;
+    };
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 2;
+    }));
+    client.setQuiet(true);
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 1 && s->signals(0).signal() == 1;
+    }));
+    server.send(signalBlock(1, 0, 1, 100'000, 0, 10));
+    server.send(signalBlock(1, 1, 3, 1'000'000, 0, 5));
+    ASSERT_TRUE(server.pump([&] { return readout->totalSamples() == 5; }));
+    EXPECT_DOUBLE_EQ(readout->latest(), 4.2) << "component z of the last sample";
+    EXPECT_EQ(scope->totalSamples(), 0U) << "a scope's signal is not delivered while quiet";
+    client.unsubscribe(readout);
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 0;
+    }));
     client.stop();
 }
 

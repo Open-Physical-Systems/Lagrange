@@ -1,0 +1,58 @@
+# The sample plugin lagrange_thermal_probe's kind `ir_thermometer` (thermal_probe.c), for the
+# robot builder's sensor catalog (RFC 0016 §5): installed under the ament resource
+# lagrange_sensor_catalog.
+schema_version: 1
+plugin: lagrange_thermal_probe
+kinds:
+  ir_thermometer:
+    name: Infrared thermometer (plugin)
+    category: environment
+    description: A spot pyrometer along +x; the grey-body apparent temperature of what a 5 x 5 grid
+      of rays meets.
+    doc: docs/physics/heat-conduction.md
+    references: []
+    renders: false
+    params:
+      - path: fov
+        type: number
+        unit: rad
+        default: 0.0
+        min: 0
+        meaning: 'square field of view; 0: one ray'
+      - path: range
+        type: number
+        unit: m
+        default: 1.0
+        min_exclusive: 0
+        meaning: rays end there
+      - path: emissivity
+        type: number
+        unit: '1'
+        default: 0.95
+        min_exclusive: 0
+        max: 1
+        meaning: the target's, set on the sensor as on a real pyrometer
+      - path: ambient
+        type: number
+        unit: K
+        default_from: env/air_temperature when the weather runs; else required (a site parameter)
+        meaning: the surroundings' temperature
+      - path: noise/stddev
+        type: number
+        unit: K
+        default: 0.0
+        min: 0
+        meaning: Gaussian, 1σ
+      - path: resolution
+        type: number
+        unit: K
+        default: 0.0
+        min: 0
+        meaning: 'quantum; 0: none'
+    signals:
+      - name: temperature
+        type: scalar
+        unit: K
+      - name: valid
+        type: scalar
+        unit: '1'

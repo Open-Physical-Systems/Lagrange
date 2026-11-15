@@ -8,12 +8,14 @@ sitl = "sitl"   # software in the loop
 lod = "lod"     # level of detail
 Stubbs = "Stubbs"  # a surname (Stubbs and Akos, GPS World 2016)
 thr = "thr"     # PX4 parameter names: THR_MDL_FAC, MPC_THR_HOVER
+BASF = "BASF"    # a company name (docs/plan/builder-phase1-plan.md)
 ned = "ned"     # north-east-down, the aerospace navigation frame
 parm = "parm"   # ArduPilot parameter files (.parm)
 thst = "thst"   # ArduPilot parameter names: MOT_THST_HOVER
 nd = "nd"       # OpenStreetMap XML: a way's node reference element <nd ref=...>
 mor = "mor"     # meteorological optical range (WMO), a visibility sensor's reading
 Shepperd = "Shepperd"  # a surname (Shepperd 1978, quaternion from a rotation matrix)
+robotis = "robotis"  # ROBOTIS, a robot maker (MuJoCo Menagerie robotis_op3)
 
 [default.extend-identifiers]
 # SDFormat PbrWorkflow::Metalness.

@@ -56,6 +56,7 @@ struct SensorDesc {
     std::map<std::string, double, std::less<>> settings;  // as World::Sensors::settings
     std::string kind;  // a custom sensor's (RFC 0008 §3), as World::Sensors::kind
     std::map<std::string, std::string, std::less<>> text;  // its text parameters
+    std::string problem;  // why the file's sensor cannot be read; non-empty refuses the model
 };
 
 struct LinkDesc {
@@ -83,6 +84,7 @@ struct JointDesc {
     bool actuated{false};
     double damping{0.0};   // N·m·s/rad or N·s/m
     double friction{0.0};  // N·m or N
+    double armature{0.0};  // kg·m² or kg: rotor inertia the joint drives (MJCF armature)
     std::string mimic;     // the joint this one copies, or empty; takes no commands
     double mimicMultiplier{1.0}, mimicOffset{0.0};
 };
@@ -104,9 +106,6 @@ struct Description {
 /// on the world. Names already in the model get the description's name in front. What cannot be
 /// represented is listed in Model::notes; a broken tree is an error.
 [[nodiscard]] Expected<void, std::string> build(const Description& description, Model& model);
-
-/// Whether a description has a plane that build() puts on the world (a ground of its own).
-[[nodiscard]] bool hasGroundPlane(const Description& description);
 
 /// Adds `text` to the model's notes once.
 void note(Model& model, std::string text);

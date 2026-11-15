@@ -4,6 +4,7 @@
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
 
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -345,8 +346,9 @@ private:
     /// Prims the overlay made sensors of (SensorAPI_1 and a sensor type) become the world's
     /// sensors, as the stage reader makes them from a USD stage, so that a robot file with an
     /// overlay runs the same as the USD lagrange_import writes from them. IMU, GNSS,
-    /// magnetometer and barometer take only attributes; a camera, lidar or radar needs more of
-    /// the stage than an overlay holds and is refused with a note to import the robot first.
+    /// magnetometer, barometer and radar take only attributes, read with the stage reader's
+    /// fallbacks and required ones (StageReader.cpp); a camera or lidar needs more of the stage
+    /// than an overlay holds, and it and any other sensor type are refused, never dropped.
     void addSensors() {
         for (const UsdPrim& prim : stage_->Traverse()) {
             if (!prim.HasAPI(TfToken("SensorAPI_1"))) {
@@ -387,15 +389,47 @@ private:
             } else if (prim.HasAPI(TfToken("BarometerAPI_1"))) {
                 type = SensorType::Barometer;
                 settings = {{"noise", real("sensor:barometer:noiseStd").value_or(0.0)}};
+            } else if (prim.HasAPI(TfToken("RadarAPI_1"))) {
+                // RadarAPI_1's fallbacks (schemas/sensor/schema.usda) and required attributes,
+                // as the stage reader reads them.
+                type = SensorType::Radar;
+                settings = {
+                    {"carrier_frequency", real("sensor:radar:carrierFrequency").value_or(77e9)},
+                    {"azimuth_resolution", real("sensor:radar:azimuthResolution").value_or(0.035)},
+                    {"range_resolution", real("sensor:radar:rangeResolution").value_or(0.2)},
+                    {"velocity_resolution", real("sensor:radar:velocityResolution").value_or(0.1)},
+                    {"antenna_gain", real("sensor:radar:antennaGain").value_or(1.0)},
+                    {"detection_threshold",
+                     real("sensor:radar:detectionThreshold").value_or(10.0)}};
+                bool complete = true;
+                for (const auto& [key, attribute] :
+                     {std::pair{"max_range", "sensor:radar:rangeMax"},
+                      std::pair{"azimuth_fov", "sensor:radar:azimuthFov"},
+                      std::pair{"elevation_fov", "sensor:radar:elevationFov"},
+                      std::pair{"tx_power", "sensor:radar:txPower"},
+                      std::pair{"noise_floor", "sensor:radar:noiseFloor"}}) {
+                    const std::optional<double> value = real(attribute);
+                    if (!value || !std::isfinite(*value) || *value <= 0.0) {
+                        errors_.push_back(path + ": " + attribute + " is required and positive");
+                        complete = false;
+                        continue;
+                    }
+                    settings[key] = *value;
+                }
+                if (!complete) {
+                    continue;
+                }
             } else {
-                errors_.push_back(path +
-                                  ": an overlay on a robot file makes IMU, GNSS, magnetometer "
-                                  "and barometer sensors only; import the robot to USD "
-                                  "(lagrange_import ROBOT OUT.usda --overlay FILE) for others");
+                errors_.push_back(
+                    path +
+                    ": an overlay on a robot file makes IMU, GNSS, magnetometer, "
+                    "barometer and radar sensors only (SensorAPI_1 with ImuAPI_1, "
+                    "GnssAPI_1, MagnetometerAPI_1, BarometerAPI_1 or RadarAPI_1); "
+                    "a camera or lidar belongs in the robot file (a <sensor>) or its USD");
                 continue;
             }
             const std::optional<double> rate = real("sensor:rate");
-            if (!rate || *rate <= 0.0) {
+            if (!rate || !std::isfinite(*rate) || *rate <= 0.0) {
                 errors_.push_back(path + ": sensor:rate is required and positive");
                 continue;
             }
@@ -417,6 +451,7 @@ private:
             at.typeName = type == SensorType::Imu            ? "Imu"
                           : type == SensorType::Gnss         ? "Gnss"
                           : type == SensorType::Magnetometer ? "Magnetometer"
+                          : type == SensorType::Radar        ? "Radar"
                                                              : "Barometer";
             m_.sensorPrim.push_back(scene->second);
         }

@@ -2,14 +2,17 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <numbers>
 #include <string>
 #include <utility>
 
 #include <gtest/gtest.h>
+#include <mujoco/mujoco.h>
 
 namespace lagrange::rigid_body {
 namespace {
@@ -203,6 +206,64 @@ TEST(MujocoBackend, FrictionScaleMakesTheBoxSlide) {
     }
 }
 
+/// How far the box of boxOnGround(10°, μ 0.3) creeps down the slope from 2 to 4 s (m/s), with
+/// `noslip` noslip iterations, or MuJoCo's default when it is negative.
+double creepRate(std::int64_t noslip) {
+    const World world = boxOnGround(10.0, 0.3);
+    Scheduler scheduler;
+    ModuleConfigData config;
+    if (noslip >= 0) {
+        config.values["noslip_iterations"] = noslip;
+    }
+    scheduler.add(std::make_unique<MujocoBackend>(), ModuleConfig(config));
+    auto result = scheduler.wire(WorldView(world));
+    EXPECT_TRUE(result);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    const double x0 = read(scheduler, "body/box/pose", 0);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{4'000'000'000}).ok());
+    return (read(scheduler, "body/box/pose", 0) - x0) / 2.0;
+}
+
+// tan 10° = 0.176 < μ 0.3: the box should hold. MuJoCo's soft contact lets it creep (the legged
+// contact spike measured 0.45 mm/s for this box); its noslip post-solver stops that.
+TEST(MujocoBackend, NoslipIterationsStopTheCreepOnASlope) {
+    const double soft = creepRate(-1);
+    const double noslip = creepRate(5);
+    EXPECT_GT(soft, 1e-4) << "creeps over 0.1 mm/s without noslip";
+    EXPECT_LT(std::abs(noslip), 1e-5) << "holds within 10 µm/s with noslip";
+    EXPECT_EQ(creepRate(0), soft) << "0 iterations is MuJoCo's default, off";
+}
+
+TEST(MujocoBackend, NoslipIterationsOutOfRangeAreRefused) {
+    for (const std::int64_t bad : {std::int64_t{-1}, std::int64_t{101}}) {
+        const World world = fallingBall();
+        Scheduler scheduler;
+        ModuleConfigData config;
+        config.values["noslip_iterations"] = bad;
+        scheduler.add(std::make_unique<MujocoBackend>(), ModuleConfig(config));
+        auto result = scheduler.wire(WorldView(world));
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().front().detail.find("noslip_iterations"), std::string::npos);
+    }
+}
+
+// A joint's armature (a motor's reflected rotor inertia, J·N²) is on the diagonal of MuJoCo's
+// joint-space inertia, which `effective_inertia` reads.
+TEST(MujocoBackend, ArmatureAddsToTheJointsEffectiveInertia) {
+    for (const double armature : {0.0, 0.048}) {
+        World world = flywheel(0.02);
+        world.joints.armature.back() = armature;
+        Scheduler scheduler;
+        scheduler.add(std::make_unique<MujocoBackend>());
+        scheduler.add(std::make_unique<Constant>("joint/axle/torque", units::N_m, 0.1));
+        wire(scheduler, world);
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+        EXPECT_NEAR(read(scheduler, "joint/axle/effective_inertia"), 0.02 + armature, 1e-12);
+        // Spun up at torque over the whole inertia.
+        EXPECT_NEAR(read(scheduler, "joint/axle/velocity"), 0.1 * 0.1 / (0.02 + armature), 1e-9);
+    }
+}
+
 TEST(MujocoBackend, LinksOfOneTreeDoNotCollideButTreesDo) {
     // A ball hangs from an arm on a slider so that it overlaps the arm's base block: inside one
     // tree that overlap is ignored, so the slider moves freely under a small force.
@@ -232,6 +293,66 @@ TEST(MujocoBackend, LinksOfOneTreeDoNotCollideButTreesDo) {
     ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
     // Separate trees collide: the wall was pushed.
     EXPECT_GT(read(scheduler, "body/wall/pose", 0), 1.0 + 1e-3);
+}
+
+// --- static scenery ------------------------------------------------------------------------
+
+TEST(MujocoBackend, StaticSceneryIsWorldGeometryAndFixedBasesKeepTheirBodies) {
+    World world;
+    world.gravityLocal = {0.0, 0.0, -kGravity};
+    // Scenery: a root turned 90° about z at 0.5 m, a shelf welded to it 1 m along its x, so at
+    // (0, 1, 0.5) in the world; its top at 0.55 m.
+    const double half = std::sqrt(0.5);
+    const BodyId scenery = world.addBody(
+        "scenery", kWorldBody, Pose{{0.0, 0.0, 0.5}, {half, 0.0, 0.0, half}}, 0.0, {}, {});
+    const BodyId shelf = world.addBody("shelf", scenery, Pose{{1.0, 0.0, 0.0}}, 0.0, {}, {});
+    world.addJoint("shelf_weld", JointType::Fixed, shelf, {0.0, 0.0, 1.0}, false);
+    world.addCollider(shelf, ShapeType::Box, {0.5, 0.5, 0.05}, Pose{}, 1.0);
+    // A box dropped on the shelf.
+    const BodyId box = world.addBody("box", kWorldBody, Pose{{0.0, 1.0, 0.7}}, 1.0, {},
+                                     diagonal(0.0067, 0.0067, 0.0067));
+    world.addJoint("box_free", JointType::Free, box, {0.0, 0.0, 1.0}, false);
+    world.addCollider(box, ShapeType::Box, {0.1, 0.1, 0.1}, Pose{}, 1.0);
+    // A fixed-base arm far away whose link overlaps its base: the base keeps its own body, so
+    // the overlap stays excluded and the link turns freely.
+    const BodyId base = world.addBody("base", kWorldBody, Pose{{5.0, 0.0, 0.5}}, 2.0, {},
+                                      diagonal(0.01, 0.01, 0.01));
+    world.addCollider(base, ShapeType::Box, {0.2, 0.2, 0.2}, Pose{}, 1.0);
+    const BodyId link =
+        world.addBody("link", base, Pose{{0.1, 0.0, 0.0}}, 0.5, {}, diagonal(0.01, 0.01, 0.01));
+    world.addJoint("pin", JointType::Revolute, link, {0.0, 0.0, 1.0}, true);
+    world.addCollider(link, ShapeType::Sphere, {0.15, 0.0, 0.0}, Pose{}, 1.0);
+
+    const StaticScenery split = staticScenery(world);
+    EXPECT_TRUE(split.toWorld[scenery.index] && split.omitted[scenery.index]);
+    EXPECT_TRUE(split.toWorld[shelf.index] && split.omitted[shelf.index]);
+    EXPECT_FALSE(split.toWorld[base.index]);
+    EXPECT_FALSE(split.toWorld[box.index] || split.toWorld[link.index]);
+
+    auto backend = std::make_unique<MujocoBackend>();
+    const MujocoBackend* mujoco = backend.get();
+    Scheduler scheduler;
+    scheduler.add(std::move(backend));
+    scheduler.add(std::make_unique<Constant>("joint/pin/torque", units::N_m, 0.01));
+    wire(scheduler, world);
+    const mjModel* model = mujoco->model();
+    ASSERT_NE(model, nullptr);
+    EXPECT_EQ(mj_name2id(model, mjOBJ_BODY, "scenery"), -1);
+    EXPECT_EQ(mj_name2id(model, mjOBJ_BODY, "shelf"), -1);
+    EXPECT_GE(mj_name2id(model, mjOBJ_BODY, "base"), 1);
+    ASSERT_EQ(model->body_geomnum[0], 1);
+    const int g = model->body_geomadr[0];
+    EXPECT_NEAR(model->geom_pos[3 * g + 0], 0.0, 1e-12);
+    EXPECT_NEAR(model->geom_pos[3 * g + 1], 1.0, 1e-12);
+    EXPECT_NEAR(model->geom_pos[3 * g + 2], 0.5, 1e-12);
+
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/box/pose", 1), 1.0, 1e-3);
+    EXPECT_NEAR(read(scheduler, "body/box/pose", 2), 0.65, 1e-3) << "rests on the shelf";
+    // The link spins up freely: θ = τ t² / (2 I) about its own centre, 0.5 rad after 1 s.
+    EXPECT_NEAR(read(scheduler, "joint/pin/position"), 0.01 / (2.0 * 0.01), 1e-2);
+    // The static bodies have no signals, as before.
+    EXPECT_FALSE(scheduler.bus().find("body/shelf/pose").valid());
 }
 
 // --- kinematic bodies ----------------------------------------------------------------------
@@ -339,6 +460,67 @@ TEST(MujocoBackend, AWorldWithoutDegreesOfFreedomStillMovesItsKinematicBodies) {
     EXPECT_NEAR(read(scheduler, "body/pusher/pose", 2), 0.15, 1e-12);
     EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -2.0, 1e-6);
     EXPECT_DOUBLE_EQ(read(scheduler, "body/pusher/acceleration", 2), 0.0);
+}
+
+/// Moves a kinematic body along x at 1 m/s, except while it stands from 0.5 s to 1 s.
+class StopAndGo final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override { return {"controller", "stop_and_go"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "body/pusher/pose_command";
+        spec.type = SignalType::Pose;
+        spec.unit = units::m;
+        spec.frame = "world_local";
+        id_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        write(bus, 0.0);
+        return {};
+    }
+    Status step(const StepContext& context, SignalBus& bus) override {
+        write(bus, (context.t + context.dt).seconds());
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    void write(SignalBus& bus, double t) const {
+        const double moved = std::min(t, 0.5) + std::max(t - 1.0, 0.0);  // m, at 1 m/s
+        bus.writeN(id_, std::array<double, 7>{6.0 - moved, 0.0, 0.15, 1.0, 0.0, 0.0, 0.0});
+    }
+    SignalId id_;
+};
+
+TEST(MujocoBackend, AKinematicBodyThatStandsHasNoTwistAndMovesOnAgain) {
+    // Its outputs are written only when they change; standing, its twist (from two equal poses)
+    // is not worked out again. A run restored while it stands carries on bit for bit.
+    const World world = pushedBox();
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<StopAndGo>());
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{400'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -1.0, 1e-6);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{700'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    for (std::size_t k = 0; k < 6; ++k) {
+        EXPECT_EQ(read(scheduler, "body/pusher/twist", k), 0.0) << k;
+    }
+    EXPECT_NEAR(read(scheduler, "body/pusher/pose", 0), 5.5, 1e-12);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'200'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -1.0, 1e-6);
+    EXPECT_NEAR(read(scheduler, "body/pusher/pose", 0), 5.3, 1e-9);
+    const std::uint64_t first = scheduler.stateHash().value();
+
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'200'000'000}).ok());
+    EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 
 // --- state ---------------------------------------------------------------------------------

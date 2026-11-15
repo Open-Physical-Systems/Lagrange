@@ -48,12 +48,21 @@ $$
 with the dry part holding the joint still while $|\tau| < f$. Under a constant effort the joint
 speed follows $\dot q(t) = \tfrac{\tau}{d}\,(1 - e^{-d t / I})$.
 
+**Armature and slope creep.** A joint's armature is its motor's rotor inertia through the
+gearbox, $J_{rotor} N^2$ (from `ElectricalMotorAPI_1`), or MJCF's `armature` (with an actuator's
+`armature` times its gear squared). MuJoCo's contacts are soft: a body friction should hold on a
+slope creeps slowly (0.44 mm/s for a box on 10°, about ten times more for a foot on a light leg),
+less the heavier the joint behind the foot. A profile's `rigid_body: {noslip_iterations: 5}` runs
+MuJoCo's noslip solver, which stops the creep at more cost per step and lets feet slip less
+while a robot moves (docs/plan/spikes/legged-contact.md §6.1). Jolt's contacts do not creep.
+
 **Mimic joints.** A `<mimic joint multiplier offset>` joint follows $q = m\,q_{leader} + o$ and
 takes no commands of its own. MuJoCo couples the two both ways (a joint equality); Jolt moves
 only the copy, by a stiff motor (100 Hz) on it.
 
 **Mesh colliders.** A collision mesh collides as the convex hull of its vertices (at most 256
-points). A mesh that fills less than 60 % of its hull is called concave and noted, and on a
+points), convex to within a millionth of its size: points that close to a face count as on it,
+so a nearly flat side (a CoACD part whose corner is a hair off) closes as one side. A mesh that fills less than 60 % of its hull is called concave and noted, and on a
 fixed link it is skipped, since its hull would block what is inside it; `collision_bake` or
 `lagrange bake` splits such a mesh into convex parts with CoACD.
 
@@ -77,7 +86,13 @@ engine's gravity between steps; time and speeds carry on.
 MuJoCo steps with its `implicitfast` integrator, which stays stable with joint damping. Jolt
 applies joint damping explicitly, limited to what one step can take without turning the joint
 round. Bodies of one kinematic tree do not collide with each other; separate trees do. The
-engines' own substeps are internal and do not show to the scheduler. A run on MuJoCo is
+engines' own substeps are internal and do not show to the scheduler. Jolt holds joints as
+constraints between free bodies, which loses a little energy every step: a pendulum swinging
+freely from 1 rad loses 16 % of its energy in 60 s at 1 ms, where MuJoCo keeps it within
+0.1 %. A profile's `rigid_body: {substeps: N}` divides Jolt's step N times. That brings the loss
+to 9 % at 2 sub-steps and 5 % at 4, at N times the cost; joint reactions and contact forces
+are then the constraint impulses averaged over the sub-steps
+([rigid_body.md §8.1](../design/domains/rigid_body.md)). A run on MuJoCo is
 bit-for-bit repeatable: two runs with the same seed give the same state hash, and a saved state
 restored runs on bit-identically (Jolt passes the same check).
 
@@ -92,6 +107,7 @@ restored runs on bit-identically (Jolt passes the same check).
 | Mimic joint | $2\,q + 0.1$ within 0.02 rad, commands refused | `JointDynamics.AMimicJointCopiesItsLeaderAndTakesNoCommands` |
 | MuJoCo against Jolt | arm joint-space inertia and fall within 2 %; the sample AMR within 0.02 m/s and 0.02 rad/s | `Backends.*` |
 | Conformance suite (free fall, resting box, pendulum period 0.5 %, slope, stack, AMR loop, determinism) | MuJoCo, Jolt and Jolt as a plugin pass | `lagrange_physics_conformance` |
+| Pendulum from 1 rad over 60 s at 1 ms | period within 0.25 % of the exact elliptic-integral period (MuJoCo −0.2 ppm, Jolt −0.15 % as its swing shrinks); energy MuJoCo −0.07 %, **Jolt −16.4 %** (−5.3 % with 4 sub-steps) | `Conformance.APendulumKeepsItsPeriodAndEnergy`, `Jolt.APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt` |
 | Contact force and joint reaction | a box at rest held up by its weight within 0.5 %; a swinging pivot carries $m g + m d \omega^2$ within 1 % (11.349 N MuJoCo, 11.348 N Jolt) | `lagrange_physics_conformance`, `test_contact_forces_on_a_robot_at_rest_carry_its_weight`, `test_a_joints_reaction_is_what_it_carries` |
 | Gravity changed while falling | the speed gained follows the new value within 0.05 m/s | `Site.GravityChangesWhileFalling` |
 | Pushing a block, against 2000 measured pushes (Yu et al. 2016) | MuJoCo within 6 mm and 4–7° of the quasi-static theory, 3–41 mm and 10–17° from the measurements; **Jolt does not turn the block** (2° against about 75°) | `Conformance.APushedBlockMovesAsTheMcubeMeasurements` |

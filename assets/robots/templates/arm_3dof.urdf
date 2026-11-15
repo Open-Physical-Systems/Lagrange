@@ -1,0 +1,101 @@
+<?xml version="1.0"?>
+<!-- Template of the robot builder (RFC 0016): a three-joint arm on a fixed base (the root link
+     "world" bolts it to the ground). Sizes, densities, limits, efforts and speeds are
+     illustrative; edit them. -->
+<robot name="arm_3dof">
+  <material name="builder_color_1">
+    <color rgba="0.66 0.72 0.81 1"/>
+  </material>
+  <link name="world">
+  </link>
+  <link name="base_link" lagrange_density="2700">
+    <inertial lagrange_overrides="">
+      <origin xyz="0 0 0.025"/>
+      <mass value="2.7143360527015816"/>
+      <inertia ixx="0.004908424361968693" ixy="0" ixz="0" iyy="0.004908424361968693" iyz="0" izz="0.008685875368645062"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.08" length="0.05"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.08" length="0.05"/></geometry>
+    </collision>
+  </link>
+  <link name="shoulder" lagrange_density="2700">
+    <inertial lagrange_overrides="">
+      <origin xyz="0 0 0.05"/>
+      <mass value="2.120575041173111"/>
+      <inertia ixx="0.0030925052683774532" ixy="0" ixz="0" iyy="0.0030925052683774532" iyz="0" izz="0.0026507188014663887"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.05" length="0.1"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.05" length="0.1"/></geometry>
+    </collision>
+  </link>
+  <link name="upper_arm" lagrange_density="2700">
+    <inertial lagrange_overrides="">
+      <origin xyz="0 0 0.15"/>
+      <mass value="2.025"/>
+      <inertia ixx="0.015609375" ixy="0" ixz="0" iyy="0.015609375" iyz="0" izz="0.0008437500000000002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.3"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.3"/></geometry>
+    </collision>
+  </link>
+  <link name="forearm" lagrange_density="2700">
+    <inertial lagrange_overrides="">
+      <origin xyz="0 0 0.125"/>
+      <mass value="1.08"/>
+      <inertia ixx="0.005769000000000001" ixy="0" ixz="0" iyy="0.005769000000000001" iyz="0" izz="0.000288"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.125" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.04 0.25"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.125" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.04 0.25"/></geometry>
+    </collision>
+  </link>
+  <joint name="base_joint" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <joint name="shoulder_yaw" type="revolute">
+    <parent link="base_link"/>
+    <child link="shoulder"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.141592653589793" upper="3.141592653589793" effort="20" velocity="2"/>
+  </joint>
+  <joint name="shoulder_pitch" type="revolute">
+    <parent link="shoulder"/>
+    <child link="upper_arm"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.5707963267948966" upper="1.5707963267948966" effort="20" velocity="2"/>
+  </joint>
+  <joint name="elbow" type="revolute">
+    <parent link="upper_arm"/>
+    <child link="forearm"/>
+    <origin xyz="0 0 0.3" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.5" upper="2.5" effort="20" velocity="2"/>
+  </joint>
+</robot>

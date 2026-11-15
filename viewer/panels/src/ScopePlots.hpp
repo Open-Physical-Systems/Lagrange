@@ -3,6 +3,7 @@
 #include "lagrange/viewer/ScopeSession.hpp"
 
 #include <cstddef>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -20,7 +21,7 @@ public:
 private:
     void plots(ScopeSession& session);
     void drawTrace(const ScopeTrace& trace, ScopeSession::View view, std::size_t columns);
-    static void legend(const ScopeSession& session, const std::string& unit);
+    void legend(const ScopeSession& session, const std::string& unit);
     static void triggerLine(double level, const char* unit, double span);
 
     // Scratch arrays: they grow to the plot width once and are then reused.
@@ -29,6 +30,14 @@ private:
     std::vector<double> low_;
     std::vector<double> high_;
     std::size_t drawn_{0};
+
+    /// A plot's legend names as drawn: cut again only when the names or the room change.
+    struct LegendNames {
+        std::vector<std::string> full;   // the traces' names
+        std::vector<std::string> shown;  // as drawn
+        float room{-1.0F};
+    };
+    std::map<std::string, LegendNames> legendNames_;  // by unit
 };
 
 /// The last two parts of a signal name: enough to tell traces apart in a legend.

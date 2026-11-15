@@ -1,0 +1,131 @@
+{
+  "mujoco": "3.12.0",
+  "rigid_quad_slope_10.xml noslip 0": {
+    "upright": true,
+    "base_height_m": 5.348995882194454,
+    "foot_invweight0": null,
+    "creep_1_3s_mm": 0.8873910823877784,
+    "creep_3_6s_mm": 1.3310866370987995,
+    "creep_rate_3_6s_mm_s": 0.44369554569959985
+  },
+  "rigid_quad_slope_10.xml noslip 5": {
+    "upright": true,
+    "base_height_m": 5.349454032337211,
+    "foot_invweight0": null,
+    "creep_1_3s_mm": -0.0013327932291140598,
+    "creep_3_6s_mm": -0.0019992586507422416,
+    "creep_rate_3_6s_mm_s": -0.0006664195502474138
+  },
+  "rigid_quad_slope_10.xml noslip 20": {
+    "upright": true,
+    "base_height_m": 5.349454032337211,
+    "foot_invweight0": null,
+    "creep_1_3s_mm": -0.0013327932291140598,
+    "creep_3_6s_mm": -0.0019992586507422416,
+    "creep_rate_3_6s_mm_s": -0.0006664195502474138
+  },
+  "rigid_quad_slope_25.xml noslip 0": {
+    "upright": true,
+    "base_height_m": 5.317287531324612,
+    "foot_invweight0": null,
+    "creep_1_3s_mm": 3.2180183445422728,
+    "creep_3_6s_mm": 4.8270278757760465,
+    "creep_rate_3_6s_mm_s": 1.609009291925349
+  },
+  "rigid_quad_slope_25.xml noslip 5": {
+    "upright": true,
+    "base_height_m": 5.319008366723,
+    "foot_invweight0": null,
+    "creep_1_3s_mm": 1.8623520994767162,
+    "creep_3_6s_mm": 2.802999056704447,
+    "creep_rate_3_6s_mm_s": 0.9343330189014823
+  },
+  "rigid_quad_slope_25.xml noslip 20": {
+    "upright": true,
+    "base_height_m": 5.319008366723,
+    "foot_invweight0": null,
+    "creep_1_3s_mm": 1.8623520994767162,
+    "creep_3_6s_mm": 2.802999056704447,
+    "creep_rate_3_6s_mm_s": 0.9343330189014823
+  },
+  "quad_slope_10.xml noslip 0": {
+    "upright": true,
+    "base_height_m": 5.336611445049045,
+    "foot_invweight0": 1.7343566813739508,
+    "creep_1_3s_mm": 6.135952031345315,
+    "creep_3_6s_mm": 16.817686476791273,
+    "creep_rate_3_6s_mm_s": 5.605895492263758
+  },
+  "quad_slope_10.xml noslip 5": {
+    "upright": true,
+    "base_height_m": 5.342892307571883,
+    "foot_invweight0": 1.7343566813739508,
+    "creep_1_3s_mm": -11.145323012283658,
+    "creep_3_6s_mm": -0.5963060383947782,
+    "creep_rate_3_6s_mm_s": -0.19876867946492607
+  },
+  "quad_slope_10.xml noslip 20": {
+    "upright": true,
+    "base_height_m": 5.342892307571883,
+    "foot_invweight0": 1.7343566813739508,
+    "creep_1_3s_mm": -11.145323012283658,
+    "creep_3_6s_mm": -0.5963060383947782,
+    "creep_rate_3_6s_mm_s": -0.19876867946492607
+  },
+  "quad_slope_10.xml noslip 0 armature 0.005": {
+    "upright": true,
+    "base_height_m": 5.33781724615518,
+    "foot_invweight0": 1.4852980478579834,
+    "creep_1_3s_mm": 4.673358445060782,
+    "creep_3_6s_mm": 14.43633231878849,
+    "creep_rate_3_6s_mm_s": 4.812110772929497
+  },
+  "quad_slope_10.xml noslip 0 armature 0.02": {
+    "upright": true,
+    "base_height_m": 5.340608959138465,
+    "foot_invweight0": 1.1423108901120889,
+    "creep_1_3s_mm": 4.514907050265138,
+    "creep_3_6s_mm": 11.299553776071502,
+    "creep_rate_3_6s_mm_s": 3.7665179253571672
+  },
+  "quad_slope_20.xml noslip 0": {
+    "upright": true,
+    "base_height_m": 5.277359274973567,
+    "foot_invweight0": 1.73435668137395,
+    "creep_1_3s_mm": -27.717035750030483,
+    "creep_3_6s_mm": 36.09732758339024,
+    "creep_rate_3_6s_mm_s": 12.032442527796746
+  },
+  "quad_slope_20.xml noslip 5": {
+    "upright": false,
+    "base_height_m": 4.762451414258139,
+    "foot_invweight0": 1.73435668137395,
+    "creep_1_3s_mm": 758.7908033647496,
+    "creep_3_6s_mm": -2.4761304118214866e-09,
+    "creep_rate_3_6s_mm_s": -8.253768039404955e-10
+  },
+  "quad_slope_20.xml noslip 20": {
+    "upright": false,
+    "base_height_m": 4.762433719289801,
+    "foot_invweight0": 1.73435668137395,
+    "creep_1_3s_mm": 758.8425399910557,
+    "creep_3_6s_mm": -2.4759083672165616e-09,
+    "creep_rate_3_6s_mm_s": -8.253027890721872e-10
+  },
+  "quad_slope_20.xml noslip 0 armature 0.005": {
+    "upright": true,
+    "base_height_m": 5.284758189212577,
+    "foot_invweight0": 1.4852980478579825,
+    "creep_1_3s_mm": -5.9127742055467,
+    "creep_3_6s_mm": 31.741111515315446,
+    "creep_rate_3_6s_mm_s": 10.580370505105149
+  },
+  "quad_slope_20.xml noslip 0 armature 0.02": {
+    "upright": true,
+    "base_height_m": 5.283047923832655,
+    "foot_invweight0": 1.1423108901120884,
+    "creep_1_3s_mm": 63.4097246679961,
+    "creep_3_6s_mm": 24.447972296592233,
+    "creep_rate_3_6s_mm_s": 8.149324098864078
+  }
+}

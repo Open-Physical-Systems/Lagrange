@@ -65,6 +65,46 @@ def test_times_and_poses_that_are_not_finite_are_refused() -> None:
     assert all(math.isfinite(x) for x in sim.read("body/base_link/pose"))
 
 
+def test_command_joint_says_why_and_what_it_clamped() -> None:
+    # QA3 F8: a refusal was a bare False and a velocity of 1e9 was taken silently.
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None, joint_control=True)
+    missing = sim.command_joint("no_such_joint", "velocity", 1.0)
+    assert not missing
+    assert "no joint no_such_joint" in missing.reason
+    nan = sim.command_joint("left_wheel_joint", "velocity", math.nan)
+    assert "not a finite number" in nan.reason
+    with pytest.raises(ValueError, match="no mode"):
+        sim.command_joint("left_wheel_joint", "speed", 1.0, strict=True)
+    taken = sim.command_joint("left_wheel_joint", "velocity", 1.0)
+    assert taken and taken.taken and not taken.clamped and taken.value == 1.0
+    assert taken.reason == ""
+    fast = sim.command_joint("left_wheel_joint", "velocity", 1e9)
+    assert fast, fast.reason
+    assert fast.clamped
+    assert 0.0 < fast.value < 1e9
+    assert "velocity limit" in fast.limit
+    assert "clamped" in repr(fast)
+    off = lagrange.Simulation(lagrange.sample_robot(), world=None)
+    assert "joint control is off" in off.command_joint("left_wheel_joint", "velocity", 1.0).reason
+
+
+def test_command_joint_still_compares_equal_to_a_bool() -> None:
+    # Review 2 L7: command_joint returned a bool in 1.3.0; `== True` and `== False` still work,
+    # though `is True` no longer does (CHANGELOG, behaviour changes).
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None, joint_control=True)
+    taken = sim.command_joint("left_wheel_joint", "velocity", 1.0)
+    refused = sim.command_joint("no_such_joint", "velocity", 1.0)
+    assert taken == True  # noqa: E712
+    assert taken != False  # noqa: E712
+    assert refused == False  # noqa: E712
+    assert refused != True  # noqa: E712
+    assert taken is not True
+    assert bool(taken) is True and bool(refused) is False
+    assert taken != 1.5 and taken != "yes"
+    assert taken == taken and taken != refused
+    assert hash(taken) == hash(True) and hash(refused) == hash(False)
+
+
 def test_world_queries() -> None:
     sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
     assert "base_link" in sim.bodies()
@@ -258,3 +298,58 @@ def test_sensor_faults_are_what_python_reads() -> None:
         lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=["compass=stuck"])
     with pytest.raises(RuntimeError, match="sensor-fault needs"):
         lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=["imu=broken"])
+
+
+def test_the_loaders_notes_are_printed_and_kept(tmp_path, capfd) -> None:
+    # Sensors QA F8: the CLI logs what the loader took its own way as [import]; Python did not.
+    urdf = tmp_path / "noted.urdf"
+    urdf.write_text(
+        '<?xml version="1.0"?><robot name="noted"><link name="base">'
+        '<inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" '
+        'ixz="0" iyz="0"/></inertial></link><gazebo reference="base">'
+        '<sensor name="x" type="ray"><update_rate>10</update_rate><ray>'
+        "<pattern>spiral</pattern><scan><horizontal><samples>8</samples></horizontal>"
+        "</scan></ray></sensor></gazebo></robot>"
+    )
+    sim = lagrange.Simulation(str(urdf), world=None)
+    notes = sim.notes()
+    assert any("lidar pattern 'spiral' is not known" in n for n in notes), notes
+    assert "[import] x: lidar pattern 'spiral'" in capfd.readouterr().err
+
+
+def test_a_state_saved_by_lagrange_1_2_restores_and_runs_on() -> None:
+    # RFC 0007: 1.x reads the states earlier 1.x releases saved. The fixture was saved by the
+    # released 1.2.0 packages (saved-state format 1, docs/design/formats.md §11):
+    #   sim = lagrange.Simulation(lagrange.sample_quadcopter(), world=None,
+    #                             profile=lagrange.sample_profile("quad_x500_hover"), lidar="cpu")
+    #   sim.step_until(3.0); state = sim.save_state()
+    # where 1.2.0 read body/base_link/pose[2] = 2.122754697547752 (hovering).
+    from pathlib import Path
+
+    state = (Path(__file__).parent / "data" / "quad_x500_hover_1.2.0.state").read_bytes()
+
+    def run() -> lagrange.Simulation:
+        sim = lagrange.Simulation(
+            lagrange.sample_quadcopter(),
+            world=None,
+            profile=lagrange.sample_profile("quad_x500_hover"),
+            lidar="cpu",
+        )
+        sim.restore_state(state)
+        return sim
+
+    sim = run()
+    assert sim.time == pytest.approx(3.0)
+    assert sim.read("body/base_link/pose")[2] == 2.122754697547752
+    resaved = sim.save_state()  # format 2 from here on
+    sim.step_until(6.0)
+    first = sim.state_hash()
+    pose = sim.read("body/base_link/pose")
+    assert abs(pose[2] - 2.1) < 0.2 and math.hypot(pose[0], pose[1]) < 0.2, "still hovering"
+
+    again = run()
+    again.step_until(6.0)
+    assert again.state_hash() == first, "the restored run is deterministic"
+    sim.restore_state(resaved)
+    sim.step_until(6.0)
+    assert sim.state_hash() == first, "and resaved in format 2 continues the same"

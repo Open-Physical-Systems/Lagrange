@@ -9,11 +9,13 @@ from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# The viewer finds the server on this socket, one per example so that they can run side by side.
+# The viewer finds the server on this socket, one per example so that they can run side by side
+# (endpoint:=unix:PATH for another, e.g. under a temporary directory of your own).
 ENDPOINT = "unix:/tmp/lagrange_example_power.sock"
 
 
 def setup(context):
+    endpoint = LaunchConfiguration("endpoint").perform(context)
     share = get_package_share_directory("lagrange_example_power")
 
     actions = [
@@ -30,7 +32,7 @@ def setup(context):
                 "--ros-topics",
                 f"{share}/config/topics.yaml",
                 "--listen",
-                ENDPOINT,
+                endpoint,
             ],
             output="screen",
         ),
@@ -47,7 +49,7 @@ def setup(context):
         # Not a ROS node: a plain process, so no --ros-args are appended.
         actions.append(
             ExecuteProcess(
-                cmd=["ros2", "run", "lagrange_viewer", "lagrange_viewer", "--connect", ENDPOINT],
+                cmd=["ros2", "run", "lagrange_viewer", "lagrange_viewer", "--connect", endpoint],
                 output="screen",
             )
         )
@@ -58,6 +60,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("viewer", default_value="true", description="open the viewer"),
+            DeclareLaunchArgument(
+                "endpoint", default_value=ENDPOINT, description="the server's socket"
+            ),
             DeclareLaunchArgument(
                 "once", default_value="false", description="stop when the node has its result"
             ),

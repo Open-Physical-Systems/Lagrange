@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -26,6 +27,9 @@ class JointTargets {
 public:
     void set(const std::string& joint, JointTarget target);
     void replace(std::map<std::string, JointTarget> targets);
+    /// Keeps only the targets of the joints `keep` says yes to, under one lock, so a command
+    /// set meanwhile from another thread is never lost between a read and a replace.
+    void keepIf(const std::function<bool(const std::string& joint)>& keep);
     /// Copies the targets into `out` if they changed since version `seen`.
     void refresh(std::uint64_t& seen, std::map<std::string, JointTarget>& out) const;
     [[nodiscard]] std::map<std::string, JointTarget> all() const;

@@ -1,17 +1,23 @@
 #include "App.hpp"
+#include "BuilderHost.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/RadarScale.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
+#include "lagrange/viewer/builder/Gizmo.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +26,7 @@
 #include <fstream>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
+#include <imgui_internal.h>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -29,6 +36,7 @@
 #include <signal.h>
 #include <span>
 #include <spawn.h>
+#include <string_view>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -50,6 +58,23 @@ const ImVec4 kLidarAttenuated = theme::hex(0x2A8F76);
 constexpr float kLidarStrongIntensity = 0.12F;
 
 using Clock = std::chrono::steady_clock;
+
+/// SIGTERM or SIGINT arrived (QA4 L2): the frame loop ends as when the window closes, so the
+/// Builder's test server and every other child is stopped by the destructors, not orphaned.
+volatile std::sig_atomic_t gStopSignal = 0;
+
+extern "C" void onStopSignal(int /*signal*/) {
+    gStopSignal = 1;
+}
+
+/// Installs onStopSignal for SIGTERM and SIGINT (after SDL_Init, which may install its own).
+void catchStopSignals() {
+    struct sigaction action{};
+    action.sa_handler = onStopSignal;
+    sigemptyset(&action.sa_mask);
+    ::sigaction(SIGTERM, &action, nullptr);
+    ::sigaction(SIGINT, &action, nullptr);
+}
 
 /// Frame-time breakdown for LAGRANGE_VIEWER_PROFILE=1: per stage, the median and the 95th
 /// percentile over the frames since the scene arrived, printed to stderr at the end (headless)
@@ -96,6 +121,168 @@ private:
 double msSince(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
+
+/// The viewer's own GPU passes, timed with Vulkan timestamp queries, and its video memory
+/// (VK_EXT_memory_budget), for the Performance workspace's GPU passes and Memory tabs. One
+/// frame is in flight at a time (both loops wait for the last frame before recording), so one
+/// query pool serves: the previous frame's marks are read before the next frame resets them.
+class GpuTimer {
+public:
+    /// The marks of a frame, in recording order; a pass runs from one mark to the next.
+    enum Mark : std::uint32_t { Begin, Uploads, View, Panels, kMarks };
+    static constexpr std::size_t kWindow = 120;  // frames the means and maxima are over
+
+    explicit GpuTimer(const gpu::Device& device) : device_(device.device()) {
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(device.physicalDevice(), &properties);
+        period_ = properties.limits.timestampPeriod;
+        std::uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(device.physicalDevice(), &count, nullptr);
+        std::vector<VkQueueFamilyProperties> families(count);
+        vkGetPhysicalDeviceQueueFamilyProperties(device.physicalDevice(), &count, families.data());
+        const std::uint32_t bits =
+            device.queueFamily() < count ? families[device.queueFamily()].timestampValidBits : 0;
+        mask_ = bits >= 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
+        if (bits != 0 && period_ > 0.0F) {
+            VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            info.queryCount = kMarks;
+            if (vkCreateQueryPool(device_, &info, nullptr, &pool_) != VK_SUCCESS) {
+                pool_ = VK_NULL_HANDLE;
+            }
+        }
+        physical_ = device.physicalDevice();
+        std::uint32_t extensions = 0;
+        vkEnumerateDeviceExtensionProperties(physical_, nullptr, &extensions, nullptr);
+        std::vector<VkExtensionProperties> available(extensions);
+        vkEnumerateDeviceExtensionProperties(physical_, nullptr, &extensions, available.data());
+        budget_ = std::ranges::any_of(available, [](const VkExtensionProperties& e) {
+            return std::strcmp(e.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0;
+        });
+        timings_.passes = {{"sensor images upload"}, {"3D view"}, {"panels (ImGui)"}};
+        timings_.gpuTimestamps = pool_ != VK_NULL_HANDLE;
+    }
+    GpuTimer(const GpuTimer&) = delete;
+    GpuTimer& operator=(const GpuTimer&) = delete;
+    ~GpuTimer() {
+        if (pool_ != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(device_, pool_, nullptr);
+        }
+    }
+
+    /// Reads the marks of the frame recorded last (its fence has been waited for) and resets
+    /// the pool for the next one; call at the start of a command buffer, outside rendering.
+    /// The 3D view pass counts only for frames that drew it (it is skipped when nothing changed).
+    void begin(VkCommandBuffer commands) {
+        if (pool_ == VK_NULL_HANDLE) {
+            return;
+        }
+        if (pending_) {
+            std::array<std::uint64_t, kMarks> ticks{};
+            if (vkGetQueryPoolResults(device_, pool_, 0, kMarks, sizeof(ticks), ticks.data(),
+                                      sizeof(std::uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                const auto ms = [&](Mark from, Mark to) {
+                    return static_cast<double>((ticks.at(to) - ticks.at(from)) & mask_) *
+                           static_cast<double>(period_) * 1e-6;
+                };
+                push(0, ms(Begin, Uploads));
+                push(1, viewDrawn_ ? ms(Uploads, View) : -1.0);
+                push(2, ms(View, Panels));
+                ++frames_;
+                timings_.gpuTimed = true;
+            }
+        }
+        vkCmdResetQueryPool(commands, pool_, 0, kMarks);
+        mark(commands, Begin);
+        pending_ = false;
+    }
+
+    /// A mark of this frame; the last one (Panels) makes the frame's results readable.
+    void mark(VkCommandBuffer commands, Mark which) {
+        if (pool_ == VK_NULL_HANDLE) {
+            return;
+        }
+        vkCmdWriteTimestamp2(commands, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool_, which);
+        if (which == Panels) {
+            pending_ = true;
+        }
+    }
+
+    /// The view drawn by the frame being recorded (set by renderScene before the View mark).
+    void setViewDrawn(bool drawn) { viewDrawn_ = drawn; }
+
+    /// CPU phases of the UI thread this frame (ms); smoothed over about a second.
+    void cpu(double uiMs, double recordMs, double waitMs, double presentMs) {
+        constexpr double kSmoothing = 0.05;  // about 20 frames
+        const auto smooth = [&](double& to, double value) { to += (value - to) * kSmoothing; };
+        smooth(timings_.uiMs, uiMs);
+        smooth(timings_.recordMs, recordMs);
+        smooth(timings_.waitMs, waitMs);
+        smooth(timings_.presentMs, presentMs);
+    }
+
+    /// The numbers for the panels; video memory is read at most once a second.
+    const ViewerTimings& timings() {
+        const auto now = Clock::now();
+        if (budget_ && now - budgetAt_ > std::chrono::seconds(1)) {
+            budgetAt_ = now;
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+            VkPhysicalDeviceMemoryProperties2 memory{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+            memory.pNext = &budget;
+            vkGetPhysicalDeviceMemoryProperties2(physical_, &memory);
+            timings_.vramUsedBytes = 0;
+            timings_.vramBudgetBytes = 0;
+            for (std::uint32_t h = 0; h < memory.memoryProperties.memoryHeapCount; ++h) {
+                if ((memory.memoryProperties.memoryHeaps[h].flags &
+                     VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+                    timings_.vramUsedBytes += budget.heapUsage[h];
+                    timings_.vramBudgetBytes += budget.heapBudget[h];
+                }
+            }
+            timings_.vramKnown = timings_.vramBudgetBytes != 0;
+        }
+        return timings_;
+    }
+
+private:
+    /// One sample of pass `index` (negative: the pass did not run this frame).
+    void push(std::size_t index, double ms) {
+        std::array<double, kWindow>& ring = samples_.at(index);
+        ring.at(frames_ % kWindow) = ms;
+        const std::size_t filled = std::min<std::size_t>(frames_ + 1, kWindow);
+        double sum = 0.0;
+        double most = 0.0;
+        std::uint32_t ran = 0;
+        for (std::size_t i = 0; i < filled; ++i) {
+            if (ring.at(i) >= 0.0) {
+                sum += ring.at(i);
+                most = std::max(most, ring.at(i));
+                ++ran;
+            }
+        }
+        ViewerTimings::Pass& pass = timings_.passes.at(index);
+        pass.meanMs = ran > 0 ? sum / ran : 0.0;
+        pass.maxMs = most;
+        pass.frames = ran;
+        timings_.window = static_cast<std::uint32_t>(filled);
+    }
+
+    VkDevice device_;
+    VkPhysicalDevice physical_{VK_NULL_HANDLE};
+    VkQueryPool pool_{VK_NULL_HANDLE};
+    float period_{0.0F};  // ns per tick
+    std::uint64_t mask_{0};
+    bool pending_{false};
+    bool viewDrawn_{false};  // by the frame recorded last, until renderScene sets it again
+    bool budget_{false};
+    Clock::time_point budgetAt_{};
+    std::size_t frames_{0};
+    std::array<std::array<double, kWindow>, 3> samples_{};
+    ViewerTimings timings_;
+};
 
 /// Where the bundled fonts are: an explicit directory, the installed share directory next to
 /// the program, or the source tree (when run from a build directory).
@@ -199,6 +386,64 @@ std::string findLocalServer() {
     return {};
 }
 
+/// A package's share directory in the ROS install (AMENT_PREFIX_PATH); empty if none.
+std::string findShare(const std::string& package) {
+    const char* prefixes = std::getenv("AMENT_PREFIX_PATH");
+    if (prefixes == nullptr) {
+        return {};
+    }
+    const std::string list = prefixes;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const std::size_t end = std::min(list.find(':', start), list.size());
+        const std::filesystem::path candidate =
+            std::filesystem::path(list.substr(start, end - start)) / "share" / package;
+        std::error_code ec;
+        if (end > start && std::filesystem::is_directory(candidate, ec)) {
+            return candidate.string();
+        }
+        start = end + 1;
+    }
+    return {};
+}
+
+/// Pages shown in the system's browser or file manager (xdg-open): never inside the viewer
+/// (CLAUDE.md invariant 13). Started without waiting; finished ones are reaped later.
+class PageOpener {
+public:
+    PageOpener() = default;
+    PageOpener(const PageOpener&) = delete;
+    PageOpener& operator=(const PageOpener&) = delete;
+    ~PageOpener() { reap(); }
+
+    /// Returns an error message, or empty when xdg-open was started.
+    std::string open(const std::string& page) {
+        reap();
+        std::string program = "xdg-open";
+        std::string argument = page;
+        std::array<char*, 3> argv{program.data(), argument.data(), nullptr};
+        pid_t pid = -1;
+        const int error =
+            ::posix_spawnp(&pid, program.c_str(), nullptr, nullptr, argv.data(), environ);
+        if (error != 0) {
+            return "could not run xdg-open: " + std::string(std::strerror(error));
+        }
+        children_.push_back(pid);
+        return {};
+    }
+
+    /// Collects the xdg-open processes that finished (never blocks).
+    void reap() {
+        std::erase_if(children_, [](pid_t pid) {
+            int status = 0;
+            return ::waitpid(pid, &status, WNOHANG) != 0;
+        });
+    }
+
+private:
+    std::vector<pid_t> children_;
+};
+
 /// A simulation server started by the viewer from the launcher. Stopped with the viewer.
 class LocalServer {
 public:
@@ -207,10 +452,18 @@ public:
     LocalServer& operator=(const LocalServer&) = delete;
     ~LocalServer() { stop(); }
 
-    /// Starts `program --listen <endpoint>`. Returns an error message, or empty on success.
-    std::string start(const std::string& program, const std::string& endpoint) {
+    /// Starts `program --listen <endpoint> <extra...>`. Returns an error message, or empty on
+    /// success.
+    std::string start(const std::string& program, const std::string& endpoint,
+                      const std::vector<std::string>& extra = {}) {
         stop();
         std::vector<std::string> args{program, "--listen", endpoint};
+        args.insert(args.end(), extra.begin(), extra.end());
+        std::string line;
+        for (const std::string& arg : args) {
+            line += (line.empty() ? "" : " ") + arg;
+        }
+        std::fprintf(stderr, "lagrange_viewer: starting %s\n", line.c_str());
         std::vector<char*> argv;
         for (std::string& arg : args) {
             argv.push_back(arg.data());
@@ -339,6 +592,55 @@ private:
     std::map<std::string, Entry, std::less<>> entries_;
 };
 
+std::string jsonEscape(const std::string& text);  // below
+
+/// The viewer's own GPU passes and video memory (headless report, Performance workspace).
+std::string viewerGpuJson(const ViewerTimings& timings) {
+    std::string passes;
+    for (const ViewerTimings::Pass& pass : timings.passes) {
+        char item[160];
+        std::snprintf(item, sizeof(item),
+                      "%s\"%s\": {\"mean_ms\": %.4f, \"max_ms\": %.4f, \"frames\": %u}",
+                      passes.empty() ? "" : ", ", pass.name, pass.meanMs, pass.maxMs, pass.frames);
+        passes += item;
+    }
+    char out[256];
+    std::snprintf(out, sizeof(out),
+                  "{\"timed\": %s, \"window\": %u, \"vram_known\": %s, \"vram_used\": %llu, "
+                  "\"passes\": {",
+                  timings.gpuTimed ? "true" : "false", timings.window,
+                  timings.vramKnown ? "true" : "false",
+                  static_cast<unsigned long long>(timings.vramUsedBytes));
+    return out + passes + "}}";
+}
+
+/// The titles of the top-level windows drawn in the last frame (headless report: which
+/// layout is in front, e.g. the Builder's Test layout). Docked tabs behind others are left out.
+std::string visibleWindowsJson() {
+    std::string out;
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+        return "[]";
+    }
+    for (const ImGuiWindow* window : context->Windows) {
+        // A docked window is a child of its dock node's host: kept when its tab is in front.
+        const bool shown = window->DockIsActive
+                               ? window->DockTabIsVisible
+                               : (window->Flags & ImGuiWindowFlags_ChildWindow) == 0;
+        if (!window->WasActive || window->Hidden || !shown ||
+            (window->Flags & ImGuiWindowFlags_DockNodeHost) != 0) {
+            continue;
+        }
+        std::string title = window->Name;
+        title = title.substr(0, title.find("##"));
+        if (title.empty()) {
+            continue;
+        }
+        out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(title) + "\"";
+    }
+    return "[" + out + "]";
+}
+
 class Ui {
 public:
     Ui(const gpu::Device& device, ViewerClient& client, VkFormat targetFormat,
@@ -350,6 +652,7 @@ public:
         , panels_(createDefaultPanels())
         , scopeSignals_(std::move(scopeSignals)) {
         renderOptions_.wireframeAvailable = renderer_.wireframeSupported();
+        builderHost_.setBeforeLeavingRun([this] { releaseBuildingPause(); });
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -408,6 +711,7 @@ public:
     }
 
     ~Ui() {
+        releaseBuildingPause();  // a run paused while building plays on without us
         vkDeviceWaitIdle(device_.device());
         textures_.clear();
         if (texture_ != VK_NULL_HANDLE) {
@@ -443,7 +747,11 @@ public:
             framedRegion_ = scene_->statics->regionEnu;
             framedRebase_ = scene_->statics->rebaseCount;
         }
-        if (scene_ && scene_->statics->stagePath != framedStage_) {
+        // A Test's run is the Builder's (R3): it is seen with the Builder view's camera, so the
+        // Scene camera is not re-aimed at it (after Back the run shown before is still the
+        // framed one), and it does not join the Recent list.
+        const bool testing = builderHost_.ownsConnection();
+        if (scene_ && scene_->statics->stagePath != framedStage_ && !testing) {
             frameScene(*scene_);
             framedStage_ = scene_->statics->stagePath;
             framedRegion_ = scene_->statics->regionEnu;
@@ -457,7 +765,7 @@ public:
                 }
             }
             selectPath_.clear();
-            if (recordRecent_ && !recentPath_.empty()) {
+            if (recordRecent_ && !recentPath_.empty() && !testing) {
                 RecentEntry entry;
                 entry.stage = scene_->statics->stagePath;
                 entry.robot =
@@ -510,6 +818,7 @@ public:
         context.renderOptions = &renderOptions_;
         context.bookmarks = &bookmarks_;
         context.launcher = &launcher_;
+        context.builder = &builderSession_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.sensorTextures = &textures_;
@@ -519,6 +828,7 @@ public:
         context.tierName = gpu::toString(device_.tier());
         context.frameMs = frameMs;
         context.drawCalls = renderer_.lastDrawCount();
+        context.viewerTimings = gpuTimer_ != nullptr ? &gpuTimer_->timings() : nullptr;
         if (launcher_.active && ImGui::GetTime() - socketChecked_ > 1.0) {
             // Is a local server listening? Looked at once a second, not every frame.
             socketChecked_ = ImGui::GetTime();
@@ -526,7 +836,23 @@ public:
             launcher_.defaultAvailable =
                 std::filesystem::is_socket(proto::defaultUnixSocketPath(), ec);
         }
+        // RFC 0016 R7: while the Builder is in front, nothing streams but the scene.
+        client_.setQuiet(workspace_ == Workspace::Builder && !launcher_.active);
         drawPanels(panels_, context);
+        if (workspace_ == Workspace::Builder && context.openFileRequested) {
+            // Ctrl O in the Builder opens a robot into the builder, not into the run.
+            context.openFileRequested = false;
+            builderSession_.openDialogRequested = true;
+        }
+        builderHost_.setServerProgram(launcher_.localServer);
+        builderHost_.afterUi();
+        pauseWhileBuilding();
+        if (launcher_.builderRequested) {
+            // Build a robot: the Builder works without a server, so nothing connects (R1).
+            launcher_.builderRequested = false;
+            launcher_.active = false;
+            workspace_ = Workspace::Builder;
+        }
         if (launcher_.connectRequested) {
             launcher_.connectRequested = false;
             const auto endpoint = proto::parseEndpoint(launcher_.connectEndpoint);
@@ -537,12 +863,16 @@ public:
                 launcher_.error.clear();
                 if (launcher_.startLocalRequested) {
                     // The client keeps retrying until the new server has bound its socket.
-                    launcher_.error =
-                        localServer_.start(launcher_.localServer, launcher_.connectEndpoint);
+                    launcher_.error = localServer_.start(
+                        launcher_.localServer, launcher_.connectEndpoint, launcher_.startArguments);
                 }
                 launcher_.startLocalRequested = false;
+                launcher_.startArguments.clear();
             }
             if (endpoint && launcher_.error.empty()) {
+                std::fprintf(stderr, "lagrange_viewer: connecting to %s\n",
+                             launcher_.connectEndpoint.c_str());
+                releaseBuildingPause();
                 client_.stop();
                 client_.setEndpoint(*endpoint);
                 client_.start();
@@ -554,8 +884,21 @@ public:
                 recordRecent_ = true;
             }
         }
+        if (!launcher_.openPageRequested.empty()) {
+            // Headless runs (tests) say what they would open instead of opening it.
+            const std::string page = std::exchange(launcher_.openPageRequested, {});
+            if (opensPages_) {
+                const std::string error = pages_.open(page);
+                if (!error.empty()) {
+                    std::fprintf(stderr, "lagrange_viewer: %s\n", error.c_str());
+                }
+            } else {
+                std::fprintf(stderr, "lagrange_viewer: would open %s\n", page.c_str());
+            }
+        }
         if (launcher_.disconnectRequested) {
             launcher_.disconnectRequested = false;
+            releaseBuildingPause();
             client_.stop();
             if (recentPath_.empty()) {
                 showLauncher(ImGui::GetStyle().FontScaleDpi);
@@ -570,7 +913,12 @@ public:
     /// Records the scene pass. The UI pass (ImGui draw data) is recorded by the caller.
     void renderScene(VkCommandBuffer commands) {
         textures_.record(commands);
+        if (gpuTimer_ != nullptr) {
+            gpuTimer_->mark(commands, GpuTimer::Uploads);
+            gpuTimer_->setViewDrawn(false);
+        }
         buildSensorOverlays();
+        buildRadarOverlays();
         buildAirflow();
         buildCables();
         followWeather();
@@ -581,24 +929,60 @@ public:
         // Its heat patches (megabytes) stay out of the key: heatVersion stands for them.
         std::vector<RenderOptions::HeatPatch> heat;
         std::swap(heat, renderOptions_.heat);
-        ViewKey key{scene_,
-                    {camera_.target[0], camera_.target[1], camera_.target[2], camera_.distance,
-                     camera_.yaw, camera_.pitch, camera_.verticalFov, camera_.nearPlane},
+        // The Builder draws its own document with its own camera, never the server's scene
+        // (RFC 0016 §1; the key below then keys on which scene is drawn, R3).
+        Camera camera = camera_;
+        std::shared_ptr<const SceneFrame> scene = scene_;
+        const bool building = workspace_ == Workspace::Builder && !launcher_.active &&
+                              builderSession_.mode == BuilderSession::Mode::Build;
+        if (workspace_ == Workspace::Builder && !launcher_.active && !building) {
+            // Testing (SPEC state 4): the test server's scene in the Builder view, seen with
+            // the Builder view's own camera, drawn as the Scene viewport draws it.
+            camera = builderSession_.camera;
+        }
+        // The Builder view draws Lit only, with its own grid toggle (12-builder SPEC).
+        RenderOptions builderOptions;
+        if (building) {
+            scene = builderHost_.frameToDraw(camera);
+            // Its grid and frames are its own overlay lines (BuilderHost), at its own scale.
+            builderOptions.grid = false;
+            builderOptions.axes = false;
+            builderOptions.sensors = false;
+            builderOptions.shading = Shading::Lit;
+        }
+        const RenderOptions& options = building ? builderOptions : renderOptions_;
+        ViewKey key{scene,
+                    {camera.target[0], camera.target[1], camera.target[2], camera.distance,
+                     camera.yaw, camera.pitch, camera.verticalFov, camera.nearPlane},
                     renderer_.extent().width,
                     renderer_.extent().height,
-                    sensorOverlayVersion_,
-                    renderOptions_};
+                    building ? builderHost_.overlayVersion() : sensorOverlayVersion_,
+                    options};
+        key.radarOverlays = building ? 0 : radarOverlayVersion_;
         std::swap(heat, renderOptions_.heat);
-        const bool moving = !airflowOverlays_.empty();  // particles move every frame
+        const bool moving = !building && !airflowOverlays_.empty();  // particles move every frame
         if (moving || !drawnKey_ || !drawnKey_->same(key)) {
             // In this order, without copying their vertices into one list.
-            const std::array<std::span<const OverlayLines>, 3> overlays{
-                cableOverlays_, sensorOverlays_, airflowOverlays_};
-            renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays);
+            // The server's overlays belong to its scene: none over the builder's.
+            std::array<std::span<const OverlayLines>, 4> overlays{cableOverlays_, sensorOverlays_,
+                                                                  radarOverlays_, airflowOverlays_};
+            if (building) {
+                overlays = {builderHost_.overlays(), {}, {}, {}};
+            }
+            renderer_.render(commands, scene.get(), camera, options, overlays);
             drawnKey_ = std::move(key);
             ++viewsDrawn_;
+            if (gpuTimer_ != nullptr) {
+                gpuTimer_->setViewDrawn(true);
+            }
+        }
+        if (gpuTimer_ != nullptr) {
+            gpuTimer_->mark(commands, GpuTimer::View);
         }
     }
+
+    /// The timer of the viewer's own GPU passes (Performance workspace); may be null.
+    void setGpuTimer(GpuTimer* timer) { gpuTimer_ = timer; }
 
     /// What the last drawn 3D view showed (see renderScene).
     struct ViewKey {
@@ -606,6 +990,7 @@ public:
         std::array<double, 8> camera{};
         std::uint32_t width{0}, height{0};
         std::uint64_t sensorOverlays{0};
+        std::uint64_t radarOverlays{0};
         RenderOptions options;  // without its heat patches, which heatVersion stands for
 
         ViewKey(std::shared_ptr<const SceneFrame> f, const std::array<double, 8>& c,
@@ -623,7 +1008,8 @@ public:
             const RenderOptions& a = options;
             const RenderOptions& b = k.options;
             return frame == k.frame && camera == k.camera && width == k.width &&
-                   height == k.height && sensorOverlays == k.sensorOverlays && a.grid == b.grid &&
+                   height == k.height && sensorOverlays == k.sensorOverlays &&
+                   radarOverlays == k.radarOverlays && a.radar == b.radar && a.grid == b.grid &&
                    a.axes == b.axes && a.sensors == b.sensors && a.follow == b.follow &&
                    a.shading == b.shading && a.wireframeAvailable == b.wireframeAvailable &&
                    a.realisticAvailable == b.realisticAvailable && a.season == b.season &&
@@ -982,12 +1368,537 @@ public:
         sensorOverlays_.resize(used);
     }
 
+    /// Radar overlay (Overlays → Radar detections): for each radar of the scene (RadarAPI_1, or
+    /// a custom sensor of kind imaging_radar), its latest detections as wireframe boxes sized by
+    /// RCS, coloured by radial velocity on the diverging scale, each with a tick along its line
+    /// of sight as long as 0.5 s of that velocity (away when receding); and its field of view
+    /// as a faint wedge out to its range, from the attributes the server reports for the prim.
+    void buildRadarOverlays() {
+        constexpr int kBins = 11;                // velocity bands, one batch of lines each
+        constexpr float kSmallestHalfM = 0.20F;  // box half size at −20 dBsm and below
+        constexpr float kLargestHalfM = 0.60F;   // at +20 dBsm and above
+        constexpr float kTickS = 0.5F;           // s of radial velocity the tick shows
+        constexpr int kArcSegments = 32;
+        constexpr float kRingStepM = 50.0F;  // range marks inside the wedge
+        const SceneFrame* frame = scene_.get();
+        if (!renderOptions_.radar || frame == nullptr || !frame->statics) {
+            if (!radarOverlays_.empty()) {
+                radarOverlays_.clear();
+                ++radarOverlayVersion_;
+            }
+            radarDrawnCount_ = 0;
+            renderOptions_.radarVelocitySpan = 0.0F;
+            radarStale_ = true;
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        if (statics.generation != radarGeneration_) {
+            radarGeneration_ = statics.generation;
+            radars_.clear();
+            std::vector<std::uint32_t> prims;
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const std::string& type = statics.prims[i].typeName;
+                if (type == "Radar" || type == "CustomSensor") {
+                    // A custom sensor is a radar if the server says so: its kind, or radar frames.
+                    Radar radar;
+                    radar.prim = static_cast<std::uint32_t>(i);
+                    radar.custom = type == "CustomSensor";
+                    radar.stream = client_.watchSensor(statics.prims[i].path);
+                    radars_.push_back(std::move(radar));
+                    prims.push_back(static_cast<std::uint32_t>(i));
+                }
+            }
+            if (!prims.empty()) {
+                client_.requestAttributesOf(prims);  // the fields of view
+            }
+            radarStale_ = true;
+        }
+        // Fields of view, once the attributes arrive.
+        const auto attributes = client_.attributesOf();
+        if (attributes != radarAttributes_) {
+            radarAttributes_ = attributes;
+            for (Radar& radar : radars_) {
+                const auto it = attributes->find(radar.prim);
+                if (it == attributes->end()) {
+                    continue;
+                }
+                const auto number = [&](const char* builtIn, const char* custom) {
+                    const std::string wanted = radar.custom ? custom : builtIn;
+                    for (const AttributeInfo& a : it->second.attributes) {
+                        if (a.name == wanted && !a.numbers.empty()) {
+                            return static_cast<float>(a.numbers.front());
+                        }
+                    }
+                    return 0.0F;
+                };
+                radar.rangeM = number("sensor:radar:rangeMax", "sensor:custom:param:max_range");
+                radar.azimuthFov =
+                    number("sensor:radar:azimuthFov", "sensor:custom:param:azimuth_fov");
+                radar.elevationFov =
+                    number("sensor:radar:elevationFov", "sensor:custom:param:elevation_fov");
+                for (const AttributeInfo& a : it->second.attributes) {
+                    if (a.name == "sensor:custom:kind") {
+                        radar.imaging = a.value == "imaging_radar" ||
+                                        a.value.find("imaging_radar") != std::string::npos;
+                    }
+                }
+            }
+            radarStale_ = true;
+        }
+        bool changed = radarStale_;
+        for (Radar& radar : radars_) {
+            std::shared_ptr<const PointCloud> cloud = radar.stream->latest();
+            if (cloud && !cloud->radar()) {
+                cloud = nullptr;  // not a radar's frames
+            }
+            const Transform pose =
+                radar.prim < frame->transforms.size() ? frame->transforms[radar.prim] : Transform{};
+            if (cloud != radar.cloud || pose.position != radar.pose.position ||
+                pose.rotation != radar.pose.rotation) {
+                changed = true;
+            }
+            radar.cloud = std::move(cloud);
+            radar.pose = pose;
+        }
+        if (!changed) {
+            return;
+        }
+        radarStale_ = false;
+        ++radarOverlayVersion_;
+        // One scale for every radar: the fastest detection drawn, rounded (RadarScale.hpp).
+        float fastest = 0.0F;
+        for (const Radar& radar : radars_) {
+            for (std::uint32_t i = 0; radar.cloud && i < radar.cloud->count; ++i) {
+                const float v = radar.cloud->points[std::size_t{i} * kRadarFloats + 3];
+                if (std::isfinite(v)) {
+                    fastest = std::max(fastest, std::abs(v));
+                }
+            }
+        }
+        const float span = radarVelocitySpan(fastest);
+        radarDrawnCount_ = 0;
+        // Batches are reused (their vectors keep their capacity): no allocation once warmed up.
+        std::size_t used = 0;
+        const auto batch = [&]() -> OverlayLines& {
+            if (used == radarOverlays_.size()) {
+                radarOverlays_.emplace_back();
+            }
+            OverlayLines& lines = radarOverlays_[used++];
+            lines.vertices.clear();
+            return lines;
+        };
+        // The wedge: the sensors' colour, dimmed, so that it stays behind what it frames.
+        const ImVec4 sensors = theme::kDomainColor[static_cast<int>(theme::Domain::Sensors)];
+        constexpr float kFaint = 0.35F;
+        const std::array<float, 4> wedgeColour{sensors.x * kFaint, sensors.y * kFaint,
+                                               sensors.z * kFaint, 1.0F};
+        bool anyDetection = false;
+        for (const Radar& radar : radars_) {
+            const bool isRadar = !radar.custom || radar.imaging || radar.cloud != nullptr;
+            if (!isRadar || radar.prim >= frame->transforms.size()) {
+                continue;
+            }
+            const std::array<float, 4>& q = radar.pose.rotation;
+            const auto rotate = [&q](float x, float y, float z) {
+                // v' = v + 2w (u x v) + 2 u x (u x v), u = (q.x, q.y, q.z)
+                const float tx = 2.0F * (q[2] * z - q[3] * y);
+                const float ty = 2.0F * (q[3] * x - q[1] * z);
+                const float tz = 2.0F * (q[1] * y - q[2] * x);
+                return std::array<float, 3>{x + q[0] * tx + (q[2] * tz - q[3] * ty),
+                                            y + q[0] * ty + (q[3] * tx - q[1] * tz),
+                                            z + q[0] * tz + (q[1] * ty - q[2] * tx)};
+            };
+            // In the sensor frame: azimuth about z (left positive), elevation up.
+            const auto along = [&](float range, float azimuth, float elevation) {
+                const float across = range * std::cos(elevation);
+                return rotate(across * std::cos(azimuth), across * std::sin(azimuth),
+                              range * std::sin(elevation));
+            };
+            const auto segment = [](std::vector<float>& out, const std::array<float, 3>& a,
+                                    const std::array<float, 3>& b) {
+                out.insert(out.end(), {a[0], a[1], a[2], b[0], b[1], b[2]});
+            };
+            if (radar.rangeM > 0.0F && radar.azimuthFov > 0.0F) {
+                OverlayLines& wedge = batch();
+                wedge.origin = radar.pose.position;
+                wedge.color = wedgeColour;
+                const float half = radar.azimuthFov * 0.5F;
+                const float up = radar.elevationFov * 0.5F;
+                const std::array<float, 3> zero{0.0F, 0.0F, 0.0F};
+                // Its top and bottom edges, or the one plane of a radar without elevation.
+                const std::array<float, 2> edges{-up, up};
+                const std::span<const float> levels(edges.data(), up > 0.0F ? 2U : 1U);
+                const auto arc = [&](float range, float elevation) {
+                    for (int k = 0; k < kArcSegments; ++k) {
+                        const float a0 = -half + 2.0F * half * static_cast<float>(k) / kArcSegments;
+                        const float a1 =
+                            -half + 2.0F * half * static_cast<float>(k + 1) / kArcSegments;
+                        segment(wedge.vertices, along(range, a0, elevation),
+                                along(range, a1, elevation));
+                    }
+                };
+                for (const float elevation : levels) {
+                    segment(wedge.vertices, zero, along(radar.rangeM, -half, elevation));
+                    segment(wedge.vertices, zero, along(radar.rangeM, half, elevation));
+                    arc(radar.rangeM, elevation);
+                }
+                if (levels.size() == 2) {
+                    for (const float side : {-half, half}) {
+                        segment(wedge.vertices, along(radar.rangeM, side, -up),
+                                along(radar.rangeM, side, up));
+                    }
+                }
+                for (float r = kRingStepM; r < radar.rangeM; r += kRingStepM) {
+                    arc(r, 0.0F);
+                }
+            }
+            if (!radar.cloud || radar.cloud->count == 0) {
+                continue;
+            }
+            // One batch per velocity band; their indices are taken before any is written.
+            const std::size_t first = used;
+            for (int b = 0; b < kBins; ++b) {
+                OverlayLines& lines = batch();
+                lines.origin = radar.pose.position;
+                lines.color = radarVelocityColour(radarBinVelocity(b, kBins, span), span);
+            }
+            for (std::uint32_t i = 0; i < radar.cloud->count; ++i) {
+                const float* p = &radar.cloud->points[std::size_t{i} * kRadarFloats];
+                if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+                    continue;
+                }
+                std::vector<float>& out =
+                    radarOverlays_[first +
+                                   static_cast<std::size_t>(radarVelocityBin(p[3], span, kBins))]
+                        .vertices;
+                const std::array<float, 3> at = rotate(p[0], p[1], p[2]);
+                const float h =
+                    kSmallestHalfM + (kLargestHalfM - kSmallestHalfM) * radarRcsFraction(p[4]);
+                // A box's twelve edges, axis aligned in the world.
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const std::size_t u = (axis + 1) % 3;
+                    const std::size_t w = (axis + 2) % 3;
+                    for (const float su : {-h, h}) {
+                        for (const float sw : {-h, h}) {
+                            std::array<float, 3> a = at;
+                            a[axis] -= h;
+                            a[u] += su;
+                            a[w] += sw;
+                            std::array<float, 3> b = a;
+                            b[axis] += 2.0F * h;
+                            segment(out, a, b);
+                        }
+                    }
+                }
+                // The Doppler tick, along the line of sight.
+                const float range = std::hypot(p[0], p[1], p[2]);
+                if (range > 0.0F && std::isfinite(p[3])) {
+                    const float k = p[3] * kTickS / range;
+                    const std::array<float, 3> d = rotate(p[0] * k, p[1] * k, p[2] * k);
+                    segment(out, at, {at[0] + d[0], at[1] + d[1], at[2] + d[2]});
+                }
+                ++radarDrawnCount_;
+                anyDetection = true;
+            }
+        }
+        radarOverlays_.resize(used);
+        renderOptions_.radarVelocitySpan = anyDetection ? span : 0.0F;
+    }
+
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
+    /// Radar detections in the 3D view's overlay as last built (the headless report).
+    [[nodiscard]] std::size_t radarDetectionsDrawn() const { return radarDrawnCount_; }
     /// How many times the 3D view was drawn (it is not when nothing in it changed).
     [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
-    void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
-    void setWorkspace(Workspace workspace) { workspace_ = workspace; }
+    void setCanOpenFiles(bool value) {
+        canOpenFiles_ = value;
+        builderHost_.setCanOpenFiles(value);
+    }
+    /// Links open in the system's browser (a window); headless runs only print them.
+    void setOpensPages(bool value) { opensPages_ = value; }
+    void setWorkspace(Workspace workspace) {
+        workspace_ = workspace;
+        if (workspace == Workspace::Builder && launcher_.localServer.empty()) {
+            // The Builder's Test needs lagrange_server on this machine (SPEC state 5), also
+            // when the launcher was never shown (--workspace builder).
+            launcher_.localServer = findLocalServer();
+        }
+        if (workspace == Workspace::Builder && launcher_.assetDirectory.empty()) {
+            launcher_.assetDirectory = findShare("lagrange_assets");  // Test's sample worlds
+        }
+    }
+    [[nodiscard]] Workspace workspace() const { return workspace_; }
+    /// --builder-open: a .urdf now, a .xacro once xacro is done (frames later).
+    void builderOpen(const std::string& path) { builderHost_.open(path); }
+    /// --builder-save: the document as it is now. False when it could not be written.
+    bool builderSave(const std::string& path) { return builderHost_.save(path); }
+    [[nodiscard]] const BuilderSession& builderSession() const { return builderSession_; }
+    [[nodiscard]] bool builderBusy() const { return builderHost_.busy(); }
+    /// The windowed loop's file dialogs for the Builder: what it asked for, once.
+    [[nodiscard]] bool takeBuilderOpenDialog() {
+        return std::exchange(builderSession_.openDialogRequested, false);
+    }
+    [[nodiscard]] bool takeBuilderSaveAsDialog() {
+        return std::exchange(builderSession_.saveAsDialogRequested, false);
+    }
+    /// A file chosen in a Builder dialog, or dropped on the window while the Builder is shown.
+    void builderOpenRequest(const std::string& path) {
+        builderSession_.openRequested = true;
+        builderSession_.openPath = path;
+    }
+    /// Add → Mesh… → Browse… (Addendum A): the SDL dialog for a mesh file, asked for once.
+    [[nodiscard]] bool takeBuilderMeshDialog() {
+        return std::exchange(builderSession_.meshDialogRequested, false);
+    }
+    /// Test ▾ → A world file → Browse…: the SDL dialog for a world file, asked for once.
+    [[nodiscard]] bool takeBuilderWorldDialog() {
+        return std::exchange(builderSession_.worldDialogRequested, false);
+    }
+    /// The world chosen there (or headless `--input N:world:FILE`): Test's target.
+    void builderTestWorld(const std::string& path) {
+        builderSession_.testTarget = std::filesystem::absolute(path).lexically_normal().string();
+        builderSession_.testIntoRun = false;
+    }
+    /// Headless `--input N:spawn:X,Y,Z,HEADING` (m, °): what Test ▾ → Start at… does for the
+    /// current Test world. False when the text is not four numbers.
+    bool builderTestSpawn(const std::string& text) {
+        builder::SpawnPose pose;
+        if (std::sscanf(text.c_str(), "%lf,%lf,%lf,%lf", &pose.x, &pose.y, &pose.z, &pose.yawDeg) !=
+            4) {
+            return false;
+        }
+        if (!builderSession_.testSpawns.loaded() && !configDirectory().empty()) {
+            builderSession_.testSpawns.load(std::filesystem::path(configDirectory()) /
+                                            "builder_spawns.tsv");
+        }
+        builderSession_.testSpawns.set(
+            builderSession_.testTarget.empty() ? "none" : builderSession_.testTarget, pose);
+        return true;
+    }
+    /// A mesh chosen in that dialog, or dropped on the window while the Builder is shown: a
+    /// mesh link on the Add panel's target (the selected link).
+    void builderAddMesh(const std::string& path) {
+        builderSession_.addMeshRequested = true;
+        builderSession_.addMeshPath = path;
+    }
+    /// Headless `--input N:select:NAME`: selects the link, joint or sensor NAME in the Builder.
+    void builderSelect(const std::string& name) {
+        using SelectionKind = BuilderSession::Selection::Kind;
+        const builder::Document& document = builderSession_.document();
+        if (builder::findLink(document, name) != nullptr) {
+            builderSession_.selection = {SelectionKind::Link, name};
+        } else if (builder::findJoint(document, name) != nullptr) {
+            builderSession_.selection = {SelectionKind::Joint, name};
+        } else if (builder::findSensor(document, name) != nullptr) {
+            builderSession_.selection = {SelectionKind::Sensor, name};
+        }
+    }
+    /// The Save as… dialog's choice (or headless `--input N:saveas:PATH`): ".urdf" added when
+    /// it lacks it, and asked first when that name exists (code review L7).
+    void builderSaveAsChosen(const std::string& path) { builderHost_.saveAsChosen(path); }
+    /// The Save as… dialog closed without a choice.
+    void builderSaveAsCancelled() { builderHost_.saveAsCancelled(); }
+    /// The window is asked to close (QA4 M1): true when it may close now; else the Builder is
+    /// shown with its unsaved-changes prompt, and takeBuilderClose() says when it was answered.
+    [[nodiscard]] bool builderMayClose() {
+        if (builderHost_.requestClose()) {
+            return true;
+        }
+        if (!launcherActive()) {
+            setWorkspace(Workspace::Builder);  // where the prompt is drawn
+        }
+        return false;
+    }
+    [[nodiscard]] bool takeBuilderClose() { return builderHost_.takeClose(); }
+    /// Headless `--input N:template:NAME`: a click on that template card.
+    void builderTemplateRequest(const std::string& name) {
+        builderSession_.templateRequested = true;
+        builderSession_.templateName = name;
+    }
+    /// The undo stack in the headless report: its labels (oldest first) and where it is.
+    [[nodiscard]] static std::string historyJson(const builder::History& history) {
+        std::string labels;
+        for (const std::string& label : history.labels()) {
+            labels += std::string(labels.empty() ? "" : ", ") + "\"" + jsonEscape(label) + "\"";
+        }
+        return "{\"position\": " + std::to_string(history.position()) + ", \"labels\": [" + labels +
+               "]}";
+    }
+    [[nodiscard]] static const char* promptName(BuilderSession::Prompt::Kind kind) {
+        using K = BuilderSession::Prompt::Kind;
+        return kind == K::Unsaved     ? "unsaved"
+               : kind == K::Restore   ? "restore"
+               : kind == K::Overwrite ? "overwrite"
+                                      : "";
+    }
+    /// The Builder's document in the headless report (RFC 0016 WP-E's input tests): counts,
+    /// the selection, the edits since the last save.
+    /// Where the run shows the document's root link (headless report, Start at…'s test):
+    /// [x, y, z (m), heading (°)] of the scene prim of that name; null without one.
+    [[nodiscard]] std::string testRootJson(const builder::Document& document) const {
+        const builder::Tree tree = builder::buildTree(document);
+        const auto frame = client_.scene();
+        if (tree.root < 0 || !frame || !frame->statics) {
+            return "null";
+        }
+        const std::string& root = document.links[static_cast<std::size_t>(tree.root)].name;
+        const auto& prims = frame->statics->prims;
+        for (std::size_t i = prims.size(); i-- > 0;) {
+            if (prims[i].name != root || i >= frame->transforms.size()) {
+                continue;
+            }
+            const Transform& at = frame->transforms[i];
+            const auto& q = at.rotation;  // w x y z
+            const double yaw = std::atan2(2.0 * (q[0] * q[3] + q[1] * q[2]),
+                                          1.0 - 2.0 * (q[2] * q[2] + q[3] * q[3]));
+            char text[160];
+            std::snprintf(text, sizeof(text), "[%.4f, %.4f, %.4f, %.3f]", at.position[0],
+                          at.position[1], at.position[2], yaw * 180.0 / std::numbers::pi);
+            return text;
+        }
+        return "null";
+    }
+
+    [[nodiscard]] std::string builderReport() const {
+        const builder::Document& document = builderSession_.document();
+        std::string joints;
+        for (const builder::Joint& joint : document.joints) {
+            joints += std::string(joints.empty() ? "" : ", ") + "\"" + jsonEscape(joint.name) +
+                      "\": \"" + std::string(builder::toString(joint.type)) + "\"";
+        }
+        char text[256];
+        std::snprintf(text, sizeof(text),
+                      "{\"links\": %zu, \"joints\": %zu, \"sensors\": %zu, \"edits\": %d, ",
+                      document.links.size(), document.joints.size(), document.sensors.size(),
+                      builderSession_.history.editsSinceSave());
+        // WP-F: the mode, the file, and what Test, the files and Check loads left in Problems.
+        const auto messages = [](const std::vector<builder::Problem>& list) {
+            std::string out;
+            for (const builder::Problem& problem : list) {
+                out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(problem.message) +
+                       "\"";
+            }
+            return "[" + out + "]";
+        };
+        // RFC 0016 §7.3: the run's joint positions and the sliders' commands while testing.
+        const auto values = [](const builder::Preview& map) {
+            std::string out;
+            for (const auto& [name, value] : map) {
+                char number[48];
+                std::snprintf(number, sizeof(number), "%.9g", value);
+                out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(name) +
+                       "\": " + (std::isfinite(value) ? number : "null");
+            }
+            return "{" + out + "}";
+        };
+        // RFC 0016 phase 3: the overlay's power system, and the run's electrical signals while
+        // testing (bus/, battery/, motor/ names from the signal catalog).
+        std::string power;
+        for (const std::string_view schema :
+             {builder::kBusSchema, builder::kBatterySchema, builder::kMotorSchema,
+              builder::kLoadSchema, builder::kConverterSchema, builder::kBranchSchema}) {
+            std::string names;
+            for (const std::size_t i : builder::entriesWith(document, schema)) {
+                names += std::string(names.empty() ? "" : ", ") + "\"" +
+                         jsonEscape(builder::entryName(document.overlay.entries[i])) + "\"";
+            }
+            power += std::string(power.empty() ? "" : ", ") + "\"" + std::string(schema) + "\": [" +
+                     names + "]";
+        }
+        std::string electrical;
+        if (builderSession_.mode == BuilderSession::Mode::Testing) {
+            if (const auto catalog = client_.catalog()) {
+                for (const SignalInfo& info : catalog->signals) {
+                    if (info.name.starts_with("bus/") || info.name.starts_with("battery/") ||
+                        info.name.starts_with("motor/") || info.name.starts_with("load/") ||
+                        info.name.starts_with("converter/") || info.name.starts_with("branch/")) {
+                        electrical += std::string(electrical.empty() ? "" : ", ") + "\"" +
+                                      jsonEscape(info.name) + "\"";
+                    }
+                }
+            }
+        }
+        // The Signals scope's traces, each at its newest sample (a Test's plotted values).
+        std::string scope;
+        for (const ScopeTrace& trace : scopeSession_.traces()) {
+            const double v = trace.buffer ? trace.buffer->latest() : 0.0;
+            char number[48];
+            std::snprintf(number, sizeof(number), "%.9g", std::isfinite(v) ? v : 0.0);
+            scope += std::string(scope.empty() ? "" : ", ") + "\"" + jsonEscape(trace.label) +
+                     "\": " + number;
+        }
+        const BuilderSession::Mode mode = builderSession_.mode;
+        return text + std::string("\"overlay\": {") + power + "}, \"electrical_signals\": [" +
+               electrical + "], \"scope_values\": {" + scope +
+               "}, \"live_joints\": " + values(builderSession_.liveJoints) +
+               ", \"joint_targets\": " + values(builderSession_.jointTargets) +
+               ", \"preview\": " + values(builderSession_.preview) + ", \"joint_drive_error\": \"" +
+               jsonEscape(builderSession_.jointDriveError) + "\", \"selected\": \"" +
+               jsonEscape(builderSession_.selection.name) + "\", \"joint_types\": {" + joints +
+               "}, \"robot\": \"" + jsonEscape(document.robot) + "\", \"mode\": \"" +
+               (mode == BuilderSession::Mode::Build      ? "build"
+                : mode == BuilderSession::Mode::Starting ? "starting"
+                                                         : "testing") +
+               "\", \"path\": \"" + jsonEscape(builderSession_.path.string()) +
+               "\", \"prompt\": \"" + promptName(builderSession_.prompt.kind) +
+               "\", \"prompt_title\": \"" + jsonEscape(builderSession_.prompt.title) +
+               "\", \"test_into_run\": " + (builderSession_.testIntoRun ? "true" : "false") +
+               ", \"run_state\": \"" +
+               (client_.status().runState == RunState::Running  ? "running"
+                : client_.status().runState == RunState::Paused ? "paused"
+                                                                : "other") +
+               "\", \"test_target\": \"" + jsonEscape(builderSession_.testTarget) +
+               "\", \"test_spawn\": \"" + jsonEscape(builderSession_.testSpawn) +
+               "\", \"test_root\": " + testRootJson(document) + ", \"start_at\": \"" +
+               jsonEscape(builder::spawnLabel(builderSession_.testSpawns.at(
+                   builderSession_.testTarget.empty() ? "none" : builderSession_.testTarget))) +
+               "\", \"test_robot\": \"" + jsonEscape(builderSession_.testRobotName) +
+               "\", \"test_passive\": " + (builderSession_.testPassive ? "true" : "false") +
+               ", \"problems\": " + messages(builderSession_.problems.builder) +
+               ", \"loader\": " + messages(builderSession_.problems.loader) +
+               ", \"files\": " + messages(builderSession_.problems.files) +
+               ", \"check\": " + messages(builderSession_.problems.check) +
+               ", \"check_exit\": " + std::to_string(builderSession_.problems.checkExit) +
+               ", \"errors\": " + std::to_string(builderSession_.problems.errors()) +
+               ", \"history\": " + historyJson(builderSession_.history) +
+               ", \"geometry\": " + builder::gizmo::geometryJson(document) + "}";
+    }
+
+    void pauseWhileBuilding() {
+        const ConnectionInfo connection = client_.connection();
+        const bool ready = connection.state == ConnectionState::Ready;
+        const std::string endpoint = proto::toString(client_.endpoint());
+        const bool building = workspace_ == Workspace::Builder && !launcher_.active &&
+                              builderSession_.mode == BuilderSession::Mode::Build;
+        const RunState state = client_.status().runState;
+        if (building && builderSession_.pauseRunWhileBuilding && ready &&
+            pausedForBuilding_.empty() && state == RunState::Running) {
+            client_.pause();
+            pausedForBuilding_ = endpoint;
+        } else if (!pausedForBuilding_.empty() &&
+                   (!building || !builderSession_.pauseRunWhileBuilding)) {
+            releaseBuildingPause();
+        }
+    }
+
+    /// Plays the run pauseWhileBuilding() paused, if this viewer is still connected to it
+    /// (its status may not say Paused yet: the pause was sent). Called before the client leaves
+    /// that run too (a Test's own server, another server, the viewer closing): the client's
+    /// stop() still delivers the queued Play to it, so nothing here waits (CLAUDE.md §8).
+    void releaseBuildingPause() {
+        if (pausedForBuilding_.empty()) {
+            return;
+        }
+        const bool ready = client_.connection().state == ConnectionState::Ready;
+        const std::string endpoint = proto::toString(client_.endpoint());
+        if (ready && endpoint == pausedForBuilding_) {
+            client_.play();
+        }
+        if (!ready || endpoint == pausedForBuilding_) {
+            pausedForBuilding_.clear();  // played again, or that run is gone
+        }
+    }
 
     /// Shows the launcher first: the client is started when the user chooses a server.
     void showLauncher(float displayScale) {
@@ -996,6 +1907,7 @@ public:
         launcher_.defaultEndpoint =
             proto::toString(proto::Endpoint::unixSocket(proto::defaultUnixSocketPath()));
         launcher_.localServer = findLocalServer();
+        launcher_.assetDirectory = findShare("lagrange_assets");
         launcher_.server = launcher_.localServer.empty() ? 1 : 0;
         recentPath_ = launcher_.system.configDirectory + "/recent.json";
         launcher_.recent.load(recentPath_);
@@ -1035,6 +1947,8 @@ public:
         renderOptions_.axes = renderOptions_.axes || names.find("axes") != std::string::npos;
         renderOptions_.sensors =
             renderOptions_.sensors || names.find("sensors") != std::string::npos;
+        renderOptions_.radar = renderOptions_.radar || names.find("sensors") != std::string::npos ||
+                               names.find("radar") != std::string::npos;
         renderOptions_.airflow =
             renderOptions_.airflow || names.find("airflow") != std::string::npos;
     }
@@ -1059,6 +1973,7 @@ public:
             renderOptions_.grid = false;
             renderOptions_.axes = false;
             renderOptions_.sensors = false;
+            renderOptions_.radar = false;
         } else if (name == "lit") {
             renderOptions_.shading = Shading::Lit;
         } else if (name == "unlit") {
@@ -1160,6 +2075,8 @@ private:
     std::string iniPath_;
     std::vector<std::string> scopeSignals_;
     bool canOpenFiles_{false};
+    bool opensPages_{false};
+    PageOpener pages_;
     Workspace workspace_{Workspace::Scene};
     ProfileSession profileSession_;
     ScopeSession scopeSession_;
@@ -1172,10 +2089,27 @@ private:
         float lowest{1e9F}, highest{-1e9F};  // the scan's bearings, rad
     };
     std::vector<LidarDrawn> lidarDrawn_;
+    struct Radar {  // per radar prim: its frames, field of view and what was drawn of it
+        std::uint32_t prim{0};
+        bool custom{false};   // a CustomSensor prim: a radar only when imaging or sending radar
+        bool imaging{false};  // its sensor:custom:kind is imaging_radar
+        std::shared_ptr<SensorStream> stream;
+        std::shared_ptr<const PointCloud> cloud;
+        Transform pose;
+        float rangeM{0.0F}, azimuthFov{0.0F}, elevationFov{0.0F};  // m, rad; 0: not known
+    };
+    std::vector<Radar> radars_;
+    std::uint64_t radarGeneration_{0};
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> radarAttributes_;
+    std::vector<OverlayLines> radarOverlays_;
+    std::uint64_t radarOverlayVersion_{0};
+    std::size_t radarDrawnCount_{0};  // detections in radarOverlays_ (the headless report)
+    bool radarStale_{true};
     bool sensorOverlaysStale_{true};
     std::uint64_t sensorOverlayVersion_{0};  // counts the rebuilds of sensorOverlays_
     std::optional<ViewKey> drawnKey_;
     std::uint64_t viewsDrawn_{0};
+    GpuTimer* gpuTimer_{nullptr};
     std::vector<OverlayLines> sensorOverlays_;
     std::vector<OverlayLines> airflowOverlays_;
     std::vector<OverlayLines> cableOverlays_;  // the scene's cables (RFC 0011)
@@ -1191,6 +2125,13 @@ private:
     std::mt19937 airRandom_{20261102U};
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
+    BuilderSession builderSession_;
+    BuilderHost builderHost_{builderSession_, client_};
+    /// View → Pause the run while building (12-builder SPEC "Cost in Build mode"): the run this
+    /// viewer paused when the Builder came to the front in Build mode, by its endpoint; empty
+    /// when it paused none. It is played again when Build mode ends, the option is unticked,
+    /// or another workspace comes to the front, if still connected to that run.
+    std::string pausedForBuilding_;
     LocalServer localServer_;
     bool recordRecent_{false};
     std::string recentPath_;
@@ -1304,7 +2245,8 @@ std::vector<InputEvent> parseInput(const std::string& script) {
             up.frame = event.frame + 2;
             events.push_back(up);
         } else if (event.kind == "key") {
-            // A key pressed on this frame and let go on the next: enter, tab or escape.
+            // A key pressed on this frame and let go on the next: enter, tab, escape, or a
+            // letter with modifiers ("ctrl+b", "ctrl+shift+z").
             InputEvent down = event;
             down.kind = "keydown";
             events.push_back(down);
@@ -1317,6 +2259,20 @@ std::vector<InputEvent> parseInput(const std::string& script) {
         }
     }
     return events;
+}
+
+/// A mesh file the builder adds as a link when dropped (Addendum A): STL, DAE, OBJ, glTF.
+bool isMeshFile(std::string_view path) {
+    const std::size_t dot = path.rfind('.');
+    if (dot == std::string_view::npos) {
+        return false;
+    }
+    std::string extension(path.substr(dot + 1));
+    for (char& c : extension) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return extension == "stl" || extension == "dae" || extension == "obj" || extension == "glb" ||
+           extension == "gltf";
 }
 
 void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGuiIO& io) {
@@ -1335,12 +2291,52 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
         } else if (event.kind == "text") {
             io.AddInputCharactersUTF8(event.text.c_str());
         } else if (event.kind == "keydown" || event.kind == "keyup") {
-            const ImGuiKey key = event.text == "enter"    ? ImGuiKey_Enter
-                                 : event.text == "tab"    ? ImGuiKey_Tab
-                                 : event.text == "escape" ? ImGuiKey_Escape
-                                                          : ImGuiKey_None;
+            std::string_view name = event.text;
+            bool ctrl = false;
+            bool shift = false;
+            for (bool more = true; more;) {
+                more = false;
+                if (name.starts_with("ctrl+")) {
+                    ctrl = more = true;
+                    name.remove_prefix(5);
+                } else if (name.starts_with("shift+")) {
+                    shift = more = true;
+                    name.remove_prefix(6);
+                }
+            }
+            ImGuiKey key = name == "enter"    ? ImGuiKey_Enter
+                           : name == "tab"    ? ImGuiKey_Tab
+                           : name == "escape" ? ImGuiKey_Escape
+                           : name == "space"  ? ImGuiKey_Space
+                           : name == "left"   ? ImGuiKey_LeftArrow
+                           : name == "right"  ? ImGuiKey_RightArrow
+                           : name == "up"     ? ImGuiKey_UpArrow
+                           : name == "down"   ? ImGuiKey_DownArrow
+                                              : ImGuiKey_None;
+            if (name == "delete") {
+                key = ImGuiKey_Delete;
+            }
+            if (name.size() >= 2 && name[0] == 'f' && name[1] >= '1' && name[1] <= '9') {
+                const int n = std::atoi(std::string(name.substr(1)).c_str());  // f2: rename
+                if (n >= 1 && n <= 12) {
+                    key = static_cast<ImGuiKey>(ImGuiKey_F1 + (n - 1));
+                }
+            }
+            if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
+                key = static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'a'));
+            }
+            if (name.size() == 1 && name[0] >= '0' && name[0] <= '9') {
+                key = static_cast<ImGuiKey>(ImGuiKey_0 + (name[0] - '0'));  // ctrl+4: Signals
+            }
             if (key != ImGuiKey_None) {
-                io.AddKeyEvent(key, event.kind == "keydown");
+                const bool down = event.kind == "keydown";
+                if (ctrl) {
+                    io.AddKeyEvent(ImGuiMod_Ctrl, down);
+                }
+                if (shift) {
+                    io.AddKeyEvent(ImGuiMod_Shift, down);
+                }
+                io.AddKeyEvent(key, down);
             }
         }
     }
@@ -1360,7 +2356,10 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
 
     ViewerClient client(endpoint);
     client.setSecurity(options.tlsCa, options.authToken);
-    if (!options.launcher && !options.startLocal) {
+    // The Builder works without a server (RFC 0016): with --workspace builder and no --connect
+    // nothing connects, and no scene is waited for.
+    const bool builderOffline = workspace == Workspace::Builder && options.endpoint.empty();
+    if (!options.launcher && !options.startLocal && !builderOffline) {
         client.start();
         if (!options.openPath.empty()) {
             openFile(client, options.openPath);
@@ -1377,6 +2376,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     std::uint32_t rendered = 0;
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
+        GpuTimer gpuTimer(*device);
+        ui.setGpuTimer(&gpuTimer);
         ui.setWorkspace(workspace);
         if (options.launcher || options.startLocal) {
             ui.showLauncher(1.0F);
@@ -1395,6 +2396,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
+        if (!options.builderOpen.empty()) {
+            ui.builderOpen(options.builderOpen);
+        }
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
             ImVec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
@@ -1417,12 +2421,49 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         auto nextFrame = Clock::time_point{};
         FrameProfile profile;
         std::uint32_t written = 0;
+        // FRAME:wait:WHAT holds the frame count at FRAME until the Builder is there (R6):
+        // connected (a Test is running), build (back in Build), idle (no tool runs), ready
+        // (the client is Ready on whatever server it follows). Frames
+        // are not timed, so a server start is waited for, not guessed in frames.
+        std::uint32_t applied = ~0U;
+        std::optional<Clock::time_point> waitingSince;
+        const auto holding = [&](std::uint32_t frame) {
+            for (const InputEvent& event : input) {
+                if (event.frame != frame || event.kind != "wait") {
+                    continue;
+                }
+                const BuilderSession& builder = ui.builderSession();
+                const bool done =
+                    event.text == "connected"
+                        ? builder.mode == BuilderSession::Mode::Testing &&
+                              client.connection().state == ConnectionState::Ready
+                    : event.text == "build" ? builder.mode == BuilderSession::Mode::Build
+                    : event.text == "ready" ? client.connection().state == ConnectionState::Ready
+                    : event.text == "idle"  ? !ui.builderBusy()
+                                            : true;
+                if (!done) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        double lastFrameMs = 0.0;
+        catchStopSignals();
+        bool closed = false;  // `--input N:close`, as the window's close button
         while ((recording ? written : rendered) < wanted) {
+            if (gStopSignal != 0) {
+                std::fprintf(stderr, "lagrange_viewer: stopped by a signal\n");
+                break;
+            }
+            if (closed || ui.takeBuilderClose()) {
+                std::fprintf(stderr, "lagrange_viewer: closed at frame %u\n", rendered);
+                break;
+            }
             // With --open, wait for the requested file's scene, not the one served before it.
             const auto current = client.scene();
             // The launcher needs no scene: it is what is shown before connecting.
             const bool haveScene =
-                options.launcher ||
+                options.launcher || builderOffline ||
                 (current != nullptr &&
                  (options.openPath.empty() || client.notice().text.rfind("Loading", 0) != 0));
             if (!haveScene && Clock::now() > deadline) {
@@ -1434,17 +2475,48 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             }
             const auto frameStart = Clock::now();
             ui.prepare();
-            applyInput(input, rendered, io);
+            if (applied != rendered) {
+                applied = rendered;  // a held frame applies its input once
+                applyInput(input, rendered, io);
+                for (const InputEvent& event : input) {
+                    if (event.frame == rendered && event.kind == "select") {
+                        ui.builderSelect(event.text);
+                    }
+                    // What a dropped file, the Save as… dialog and a template card do.
+                    if (event.frame == rendered && event.kind == "open") {
+                        ui.builderOpenRequest(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "saveas") {
+                        ui.builderSaveAsChosen(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "close" && ui.builderMayClose()) {
+                        closed = true;  // what the window's close button does (QA4 M1)
+                    }
+                    if (event.frame == rendered && event.kind == "template") {
+                        ui.builderTemplateRequest(event.text);
+                    }
+                    if (event.frame == rendered && event.kind == "world") {
+                        ui.builderTestWorld(event.text);  // Test ▾ → A world file → Browse…
+                    }
+                    if (event.frame == rendered && event.kind == "spawn" &&
+                        !ui.builderTestSpawn(event.text)) {
+                        std::fprintf(stderr, "--input: spawn needs X,Y,Z,HEADING\n");
+                    }
+                }
+            }
             io.DeltaTime = 1.0F / 60.0F;
             ImGui_ImplVulkan_NewFrame();
             ImGui::NewFrame();
-            ui.build(0.0F);
+            // The frame time shown is the last frame's work (UI, recording, GPU submit and wait),
+            // without the loop's pause between frames: headless frames are not paced.
+            ui.build(static_cast<float>(lastFrameMs));
             ImGui::Render();
             const double uiMs = msSince(frameStart);
             double recordMs = 0.0;
             const auto submitStart = Clock::now();
             device->submitAndWait([&](VkCommandBuffer commands) {
                 const auto recordStart = Clock::now();
+                gpuTimer.begin(commands);
                 ui.renderScene(commands);
                 gpu::transitionImage(
                     commands, target.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1453,10 +2525,26 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 beginUiPass(commands, target.view, extent);
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
                 vkCmdEndRendering(commands);
+                gpuTimer.mark(commands, GpuTimer::Panels);
                 recordMs = msSince(recordStart);
             });
+            gpuTimer.cpu(uiMs, recordMs, msSince(submitStart) - recordMs, 0.0);
             first = false;
-            if (haveScene) {
+            const bool hold = haveScene && holding(rendered);
+            if (hold) {
+                if (!waitingSince) {
+                    waitingSince = Clock::now();
+                } else if (Clock::now() - *waitingSince >
+                           std::chrono::milliseconds(std::max(options.waitMs, 30'000U))) {
+                    std::fprintf(stderr, "error: waited too long at frame %u for --input's wait\n",
+                                 rendered);
+                    exitCode = 4;
+                    break;
+                }
+            } else {
+                waitingSince.reset();
+            }
+            if (haveScene && !hold) {
                 profile.add(0, uiMs);
                 profile.add(1, recordMs);
                 profile.add(2, msSince(submitStart) - recordMs);
@@ -1479,9 +2567,26 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     ++written;
                 }
             }
+            lastFrameMs = msSince(frameStart);
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
+        if (exitCode == 0 && !options.builderSave.empty() && !options.builderOpen.empty() &&
+            ui.builderSession().opened == 0) {
+            // QA F15: --builder-open did not open (or a xacro is still expanding): the
+            // document is not that file, so nothing is written over the target.
+            const auto& files = ui.builderSession().problems.files;
+            std::fprintf(stderr, "error: not saved: %s\n",
+                         files.empty() ? ("cannot open " + options.builderOpen).c_str()
+                                       : files.back().message.c_str());
+            exitCode = 5;
+        } else if (exitCode == 0 && !options.builderSave.empty() &&
+                   !ui.builderSave(options.builderSave)) {
+            const auto& files = ui.builderSession().problems.files;
+            std::fprintf(stderr, "error: %s\n",
+                         files.empty() ? "cannot save" : files.back().message.c_str());
+            exitCode = 5;
+        }
         profile.print("headless");
         if (profile.enabled()) {
             std::fprintf(stderr, "profile headless: 3D view drawn %llu times in %u frames\n",
@@ -1498,8 +2603,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
 
         // What the server runs (applied), and what it says about the profile being edited.
         std::string enabledDomains;
-        if (const auto profile = client.profile()) {
-            for (const DomainInfo& domain : profile->domains) {
+        if (const auto serverProfile = client.profile()) {
+            for (const DomainInfo& domain : serverProfile->domains) {
                 if (domain.enabled) {
                     enabledDomains += enabledDomains.empty() ? "" : ",";
                     enabledDomains += domain.name;
@@ -1527,13 +2632,17 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"deltas\": %llu, \"resyncs\": %llu, "
             "\"prims\": %zu, \"meshes\": %zu, \"draw_calls\": %u, \"sim_time_ns\": %lld, "
             "\"signal_blocks\": %llu, \"samples\": %llu, \"invalid_runs\": %llu, "
-            "\"dropped_samples\": %llu, "
+            "\"dropped_samples\": %llu, \"sensor_frames\": %llu, \"field_messages\": %llu, "
+            "\"world_messages\": %llu, \"ros_graphs\": %llu, \"streamed_while_quiet\": %llu, "
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s, "
             "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\", "
             "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
-            "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d}\n",
+            "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
+            "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s, "
+            "\"radar_detections\": %zu, \"viewer_gpu\": %s, \"replay_compare\": %s, \"signals\": "
+            "%s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -1544,7 +2653,12 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             static_cast<unsigned long long>(stats.signalBlocks),
             static_cast<unsigned long long>(stats.samples),
             static_cast<unsigned long long>(stats.invalidRuns),
-            static_cast<unsigned long long>(stats.droppedSamples), device->info().name.c_str(),
+            static_cast<unsigned long long>(stats.droppedSamples),
+            static_cast<unsigned long long>(stats.sensorFrames),
+            static_cast<unsigned long long>(stats.fieldMessages),
+            static_cast<unsigned long long>(stats.worldMessages),
+            static_cast<unsigned long long>(stats.rosGraphs),
+            static_cast<unsigned long long>(stats.streamedWhileQuiet), device->info().name.c_str(),
             static_cast<int>(device->tier()), device->validationErrorCount(),
             client.connection().state == ConnectionState::Ready ? "true" : "false", profileVerdict,
             ui.profileSession().draft().changedLineCount(), enabledDomains.c_str(),
@@ -1557,7 +2671,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.rosGraph() ? client.rosGraph()->nodes.size() : std::size_t{0},
             client.world() ? client.world()->tiles.size() : std::size_t{0},
             client.world() ? client.world()->agents.size() : std::size_t{0},
-            static_cast<int>(ui.shading()));
+            static_cast<int>(ui.shading()), toString(ui.workspace()),
+            ui.launcherActive() ? "true" : "false", visibleWindowsJson().c_str(),
+            ui.builderReport().c_str(), ui.radarDetectionsDrawn(),
+            viewerGpuJson(gpuTimer.timings()).c_str(), replayCompareJson().c_str(),
+            signalsTabsReport().c_str());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
@@ -1721,8 +2839,10 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
     // Without a server named on the command line the viewer starts on the launcher, and the
     // client is started when the user picks a server there (design: 01-launcher).
-    const bool launcher = options.launcher || options.startLocal ||
-                          (options.endpoint.empty() && options.openPath.empty());
+    // --workspace builder opens the Builder, which needs no server (RFC 0016).
+    const bool launcher =
+        options.launcher || options.startLocal ||
+        (options.endpoint.empty() && options.openPath.empty() && workspace != Workspace::Builder);
     ViewerClient client(endpoint);
     client.setSecurity(options.tlsCa, options.authToken);
     if (!launcher) {
@@ -1753,8 +2873,11 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         Ui ui(*device, client, swapchain.format,
               static_cast<std::uint32_t>(swapchain.images.size()), dpiScale, true,
               options.scopeSignals);
+        GpuTimer gpuTimer(*device);
+        ui.setGpuTimer(&gpuTimer);
         ImGui_ImplSDL3_InitForVulkan(window);
         ui.setCanOpenFiles(true);
+        ui.setOpensPages(true);
         if (launcher) {
             ui.showLauncher(dpiScale);
         }
@@ -1776,6 +2899,10 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         struct Chosen {
             std::mutex mutex;
             std::vector<std::string> paths;
+            std::vector<std::string> builderOpen;  // the Builder's Open… and Save as… dialogs
+            std::vector<std::string> builderSave;
+            std::vector<std::string> builderMesh;   // Add → Mesh… → Browse…
+            std::vector<std::string> builderWorld;  // Test ▾ → A world file → Browse…
         } chosen;
 
         bool running = true;
@@ -1785,21 +2912,34 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         auto last = Clock::now();
         FrameProfile profile;
         auto profiled = last;
+        catchStopSignals();
         while (running) {
+            if (gStopSignal != 0) {
+                break;  // QA4 L2: the destructors stop the test server
+            }
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 ImGui_ImplSDL3_ProcessEvent(&event);
-                if (event.type == SDL_EVENT_QUIT ||
-                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                     event.window.windowID == SDL_GetWindowID(window))) {
-                    running = false;
+                if ((event.type == SDL_EVENT_QUIT ||
+                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                      event.window.windowID == SDL_GetWindowID(window))) &&
+                    ui.builderMayClose()) {
+                    running = false;  // QA4 M1: unsaved Builder edits ask first
                 }
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                     rebuild = true;
                 }
                 if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr) {
-                    // A file dropped on the window: opened now, or after connecting.
-                    if (ui.launcherActive()) {
+                    // A file dropped on the window: opened now, or after connecting; a robot
+                    // dropped on the Builder opens there.
+                    const std::string_view dropped = event.drop.data;
+                    if (ui.workspace() == Workspace::Builder && !ui.launcherActive() &&
+                        (dropped.ends_with(".urdf") || dropped.ends_with(".xacro"))) {
+                        ui.builderOpenRequest(event.drop.data);
+                    } else if (ui.workspace() == Workspace::Builder && !ui.launcherActive() &&
+                               isMeshFile(dropped)) {
+                        ui.builderAddMesh(event.drop.data);  // a mesh link on the selection
+                    } else if (ui.launcherActive()) {
                         ui.setOpenTarget(event.drop.data);
                     } else {
                         openFile(client, event.drop.data);
@@ -1813,7 +2953,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
             const auto waitStart = Clock::now();
             vkWaitForFences(device->device(), 1, &frameDone, VK_TRUE, UINT64_MAX);
-            profile.add(2, msSince(waitStart));
+            const double waitMs = msSince(waitStart);
+            profile.add(2, waitMs);
             if (rebuild) {
                 vkDeviceWaitIdle(device->device());
                 if (!createSwapchain(*device, window, swapchain)) {
@@ -1830,7 +2971,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             ImGui::NewFrame();
             ui.build(frameMs);
             ImGui::Render();
-            profile.add(0, msSince(uiStart));
+            const double uiMs = msSince(uiStart);
+            profile.add(0, uiMs);
             if (ui.takeOpenFileRequest()) {
                 static const SDL_DialogFileFilter kFilters[] = {
                     {"Robots and recordings", "urdf;sdf;xml;usd;usda;usdc;mcap"},
@@ -1845,8 +2987,79 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     },
                     &chosen, window, kFilters, 2, nullptr, false);
             }
+            if (ui.takeBuilderOpenDialog()) {
+                static const SDL_DialogFileFilter kRobots[] = {{"Robots", "urdf;xacro"},
+                                                               {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderOpen.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kRobots, 2, nullptr, false);
+            }
+            if (ui.takeBuilderMeshDialog()) {
+                static const SDL_DialogFileFilter kMeshes[] = {
+                    {"Meshes", "stl;STL;dae;DAE;obj;OBJ;glb;gltf"}, {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderMesh.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kMeshes, 2, nullptr, false);
+            }
+            if (ui.takeBuilderWorldDialog()) {
+                static const SDL_DialogFileFilter kWorlds[] = {
+                    {"Worlds", "usda;usd;usdc;sdf;world;urdf"}, {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderWorld.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kWorlds, 2, nullptr, false);
+            }
+            if (ui.takeBuilderSaveAsDialog()) {
+                static const SDL_DialogFileFilter kUrdf[] = {{"URDF", "urdf"}};
+                SDL_ShowSaveFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        const std::lock_guard lock(result->mutex);
+                        // Closed without a choice (or an error): an empty entry says so.
+                        result->builderSave.emplace_back(
+                            files != nullptr && files[0] != nullptr ? files[0] : "");
+                    },
+                    &chosen, window, kUrdf, 1, nullptr);
+            }
             {
                 const std::lock_guard lock(chosen.mutex);
+                for (const std::string& path : chosen.builderOpen) {
+                    ui.builderOpenRequest(path);
+                }
+                chosen.builderOpen.clear();
+                for (const std::string& path : chosen.builderMesh) {
+                    ui.builderAddMesh(path);
+                }
+                chosen.builderMesh.clear();
+                for (const std::string& path : chosen.builderWorld) {
+                    ui.builderTestWorld(path);
+                }
+                chosen.builderWorld.clear();
+                for (const std::string& path : chosen.builderSave) {
+                    if (path.empty()) {
+                        ui.builderSaveAsCancelled();
+                    } else {
+                        ui.builderSaveAsChosen(path);  // ".urdf" added before asking (L7)
+                    }
+                }
+                chosen.builderSave.clear();
                 for (const std::string& path : chosen.paths) {
                     if (ui.launcherActive()) {
                         ui.setOpenTarget(path);
@@ -1876,6 +3089,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             vkBeginCommandBuffer(commands, &beginInfo);
+            gpuTimer.begin(commands);
             ui.renderScene(commands);
             gpu::transitionImage(commands, swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
@@ -1883,11 +3097,13 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             beginUiPass(commands, swapchain.views[imageIndex], swapchain.extent);
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
             vkCmdEndRendering(commands);
+            gpuTimer.mark(commands, GpuTimer::Panels);
             gpu::transitionImage(commands, swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
             vkEndCommandBuffer(commands);
-            profile.add(1, msSince(recordStart));
+            const double recordMs = msSince(recordStart);
+            profile.add(1, recordMs);
 
             VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
             waitInfo.semaphore = acquired;
@@ -1914,13 +3130,18 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             present.pImageIndices = &imageIndex;
             const auto presentStart = Clock::now();
             const VkResult presented = vkQueuePresentKHR(device->queue(), &present);
-            profile.add(3, msSince(presentStart));
+            const double presentMs = msSince(presentStart);
+            profile.add(3, presentMs);
+            gpuTimer.cpu(uiMs, recordMs, waitMs, presentMs);
             if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
                 rebuild = true;
             }
 
             if (options.frames != 0 && ++presentedFrames >= options.frames) {
                 running = false;  // smoke-test mode
+            }
+            if (ui.takeBuilderClose()) {
+                running = false;  // the unsaved-changes prompt let the window close (QA4 M1)
             }
             const auto now = Clock::now();
             frameMs = std::chrono::duration<float, std::milli>(now - last).count();
@@ -1964,7 +3185,9 @@ int runViewer(const Options& options) {
     if (!options.workspace.empty()) {
         const std::optional<Workspace> parsed = parseWorkspace(options.workspace);
         if (!parsed) {
-            std::fprintf(stderr, "error: unknown workspace '%s' (scene, domains, signals)\n",
+            std::fprintf(stderr,
+                         "error: unknown workspace '%s' (scene, domains, electrical, signals, "
+                         "sensors, environment, replay, ros2, world, performance, builder)\n",
                          options.workspace.c_str());
             return 2;
         }
