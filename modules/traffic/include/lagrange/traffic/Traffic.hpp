@@ -41,7 +41,21 @@ struct LaneGraph {
     std::vector<Crossing> crossings;
     /// Where walkers go: per sidewalk lane, the sidewalk lanes that touch its start and its end.
     std::vector<std::array<std::vector<std::size_t>, 2>> walkLinks;
+    /// Per lane, the lane of the same kind beside it on its road section (OpenDRIVE lane id one
+    /// further in or out), for the road's bank; none for a lane alone.
+    std::vector<std::optional<std::size_t>> beside;
+    /// Whether any lane leaves the level (its centre lines' heights differ): agents then tilt.
+    bool sloped{false};
 };
+
+/// A vehicle's tilt on its lane `along` metres in: roll about its direction of travel (rad,
+/// positive raising its left), from the height of the lane beside it (a banked road), and
+/// pitch (rad, positive nose down, about its left axis) from its centre line's slope.
+struct Tilt {
+    double roll{0.0};
+    double pitch{0.0};
+};
+[[nodiscard]] Tilt tiltAt(const LaneGraph& graph, std::size_t lane, double along);
 
 /// The network of `world`'s RoadLaneAPI_1 lanes, with signal groups: per junction, approaches
 /// facing each other share a group.
@@ -193,6 +207,7 @@ private:
         SignalId poseCommand;
         Vec3 position{};
         double yaw{0.0};
+        Tilt tilt;  // on a sloped or banked road
     };
     struct Ego {
         SignalId pose, twist;

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1518,6 +1519,66 @@ TEST(DemoDrive, TheSedanBacksAwayFromWhatHoldsItAndDrivesOn) {
     }
     EXPECT_LE(longestHeld, 2.5);     // s: held 2 s, then it backs away
     EXPECT_GT(travelledLate, 20.0);  // m in the last 10 s: on its circle at 3 m/s
+}
+
+// The sedan on a banked, raised road (assets/worlds/banked_ring: a 5 m ring 1.5 m up, 5° of
+// superelevation falling to the inside): its demo circle is the ring's reference line. Its
+// raycast suspension stands on the road's slabs, so it stays on the banked surface at its ride
+// height, rolled with the bank, and never drops to the ground below.
+TEST(BankedRing, TheSedanDrivesTheBankedRingOnItsSurface) {
+    constexpr double kBank = -0.0872664626;  // rad, falling to the left of s (the inside)
+    constexpr double kElevation = 1.5;       // m
+    constexpr double kSurface = 0.01;        // m, ConvertOptions::surfaceHeight
+    constexpr double kRideHeight = 0.316;    // m, the base above the ground at rest (flat test)
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+    options.worldPath = LAGRANGE_TEST_BANKED_RING_USDA;
+    options.ros = false;
+    options.trafficVehicles = 0;
+    options.trafficPedestrians = 0;
+    options.spawn.position = {5.0, 0.0, kElevation + 0.4};
+    options.spawn.orientation = {std::cos(std::numbers::pi / 4.0), 0.0, 0.0,
+                                 std::sin(std::numbers::pi / 4.0)};  // facing +y, along s
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    double worstHeight = 0.0;
+    double inner = INFINITY;  // m, the nearest and farthest it came from the ring's centre
+    double outer = 0.0;
+    double worstRoll = 0.0;
+    double travelled = 0.0;
+    std::vector<double> last;
+    for (std::int64_t k = 1; k <= 40; ++k) {  // 20 s by half seconds
+        ASSERT_TRUE(server.stepUntil(SimTime{k * 500'000'000}).ok());
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        if (!last.empty()) {
+            travelled += std::hypot(pose[0] - last[0], pose[1] - last[1]);
+        }
+        last = pose;
+        if (k < 12) {
+            continue;  // 6 s to settle and come up to speed
+        }
+        const double r = std::hypot(pose[0], pose[1]);
+        // The surface r from the centre: (5 − r) to the left of s, horizontally.
+        const double surface = kElevation + kSurface + (5.0 - r) * std::tan(kBank);
+        worstHeight = std::max(worstHeight, std::abs(pose[2] - surface - kRideHeight));
+        inner = std::min(inner, r);
+        outer = std::max(outer, r);
+        const double w = pose[3];
+        const double x = pose[4];
+        const double y = pose[5];
+        const double z = pose[6];
+        const double roll = std::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
+        worstRoll = std::max(worstRoll, std::abs(roll - kBank));
+    }
+    EXPECT_LT(worstHeight, 0.05) << "m off its ride height above the banked surface";
+    // On the driving lanes (radius 1.5 m to 8.5 m), a car's half width (1 m) inside their edges.
+    EXPECT_GT(inner, 2.5);
+    EXPECT_LT(outer, 7.5);
+    EXPECT_LT(worstRoll, 0.03) << "rad off the bank";
+    EXPECT_NEAR(server.read("vehicle/sedan/speed").at(0), 3.0, 0.3);
+    EXPECT_GT(travelled, 40.0);  // m: about 3 m/s once up to speed
+    std::printf("banked ring: worst height %.4f m, radius %.3f to %.3f m, roll %.4f rad, %.1f m\n",
+                worstHeight, inner, outer, worstRoll, travelled);
 }
 
 TEST_F(ServerTest, SeekingASimulationIsRefused) {

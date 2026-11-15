@@ -72,6 +72,24 @@ std::array<double, 4> yawQuat(double yaw) {
     return {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
 }
 
+/// Yaw about z, then pitch about the turned y, then roll about the turned x (w, x, y, z).
+std::array<double, 4> attitude(double yaw, const Tilt& tilt) {
+    if (tilt.roll == 0.0 && tilt.pitch == 0.0) {
+        return yawQuat(yaw);
+    }
+    const double cy = std::cos(yaw / 2.0);
+    const double sy = std::sin(yaw / 2.0);
+    const double cp = std::cos(tilt.pitch / 2.0);
+    const double sp = std::sin(tilt.pitch / 2.0);
+    const double cr = std::cos(tilt.roll / 2.0);
+    const double sr = std::sin(tilt.roll / 2.0);
+    return {cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy};
+}
+
+constexpr double kTiltBase = 1.0;   // m, the centre-line span the pitch is taken over
+constexpr double kBesideMin = 0.5;  // m, a lane nearer than this beside gives no bank
+
 }  // namespace
 
 /// Whether two polylines cross (or touch), in the plane.
@@ -93,9 +111,59 @@ bool crosses(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
     return false;
 }
 
+Tilt tiltAt(const LaneGraph& graph, std::size_t index, double along) {
+    Tilt tilt;
+    if (!graph.sloped) {
+        return tilt;
+    }
+    const Lane& lane = graph.lanes[index];
+    const auto [p, yaw] = lane.at(along);
+    const Vec3 back = lane.at(along - kTiltBase / 2.0).first;
+    const Vec3 ahead = lane.at(along + kTiltBase / 2.0).first;
+    const double run = distance2d(ahead, back);
+    if (run > 1e-6) {
+        tilt.pitch = -std::atan2(ahead[2] - back[2], run);
+    }
+    if (graph.beside.size() > index && graph.beside[index]) {
+        const Lane& other = graph.lanes[*graph.beside[index]];
+        const Vec3 q = other.at(other.project(p).first).first;
+        // Across this lane's direction, positive to its left.
+        const double lateral = -std::sin(yaw) * (q[0] - p[0]) + std::cos(yaw) * (q[1] - p[1]);
+        if (std::abs(lateral) > kBesideMin) {
+            tilt.roll = std::atan((q[2] - p[2]) / lateral);
+        }
+    }
+    return tilt;
+}
+
 LaneGraph lanesOf(const WorldView& world) {
     LaneGraph g;
     g.lanes = roadLanesOf(world).lanes;
+    // The lane beside each, for the bank: the same road section, kind and junction, the next
+    // OpenDRIVE lane id inwards (across the centre: -1 and 1), else outwards.
+    g.beside.assign(g.lanes.size(), std::nullopt);
+    double low = INFINITY;
+    double high = -INFINITY;
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        const Lane& a = g.lanes[i];
+        for (const Vec3& p : a.points) {
+            low = std::min(low, p[2]);
+            high = std::max(high, p[2]);
+        }
+        const int in =
+            a.lane > 0 ? (a.lane == 1 ? -1 : a.lane - 1) : (a.lane == -1 ? 1 : a.lane + 1);
+        const int out = a.lane > 0 ? a.lane + 1 : a.lane - 1;
+        for (const int want : {in, out}) {
+            for (std::size_t k = 0; k < g.lanes.size() && !g.beside[i]; ++k) {
+                const Lane& b = g.lanes[k];
+                if (k != i && b.road == a.road && b.lane == want && b.sStart == a.sStart &&
+                    b.sidewalk == a.sidewalk && b.junction == a.junction) {
+                    g.beside[i] = k;
+                }
+            }
+        }
+    }
+    g.sloped = high - low > 1e-6;
     // Junctions: driving lanes of a junction leave the same lane, end on the same lane, or cross.
     // (Not "the same road": on a road network a road joins two junctions.)
     // Each approach (a lane into a junction) gets a signal group by its heading at the stop line.
@@ -1457,6 +1525,8 @@ void Traffic::place(Agent& a) {
     }
     a.position = {p[0], p[1], p[2] + a.height / 2.0};
     a.yaw = yaw;
+    // Vehicles lie on the road (its slope and bank); people stand upright.
+    a.tilt = a.pedestrian ? Tilt{} : tiltAt(graph_, a.lane, a.s);
 }
 
 bool Traffic::respawn(Agent& a, std::size_t agentIndex) {
@@ -1817,7 +1887,7 @@ void Traffic::write(SignalBus& bus, double t) {
         if (zero_) {
             pose = {a.position[0], a.position[1], kHidden, 1.0, 0.0, 0.0, 0.0};
         } else {
-            const auto q = yawQuat(a.yaw);
+            const auto q = attitude(a.yaw, a.tilt);
             pose = {a.position[0], a.position[1], a.position[2], q[0], q[1], q[2], q[3]};
         }
         bus.writeN(a.poseCommand, pose);

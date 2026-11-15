@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A banked ring 1.5 m up (docs/design/formats.md §3.11): its reference line a circle of 5 m
+     radius round the origin, counter-clockwise, the sedan's demo circle; 5° of superelevation
+     falling to the inside (negative: to the left of s); a driving lane each side of the
+     reference line and a 2 m sidewalk with a 0.15 m kerb outside. Converted with
+       ros2 run lagrange_opendrive lagrange_opendrive_import banked_ring.xodr banked_ring.usda
+     and driven by server/test/test_server.cpp (BankedRing). -->
+<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="banked_ring" version="1"/>
+  <road id="1" name="ring" length="31.4159265358979" junction="-1">
+    <link>
+      <predecessor elementType="road" elementId="1" contactPoint="end"/>
+      <successor elementType="road" elementId="1" contactPoint="start"/>
+    </link>
+    <type s="0" type="town"><speed max="30" unit="km/h"/></type>
+    <planView>
+      <geometry s="0" x="5" y="0" hdg="1.5707963267949" length="31.4159265358979">
+        <arc curvature="0.2"/>
+      </geometry>
+    </planView>
+    <elevationProfile><elevation s="0" a="1.5" b="0" c="0" d="0"/></elevationProfile>
+    <lateralProfile><superelevation s="0" a="-0.0872664626" b="0" c="0" d="0"/></lateralProfile>
+    <lanes>
+      <laneSection s="0">
+        <left>
+          <lane id="1" type="driving">
+            <link><predecessor id="1"/><successor id="1"/></link>
+            <width sOffset="0" a="3.5" b="0" c="0" d="0"/>
+            <roadMark sOffset="0" type="solid" color="standard" width="0.12"/>
+          </lane>
+        </left>
+        <center>
+          <lane id="0" type="none"><roadMark sOffset="0" type="broken" color="standard" width="0.12"/></lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving">
+            <link><predecessor id="-1"/><successor id="-1"/></link>
+            <width sOffset="0" a="3.5" b="0" c="0" d="0"/>
+            <roadMark sOffset="0" type="solid" color="standard" width="0.12"/>
+          </lane>
+          <lane id="-2" type="sidewalk">
+            <link><predecessor id="-2"/><successor id="-2"/></link>
+            <width sOffset="0" a="2" b="0" c="0" d="0"/>
+            <height sOffset="0" inner="0.15" outer="0.15"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>

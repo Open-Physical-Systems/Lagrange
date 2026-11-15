@@ -708,14 +708,34 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
 **OpenDRIVE import** (v0.6). An own reader covers the subset that carries geometry and lanes:
 - **Reference lines:** line, arc, spiral (clothoid, by Gauss–Legendre integration), poly3 and
   paramPoly3 (both by arc length).
-- **Roads:** elevation, lane offset, lane sections with width polynomials, road marks.
+- **Roads:** elevation, superelevation (`<lateralProfile><superelevation>`, after 1.x), lane
+  offset, lane sections with width polynomials, lane heights (`<height>`) and `@level`, road
+  marks.
 - **Links:** lane, road and junction links.
 
-Superelevation, lane heights, objects and signals are not read yet. Road surfaces become meshes
-per lane type, road marks become thin meshes (broken marks are 3 m on and 6 m off,
-illustrative), and every driving, biking, parking or sidewalk lane becomes a `RoadLaneAPI_1`
-prim with its links. The surfaces have no colliders: they lie 1 cm above the ground plane that
-the loader adds, so roads with elevation are drawn but not yet driven on.
+**Cross section.** Superelevation is the roll of the cross section about the reference line, a
+cubic in s (rad), positive falling to the right (ASAM OpenDRIVE 1.8 §10.5.2). t is measured
+along the banked t axis: a point at t lies t·cos φ to the side of the reference line and
+t·sin φ above its elevation, so a lane keeps its width and its projected width shrinks. A lane's
+`<height>` raises its surface along h, the banked cross section's normal (§11.6.3), linear from
+`inner` at its inner border to `outer` at its outer one (the standard gives only the two border
+values); a sidewalk with `inner="0.15" outer="0.15"` is a kerb, its face drawn where it meets
+the lane inside it. A lane with `@level="true"` (and every lane outside it, as the standard
+requires) stays level at the height of the first level lane's inner border. Road surfaces, kerb
+faces, road marks and the lanes' `lane:centreLine` (its z) all follow the cross section, and the
+meshes' normals are the surface's.
+
+Objects and signals are not read yet. Road surfaces become meshes per lane type, road marks
+become thin meshes (broken marks are 3 m on and 6 m off, illustrative), and every driving,
+biking, parking or sidewalk lane becomes a `RoadLaneAPI_1` prim with its links. A road on the
+ground (no elevation, superelevation or lane height) has no colliders: its surfaces lie 1 cm
+above the ground plane that the loader adds, and its import is unchanged. A raised road (any of
+those) also collides: each drawn lane gets a convex slab every 2 m along s, its top the drawn
+surface and 0.3 m thick (`ConvertOptions::colliderStep`, `colliderDepth`), written under
+`/<root>/colliders`, so cars stand on banked curves, ramps and bridges and traffic sees a ramp
+in its lanes' heights. A raised road below z = 0 is under the ground plane, which is hit first:
+lift such a network with its elevation. Sample: `assets/worlds/banked_ring` (a 5 m ring 1.5 m
+up, 5° of bank falling to the inside, a 0.15 m kerb).
 
 ### 3.12 `schemas/tether/schema.usda`
 

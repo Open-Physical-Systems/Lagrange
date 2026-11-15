@@ -90,6 +90,11 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
   - Into a junction they stop on red and yellow, and wait while a crossing or merging junction
     lane is taken or a vehicle nearer its line is about to take one (first come, first served).
   - No priority rules.
+  - On a raised road (formats.md §3.11: elevation, superelevation, lane heights) they ride at
+    their lane's height, pitch with its centre line (over 1 m) and roll with the height of the
+    lane of the same kind beside them on the same road section: on a banked road the bank as seen
+    along their way (`tiltAt`, `test_traffic` BankedRoad). A lane with none beside it (or only a
+    sidewalk) does not roll them. On a level network the attitude stays yaw only.
 - **Pedestrians.** They walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends,
   and step aside from each other and from the robots by a social force (Helbing and Molnár 1995,
   A = 2 m/s², B = 0.3 m). On a world with crossings they are walking people instead (§8.2).
