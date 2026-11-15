@@ -1,0 +1,52 @@
+<mujoco model="rimless">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="slab" type="box" size="30 2 0.05" pos="0 0 5.0" euler="0 0.06981317007977318 0" friction="1.5"/>
+    <body name="hub" pos="0.009999 0 5.555536">
+      <freejoint name="hub_free"/>
+      <inertial pos="0 0 0" mass="10.0" diaginertia="0.01 0.01 0.01"/>
+      <geom type="cylinder" fromto="0 -0.15 0 0 0.15 0" size="0.01" contype="0" conaffinity="0" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 -0.009999 -0.15 -0.499900" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.009999 -0.15 -0.499900" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 0.285744 -0.15 -0.410305" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.285744 -0.15 -0.410305" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 0.472343 -0.15 -0.163988" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.472343 -0.15 -0.163988" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 0.478523 -0.15 0.144968" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.478523 -0.15 0.144968" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 0.301923 -0.15 0.398550" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.301923 -0.15 0.398550" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 0.009999 -0.15 0.499900" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.009999 -0.15 0.499900" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 -0.285744 -0.15 0.410305" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.285744 -0.15 0.410305" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 -0.472343 -0.15 0.163988" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.472343 -0.15 0.163988" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 -0.478523 -0.15 -0.144968" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.478523 -0.15 -0.144968" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 -0.15 0 -0.301923 -0.15 -0.398550" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.301923 -0.15 -0.398550" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 -0.009999 0.15 -0.499900" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.009999 0.15 -0.499900" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 0.285744 0.15 -0.410305" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.285744 0.15 -0.410305" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 0.472343 0.15 -0.163988" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.472343 0.15 -0.163988" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 0.478523 0.15 0.144968" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.478523 0.15 0.144968" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 0.301923 0.15 0.398550" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.301923 0.15 0.398550" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 0.009999 0.15 0.499900" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="0.009999 0.15 0.499900" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 -0.285744 0.15 0.410305" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.285744 0.15 0.410305" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 -0.472343 0.15 0.163988" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.472343 0.15 0.163988" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 -0.478523 0.15 -0.144968" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.478523 0.15 -0.144968" friction="1.5" mass="0"/>
+      <geom type="capsule" fromto="0 0.15 0 -0.301923 0.15 -0.398550" size="0.004" contype="0" conaffinity="0" mass="0"/>
+      <geom type="sphere" size="0.005" pos="-0.301923 0.15 -0.398550" friction="1.5" mass="0"/>
+    </body>
+  </worldbody>
+</mujoco>

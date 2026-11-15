@@ -1,0 +1,12 @@
+<mujoco model="box_slope_10">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="slab" type="box" size="6.0 3.0 0.05" pos="0 0 5.0" euler="0 0.17453292519943295 0" friction="0.3"/>
+    <body name="box" pos="0.026134050738873017 0.0 5.148213566828337" euler="0 0.17453292519943295 0">
+      <freejoint name="box_free"/>
+      <inertial pos="0 0 0" mass="1" diaginertia="0.006666666666666668 0.006666666666666668 0.006666666666666668"/>
+      <geom type="box" size="0.1 0.1 0.1" friction="0.3" mass="0"/>
+    </body>
+  </worldbody>
+</mujoco>

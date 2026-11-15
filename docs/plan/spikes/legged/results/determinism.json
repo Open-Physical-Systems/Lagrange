@@ -1,0 +1,16 @@
+{
+  "mujoco": {
+    "identical": true,
+    "checks": 20
+  },
+  "jolt": {
+    "identical": true,
+    "checks": 20
+  },
+  "_meta": {
+    "wall_s": 0.2616647179820575,
+    "load_start": 7.79,
+    "load_end": 7.79,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-legspike/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "mujoco 0.5 ms": {
+    "backend": "mujoco",
+    "dt": 0.0005,
+    "impact_speed_closed_mps": 1.4007141035914503,
+    "peak_force_over_mg": 11.742693209890852,
+    "peak_penetration_mm": 13.119525114587173,
+    "rest_penetration_mm": 1.3100810109222607,
+    "settle_to_2pct_s": 0.15749999999999997,
+    "energy_lost_J": 15.252336393789008,
+    "drop_energy_J": 15.107400000000002
+  },
+  "mujoco 1 ms": {
+    "backend": "mujoco",
+    "dt": 0.001,
+    "impact_speed_closed_mps": 1.4007141035914503,
+    "peak_force_over_mg": 12.077450801753693,
+    "peak_penetration_mm": 12.881458253602686,
+    "rest_penetration_mm": 1.3100810021283507,
+    "settle_to_2pct_s": 0.15599999999999997,
+    "energy_lost_J": 15.199353607605737,
+    "drop_energy_J": 15.107400000000002
+  },
+  "mujoco 2 ms": {
+    "backend": "mujoco",
+    "dt": 0.002,
+    "impact_speed_closed_mps": 1.4007141035914503,
+    "peak_force_over_mg": 11.006214883258897,
+    "peak_penetration_mm": 11.819106281629889,
+    "rest_penetration_mm": 1.3100809965406535,
+    "settle_to_2pct_s": 0.15399999999999997,
+    "energy_lost_J": 15.09487007299137,
+    "drop_energy_J": 15.107400000000002
+  },
+  "jolt 0.5 ms": {
+    "backend": "jolt",
+    "dt": 0.0005,
+    "impact_speed_closed_mps": 1.4007141035914503,
+    "peak_force_over_mg": 129.69730220709684,
+    "peak_penetration_mm": 0.16561746597291288,
+    "rest_penetration_mm": 0.0020777469974613922,
+    "settle_to_2pct_s": 0.1315,
+    "energy_lost_J": 15.05475365675671,
+    "drop_energy_J": 15.107400000000002
+  },
+  "jolt 1 ms": {
+    "backend": "jolt",
+    "dt": 0.001,
+    "impact_speed_closed_mps": 1.4007141035914503,
+    "peak_force_over_mg": 64.25888813559084,
+    "peak_penetration_mm": 0.3220945596695071,
+    "rest_penetration_mm": 0.00992892289623783,
+    "settle_to_2pct_s": 0.13,
+    "energy_lost_J": 15.003231788681319,
+    "drop_energy_J": 15.107400000000002
+  },
+  "jolt 2 ms": {
+    "backend": "jolt",
+    "dt": 0.002,
+    "impact_speed_closed_mps": 1.4007141035914503,
+    "peak_force_over_mg": 32.093471061459475,
+    "peak_penetration_mm": 0.6744772195552486,
+    "rest_penetration_mm": 0.02179096334835512,
+    "settle_to_2pct_s": 0.15599999999999997,
+    "energy_lost_J": 14.903069016812886,
+    "drop_energy_J": 15.107400000000002
+  },
+  "_meta": {
+    "wall_s": 0.6028724629723001,
+    "load_start": 7.28,
+    "load_end": 7.28,
+    "lagrange": "/home/cleverrobotic/Documents/Research/lagrange-night/wt6-legspike/install/lagrange_python/lib/python3.14/site-packages/lagrange/__init__.py"
+  }
+}

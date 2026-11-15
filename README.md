@@ -286,7 +286,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (23)</summary>
+<details><summary>Plan and evaluation (24)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Robot builder: phase 1 and 1b work plan (RFC 0016)](docs/plan/builder-phase1-plan.md)
@@ -308,6 +308,7 @@ recorded to MCAP and replayed.
 - [Spike 0.2-C6: a second rigid-body backend on Jolt Physics](docs/plan/spikes/0.2-C6-jolt.md)
 - [Spike 0.2-F7: `rosidl::Buffer` (desk study)](docs/plan/spikes/0.2-F7-rosidl-buffer.md)
 - [Spike 0.2-H8: packaging trial](docs/plan/spikes/0.2-H8-packaging.md)
+- [Spike: legged contact, measured first (RFC 0019 step 1)](docs/plan/spikes/legged-contact.md)
 - [Spike: MuJoCo 3.12 → 4.x](docs/plan/spikes/mujoco-4.md)
 - [Usability and sensor physics queue](docs/plan/usability-physics-queue.md)
 - [Verification record](docs/plan/verification.md)

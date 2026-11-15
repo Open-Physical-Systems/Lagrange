@@ -1,0 +1,64 @@
+<mujoco model="quad_drop">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="20 20 0.1" friction="0.6"/>
+    <body name="base_link" pos="0.0 0.0 0.525" euler="0 0.0 0">
+      <freejoint name="base_free"/>
+      <inertial pos="0 0 0" mass="9.0" diaginertia="0.06 0.2 0.24"/>
+      <geom name="base" type="box" size="0.25 0.11 0.05" mass="0"/>
+      <body name="front_left_hip" pos="0.22 0.13 0">
+        <joint name="front_left_hip_joint" type="hinge" axis="1 0 0" range="-0.6 0.6" damping="0.05"/>
+        <inertial pos="0 0 0" mass="0.5" diaginertia="0.001 0.001 0.001"/>
+        <body name="front_left_thigh" pos="0 0 0">
+          <joint name="front_left_thigh_joint" type="hinge" axis="0 1 0" range="-1.6 1.6" damping="0.05"/>
+          <inertial pos="0 0 -0.1" mass="0.8" diaginertia="0.003 0.003 0.0005"/>
+          <body name="front_left_shin" pos="0 0 -0.2">
+            <joint name="front_left_knee_joint" type="hinge" axis="0 1 0" range="-2.6 0" damping="0.05"/>
+            <inertial pos="0 0 -0.1" mass="0.3" diaginertia="0.001 0.001 0.0002"/>
+            <geom name="front_left_foot" type="sphere" size="0.025" pos="0 0 -0.2" friction="0.6" mass="0"/>
+          </body>
+        </body>
+      </body>
+      <body name="front_right_hip" pos="0.22 -0.13 0">
+        <joint name="front_right_hip_joint" type="hinge" axis="1 0 0" range="-0.6 0.6" damping="0.05"/>
+        <inertial pos="0 0 0" mass="0.5" diaginertia="0.001 0.001 0.001"/>
+        <body name="front_right_thigh" pos="0 0 0">
+          <joint name="front_right_thigh_joint" type="hinge" axis="0 1 0" range="-1.6 1.6" damping="0.05"/>
+          <inertial pos="0 0 -0.1" mass="0.8" diaginertia="0.003 0.003 0.0005"/>
+          <body name="front_right_shin" pos="0 0 -0.2">
+            <joint name="front_right_knee_joint" type="hinge" axis="0 1 0" range="-2.6 0" damping="0.05"/>
+            <inertial pos="0 0 -0.1" mass="0.3" diaginertia="0.001 0.001 0.0002"/>
+            <geom name="front_right_foot" type="sphere" size="0.025" pos="0 0 -0.2" friction="0.6" mass="0"/>
+          </body>
+        </body>
+      </body>
+      <body name="rear_left_hip" pos="-0.22 0.13 0">
+        <joint name="rear_left_hip_joint" type="hinge" axis="1 0 0" range="-0.6 0.6" damping="0.05"/>
+        <inertial pos="0 0 0" mass="0.5" diaginertia="0.001 0.001 0.001"/>
+        <body name="rear_left_thigh" pos="0 0 0">
+          <joint name="rear_left_thigh_joint" type="hinge" axis="0 1 0" range="-1.6 1.6" damping="0.05"/>
+          <inertial pos="0 0 -0.1" mass="0.8" diaginertia="0.003 0.003 0.0005"/>
+          <body name="rear_left_shin" pos="0 0 -0.2">
+            <joint name="rear_left_knee_joint" type="hinge" axis="0 1 0" range="-2.6 0" damping="0.05"/>
+            <inertial pos="0 0 -0.1" mass="0.3" diaginertia="0.001 0.001 0.0002"/>
+            <geom name="rear_left_foot" type="sphere" size="0.025" pos="0 0 -0.2" friction="0.6" mass="0"/>
+          </body>
+        </body>
+      </body>
+      <body name="rear_right_hip" pos="-0.22 -0.13 0">
+        <joint name="rear_right_hip_joint" type="hinge" axis="1 0 0" range="-0.6 0.6" damping="0.05"/>
+        <inertial pos="0 0 0" mass="0.5" diaginertia="0.001 0.001 0.001"/>
+        <body name="rear_right_thigh" pos="0 0 0">
+          <joint name="rear_right_thigh_joint" type="hinge" axis="0 1 0" range="-1.6 1.6" damping="0.05"/>
+          <inertial pos="0 0 -0.1" mass="0.8" diaginertia="0.003 0.003 0.0005"/>
+          <body name="rear_right_shin" pos="0 0 -0.2">
+            <joint name="rear_right_knee_joint" type="hinge" axis="0 1 0" range="-2.6 0" damping="0.05"/>
+            <inertial pos="0 0 -0.1" mass="0.3" diaginertia="0.001 0.001 0.0002"/>
+            <geom name="rear_right_foot" type="sphere" size="0.025" pos="0 0 -0.2" friction="0.6" mass="0"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

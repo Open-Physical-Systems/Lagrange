@@ -1,0 +1,72 @@
+<mujoco model="hexapod">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="20 20 0.1" friction="1"/>
+    <body name="body" pos="0 0 0.16">
+      <freejoint name="body_free"/>
+      <inertial pos="0 0 0" mass="4.0" diaginertia="0.01 0.03 0.035"/>
+      <geom type="box" size="0.22 0.08 0.03" mass="0"/>
+      <body name="leg0l_upper" pos="0.18 0.1 0">
+        <joint name="leg0l_swing" type="hinge" axis="0 0 1" range="-0.8 0.8" damping="0.05"/>
+        <joint name="leg0l_lift" type="hinge" axis="1 0 0" range="-1.2 1.2" damping="0.05"/>
+        <inertial pos="0 0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="leg0l_lower" pos="0 0.12 0">
+          <joint name="leg0l_knee" type="hinge" axis="1 0 0" range="-0.4 1.8" damping="0.05"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom name="leg0l_foot" type="sphere" size="0.015" pos="0 0 -0.12" friction="1" mass="0"/>
+        </body>
+      </body>
+      <body name="leg0r_upper" pos="0.18 -0.1 0">
+        <joint name="leg0r_swing" type="hinge" axis="0 0 1" range="-0.8 0.8" damping="0.05"/>
+        <joint name="leg0r_lift" type="hinge" axis="-1 0 0" range="-1.2 1.2" damping="0.05"/>
+        <inertial pos="0 -0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="leg0r_lower" pos="0 -0.12 0">
+          <joint name="leg0r_knee" type="hinge" axis="-1 0 0" range="-0.4 1.8" damping="0.05"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom name="leg0r_foot" type="sphere" size="0.015" pos="0 0 -0.12" friction="1" mass="0"/>
+        </body>
+      </body>
+      <body name="leg1l_upper" pos="0.0 0.1 0">
+        <joint name="leg1l_swing" type="hinge" axis="0 0 1" range="-0.8 0.8" damping="0.05"/>
+        <joint name="leg1l_lift" type="hinge" axis="1 0 0" range="-1.2 1.2" damping="0.05"/>
+        <inertial pos="0 0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="leg1l_lower" pos="0 0.12 0">
+          <joint name="leg1l_knee" type="hinge" axis="1 0 0" range="-0.4 1.8" damping="0.05"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom name="leg1l_foot" type="sphere" size="0.015" pos="0 0 -0.12" friction="1" mass="0"/>
+        </body>
+      </body>
+      <body name="leg1r_upper" pos="0.0 -0.1 0">
+        <joint name="leg1r_swing" type="hinge" axis="0 0 1" range="-0.8 0.8" damping="0.05"/>
+        <joint name="leg1r_lift" type="hinge" axis="-1 0 0" range="-1.2 1.2" damping="0.05"/>
+        <inertial pos="0 -0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="leg1r_lower" pos="0 -0.12 0">
+          <joint name="leg1r_knee" type="hinge" axis="-1 0 0" range="-0.4 1.8" damping="0.05"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom name="leg1r_foot" type="sphere" size="0.015" pos="0 0 -0.12" friction="1" mass="0"/>
+        </body>
+      </body>
+      <body name="leg2l_upper" pos="-0.18 0.1 0">
+        <joint name="leg2l_swing" type="hinge" axis="0 0 1" range="-0.8 0.8" damping="0.05"/>
+        <joint name="leg2l_lift" type="hinge" axis="1 0 0" range="-1.2 1.2" damping="0.05"/>
+        <inertial pos="0 0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="leg2l_lower" pos="0 0.12 0">
+          <joint name="leg2l_knee" type="hinge" axis="1 0 0" range="-0.4 1.8" damping="0.05"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom name="leg2l_foot" type="sphere" size="0.015" pos="0 0 -0.12" friction="1" mass="0"/>
+        </body>
+      </body>
+      <body name="leg2r_upper" pos="-0.18 -0.1 0">
+        <joint name="leg2r_swing" type="hinge" axis="0 0 1" range="-0.8 0.8" damping="0.05"/>
+        <joint name="leg2r_lift" type="hinge" axis="-1 0 0" range="-1.2 1.2" damping="0.05"/>
+        <inertial pos="0 -0.06 0" mass="0.15" diaginertia="0.0003 0.0003 0.0003"/>
+        <body name="leg2r_lower" pos="0 -0.12 0">
+          <joint name="leg2r_knee" type="hinge" axis="-1 0 0" range="-0.4 1.8" damping="0.05"/>
+          <inertial pos="0 0 -0.06" mass="0.1" diaginertia="0.0002 0.0002 0.00005"/>
+          <geom name="leg2r_foot" type="sphere" size="0.015" pos="0 0 -0.12" friction="1" mass="0"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>
