@@ -280,9 +280,10 @@ public:
         if (building) {
             gizmo_.draw(draw, session, view);
         }
-        triad(draw, camera, session.document(),  // not held across the gizmo's commit
-              ImVec2(origin.x + px(10.0F), origin.y + available.y - px(58.0F)));
-        snapBox(draw, origin, available, io.KeyCtrl);
+        const float triadRight =
+            triad(draw, camera, session.document(),  // not held across the gizmo's commit
+                  ImVec2(origin.x + px(10.0F), origin.y + available.y - px(58.0F)));
+        snapBox(draw, origin, available, io.KeyCtrl, triadRight);
         toolColumn(session, ImVec2(origin.x + px(10.0F), origin.y + px(46.0F)));
         toggles(session, ImVec2(origin.x + available.x - px(10.0F), origin.y + px(10.0F)));
         ImGui::End();
@@ -625,9 +626,10 @@ private:
         return end;
     }
 
-    /// Bottom left: the axes as the camera sees them, the frame and the grid spacing.
-    static void triad(ImDrawList* draw, const Camera& camera, const builder::Document& document,
-                      const ImVec2& min) {
+    /// Bottom left: the axes as the camera sees them, the frame and the grid spacing. Returns
+    /// the box's right edge.
+    static float triad(ImDrawList* draw, const Camera& camera, const builder::Document& document,
+                       const ImVec2& min) {
         ImFont* font = theme::fonts().mono;
         const float size = px(theme::kMonoSize);
         char frame[96];
@@ -655,18 +657,22 @@ private:
         const float x = min.x + px(8.0F) + box + px(10.0F);
         draw->AddText(font, size, ImVec2(x, min.y + px(7.0F)), u32(c::t2), frame);
         draw->AddText(font, size, ImVec2(x, min.y + px(25.0F)), u32(c::t2), grid);
+        return max.x;
     }
 
     /// Bottom right: snap steps (builder::gizmo's, the SPEC's defaults) and the Focus key.
-    /// Holding Ctrl turns snapping off while it is held (SPEC: "Ctrl toggles").
-    static void snapBox(ImDrawList* draw, const ImVec2& origin, const ImVec2& size, bool off) {
+    /// Holding Ctrl turns snapping off while it is held (SPEC: "Ctrl toggles"). In a narrow
+    /// view, where it would cover the triad's box (right edge `triadRight`), it sits above it.
+    static void snapBox(ImDrawList* draw, const ImVec2& origin, const ImVec2& size, bool off,
+                        float triadRight) {
         const char* text = off ? "snap  off (Ctrl)   Focus [F]" : "snap  5 mm · 5°   Focus [F]";
         const float width =
             theme::fonts().mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x +
             px(16.0F);
-        overlayBox(draw,
-                   ImVec2(origin.x + size.x - width - px(10.0F), origin.y + size.y - px(36.0F)),
-                   text);
+        const float left = origin.x + size.x - width - px(10.0F);
+        const float top = left < triadRight + px(8.0F) ? origin.y + size.y - px(92.0F)
+                                                       : origin.y + size.y - px(36.0F);
+        overlayBox(draw, ImVec2(left, top), text);
     }
 
     /// Left: Select (Q), Move (W), Rotate (E), Joint axis (A), Measure (M).

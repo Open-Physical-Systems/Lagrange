@@ -43,6 +43,25 @@ ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
 }
 
+/// A note over a sensor view (mono text in a dark box, design 06-sensors), at most `maxWidth`
+/// wide: its text cut with an ellipsis when longer. Returns the box's right edge.
+float overlayBox(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color,
+                 float maxWidth) {
+    ImFont* font = theme::fonts().mono;
+    const float size = px(theme::kMonoSize);
+    const float pad = px(8.0F);
+    std::string shown = text;
+    if (font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x + 2.0F * pad > maxWidth) {
+        shown = fit::cut(font, size, text, std::max(maxWidth - 2.0F * pad, 0.0F));
+    }
+    const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, shown.c_str()).x;
+    const ImVec2 max(min.x + width + 2.0F * pad, min.y + px(26.0F));
+    draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+    draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
+    draw->AddText(font, size, ImVec2(min.x + pad, min.y + px(6.0F)), u32(color), shown.c_str());
+    return max.x;
+}
+
 enum class Kind : std::uint8_t { Lidar, Camera, Imu, Radar, Other };
 
 Kind kindOf(const std::string& typeName) {
@@ -530,26 +549,36 @@ public:
 
         // Overlays: what is drawn, and how much of it.
         const ImVec2 bottomLeft(origin.x + px(10.0F), origin.y + size.y - px(36.0F));
+        // A replay sends only what the recording holds, and it keeps no point buffers (#408):
+        // say so instead of the domain-off note, which is about live runs. The note and the
+        // box stack rather than overlap.
+        const bool replaying = context.status.replayEndNs > context.status.replayBeginNs;
+        const DomainView* sensorsDomain = context.profileSession->find("sensors");
+        const bool domainNote = !replaying && sensorsDomain != nullptr && !sensorsDomain->enabled;
         if (!cloud) {
-            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)),
-                "no frames from this sensor yet", c::t2);
+            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(domainNote ? 36.0F : 10.0F)),
+                replaying ? "the recording holds no frames of this sensor"
+                          : "no frames from this sensor yet",
+                c::t2, size.x - px(20.0F));
         } else {
             char count[64];
             std::snprintf(count, sizeof(count), "%u pts  ·  %.1f Hz", cloud->count, lidar->rateHz);
             const float width =
                 fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, count).x + px(16.0F);
-            box(draw, ImVec2(origin.x + size.x - width - px(10.0F), bottomLeft.y), count, c::t1);
-            if (mode_ == 0) {
-                legend(draw, bottomLeft, strong, cloud->count);
-            } else {
-                box(draw, bottomLeft, "colour: range, near to far", c::t2);
-            }
+            const float legendRight =
+                mode_ == 0 ? legend(draw, bottomLeft, strong, cloud->count)
+                           : box(draw, bottomLeft, "colour: range, near to far", c::t2);
+            // The count sits at the bottom right; in a narrow view, above the legend's row
+            // rather than over it.
+            const float countLeft = origin.x + size.x - width - px(10.0F);
+            const float countTop =
+                countLeft < legendRight + px(8.0F) ? bottomLeft.y - px(32.0F) : bottomLeft.y;
+            box(draw, ImVec2(countLeft, countTop), count, c::t1);
         }
-        if (const DomainView* view = context.profileSession->find("sensors");
-            view != nullptr && !view->enabled) {
+        if (domainNote) {
             ImGui::SetCursorScreenPos(ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)));
-            widgets::Pill("Sensors domain is off in the profile · this scan is synthetic",
-                          widgets::PillKind::Info);
+            fit::pill("Sensors domain is off in the profile · this scan is synthetic",
+                      widgets::PillKind::Info, size.x - px(20.0F));
         }
         ImGui::End();
     }
@@ -569,30 +598,44 @@ private:
                           a.z + (b.z - a.z) * blend, 1.0F));
     }
 
-    static void box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color) {
-        ImFont* font = theme::fonts().mono;
-        const float size = px(theme::kMonoSize);
-        const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
-        const ImVec2 max(min.x + width + px(16.0F), min.y + px(26.0F));
-        draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
-        draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
-        draw->AddText(font, size, ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(color), text);
+    /// Returns the box's right edge.
+    static float box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color,
+                     float maxWidth = FLT_MAX) {
+        return overlayBox(draw, min, text, color, maxWidth);
     }
 
-    static void legend(ImDrawList* draw, const ImVec2& min, std::uint32_t strong,
-                       std::uint32_t total) {
-        char text[96];
-        std::snprintf(text, sizeof(text), "strong %u     attenuated %u", strong, total - strong);
+    /// Design 06-sensors: each dot (6 px) 5 px before its own label, 12 px between the items.
+    /// Returns the legend's right edge.
+    static float legend(ImDrawList* draw, const ImVec2& min, std::uint32_t strong,
+                        std::uint32_t total) {
+        char strongText[48];
+        char weakText[48];
+        std::snprintf(strongText, sizeof(strongText), "strong %u", strong);
+        std::snprintf(weakText, sizeof(weakText), "attenuated %u", total - strong);
         ImFont* font = theme::fonts().sans;
         const float size = px(theme::kLabelSize);
-        const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
-        const ImVec2 max(min.x + width + px(44.0F), min.y + px(26.0F));
+        const float dot = px(6.0F);
+        const float gap = px(5.0F);
+        const float between = px(12.0F);
+        const float strongWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, strongText).x;
+        const float weakWidth = font->CalcTextSizeA(size, FLT_MAX, 0.0F, weakText).x;
+        const float pad = px(8.0F);
+        const ImVec2 max(
+            min.x + pad + dot + gap + strongWidth + between + dot + gap + weakWidth + pad,
+            min.y + px(26.0F));
         draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
         draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
-        draw->AddCircleFilled(ImVec2(min.x + px(12.0F), min.y + px(13.0F)), px(3.5F), u32(kStrong));
-        draw->AddCircleFilled(ImVec2(min.x + px(24.0F), min.y + px(13.0F)), px(3.5F),
-                              u32(kAttenuated));
-        draw->AddText(font, size, ImVec2(min.x + px(34.0F), min.y + px(5.0F)), u32(c::t2), text);
+        const float middle = min.y + px(13.0F);
+        const float textY = min.y + px(5.0F);
+        float x = min.x + pad;
+        draw->AddCircleFilled(ImVec2(x + dot * 0.5F, middle), dot * 0.5F, u32(kStrong));
+        x += dot + gap;
+        draw->AddText(font, size, ImVec2(x, textY), u32(c::t2), strongText);
+        x += strongWidth + between;
+        draw->AddCircleFilled(ImVec2(x + dot * 0.5F, middle), dot * 0.5F, u32(kAttenuated));
+        x += dot + gap;
+        draw->AddText(font, size, ImVec2(x, textY), u32(c::t2), weakText);
+        return max.x;
     }
 
     std::shared_ptr<SensorsState> state_;
@@ -839,9 +882,17 @@ public:
 
         // Overlays: the colour scale bottom left, the count bottom right.
         const ImVec2 bottomLeft(origin.x + px(10.0F), end.y - px(36.0F));
+        // A replay sends only what the recording holds, and it keeps no point buffers (#408):
+        // say so instead of the domain-off note, which is about live runs. The note and the
+        // box stack rather than overlap.
+        const bool replaying = context.status.replayEndNs > context.status.replayBeginNs;
+        const DomainView* sensorsDomain = context.profileSession->find("sensors");
+        const bool domainNote = !replaying && sensorsDomain != nullptr && !sensorsDomain->enabled;
         if (!have) {
-            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)),
-                "no frames from this sensor yet", c::t2);
+            box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(domainNote ? 36.0F : 10.0F)),
+                replaying ? "the recording holds no frames of this sensor"
+                          : "no frames from this sensor yet",
+                c::t2, size.x - px(20.0F));
         } else {
             char count[96];
             std::snprintf(count, sizeof(count), "%u det  ·  %u closing  ·  %u away  ·  %.1f Hz",
@@ -851,11 +902,10 @@ public:
             box(draw, ImVec2(end.x - width - px(10.0F), origin.y + px(10.0F)), count, c::t1);
             legend(draw, bottomLeft, span);
         }
-        if (const DomainView* domain = context.profileSession->find("sensors");
-            domain != nullptr && !domain->enabled) {
+        if (domainNote) {
             ImGui::SetCursorScreenPos(ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)));
-            widgets::Pill("Sensors domain is off in the profile · ground truth sends no detections",
-                          widgets::PillKind::Info);
+            fit::pill("Sensors domain is off in the profile · ground truth sends no detections",
+                      widgets::PillKind::Info, size.x - px(20.0F));
         }
         ImGui::End();
     }
@@ -872,14 +922,9 @@ private:
         return 10.0F * decade;
     }
 
-    static void box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color) {
-        ImFont* font = theme::fonts().mono;
-        const float size = px(theme::kMonoSize);
-        const float width = font->CalcTextSizeA(size, FLT_MAX, 0.0F, text).x;
-        const ImVec2 max(min.x + width + px(16.0F), min.y + px(26.0F));
-        draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
-        draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
-        draw->AddText(font, size, ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(color), text);
+    static void box(ImDrawList* draw, const ImVec2& min, const char* text, const ImVec4& color,
+                    float maxWidth = FLT_MAX) {
+        (void)overlayBox(draw, min, text, color, maxWidth);
     }
 
     /// The diverging scale: closing (blue) through at rest to moving away (orange), ± span.
@@ -1018,12 +1063,16 @@ public:
         const std::shared_ptr<SensorStream> stream = streamOf(context, camera);
         const std::shared_ptr<const SensorImage> image = stream ? stream->latestImage() : nullptr;
         if (camera == nullptr || !image) {
+            // A replay (the server reports the recording's time range) sends only what the
+            // recording holds, and a recording keeps no images (#408).
+            const bool replaying = context.status.replayEndNs > context.status.replayBeginNs;
             ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context, *state_)) {
                 ImGui::PushTextWrapPos(0.0F);
                 widgets::Caption("%s", camera == nullptr ? "This stage has no camera."
-                                       : !stream
-                                           ? "This server does not send this image."
+                                       : !stream         ? "This server does not send this image."
+                                       : replaying
+                                           ? "The recording holds no images for this camera."
                                            : "Waiting for the first image (the sensors domain "
                                              "may be on ground truth, which renders nothing).");
                 ImGui::PopTextWrapPos();

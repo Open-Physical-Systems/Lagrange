@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lagrange/viewer/ProfileSession.hpp"
+#include "lagrange/viewer/Widgets.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -57,5 +58,12 @@ void text(std::string_view text, float width, bool middle = false);
 /// fit::text in the rest of the line, right-aligned: whole when it fits, else cut to all of the
 /// rest (a note after a label, QA3 F6), with all of it in a tooltip.
 void textRight(std::string_view text, bool middle = false);
+
+/// fit::text as a widgets::Caption (sans, caption size, t3): a one-line note cut to `width`.
+void caption(std::string_view text, float width);
+
+/// widgets::Pill with its text cut so that the pill is at most `width` wide; hovering a cut pill
+/// shows all of it in a tooltip.
+void pill(const std::string& text, widgets::PillKind kind, float width);
 
 }  // namespace lagrange::viewer::fit

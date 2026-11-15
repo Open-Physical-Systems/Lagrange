@@ -1,5 +1,7 @@
 #include "PanelFormat.hpp"
+#include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/TextFit.hpp"
+#include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
 #include <array>
@@ -160,6 +162,28 @@ void textRight(std::string_view text, bool middle) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available - width);
     }
     fit::text(text, available, middle);
+}
+
+void caption(std::string_view text, float width) {
+    ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::c::t3);
+    fit::text(text, width);
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+void pill(const std::string& text, widgets::PillKind kind, float width) {
+    const float padding = widgets::PillWidth("");
+    if (widgets::PillWidth(text.c_str()) <= width) {
+        widgets::Pill(text.c_str(), kind);
+        return;
+    }
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);  // as PillWidth measures
+    const std::string shown =
+        cut(ImGui::GetFont(), ImGui::GetFontSize(), text, std::max(width - padding, 0.0F));
+    ImGui::PopFont();
+    widgets::Pill(shown.c_str(), kind);
+    ImGui::SetItemTooltip("%s", text.c_str());
 }
 
 }  // namespace lagrange::viewer::fit

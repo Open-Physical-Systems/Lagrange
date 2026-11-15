@@ -560,6 +560,12 @@ public:
                 for (const double value : {s.min, s.max, s.mean, s.rms}) {
                     ImGui::TableNextColumn();
                     number(s.count == 0 ? NAN : value, text, sizeof(text), "%.3g");
+                    // A narrow column: two digits before cutting with an ellipsis.
+                    ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                    if (ImGui::CalcTextSize(text).x > ImGui::GetContentRegionAvail().x) {
+                        number(s.count == 0 ? NAN : value, text, sizeof(text), "%.2g");
+                    }
+                    ImGui::PopFont();
                     rightMono(c::t1, text);
                 }
             }

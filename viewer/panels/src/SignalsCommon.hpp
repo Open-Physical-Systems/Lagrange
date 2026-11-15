@@ -22,12 +22,14 @@ inline constexpr ImGuiTableFlags kTableFlags =
     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp |
     ImGuiTableFlags_NoPadOuterX | ImGuiTableFlags_Resizable;
 
-/// Mono text ending at the right edge of the cell.
+/// Mono text ending at the right edge of the cell; in a cell too narrow for it, cut with an
+/// ellipsis (whole in a tooltip) rather than drawn over the next cell.
 inline void rightMono(const ImVec4& color, const char* text) {
     ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
-    widgets::AlignRight(ImGui::CalcTextSize(text).x);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    fit::textRight(text);
+    ImGui::PopStyleColor();
     ImGui::PopFont();
-    widgets::Mono(color, "%s", text);
 }
 
 /// A number, or "-" for NaN.

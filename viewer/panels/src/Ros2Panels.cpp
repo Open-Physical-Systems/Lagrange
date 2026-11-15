@@ -269,9 +269,8 @@ public:
             if (!graph->note.empty()) {
                 // A server without a bridge says why; that is the whole content of the graph.
                 ImGui::SetCursorPosX(px(8.0F));
-                ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-                widgets::Pill(graph->note.c_str(), widgets::PillKind::Warn);
-                ImGui::PopTextWrapPos();
+                fit::pill(graph->note, widgets::PillKind::Warn,
+                          ImGui::GetContentRegionAvail().x - px(8.0F));
             }
             ImGui::EndChild();
             ImGui::End();
@@ -367,7 +366,7 @@ public:
             ImGui::SetCursorScreenPos(
                 ImVec2(origin.x + ImGui::GetScrollX() + px(10.0F),
                        origin.y + ImGui::GetScrollY() + visible.y - px(28.0F)));
-            widgets::Pill(graph->note.c_str(), widgets::PillKind::Warn);
+            fit::pill(graph->note, widgets::PillKind::Warn, visible.x - px(20.0F));
         }
         ImGui::EndChild();
         ImGui::End();

@@ -2,6 +2,7 @@
 // is the catalog file (RFC 0016 §5) as SensorCatalog::load returned it, read at start; nothing
 // comes from the server.
 #include "BuilderCommon.hpp"
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
@@ -72,9 +73,14 @@ public:
         const float segWidth = ImGui::CalcTextSize("AllURDF").x +
                                ImGui::CalcTextSize(overlayLabel).x + px(16.0F) * 3.0F;
         ImGui::PopFont();
+        // In a narrow panel the scopes go under the search field rather than off the edge.
+        const float searchWidth = ImGui::GetContentRegionAvail().x - segWidth - px(6.0F);
+        const bool oneRow = searchWidth >= px(100.0F);
         (void)widgets::SearchField("##filter", "Filter sensors", filter_.data(), filter_.size(),
-                                   ImGui::GetContentRegionAvail().x - segWidth - px(6.0F));
-        ImGui::SameLine(0.0F, px(6.0F));
+                                   oneRow ? searchWidth : ImGui::GetContentRegionAvail().x);
+        if (oneRow) {
+            ImGui::SameLine(0.0F, px(6.0F));
+        }
         (void)widgets::Segmented("##scope", scopes, 3, &scope_);
 
         ImGui::BeginChild("##entries");
@@ -184,11 +190,11 @@ private:
         }
         const float caption = px(theme::kCaptionSize);
         const float summaryX = x + px(118.0F);
-        draw->PushClipRect(ImVec2(summaryX, min.y),
-                           ImVec2(std::max(right, summaryX), min.y + height), true);
-        draw->AddText(fonts.sans, caption, ImVec2(summaryX, midY - caption * 0.5F - px(1.0F)),
-                      ImGui::ColorConvertFloat4ToU32(c::t3), entry.summary.c_str());
-        draw->PopClipRect();
+        // Cut with an ellipsis where the row ends (QA3 at 1024 px), whole in the tooltip.
+        if (right - summaryX > caption) {
+            fit::draw(draw, fonts.sans, caption, ImVec2(summaryX, midY - caption * 0.5F - px(1.0F)),
+                      ImGui::ColorConvertFloat4ToU32(c::t3), entry.summary, right - summaryX);
+        }
         ImGui::SetCursorScreenPos(ImVec2(min.x, min.y + height));
         ImGui::Dummy(ImVec2(0.0F, 0.0F));
         ImGui::PopID();
