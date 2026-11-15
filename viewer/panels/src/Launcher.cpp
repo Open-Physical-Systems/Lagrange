@@ -18,6 +18,7 @@
 #include <ctime>
 #include <imgui_internal.h>  // BeginViewportSideBar
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -42,6 +43,25 @@ void text(ImFont* font, float size, const ImVec4& color, const char* string) {
     ImGui::PushFont(font, size);
     ImGui::TextColored(color, "%s", string);
     ImGui::PopFont();
+}
+
+using KeyFocus = LauncherState::KeyFocus;
+
+/// The keyboard focus ring (SPEC acceptance: the keyboard alone picks a card and connects):
+/// Dear ImGui's nav cursor colour, the accent (lagrange_theme ImGuiCol_NavCursor), 3 px outside
+/// the focused thing.
+void focusRing(ImDrawList* draw, const ImVec2& min, const ImVec2& max) {
+    const float out = px(3.0F);
+    ImVec4 color = c::accent;
+    color.w = 0.7F;
+    draw->AddRect(ImVec2(min.x - out, min.y - out), ImVec2(max.x + out, max.y + out), u32(color),
+                  px(6.0F), 0, px(1.5F));
+}
+
+/// The launcher's own keys act unless a text field or a menu has the keyboard.
+bool keysFree() {
+    return !ImGui::GetIO().WantTextInput &&
+           !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
 bool containsNoCase(std::string_view haystack, std::string_view needle) {
@@ -193,14 +213,24 @@ void check(bool ok, const char* line, const char* detail, const char* accent = n
     const bool oneLine =
         accent != nullptr &&
         detailWidth + theme::fonts().sans->CalcTextSizeA(caption, FLT_MAX, 0.0F, accent).x <= room;
-    ImGui::PushTextWrapPos(0.0F);
-    text(theme::fonts().sans, theme::kCaptionSize, c::t3, detail);
-    ImGui::PopTextWrapPos();
+    // A detail that leads into the accent ("... → ") keeps its arrow with the accent when the
+    // accent goes to a line of its own (else the arrow wraps alone).
+    std::string_view shown = detail;
+    constexpr std::string_view kArrow = " → ";
+    const bool leads = accent != nullptr && !oneLine && shown.ends_with(kArrow);
+    if (leads) {
+        shown.remove_suffix(kArrow.size());
+    }
+    widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3, "%.*s",
+                        static_cast<int>(shown.size()), shown.data());
     if (accent != nullptr) {
         if (oneLine) {
             ImGui::SameLine(0.0F, 0.0F);
+        } else if (leads) {
+            widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::t3, "→");
+            ImGui::SameLine(0.0F, px(3.0F));  // the space after the arrow
         }
-        text(theme::fonts().sans, theme::kCaptionSize, c::accent, accent);
+        widgets::ParagraphF(theme::fonts().sans, theme::kCaptionSize, c::accent, "%s", accent);
     }
     ImGui::PopStyleVar();
     ImGui::EndGroup();
@@ -238,13 +268,16 @@ void about(LauncherState& state) {
     ImGui::EndGroup();
     ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + px(64.0F)));
     ImGui::Dummy(ImVec2(0.0F, px(14.0F)));
-    ImGui::PushTextWrapPos(0.0F);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, px(5.0F)));
-    text(theme::fonts().sans, theme::kBodySize, c::t2,
-         "Coupled multi-physics robot simulation. Turn each physics domain on, off, or replace "
-         "it with a substitute, and watch every signal live.");
-    ImGui::PopStyleVar();
-    ImGui::PopTextWrapPos();
+    // Design: 13 px on 20 px lines.
+    constexpr float kBlurbLine = 20.0F;
+    ImGui::PushFont(theme::fonts().sans, theme::kBodySize);
+    ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+    widgets::Paragraph(
+        "Coupled multi-physics robot simulation. Turn each physics domain on, off, or replace "
+        "it with a substitute, and watch every signal live.",
+        kBlurbLine);
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
     ImGui::Dummy(ImVec2(0.0F, px(14.0F)));
     widgets::Caption("SYSTEM CHECK");
     ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
@@ -544,7 +577,7 @@ void art(ImDrawList* draw, int index, const ImVec2& centre, ImU32 ink, ImU32 hol
 }
 
 /// A robot-class card (design: .tpl): 1 = clicked, 2 = double-clicked, 0 = neither.
-int card(int index, const RobotClass& item, const char* unavailable, bool selected,
+int card(int index, const RobotClass& item, const char* unavailable, bool selected, bool focused,
          const ImVec2& size) {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max(min.x + size.x, min.y + size.y);
@@ -557,6 +590,9 @@ int card(int index, const RobotClass& item, const char* unavailable, bool select
     const bool empty = index == static_cast<int>(kClasses.size()) - 1;  // dashed (design)
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(min, max, u32(hovered && available ? c::bg2 : c::bg1), px(4.0F));
+    if (focused) {
+        focusRing(draw, min, max);
+    }
     if (selected) {
         draw->AddRect(min, max, u32(c::accent), px(4.0F), 0, px(2.0F));
     } else if (empty) {
@@ -588,12 +624,9 @@ int card(int index, const RobotClass& item, const char* unavailable, bool select
     // the tooltip).
     const float bottom = max.y - pad - px(14.0F);
     const float small = px(theme::kCaptionSize);
-    const ImVec2 wrapped = fonts.sans->CalcTextSizeA(small, FLT_MAX, inner, item.description);
-    const bool cutDescription = y + wrapped.y > bottom - px(4.0F);
-    draw->PushClipRect(ImVec2(min.x + pad, y), ImVec2(max.x - pad, bottom - px(4.0F)), true);
-    draw->AddText(fonts.sans, small, ImVec2(min.x + pad, y), u32(c::t3), item.description, nullptr,
-                  inner);
-    draw->PopClipRect();
+    const bool cutDescription =
+        widgets::DrawParagraph(draw, fonts.sans, small, ImVec2(min.x + pad, y), u32(c::t3),
+                               item.description, inner, 0.0F, bottom - px(4.0F));
     // Bottom line: the domains the class turns on, and what it integrates with after them.
     for (int d = 0; d < item.domainCount; ++d) {
         draw->AddCircleFilled(
@@ -698,6 +731,26 @@ void start(PanelContext& context, LauncherState& state) {
     ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
     // Four cards a row (design); three when four would be too narrow for their names.
     const int cardsPerRow = (width - gap * 3.0F) / 4.0F < px(128.0F) ? 3 : 4;
+    // Arrows move the selection over the cards that can run, as they are laid out.
+    if (state.keyFocus == KeyFocus::Cards && keysFree()) {
+        int step = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+            step = -1;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+            step = 1;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+            step = -cardsPerRow;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+            step = cardsPerRow;
+        }
+        const int count = static_cast<int>(kClasses.size());
+        for (int i = state.robotClass + step; step != 0 && i >= 0 && i < count; i += step) {
+            if (whyNot(state, kClasses.at(static_cast<std::size_t>(i))) == nullptr) {
+                pickClass(state, i, false);
+                break;
+            }
+        }
+    }
     const ImVec2 cardSize(
         (width - gap * static_cast<float>(cardsPerRow - 1)) / static_cast<float>(cardsPerRow),
         px(178.0F));
@@ -706,7 +759,9 @@ void start(PanelContext& context, LauncherState& state) {
             ImGui::SameLine(0.0F, gap);
         }
         const RobotClass& item = kClasses.at(static_cast<std::size_t>(i));
-        const int pressed = card(i, item, whyNot(state, item), state.robotClass == i, cardSize);
+        const bool selected = state.robotClass == i;
+        const int pressed = card(i, item, whyNot(state, item), selected,
+                                 selected && state.keyFocus == KeyFocus::Cards, cardSize);
         if (pressed != 0) {
             pickClass(state, i, pressed == 2);
         }
@@ -821,7 +876,7 @@ void start(PanelContext& context, LauncherState& state) {
 
 /// A server row (design: .srv) with a radio mark, two lines and a status pill.
 bool serverRow(const char* id, const char* name, const char* detail, const char* pill,
-               widgets::PillKind kind, bool selected, bool enabled) {
+               widgets::PillKind kind, bool selected, bool enabled, bool focused) {
     const float width = ImGui::GetContentRegionAvail().x;
     const float height = px(52.0F);
     const ImVec2 min = ImGui::GetCursorScreenPos();
@@ -832,6 +887,9 @@ bool serverRow(const char* id, const char* name, const char* detail, const char*
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(min, max, u32(selected ? theme::hex(0xE8772E, 0.08F) : c::bg1), px(4.0F));
     draw->AddRect(min, max, u32(selected ? c::accent : c::line), px(4.0F));
+    if (focused && selected) {
+        focusRing(draw, min, max);
+    }
     const ImVec2 radio(min.x + px(18.0F), min.y + height * 0.5F);
     draw->AddCircle(radio, px(6.5F), u32(selected ? c::accent : c::lineStrong), 0, px(1.5F));
     if (selected) {
@@ -901,13 +959,27 @@ void servers(LauncherState& state) {
 
     // Starting one is pointless while a server already listens on the default socket.
     const bool canStart = !state.localServer.empty() && !state.defaultAvailable;
+    const bool keyed = state.keyFocus == KeyFocus::Servers;
+    // Up and down pick among the rows that can be chosen.
+    if (keyed && keysFree()) {
+        const int step = ImGui::IsKeyPressed(ImGuiKey_UpArrow)     ? -1
+                         : ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1
+                                                                   : 0;
+        const int last = state.showOther ? 2 : 1;
+        for (int i = state.server + step; step != 0 && i >= 0 && i <= last; i += step) {
+            if (i != 0 || canStart) {
+                state.server = i;
+                break;
+            }
+        }
+    }
     if (serverRow("##local", "Start local simulator",
                   state.localServer.empty() ? "lagrange_server is not installed"
                                             : "launches lagrange_server on this machine",
                   state.localServer.empty() ? "not installed"
                                             : (state.defaultAvailable ? "running" : "available"),
                   canStart ? widgets::PillKind::Ok : widgets::PillKind::Neutral, state.server == 0,
-                  canStart)) {
+                  canStart, keyed)) {
         state.server = 0;
     }
     if (state.server == 0 && !canStart) {
@@ -918,14 +990,14 @@ void servers(LauncherState& state) {
     if (serverRow("##mock", "Server on the default socket", detail,
                   state.defaultAvailable ? "ready" : "not running",
                   state.defaultAvailable ? widgets::PillKind::Ok : widgets::PillKind::Warn,
-                  state.server == 1, true)) {
+                  state.server == 1, true, keyed)) {
         state.server = 1;
     }
     if (state.showOther) {
         if (serverRow("##other", "Other server",
                       state.otherEndpoint[0] != '\0' ? state.otherEndpoint
                                                      : "unix:/path/to.sock or tcp://host:port",
-                      "typed", widgets::PillKind::Neutral, state.server == 2, true)) {
+                      "typed", widgets::PillKind::Neutral, state.server == 2, true, keyed)) {
             state.server = 2;
         }
         ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
@@ -1001,8 +1073,11 @@ void servers(LauncherState& state) {
     draw->AddText(font, fontSize,
                   ImVec2(min.x + (size.x - extent.x) * 0.5F, min.y + (size.y - extent.y) * 0.5F),
                   u32(endpoint.empty() ? c::t3 : c::onAccent), label);
-    if (clicked || (!endpoint.empty() && !ImGui::GetIO().WantTextInput &&
-                    ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+    if (state.keyFocus == KeyFocus::Connect) {
+        focusRing(draw, min, ImVec2(min.x + size.x, min.y + size.y));
+    }
+    if (clicked ||
+        (!endpoint.empty() && keysFree() && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
         state.connectRequested = true;
         state.startLocalRequested = state.server == 0;
         state.startArguments = state.server == 0 && canRun(state, chosen)
@@ -1014,9 +1089,7 @@ void servers(LauncherState& state) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         widgets::Pill("error", widgets::PillKind::Error);
         ImGui::SameLine(0.0F, px(8.0F));
-        ImGui::PushTextWrapPos(0.0F);
-        ImGui::TextUnformatted(state.error.c_str());
-        ImGui::PopTextWrapPos();
+        widgets::Paragraph(state.error);
     }
     if (!state.defaultAvailable && state.server == 1) {
         ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
@@ -1212,6 +1285,32 @@ void drawLauncher(PanelContext& context) {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_B)) {
         state.builderRequested = true;
     }
+    // Tab and Shift Tab move the keyboard between the cards, the server list and Connect;
+    // Escape or a click lets go of it (the columns take no Dear ImGui navigation: NoNav).
+    if (keysFree()) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
+            const bool back = ImGui::GetIO().KeyShift;
+            switch (state.keyFocus) {
+                case KeyFocus::None:
+                    state.keyFocus = back ? KeyFocus::Connect : KeyFocus::Cards;
+                    break;
+                case KeyFocus::Cards:
+                    state.keyFocus = back ? KeyFocus::Connect : KeyFocus::Servers;
+                    break;
+                case KeyFocus::Servers:
+                    state.keyFocus = back ? KeyFocus::Cards : KeyFocus::Connect;
+                    break;
+                case KeyFocus::Connect:
+                    state.keyFocus = back ? KeyFocus::Servers : KeyFocus::Cards;
+                    break;
+            }
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            state.keyFocus = KeyFocus::None;
+        }
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        state.keyFocus = KeyFocus::None;
+    }
 
     // Status bar.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(10.0F), px(4.0F)));
@@ -1257,17 +1356,18 @@ void drawLauncher(PanelContext& context) {
     const ImVec2 size = viewport->WorkSize;
     const float left = std::min(px(380.0F), size.x * 0.28F);
     const float right = std::min(px(400.0F), size.x * 0.30F);
-    column("##launcher-about", origin, ImVec2(left, size.y), c::bg1, ImVec2(px(28.0F), px(32.0F)));
+    column("##launcher-about", origin, ImVec2(left, size.y), c::bg1, ImVec2(px(28.0F), px(32.0F)),
+           kFixed | ImGuiWindowFlags_NoNav);
     about(state);
     ImGui::End();
     // The middle column scrolls when a small window cannot hold its tiles, cards and Recent.
     column("##launcher-start", ImVec2(origin.x + left, origin.y),
            ImVec2(size.x - left - right, size.y), c::bg0, ImVec2(px(28.0F), px(28.0F)),
-           kFixed & ~ImGuiWindowFlags_NoScrollbar);
+           (kFixed & ~ImGuiWindowFlags_NoScrollbar) | ImGuiWindowFlags_NoNav);
     start(context, state);
     ImGui::End();
     column("##launcher-server", ImVec2(origin.x + size.x - right, origin.y), ImVec2(right, size.y),
-           c::bg1, ImVec2(px(24.0F), px(28.0F)));
+           c::bg1, ImVec2(px(24.0F), px(28.0F)), kFixed | ImGuiWindowFlags_NoNav);
     servers(state);
     ImGui::End();
     // Rules between the columns.

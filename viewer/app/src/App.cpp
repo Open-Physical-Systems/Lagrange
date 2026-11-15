@@ -2168,6 +2168,11 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
             ImGuiKey key = name == "enter"    ? ImGuiKey_Enter
                            : name == "tab"    ? ImGuiKey_Tab
                            : name == "escape" ? ImGuiKey_Escape
+                           : name == "space"  ? ImGuiKey_Space
+                           : name == "left"   ? ImGuiKey_LeftArrow
+                           : name == "right"  ? ImGuiKey_RightArrow
+                           : name == "up"     ? ImGuiKey_UpArrow
+                           : name == "down"   ? ImGuiKey_DownArrow
                                               : ImGuiKey_None;
             if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
                 key = static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'a'));

@@ -73,6 +73,10 @@ struct LauncherState {
     char recentFilter[64]{};
     int recentRow{-1};  ///< The Recent row picked last (highlighted), or -1.
     std::string error;  ///< Why the last attempt to connect could not start.
+    /// What the keyboard moves (SPEC acceptance: Tab, arrow keys, Enter): Tab goes from the
+    /// robot-class cards to the server list to Connect and back; arrows pick within.
+    enum class KeyFocus { None, Cards, Servers, Connect };
+    KeyFocus keyFocus{KeyFocus::None};
 
     // Out, read by the application after the frame.
     bool connectRequested{false};

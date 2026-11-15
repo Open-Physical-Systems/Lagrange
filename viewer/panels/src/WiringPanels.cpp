@@ -291,6 +291,7 @@ private:
         if (ImGui::InvisibleButton(node.module.c_str(), ImVec2(nodeWidth_, px(kNodeHeight)))) {
             session.selectedDomain = node.domain;  // the same selection as the Domains table
         }
+        const bool hovered = ImGui::IsItemHovered();
         const bool selected = session.selectedDomain == node.domain;
         const float rounding = px(4.0F);
         draw->AddRectFilled(min, max, u32(node.substitute ? c::bg1 : c::bg2), rounding);
@@ -332,27 +333,45 @@ private:
         } else {
             std::snprintf(name, sizeof(name), "%s", node.module.c_str());
         }
-        const char* tag = node.substitute ? "sub" : node.detail.c_str();
-        const float tagWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, tag).x;
-        // A long name stops short of the tag on the right instead of running under it.
-        draw->PushClipRect(min, ImVec2(max.x - tagWidth - px(14.0F), max.y), true);
-        draw->AddText(fonts.sansSemiBold, label,
+        // The name and the tag on the right share the header: when both do not fit, the tag
+        // gives way first (down to 40 % of it), then the name; both end in an ellipsis.
+        const std::string_view tagText =
+            node.substitute ? std::string_view("sub") : std::string_view(node.detail);
+        const float headerRoom = nodeWidth_ - px(22.0F) - px(8.0F) - px(6.0F);
+        const float nameWidth = fonts.sansSemiBold->CalcTextSizeA(label, FLT_MAX, 0.0F, name).x;
+        const std::string tag = fit::cut(fonts.mono, small, tagText,
+                                         std::max(headerRoom - nameWidth, headerRoom * 0.4F));
+        const float tagWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, tag.c_str()).x;
+        const bool cutHeader =
+            fit::draw(draw, fonts.sansSemiBold, label,
                       ImVec2(min.x + px(22.0F), min.y + (header - label) * 0.5F - px(1.0F)),
-                      u32(node.substitute ? c::accent : c::t1), name);
-        draw->PopClipRect();
+                      u32(node.substitute ? c::accent : c::t1), name, headerRoom - tagWidth) ||
+            tag != tagText;
         draw->AddText(fonts.mono, small,
                       ImVec2(max.x - tagWidth - px(8.0F), min.y + (header - small) * 0.5F),
-                      u32(node.substitute ? c::accent : c::t3), tag);
+                      u32(node.substitute ? c::accent : c::t3), tag.c_str());
 
         char line[160];
         float y = min.y + header + px(7.0F);
-        std::snprintf(line, sizeof(line), "in  %s",
+        // What it reads and writes: cut with an ellipsis inside the node, all of it in the
+        // tooltip (a long list ran past the node's right edge, clipped mid-character).
+        const float room = nodeWidth_ - px(20.0F);
+        char inputs[160];
+        std::snprintf(inputs, sizeof(inputs), "in  %s",
                       node.inputs.empty() ? "-" : joined(node.inputs).c_str());
-        draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2), line);
+        bool cut = fit::draw(draw, fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2),
+                             inputs, room);
         y += px(19.0F);
-        std::snprintf(line, sizeof(line), "out %s",
+        char outputs[160];
+        std::snprintf(outputs, sizeof(outputs), "out %s",
                       node.outputs.empty() ? "-" : joined(node.outputs).c_str());
-        draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2), line);
+        cut = fit::draw(draw, fonts.mono, small, ImVec2(min.x + px(10.0F), y), u32(c::t2), outputs,
+                        room) ||
+              cut;
+        if ((cut || cutHeader) && hovered) {
+            ImGui::SetTooltip("%s  %.*s\n%s\n%s", name, static_cast<int>(tagText.size()),
+                              tagText.data(), inputs, outputs);
+        }
         y += px(19.0F);
         if (node.substitute) {
             std::snprintf(line, sizeof(line), "replaces the module");

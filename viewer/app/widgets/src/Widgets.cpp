@@ -92,10 +92,58 @@ void dashedRect(ImDrawList* draw, const ImVec2& min, const ImVec2& max, ImU32 co
     path.Size = 0;  // the path was only used to lay out the outline
 }
 
+/// Calls `line(begin, end, index)` for each line of `text` wrapped at `wrapWidth` pixels in
+/// `font` at `size` pixels, as Dear ImGui wraps (ImFont::CalcTextSizeA): at blanks after words,
+/// at newlines, and inside a word longer than the line. Returns the number of lines.
+template <class Line>
+int forEachLine(ImFont* font, float size, std::string_view text, float wrapWidth,
+                const Line& line) {
+    const char* s = text.data();
+    const char* const end = text.data() + text.size();
+    int index = 0;
+    while (s < end) {
+        const char* newline = static_cast<const char*>(std::memchr(s, '\n', end - s));
+        const char* const lineEnd = newline != nullptr ? newline : end;
+        const char* eol = wrapWidth > 0.0F
+                              ? ImFontCalcWordWrapPositionEx(font, size, s, lineEnd, wrapWidth)
+                              : lineEnd;
+        if (eol <= s && s < lineEnd) {
+            eol = s + 1;  // never an empty line in the middle: at least one byte moves on
+        }
+        // The line without the blanks it wrapped at.
+        const char* shownEnd = eol;
+        while (shownEnd > s && (shownEnd[-1] == ' ' || shownEnd[-1] == '\t')) {
+            --shownEnd;
+        }
+        line(s, shownEnd, index++);
+        s = ImTextCalcWordWrapNextLineStart(eol, end);
+    }
+    return std::max(index, 1);
+}
+
+/// A logical line height (0: the font size's paragraph line height) in pixels.
+float lineHeightPx(float sizePx, float lineHeight) {
+    const float dpi = std::max(ImGui::GetStyle().FontScaleDpi, 1.0e-3F);
+    return lineHeight > 0.0F ? px(lineHeight) : px(ParagraphLineHeight(sizePx / dpi));
+}
+
+/// Is a TextWrapPos pushed (PushTextWrapPos) in the current window?
+bool wrapping() {
+    return ImGui::GetCurrentWindowRead()->DC.TextWrapPos >= 0.0F;
+}
+
 void textV(ImFont* font, float size, const ImVec4& color, const char* format, va_list args) {
     ImGui::PushFont(font, size);
     ImGui::PushStyleColor(ImGuiCol_Text, color);
-    ImGui::TextV(format, args);
+    if (wrapping()) {
+        // Wrapped text keeps the design's line height (Paragraph), not Dear ImGui's 1.0 em.
+        const char* begin = nullptr;
+        const char* end = nullptr;
+        ImFormatStringToTempBufferV(&begin, &end, format, args);
+        Paragraph(std::string_view(begin, static_cast<std::size_t>(end - begin)));
+    } else {
+        ImGui::TextV(format, args);
+    }
     ImGui::PopStyleColor();
     ImGui::PopFont();
 }
@@ -140,6 +188,87 @@ void Strong(const char* format, ...) {
     va_start(args, format);
     textV(theme::fonts().sansSemiBold, theme::kBodySize, c::t1, format, args);
     va_end(args);
+}
+
+float ParagraphLineHeight(float fontSize) {
+    // reference.html: body { font-size: 13px; line-height: 18px }, .xs { 11px / 14px }; 12 px
+    // text (.sm) keeps the body's 18 px.
+    constexpr float kBodyLine = 18.0F;
+    constexpr float kSmallLine = 14.0F;
+    constexpr float kLargeEm = 1.4F;
+    if (fontSize <= theme::kCaptionSize + 0.01F) {
+        return kSmallLine;
+    }
+    if (fontSize <= theme::kBodySize + 0.01F) {
+        return kBodyLine;
+    }
+    return std::round(fontSize * kLargeEm);
+}
+
+void Paragraph(std::string_view text, float lineHeight, float wrapWidth) {
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if (window->SkipItems) {
+        return;
+    }
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize();
+    const float line = lineHeightPx(size, lineHeight);
+    const ImVec2 at = window->DC.CursorPos;
+    float wrap = wrapWidth;
+    if (wrap <= 0.0F) {
+        wrap = ImGui::CalcWrapWidthForPos(
+            at, window->DC.TextWrapPos >= 0.0F ? window->DC.TextWrapPos : 0.0F);
+    }
+    float width = 0.0F;
+    const int lines = forEachLine(font, size, text, wrap, [&](const char* b, const char* e, int) {
+        width = std::max(width, font->CalcTextSizeA(size, FLT_MAX, 0.0F, b, e).x);
+    });
+    const ImRect box(at, ImVec2(at.x + width, at.y + line * static_cast<float>(lines)));
+    ImGui::ItemSize(box, 0.0F);
+    if (!ImGui::ItemAdd(box, 0)) {
+        return;
+    }
+    DrawParagraph(window->DrawList, font, size, at, ImGui::GetColorU32(ImGuiCol_Text), text, wrap,
+                  lineHeight);
+}
+
+void ParagraphF(ImFont* font, float size, const ImVec4& color, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    const char* begin = nullptr;
+    const char* end = nullptr;
+    ImFormatStringToTempBufferV(&begin, &end, format, args);
+    va_end(args);
+    ImGui::PushFont(font, size);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    Paragraph(std::string_view(begin, static_cast<std::size_t>(end - begin)));
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+bool DrawParagraph(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
+                   std::string_view text, float wrapWidth, float lineHeight, float maxY) {
+    const float line = lineHeightPx(size, lineHeight);
+    // CSS centres the text's line (Dear ImGui's font size) in the line box: half the leading
+    // above it.
+    const float lead = (line - size) * 0.5F;
+    bool cut = false;
+    forEachLine(font, size, text, wrapWidth, [&](const char* b, const char* e, int index) {
+        const float top = at.y + line * static_cast<float>(index);
+        if (top + line > maxY + 0.5F) {
+            cut = true;
+            return;
+        }
+        draw->AddText(font, size, ImVec2(at.x, top + lead), color, b, e);
+    });
+    return cut;
+}
+
+float ParagraphHeight(ImFont* font, float size, std::string_view text, float wrapWidth,
+                      float lineHeight) {
+    const int lines =
+        forEachLine(font, size, text, wrapWidth, [](const char*, const char*, int) {});
+    return lineHeightPx(size, lineHeight) * static_cast<float>(lines);
 }
 
 void AlignRight(float itemWidth) {
@@ -716,6 +845,16 @@ std::string_view schemaDomain(std::string_view name) {
         }
     }
     return {};
+}
+
+float SegmentedWidth(const char* const* options, int count) {
+    ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
+    float width = 0.0F;
+    for (int i = 0; i < count; ++i) {
+        width += ImGui::CalcTextSize(options[i]).x + px(16.0F);  // as Segmented lays out a cell
+    }
+    ImGui::PopFont();
+    return width;
 }
 
 bool Segmented(const char* id, const char* const* options, int count, int* index) {

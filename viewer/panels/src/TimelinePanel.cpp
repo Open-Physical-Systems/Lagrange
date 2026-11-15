@@ -114,7 +114,15 @@ private:
         widgets::Pill(replay ? "REPLAY" : "LIVE",
                       replay ? widgets::PillKind::Info : widgets::PillKind::Ok);
 
+        // The step and speed choices go to a line of their own in a narrow panel (they were cut
+        // off at its right edge).
+        const float choices = ImGui::CalcTextSize("step").x + ImGui::CalcTextSize("speed").x +
+                              px(6.0F + 74.0F + 10.0F + 6.0F + 64.0F);
         ImGui::SameLine(0.0F, px(10.0F));
+        if (ImGui::GetContentRegionAvail().x < choices) {
+            ImGui::NewLine();
+        }
+        ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("step");
         ImGui::SameLine(0.0F, px(6.0F));
         ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
@@ -147,19 +155,25 @@ private:
         }
         ImGui::PopFont();
 
-        // The time window of the track. It moves to its own line when the panel is narrow.
-        ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
-        float needed = 0.0F;
-        for (const char* option : kWindows) {
-            needed += ImGui::CalcTextSize(option).x + px(16.0F);
-        }
-        ImGui::PopFont();
+        // The time window of the track at the right end of the row, after its "window" label
+        // (design) when there is room for both; on a line of its own only when the panel is too
+        // narrow for the buttons.
+        const int count = static_cast<int>(kWindows.size());
+        const float buttons = widgets::SegmentedWidth(kWindows.data(), count);
+        const float label = ImGui::CalcTextSize("window").x + px(6.0F);
         ImGui::SameLine(0.0F, px(10.0F));
-        if (ImGui::GetContentRegionAvail().x < needed) {
+        const float room = ImGui::GetContentRegionAvail().x;
+        if (room < buttons) {
             ImGui::NewLine();
+        } else {
+            const bool withLabel = room >= label + buttons;
+            widgets::AlignRight(buttons + (withLabel ? label : 0.0F));
+            if (withLabel) {
+                ImGui::TextDisabled("window");
+                ImGui::SameLine(0.0F, px(6.0F));
+            }
         }
-        widgets::Segmented("##window", kWindows.data(), static_cast<int>(kWindows.size()),
-                           &window_);
+        widgets::Segmented("##window", kWindows.data(), count, &window_);
     }
 
     void track(PanelContext& context, double begin, double end, double now, bool ready) {
