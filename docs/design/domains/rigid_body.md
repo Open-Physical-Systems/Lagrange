@@ -152,6 +152,13 @@ profile's `rigid_body: {backend: NAME}`. Its contract is §3 and §5, binding:
   armature; `World::Joints::initialPosition` (or a warning that it starts at zero);
   `shift_origin`; and, for a backend that says it is deterministic, `save_state` and
   `restore_state` that restore a run bit for bit.
+- **Friction** is per collider: a contact takes the larger of its two colliders' coefficients
+  (MuJoCo's rule for geoms of equal priority), times `env/friction_scale`. Jolt keeps each
+  collider's coefficient on its sub-shape of the body's compound shape (the shape's user data)
+  and combines per contact manifold (`SetCombineFriction` with the sub-shape IDs); it turns off
+  manifold reduction on a body whose colliders differ, which would otherwise merge the contacts
+  of e.g. feet and body under one sub-shape. Through v1.3.0 Jolt took the largest coefficient of a
+  body's colliders for all of them (the legged spike, `docs/plan/spikes/legged-contact.md` §5).
 
 MuJoCo and kinematic bodies (since 1.2.x): MuJoCo makes no contact between two bodies without
 degrees of freedom (a kinematic body and the scenery, or two kinematic bodies), but its broad
@@ -183,6 +190,7 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 | A pendulum | period of the physical pendulum, `2π √(I / (m g d))·(1 + θ₀²/16)`, within 0.5 % |
 | A pendulum's energy | from 1 rad, 60 s at 1 ms: period of the first five swings within 0.25 % of the exact `4 √(I / (m g d))·K(sin(θ₀/2))`; energy never above its start by 0.5 %, at least 80 % of it kept (§8.1) |
 | A box on a slope | friction 1: holds at 30° (moves < 1 cm in 1.4 s), slides at 60° (> 0.3 m) |
+| Friction per collider | a body box of friction 1 on four feet of 0.3 (the ramp 0.3): holds at 10°, slides at 25° at `g (sin θ − 0.3 cos θ)` within 10 % |
 | A stack of three boxes | stands for 10 s: the top box within 1 cm of its place |
 | The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
 | Determinism and state | two runs bit-identical; a saved state restored runs on bit-identically |
@@ -190,7 +198,9 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
 `modules/rigid_body/jolt_backend/src/jolt_plugin.cpp`, `--plugin lagrange_jolt`) pass it; Jolt and
 `jolt_abi` give identical numbers. On Jolt the AMR's loop ends 5.3 % of its 5.4 m from MuJoCo's
-end (heading drift from its per-body friction). Writing the suite found two Jolt bugs, both
+end (heading drift; not from friction, since each of the AMR's bodies has one friction on all
+its colliders: the run is bit for bit the same with Jolt's friction per body or per collider).
+Writing the suite found two Jolt bugs, both
 fixed (a third, Jolt's default body damping, came up later and is fixed too): loose objects of one world file passed through each other (collisions were filtered by
 robot index instead of by tree), and a restored state lost its contacts with the static scenery.
 Restored contacts now include the scenery whenever it is unchanged; it changes between a save

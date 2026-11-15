@@ -286,15 +286,17 @@ def hexapod() -> str:
 
 RIGID_MU = 0.5  # atan 0.5 = 26.57°
 RIGID_SLOPES = (10.0, 20.0, 25.0, 26.0, 28.0, 32.0)
+BODY1_SLOPES = (26.0, 28.0, 32.0)  # the body box at μ 1 on μ 0.5 feet: holds, slides, slides
 STAND_DEPTH = 0.28  # m, hip to foot centre (the example's stance)
 
 
-def rigid_quad_slope(deg: float) -> str:
+def rigid_quad_slope(deg: float, base_mu: float = RIGID_MU, name: str = "rigid_quad_slope") -> str:
     """The quadruped as one rigid body in its stance (legs welded), so that only the contacts can
     give: the creep test without a controller. Same mass, feet where the standing robot has them
-    (under the hips), μ 0.5 on feet, body and slab (the body's too: Jolt takes one friction per
-    rigid body, the largest of its colliders', so a body at MJCF's default 1 would hold the feet). It tips over forward beyond about 33.7°, so the
-    slopes stay below that."""
+    (under the hips), μ 0.5 on feet and slab, and on the body box unless `base_mu` says otherwise
+    (`rigid_body1_quad_slope_*`: the body at MJCF's default 1, which Jolt once gave the whole
+    robot, as it took one friction per rigid body). It tips over forward beyond about 33.7°, so
+    the slopes stay below that."""
     pos = _on_slab(deg, STAND_DEPTH + FOOT_R + 0.0005)
     feet = []
     for leg, (sx, sy) in LEGS.items():
@@ -305,13 +307,13 @@ def rigid_quad_slope(deg: float) -> str:
         )
     bx, by, bz = (s / 2 for s in BASE_SIZE)
     return (
-        _header(f"rigid_quad_slope_{deg:g}")
+        _header(f"{name}_{deg:g}")
         + f"""  <worldbody>
 {_slab(deg, RIGID_MU)}
     <body name="base_link" pos="{pos[0]} {pos[1]} {pos[2]}" euler="0 {math.radians(deg)} 0">
       <freejoint name="base_free"/>
       <inertial pos="0 0 -0.05" mass="{QUAD_M}" diaginertia="0.2 0.4 0.4"/>
-      <geom name="base" type="box" size="{bx} {by} {bz}" friction="{RIGID_MU}" mass="0"/>
+      <geom name="base" type="box" size="{bx} {by} {bz}" friction="{base_mu}" mass="0"/>
 {chr(10).join(feet)}
     </body>
   </worldbody>
@@ -339,6 +341,10 @@ def main() -> int:
         files[f"quad_slope_{d:g}.xml"] = quad_slope(d)
     for d in RIGID_SLOPES:
         files[f"rigid_quad_slope_{d:g}.xml"] = rigid_quad_slope(d)
+    for d in BODY1_SLOPES:
+        files[f"rigid_body1_quad_slope_{d:g}.xml"] = rigid_quad_slope(
+            d, 1.0, "rigid_body1_quad_slope"
+        )
     for d in BOX_SLOPES:
         files[f"box_slope_{d:g}.xml"] = box_slope(d)
     for name, text in files.items():

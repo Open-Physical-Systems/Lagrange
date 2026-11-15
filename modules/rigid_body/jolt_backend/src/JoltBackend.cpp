@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <mutex>
 #include <numbers>
@@ -65,6 +66,25 @@ constexpr double kArmatureRelaxation = 0.5;
 constexpr float kMaxAngularVelocityRadPerS = 1.0e6F;
 
 // Object layers: static scenery, and everything that moves.
+// A collider's own friction rides on its Jolt shape as user data: this tag in the upper 32 bits,
+// the float's bits in the lower. A body's Jolt friction is then only the scale of all of them
+// (env/friction_scale), so that a robot's feet and its body each touch with their own.
+constexpr JPH::uint64 kFrictionTag = 0x4C46'5249U;  // "LFRI"
+
+void tagFriction(JPH::Shape& shape, double friction) {
+    shape.SetUserData((kFrictionTag << 32U) |
+                      std::bit_cast<std::uint32_t>(static_cast<float>(friction)));
+}
+
+/// The friction of the collider a contact touches on `body`: its own, times the body's scale.
+float colliderFriction(const JPH::Body& body, const JPH::SubShapeID& part) {
+    const JPH::uint64 data = body.GetShape()->GetSubShapeUserData(part);
+    if ((data >> 32U) != kFrictionTag) {
+        return body.GetFriction();
+    }
+    return std::bit_cast<float>(static_cast<std::uint32_t>(data)) * body.GetFriction();
+}
+
 constexpr JPH::ObjectLayer kStaticLayer = 0;
 constexpr JPH::ObjectLayer kMovingLayer = 1;
 constexpr JPH::uint kLayers = 2;
@@ -278,13 +298,12 @@ struct JoltBackend::Impl {
         JPH::BodyID id;
         std::uint32_t root{0};
         double mass{0.0};
-        Mat3 inertia{};  // about the centre of mass, in the root's frame
-        Vec3 com{};      // in the root's frame
-        float friction{0.5F};
+        Mat3 inertia{};       // about the centre of mass, in the root's frame
+        Vec3 com{};           // in the root's frame
         Vec3 lastVelocity{};  // of the centre of mass, at the end of the previous step
     };
     std::vector<Group> groups;
-    std::vector<std::pair<JPH::BodyID, float>> staticFriction;  // scenery: body, base friction
+    std::vector<JPH::BodyID> staticBodies;  // scenery, for the friction scale
     double appliedFrictionScale{1.0};
     std::vector<std::int32_t> groupOf;  // per world body; -1 for static ones
     std::vector<Pose> inGroup;          // per world body: its pose in its group root's frame
@@ -409,10 +428,10 @@ Vec3 JoltBackend::Impl::anchorOf(const Joint& j) const {
 void JoltBackend::Impl::applyFrictionScale(double scale) {
     JPH::BodyInterface& bi = system->GetBodyInterfaceNoLock();
     for (const Group& group : groups) {
-        bi.SetFriction(group.id, static_cast<float>(group.friction * scale));
+        bi.SetFriction(group.id, static_cast<float>(scale));
     }
-    for (const auto& [id, friction] : staticFriction) {
-        bi.SetFriction(id, static_cast<float>(friction * scale));
+    for (const JPH::BodyID id : staticBodies) {
+        bi.SetFriction(id, static_cast<float>(scale));
     }
     appliedFrictionScale = scale;
 }
@@ -762,14 +781,14 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
     s.system = std::make_unique<JPH::PhysicsSystem>();
     s.system->Init(4096, 0, 8192, 8192, s.broadPhase, s.objectVsBroadPhase, s.objectPairs);
     s.system->SetGravity(jv(world.gravityLocal));
-    // Contact friction is the larger of the two bodies', as MuJoCo combines its geoms' (Jolt's
-    // default is the geometric mean).
-    s.system->SetCombineFriction(
-        [](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
-            return std::max(a.GetFriction(), b.GetFriction());
-        });
+    // Contact friction is the larger of the two colliders' (each a sub-shape of its body), as
+    // MuJoCo combines its geoms' (Jolt's default is the geometric mean of the bodies').
+    s.system->SetCombineFriction([](const JPH::Body& a, const JPH::SubShapeID& partA,
+                                    const JPH::Body& b, const JPH::SubShapeID& partB) {
+        return std::max(colliderFriction(a, partA), colliderFriction(b, partB));
+    });
     s.gravity = world.gravityLocal;
-    s.staticFriction.clear();
+    s.staticBodies.clear();
     s.appliedFrictionScale = 1.0;
     s.hasArmature = false;
     JPH::BodyInterface& bi = s.system->GetBodyInterfaceNoLock();
@@ -830,8 +849,9 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
             }
         }
         JPH::StaticCompoundShapeSettings compound;
-        float friction = 0.0F;
         int parts = 0;
+        bool mixedFriction = false;
+        double firstFriction = 0.0;
         for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
             const BodyId owner = world.colliders.body[c];
             if (owner == kWorldBody || s.groupOf[owner.index] != static_cast<std::int32_t>(g)) {
@@ -845,9 +865,13 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                                      "jolt: collider of " + bodies.names[owner.index] + ": " +
                                          std::string(shape.GetError().c_str()));
             }
+            tagFriction(*shape.Get(), world.colliders.friction[c]);
             compound.AddShape(jv(p.position),
                               shapeRotation(world.colliders.shape[c], p.orientation), shape.Get());
-            friction = std::max(friction, static_cast<float>(world.colliders.friction[c]));
+            if (parts == 0) {
+                firstFriction = world.colliders.friction[c];
+            }
+            mixedFriction = mixedFriction || world.colliders.friction[c] != firstFriction;
             ++parts;
         }
         JPH::RefConst<JPH::Shape> shape;
@@ -880,13 +904,15 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
         }
         tensorJ(3, 3) = 1.0F;
         settings.mMassPropertiesOverride.mInertia = tensorJ;
-        // A frictionless collider stays frictionless (MuJoCo keeps 0 too); only a body without
-        // colliders, which touches nothing, takes Jolt's default.
-        settings.mFriction = parts > 0 ? friction : 0.5F;
+        // Each collider carries its own friction (tagFriction); the body's is the scale. A
+        // frictionless collider stays frictionless (MuJoCo keeps 0 too).
+        settings.mFriction = 1.0F;
+        // Jolt merges touching manifolds of one body with similar normals, keeping one of their
+        // sub-shapes: with colliders of different friction that would pick one friction for all.
+        settings.mUseManifoldReduction = !mixedFriction;
         s.groups[g].mass = mass;
         s.groups[g].inertia = inertia;
         s.groups[g].com = com;
-        s.groups[g].friction = settings.mFriction;
         settings.mCollisionGroup = JPH::CollisionGroup(
             filter, static_cast<JPH::CollisionGroup::GroupID>(bodies.robot[s.groups[g].root]),
             static_cast<JPH::CollisionGroup::SubGroupID>(g));
@@ -917,12 +943,12 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
             return Status::error(StatusCode::InvalidConfig,
                                  "jolt: " + std::string(shape.GetError().c_str()));
         }
+        tagFriction(*shape.Get(), world.colliders.friction[c]);
         JPH::BodyCreationSettings settings(shape.Get(), JPH::RVec3(jv(p.position)),
                                            shapeRotation(world.colliders.shape[c], p.orientation),
                                            JPH::EMotionType::Static, kStaticLayer);
-        settings.mFriction = static_cast<float>(world.colliders.friction[c]);
-        s.staticFriction.emplace_back(bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate),
-                                      settings.mFriction);
+        settings.mFriction = 1.0F;  // the scale; the collider's own is on its shape
+        s.staticBodies.push_back(bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate));
     }
 
     // Joints between groups: the anchor is the child's origin, the axis in the child frame.

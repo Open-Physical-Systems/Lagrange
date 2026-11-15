@@ -2,6 +2,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <set>
 #include <string>
@@ -25,6 +26,62 @@ Pose relative(const Pose& a, const Pose& b) {
     return {rotate(inverse, {b.position[0] - a.position[0], b.position[1] - a.position[1],
                              b.position[2] - a.position[2]}),
             multiply(inverse, b.orientation)};
+}
+
+/// Takes the helper frames' placeholder masses (kPlaceholderMassKg each, kPlaceholderInertia
+/// about every axis, at `frames` in the body frame) out of a link's mass, centre of mass and
+/// inertia (about the centre of mass, [xx, yy, zz, xy, xz, yz]), so that the link and its frames
+/// weigh, balance and turn as the link alone. Where the frames sit on the link's joint axes (an
+/// MJCF body's joints all at its origin, the usual case) that holds in every pose, not only at
+/// rest: a helper's point stays where it is in the body frame. False, changing nothing, when the
+/// link is too light to give it (the rest would not stay a positive-definite inertia with a
+/// margin: Gershgorin's rows at half the original diagonal).
+bool takeHelperMass(double& mass, std::array<double, 3>& com, std::array<double, 6>& inertia,
+                    const std::vector<std::array<double, 3>>& frames) {
+    const double taken = kPlaceholderMassKg * static_cast<double>(frames.size());
+    const double rest = mass - taken;
+    if (rest <= 0.5 * mass) {
+        return false;
+    }
+    std::array<double, 3> c{};  // the rest's centre of mass
+    for (std::size_t i = 0; i < 3; ++i) {
+        double moment = mass * com[i];
+        for (const auto& f : frames) {
+            moment -= kPlaceholderMassKg * f[i];
+        }
+        c[i] = moment / rest;
+    }
+    // Inertia about c: the whole link's, moved from com to c, less each helper's (its own and
+    // its point mass's about c). Parallel axis: I_c = I_com + m (|d|² 1 − d dᵀ), d = com − c.
+    const auto shift = [](double m, const std::array<double, 3>& d) {
+        const double d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        return std::array<double, 6>{m * (d2 - d[0] * d[0]), m * (d2 - d[1] * d[1]),
+                                     m * (d2 - d[2] * d[2]), -m * d[0] * d[1],
+                                     -m * d[0] * d[2],       -m * d[1] * d[2]};
+    };
+    std::array<double, 6> out = inertia;
+    const std::array<double, 6> whole = shift(mass, {com[0] - c[0], com[1] - c[1], com[2] - c[2]});
+    for (std::size_t i = 0; i < 6; ++i) {
+        out[i] += whole[i];
+    }
+    for (const auto& f : frames) {
+        const std::array<double, 6> point =
+            shift(kPlaceholderMassKg, {f[0] - c[0], f[1] - c[1], f[2] - c[2]});
+        for (std::size_t i = 0; i < 6; ++i) {
+            out[i] -= point[i] + (i < 3 ? kPlaceholderInertia : 0.0);
+        }
+    }
+    // Rows: xx with xy, xz; yy with xy, yz; zz with xz, yz.
+    const std::array<std::array<std::size_t, 3>, 3> rows{{{0, 3, 4}, {1, 3, 5}, {2, 4, 5}}};
+    for (const auto& r : rows) {
+        if (out[r[0]] - std::abs(out[r[1]]) - std::abs(out[r[2]]) < 0.5 * inertia[r[0]]) {
+            return false;
+        }
+    }
+    mass = rest;
+    com = c;
+    inertia = out;
+    return true;
 }
 
 /// Rotation matrix (row-major) of a unit quaternion.
@@ -339,10 +396,6 @@ private:
             parent = helper;
             parentWorld = world;
         }
-        if (joints.size() > 1) {
-            note(m_, "link '" + link.name + "' has " + std::to_string(joints.size()) +
-                         " joints; a 1 g frame was added for each joint but the last");
-        }
 
         // The body frame is at the anchor of the link's (last) joint.
         const bool moving = !joints.empty();
@@ -357,6 +410,20 @@ private:
             mass = kPlaceholderMassKg;
             com = {};
             inertia = {kPlaceholderInertia, kPlaceholderInertia, kPlaceholderInertia, 0, 0, 0};
+        } else if (joints.size() > 1) {
+            std::vector<std::array<double, 3>> frames;  // the helpers' origins, in the body frame
+            for (std::size_t k = 0; k + 1 < joints.size(); ++k) {
+                frames.push_back(relative(frame, joints[k]->anchor).position);
+            }
+            if (takeHelperMass(mass, com, inertia, frames)) {
+                note(m_, "link '" + link.name + "' has " + std::to_string(joints.size()) +
+                             " joints; a 1 g frame was added for each joint but the last, its "
+                             "mass taken from the link's");
+            } else {
+                note(m_, "link '" + link.name + "' has " + std::to_string(joints.size()) +
+                             " joints; a 1 g frame was added for each joint but the last (the "
+                             "link is too light to give it)");
+            }
         }
         const BodyId body = addBody(link.name, parent, parentWorld, world, mass, com, inertia);
         if (moving) {

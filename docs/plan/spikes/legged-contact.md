@@ -6,8 +6,11 @@ at 0.5, 1 and 2 ms, and how fast does `lagrange.envs` run a legged robot? Step 1
 "tests 1–5 and 10 on both engines at 0.5, 1 and 2 ms; the RL speed ... No model changes. Decides
 §4's open points." Test 6 (rimless wheel) was feasible and is included.
 
-**Nothing in Lagrange was changed.** Everything below runs today's `dev` (2e06653) through the
-Python bindings, with test models and scripts in [`legged/`](legged/).
+**Nothing in Lagrange was changed for the measurements.** Everything below runs `dev` (2e06653)
+through the Python bindings, with test models and scripts in [`legged/`](legged/). Two findings
+were fixed afterwards (`fix/jolt-friction-mjcf-joints`): Jolt's friction per collider (§5) and the
+MJCF importer's helper frames' mass (§2); the numbers they change are rerun and marked "since the
+fix".
 
 ## Answer in short
 
@@ -56,7 +59,8 @@ Python bindings, with test models and scripts in [`legged/`](legged/).
   writes `MUJOCO_LOG.TXT` into the working directory when the gain sweep makes it diverge.
 - Engines: MuJoCo 3.12.0 (vendor), Jolt 5.6.0 (vendor), as Lagrange configures them (MuJoCo:
   elliptic cone, `implicitfast`, default `solref`/`solimp`, `condim` 3; Jolt: one body per rigid
-  group, friction the larger of the two bodies', no sleeping).
+  group, friction the larger of the two bodies' at measurement time, the larger of the two
+  colliders' since the fix; no sleeping).
 - Every case is an MJCF with its own floor or slab (so Lagrange adds no ground) and a profile
   that picks the backend and `rigid_body.dt` and turns every other domain to its substitute.
 - Legs are held by an **impedance law in Python**: before every physics step, each joint gets
@@ -117,10 +121,17 @@ and the model's inertial offsets) and the measured feet gives each pair's share.
 - Left and right agree to 0.01 N on MuJoCo and to 0.01–0.02 N on Jolt (Jolt's rigid contacts
   make the split indeterminate; here it stayed symmetric).
 - **Hexapod** (6 feet, kp 30): every foot 9.00–9.01 N on MuJoCo and Jolt at 0.5 and 1 ms. The
-  sum reads +0.11 % over the 5.5 kg weight: the MJCF importer adds a 1 g placeholder body for each
+  sum read +0.11 % over the 5.5 kg weight: the MJCF importer added a 1 g placeholder body for each
   extra joint of a multi-joint body (`kPlaceholderMassKg`, `io/importers/src/Description.cpp`),
-  six here, which is 0.109 %; the rest agrees to 0.003 %. At 2 ms Jolt diverged with this law
-  (§8); MuJoCo held.
+  six here, which is 0.109 %; the rest agreed to 0.003 %. **Since the fix** the helper frames
+  take their 1 g from their link (its mass, centre of mass and inertia less theirs, so the link
+  and its frames weigh, balance and turn as the MJCF body; exact in every pose when the body's
+  joints share its origin, as here), the robot weighs the MJCF's 5.5 kg, and the sum reads
+  +0.003 % on MuJoCo and −0.0001 to −0.0008 % on Jolt at 0.5 and 1 ms (feet 8.99–9.00 N;
+  `results/hexapod.json`). MuJoCo refuses a massless body with a joint ("mass and inertia of
+  moving bodies must be larger than mjMINVAL", checked in standalone MuJoCo 3.12.0) and Jolt
+  needs a mass per body, so the frames keep theirs. At 2 ms Jolt diverged with this law (§8),
+  before and after; MuJoCo held.
 
 ## 3. Static leg torques (test 3)
 
@@ -217,12 +228,18 @@ its first 2 s and 0.89 mm in the next 2 s on MuJoCo here, against 0.916 mm in co
 - The articulated runs on 28° and 34° (μ 0.6) are not in the table: the robot, rising from
   straight legs on kp 100, pitched over forwards on both engines. That is the test's controller,
   not contact; the rigid robot above answers the friction question.
-- **Jolt reads one friction per rigid body**, the largest of its colliders'
+- **Jolt read one friction per rigid body**, the largest of its colliders'
   (`JoltBackend.cpp`, compound shape). The first run of the rigid robot left the body box at
   MJCF's default μ 1, and on Jolt the robot then held at 28° and 32° where its μ 0.5 feet should
-  slide (MuJoCo slid; `results/rigid_body_friction_1.json`). A legged robot whose feet have a
-  friction different from the shin they sit on gets the larger on Jolt. The RFC's per-collider
-  `ContactAPI_1` (RFC §4, §6) inherits this.
+  slide (MuJoCo slid). **Since the fix** each collider carries its own friction on its Jolt
+  sub-shape and a contact takes the larger of the two colliders' (MuJoCo's rule for geoms of
+  equal priority); manifold reduction is off for a body whose colliders differ, since it would
+  merge the feet's and the body's contacts under one sub-shape. Rerun with the body box at μ 1
+  (`rigid_body1_quad_slope_*`, `contact_tests.py ... rigid_body_friction_1`,
+  `results/rigid_body_friction_1.json`): on 26° Jolt holds (0 creep) and MuJoCo creeps as in the
+  table; on 28° and 32° Jolt slides at 0.2746–0.2747 and 1.0388–1.0389 m/s² (closed form 0.2747
+  and 1.0388), its pose bit for bit that of the μ 0.5 body, and MuJoCo is unchanged. Conformance
+  test `EachColliderTouchesWithItsOwnFriction` checks it on every backend.
 
 ## 6. MuJoCo `noslip` and armature, standalone
 
@@ -381,8 +398,8 @@ asynchronous learner sees); `ParallelEnvs` steps them in lock step through pipes
   and is what menagerie's models are tuned for. Its two legged errors are measured: a centimetre of
   soft landing and slope creep that legs multiply by ~13. Jolt: rigid contacts, no creep, no sink,
   but impacts that keep 2–3 % too much velocity (a 10–17 % fast rimless wheel), step-dependent
-  peak forces, one friction per rigid body, and less margin for stiff explicit gains. Supported
-  and reported, not the reference.
+  peak forces, and less margin for stiff explicit gains (its one friction per rigid body is
+  fixed, §5). Supported and reported, not the reference.
 - **RFC §4 Creep.** It is real and large on legs (5.7 mm/s standing on 10°, 11.5 mm/s on 20°): a
   robot standing for a minute on a ramp slides 0.3–0.7 m on MuJoCo, and Lagrange reproduces
   standalone MuJoCo's creep exactly. Two levers, both measured (§6): `noslip_iterations` (5 is
@@ -407,7 +424,8 @@ asynchronous learner sees); `ParallelEnvs` steps them in lock step through pipes
   transients differ by engine by design (MuJoCo: a 40 ms spring; Jolt: one step of `m Δv/dt`).
 - **Smaller things found.** (a) Joints on a fixed base are held at their start until commanded,
   which surprises a test that wants a free rail. (b) The MJCF importer's 1 g placeholder bodies
-  (one per extra joint) add weight, 0.1 % on the hexapod. (c) Lagrange's default joint loops
+  (one per extra joint) added weight, 0.1 % on the hexapod (fixed: taken from their link, §2).
+  (c) Lagrange's default joint loops
   (8 Hz) cannot hold a legged robot up; `LagrangeEnv(mode="position")` inherits that until
   impedance mode exists.
 
