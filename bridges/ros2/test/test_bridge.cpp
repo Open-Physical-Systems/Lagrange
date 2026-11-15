@@ -1,5 +1,5 @@
-// The bridge over a real DDS domain (ROS_DOMAIN_ID 73, localhost): a fake module writes the
-// signals a robot would, the bridge publishes them, and a test node listens.
+// The bridge over a real DDS domain ($ROS_DOMAIN_ID, else 73; localhost): a fake module writes
+// the signals a robot would, the bridge publishes them, and a test node listens.
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 

@@ -40,7 +40,7 @@ Each launch file does the same three things:
 2. Runs your node, `on_exit=Shutdown()`.
 3. Runs the viewer as a plain process unless `viewer:=false`. It finds the server on the socket given by `--listen`.
 
-Each takes two launch arguments: `viewer` (default `true`) and `once` (default `false`). With `once:=true` the launch ends when the node has its result; without it the run stays up to look at. Every node logs one line starting `RESULT:`.
+Each takes `viewer` (default `true`) and `once` (default `false`). With `once:=true` the launch ends when the node has its result; without it the run stays up to look at. Every node logs one line starting `RESULT:`. The server-launching ones also take `endpoint` (default `unix:/tmp/lagrange_example_<name>.sock`), the socket the server listens on and the viewer connects to.
 
 ## Checking them
 
@@ -48,6 +48,8 @@ Each takes two launch arguments: `viewer` (default `true`) and `once` (default `
 tools/ci/check_examples.py              # all, without a viewer
 tools/ci/check_examples.py arm power    # some
 ```
+
+Each runs on `$ROS_DOMAIN_ID` when it is set, else on a domain of its own from 60 up, with its socket in a temporary directory of the run's, so that several checks can run on one machine.
 
 It runs each launch file and fails when one logs no result or does not end in time. `colcon test --packages-select lagrange_examples_check` runs the same. A result is only logged when the example did its job, but the check does not compare numbers.
 

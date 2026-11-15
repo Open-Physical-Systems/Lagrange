@@ -64,6 +64,7 @@ if(BUILD_TESTING)
     ament_add_gtest(test_fields test/test_fields.cpp)
     target_link_libraries(test_fields lagrange_fields)
     lagrange_target_defaults(test_fields)
+    lagrange_test_private_tmpdir(test_fields)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

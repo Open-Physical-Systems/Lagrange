@@ -11,7 +11,9 @@
 set -euo pipefail
 
 PX4_DIR=${PX4_DIR:-$HOME/PX4-Autopilot}
-OUT=${OUT:-/tmp/lagrange-px4}
+# Logs in a directory of this run's unless OUT names one. (The MAVLink ports are fixed, so two
+# missions still cannot fly at once on one machine.)
+OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/lagrange-px4-XXXXXX")}
 mkdir -p "$OUT"
 build=$PX4_DIR/build/px4_sitl_default
 python=$PX4_DIR/.venv/bin/python
@@ -31,7 +33,7 @@ mkdir -p "$build/rootfs"
 
 site=(--air-density 1.225 --geo-origin "47.397742,8.545594,488")  # PX4 SITL's default home
 robot=(--robot assets/robots/quad_x500/quad_x500.usda --world assets/worlds/open_field/open_field.usda)
-socket=${XDG_RUNTIME_DIR:-/tmp}/lagrange-px4.sock
+socket=${XDG_RUNTIME_DIR:-/tmp}/lagrange-px4-$$.sock
 if [ "${1:-}" = "--wind" ]; then
     ros2 run lagrange_server lagrange run profiles/examples/quad_x500_gusty.yaml "${robot[@]}" \
         "${site[@]}" --mavlink px4 --no-ros --listen "unix:$socket" >"$OUT/server.log" 2>&1 &

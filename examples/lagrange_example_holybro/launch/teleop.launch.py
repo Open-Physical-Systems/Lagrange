@@ -29,7 +29,8 @@ from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# The viewer finds the server on this socket, one per example so that they can run side by side.
+# The viewer finds the server on this socket, one per example so that they can run side by side
+# (endpoint:=unix:PATH for another, e.g. under a temporary directory of your own).
 ENDPOINT = "unix:/tmp/lagrange_example_holybro.sock"
 ROBOT = "holybro_x500_v2"
 # A 10 inch two-blade propeller, the Holybro's size, for the blade-element rotors of air:=live.
@@ -94,6 +95,7 @@ def teleop(context) -> list:
 
 
 def setup(context):
+    endpoint = LaunchConfiguration("endpoint").perform(context)
     if not (asset_dir() / ROBOT).is_dir():
         raise RuntimeError(
             f"the {ROBOT} meshes are not in {asset_dir()}: "
@@ -112,7 +114,7 @@ def setup(context):
         "--geo-origin",
         "47.397742,8.545594,488",
         "--listen",
-        ENDPOINT,
+        endpoint,
         # On the ground until /cmd_vel asks it to climb, instead of taking off after 1 s.
         "--no-demo",
     ]
@@ -144,7 +146,7 @@ def setup(context):
         # Not a ROS node: a plain process, so no --ros-args are appended. The follow camera stays
         # 4 m behind the drone, 20 degrees above it. (--scope SIGNAL,... would open the
         # Signals workspace with those plotted instead of the 3D view.)
-        viewer = ["lagrange_viewer", "--connect", ENDPOINT, "--follow", "4,20"]
+        viewer = ["lagrange_viewer", "--connect", endpoint, "--follow", "4,20"]
         if LaunchConfiguration("airflow").perform(context) == "true":
             field = "aero/air_box" if air == "live" else "aero/wind_speed"
             viewer += ["--overlays", "airflow", "--slice", f"{field}:xz"]
@@ -170,6 +172,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("viewer", default_value="true", description="open the viewer"),
+            DeclareLaunchArgument(
+                "endpoint", default_value=ENDPOINT, description="the server's socket"
+            ),
             DeclareLaunchArgument(
                 "teleop",
                 default_value="tx16s",

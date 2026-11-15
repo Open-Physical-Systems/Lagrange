@@ -375,6 +375,7 @@ if(BUILD_TESTING)
             LAGRANGE_PROFILE_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
     )
     lagrange_target_defaults(test_viewer_client)
+    lagrange_test_private_tmpdir(test_viewer_client)
 
     # The Geodesy tab's WGS84 <-> ENU, a header of the viewer's own, against the core's
     # coords that the server uses. lagrange_core in this test only: the client and panels do not.
@@ -436,6 +437,7 @@ if(BUILD_TESTING)
             LAGRANGE_PLUGIN_CATALOG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/catalog"
     )
     lagrange_target_defaults(test_viewer_builder)
+    lagrange_test_private_tmpdir(test_viewer_builder)
     # Read and write a URDF from the command line, and make the templates (WP-B); not installed.
     add_executable(builder_urdf_tool builder/test/urdf_tool.cpp)
     target_link_libraries(builder_urdf_tool PRIVATE lagrange_viewer_builder)

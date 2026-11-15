@@ -12,7 +12,7 @@ source install/setup.bash
 set -u
 
 work="$(mktemp -d)"
-export ROS_DOMAIN_ID=$((120 + $$ % 80))
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-$((120 + $$ % 80))}"
 trap 'rm -rf "$work"' EXIT
 robot=assets/robots/led_heatsink/led_heatsink.urdf
 

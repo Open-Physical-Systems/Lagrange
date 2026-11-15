@@ -1,6 +1,8 @@
 # Compile options shared by every Lagrange target.
 #
 #   lagrange_target_defaults(<target>)
+#   lagrange_test_private_tmpdir(<test target>...)
+#   lagrange_test_ros_domain(<test target> <default domain>)
 #
 # Options:
 #   LAGRANGE_WARNINGS_AS_ERRORS  Treat compiler warnings as errors.
@@ -54,6 +56,35 @@ function(lagrange_target_defaults target)
             PRIVATE -fsanitize=${_lagrange_sanitizers} -fno-sanitize=vptr
         )
     endif()
+endfunction()
+
+# Gives each run of a test executable a temporary directory of its own: before main() it makes
+# $TMPDIR/lagrange-test-XXXXXX, points TMPDIR and TEST_TMPDIR at it (which
+# ::testing::TempDir() and std::filesystem::temp_directory_path() read) and removes it at exit.
+# Tests that write fixed names under the temporary directory can then run concurrently on one
+# machine (several worktrees, CI jobs or agents) without overwriting each other's files.
+function(lagrange_test_private_tmpdir)
+    foreach(target IN LISTS ARGN)
+        target_sources(
+            ${target}
+            PRIVATE
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/lagrange_test_tmpdir.cpp"
+        )
+    endforeach()
+endfunction()
+
+# A test that talks over DDS runs on $ROS_DOMAIN_ID when the environment sets it, else on
+# <default domain>. (ament_add_gtest(... ENV ROS_DOMAIN_ID=N) would override the caller's.)
+function(lagrange_test_ros_domain target default_domain)
+    target_sources(
+        ${target}
+        PRIVATE
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/lagrange_test_ros_domain.cpp"
+    )
+    target_compile_definitions(
+        ${target}
+        PRIVATE LAGRANGE_TEST_ROS_DOMAIN_DEFAULT="${default_domain}"
+    )
 endfunction()
 
 # For targets that use the Vulkan C API. Its structs are initialised as

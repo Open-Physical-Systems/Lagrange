@@ -23,6 +23,7 @@ ENDPOINT = "unix:/tmp/lagrange_example_wind_tunnel.sock"
 
 
 def setup(context):
+    endpoint = LaunchConfiguration("endpoint").perform(context)
     robot = get_package_share_directory("lagrange_example_wind_tunnel") + "/robot/pod.urdf"
     tool = get_package_prefix("lagrange_server") + "/lib/lagrange_server/lagrange_tunnel"
     out = tempfile.mkdtemp(prefix="lagrange_tunnel_")
@@ -63,7 +64,7 @@ def setup(context):
                     "--world",
                     f"{out}/flow_view.usda",
                     "--listen",
-                    ENDPOINT,
+                    endpoint,
                 ],
                 output="screen",
             )
@@ -77,7 +78,7 @@ def setup(context):
                         "lagrange_viewer",
                         "lagrange_viewer",
                         "--connect",
-                        ENDPOINT,
+                        endpoint,
                     ],
                     output="screen",
                 )
@@ -89,6 +90,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("viewer", default_value="true", description="open the viewer"),
+            DeclareLaunchArgument(
+                "endpoint", default_value=ENDPOINT, description="the server's socket"
+            ),
             DeclareLaunchArgument("once", default_value="false", description="stop at the result"),
             DeclareLaunchArgument("speed", default_value="15", description="wind, m/s"),
             DeclareLaunchArgument(

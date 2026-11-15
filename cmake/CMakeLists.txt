@@ -8,7 +8,10 @@ find_package(ament_cmake REQUIRED)
 include(LagrangeCompileOptions.cmake)
 
 install(
-    FILES LagrangeCompileOptions.cmake
+    FILES
+        LagrangeCompileOptions.cmake
+        lagrange_test_tmpdir.cpp
+        lagrange_test_ros_domain.cpp
     DESTINATION share/${PROJECT_NAME}/cmake
 )
 

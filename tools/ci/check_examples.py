@@ -6,6 +6,10 @@
 Each example's launch file runs Lagrange and its node; with once:=true the node ends the launch
 when it has its result, which it logs as "RESULT: ...". An example fails when it logs none, or the
 launch does not end in time. Needs the workspace built and sourced.
+
+Each example runs on $ROS_DOMAIN_ID when it is set (so that runs on one machine, by several CI
+jobs or agents, each keep to their own domain), else on a domain of its own from 60 up; its
+server listens on a socket in a temporary directory of this run's, never a fixed path.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -30,10 +35,10 @@ def launches() -> dict[str, tuple[str, str]]:
     return found
 
 
-def run(package: str, launch: str, domain: int, timeout: float) -> tuple[bool, str]:
+def run(package: str, launch: str, domain: int, endpoint: str, timeout: float) -> tuple[bool, str]:
     environment = {**os.environ, "ROS_DOMAIN_ID": str(domain)}
     process = subprocess.Popen(
-        ["ros2", "launch", package, launch, "viewer:=false", "once:=true"],
+        ["ros2", "launch", package, launch, "viewer:=false", "once:=true", f"endpoint:={endpoint}"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -66,15 +71,20 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=150.0, help="seconds for each")
     args = parser.parse_args()
     all_examples = launches()
+    unknown = [name for name in args.names if name not in all_examples]
+    if unknown:
+        print(f"no example {unknown[0]}; there are {', '.join(all_examples)}")
+        return 2
+    given = os.environ.get("ROS_DOMAIN_ID", "")
     failed = 0
-    for offset, name in enumerate(args.names or all_examples):
-        if name not in all_examples:
-            print(f"no example {name}; there are {', '.join(all_examples)}")
-            return 2
-        package, launch = all_examples[name]
-        ok, text = run(package, launch, 60 + offset, args.timeout)
-        failed += not ok
-        print(f"{'ok  ' if ok else 'FAIL'} {name:14} {text}", flush=True)
+    with tempfile.TemporaryDirectory(prefix="lagrange-examples-") as sockets:
+        for offset, name in enumerate(args.names or all_examples):
+            package, launch = all_examples[name]
+            domain = int(given) if given else 60 + offset
+            endpoint = f"unix:{sockets}/{name}.sock"
+            ok, text = run(package, launch, domain, endpoint, args.timeout)
+            failed += not ok
+            print(f"{'ok  ' if ok else 'FAIL'} {name:14} {text}", flush=True)
     print("PASSED" if not failed else f"FAILED: {failed}")
     return 1 if failed else 0
 

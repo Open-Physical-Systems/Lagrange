@@ -71,6 +71,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_URDF="${assets}/robots/amr_diffdrive/amr_diffdrive.urdf"
     )
     lagrange_target_defaults(test_importers)
+    lagrange_test_private_tmpdir(test_importers)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

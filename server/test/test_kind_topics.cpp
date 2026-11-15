@@ -1,5 +1,5 @@
 // The built-in kinds on ROS with no --ros-topics map (sensors.md §9 "ROS topics of the built-in
-// kinds"), end to end: the sample AMR with its safety sensors, on ROS_DOMAIN_ID 77.
+// kinds"), end to end: the sample AMR with its safety sensors, on $ROS_DOMAIN_ID (else 77).
 #include "lagrange/server/Server.hpp"
 
 #include <chrono>

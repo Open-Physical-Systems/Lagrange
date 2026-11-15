@@ -67,6 +67,7 @@ if(BUILD_TESTING)
         lagrange_gpu::lagrange_gpu
     )
     lagrange_target_defaults(test_lbm)
+    lagrange_test_private_tmpdir(test_lbm)
     ament_add_gtest(test_lbm_box test/test_lbm_box.cpp TIMEOUT 300)
     target_link_libraries(
         test_lbm_box

@@ -54,6 +54,7 @@ if(BUILD_TESTING)
         PRIVATE LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
     )
     lagrange_target_defaults(test_fmu_host)
+    lagrange_test_private_tmpdir(test_fmu_host)
     # The netlist round trip runs ngspice when it is installed (apt ngspice; offline tool).
     find_program(NGSPICE ngspice)
     ament_add_gtest(test_export test/test_export.cpp TIMEOUT 120)
