@@ -85,6 +85,13 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
 - **Vehicles.**
   - They follow their lanes by the IDM (Treiber, Hennecke and Helbing 2000; a = 1.5 m/s²,
     b = 2 m/s², s0 = 2 m, T = 1.5 s) at the lane's speed limit, behind the agent or robot ahead.
+  - A robot is seen by its footprint (its root body's colliders, across and along the lane), where
+    it is and where it will be on its arc (speed and yaw rate held) within 3 s, as a leader at its
+    speed along the lane; not when the vehicle is through before it arrives. Into a junction they
+    also wait at the line while a robot is in their junction lane or will be before they are
+    through it, so they never stop inside the box in a robot's way (a car crossing a junction
+    meets a lane with its nose 2.3 m before its middle;
+    `DemoDrive.TheTrafficKeepsClearOfTheSedanInTheCityBlock`).
   - They take a seeded random successor at a lane's end, and come back in at a free entry lane at
     the network's edge.
   - Into a junction they stop on red and yellow, and wait while a crossing or merging junction

@@ -727,18 +727,7 @@ protected:
     }
 };
 
-/// The sedan alone: a traffic agent crossing the junction strikes it near 9 s, and where that
-/// leaves it depends on millimetres of its line.
-class SedanAloneServerTest : public SedanServerTest {
-protected:
-    void adjust(ServerOptions& options) override {
-        SedanServerTest::adjust(options);
-        options.trafficVehicles = 0;
-        options.trafficPedestrians = 0;
-    }
-};
-
-TEST_F(SedanAloneServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
+TEST_F(SedanServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
     for (std::uint64_t id = 10; id < 22; ++id) {  // 12 s, a second at a time
         v1::Envelope step = command(id);
@@ -1534,7 +1523,104 @@ TEST(DemoDrive, TheSedanBacksAwayFromWhatHoldsItAndDrivesOn) {
     EXPECT_GT(travelledLate, 20.0);  // m in the last 10 s: on its circle at 3 m/s
 }
 
-// The sedan on a banked, raised road (assets/worlds/banked_ring: a 5 m ring 1.5 m up, 5° of
+/// The corners of a footprint (x, y, yaw, length, width) on the ground.
+std::array<std::array<double, 2>, 4> cornersOf(double x, double y, double yaw, double length,
+                                               double width) {
+    const double c = std::cos(yaw);
+    const double s = std::sin(yaw);
+    std::array<std::array<double, 2>, 4> out{};
+    const std::array<std::array<double, 2>, 4> unit{{{1, 1}, {1, -1}, {-1, -1}, {-1, 1}}};
+    for (std::size_t k = 0; k < 4; ++k) {
+        const double u = unit[k][0] * length / 2.0;
+        const double v = unit[k][1] * width / 2.0;
+        out[k] = {x + c * u - s * v, y + s * u + c * v};
+    }
+    return out;
+}
+
+/// The distance between two convex footprints on the ground, 0 when they overlap.
+double footprintGap(const std::array<std::array<double, 2>, 4>& a,
+                    const std::array<std::array<double, 2>, 4>& b) {
+    const auto separatedBy = [](const auto& p, const auto& q) {  // p's edges as axes
+        double best = -INFINITY;
+        for (std::size_t k = 0; k < 4; ++k) {
+            const auto& e0 = p[k];
+            const auto& e1 = p[(k + 1) % 4];
+            double nx = e1[1] - e0[1];
+            double ny = -(e1[0] - e0[0]);
+            const double n = std::hypot(nx, ny);
+            nx /= n;
+            ny /= n;
+            double lo = INFINITY;
+            double hiP = -INFINITY;
+            for (const auto& r : p) {
+                hiP = std::max(hiP, nx * r[0] + ny * r[1]);
+            }
+            for (const auto& r : q) {
+                lo = std::min(lo, nx * r[0] + ny * r[1]);
+            }
+            best = std::max(best, lo - hiP);
+        }
+        return best;
+    };
+    return std::max(0.0, std::max(separatedBy(a, b), separatedBy(b, a)));
+}
+
+// Found with #422: in the city block a traffic car crossing the junction drove into the sedan on
+// its demo circle near 9 s; kinematic agents push without limit, so a robot they miss is struck.
+// Over a minute of the demo and three populations, no vehicle of the traffic comes within a few
+// centimetres of the sedan's body.
+TEST(DemoDrive, TheTrafficKeepsClearOfTheSedanInTheCityBlock) {
+    constexpr double kSedanLength = 4.6;  // m, sedan.urdf's body box
+    constexpr double kSedanWidth = 1.8;
+    for (const std::uint64_t seed : {1U, 2U, 3U}) {
+        ServerOptions options;
+        options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+        options.worldPath = LAGRANGE_TEST_CITY_USDA;
+        options.ros = false;
+        options.trafficSeed = seed;
+        Server server(options);
+        ASSERT_TRUE(server.load().ok());
+        double nearest = INFINITY;
+        double when = 0.0;
+        double travelled = 0.0;
+        double trafficTravelled = 0.0;  // m, all its vehicles
+        std::vector<double> last;
+        for (std::int64_t k = 1; k <= 600; ++k) {  // 60 s by 0.1 s
+            ASSERT_TRUE(server.stepUntil(SimTime{k * 100'000'000}).ok());
+            const std::vector<double> pose = server.read("body/base_link/pose");
+            if (!last.empty()) {
+                travelled += std::hypot(pose[0] - last[0], pose[1] - last[1]);
+            }
+            last = pose;
+            const double yaw = std::atan2(2.0 * (pose[3] * pose[6] + pose[4] * pose[5]),
+                                          1.0 - 2.0 * (pose[5] * pose[5] + pose[6] * pose[6]));
+            const auto sedan = cornersOf(pose[0], pose[1], yaw, kSedanLength, kSedanWidth);
+            const std::vector<double> agents = server.read("traffic/agents");
+            for (std::size_t i = 0; i + 8 <= agents.size(); i += 8) {
+                if (agents[i] != 0.0) {
+                    continue;  // pedestrians walk the sidewalks
+                }
+                trafficTravelled += agents[i + 5] * 0.1;
+                const double gap =
+                    footprintGap(sedan, cornersOf(agents[i + 1], agents[i + 2], agents[i + 4],
+                                                  agents[i + 6], agents[i + 7]));
+                if (gap < nearest) {
+                    nearest = gap;
+                    when = static_cast<double>(k) * 0.1;
+                }
+            }
+        }
+        EXPECT_GT(nearest, 0.05) << "seed " << seed << ": " << nearest << " m at " << when << " s";
+        EXPECT_GT(travelled, 100.0) << "seed " << seed;         // on its circle, not held for long
+        EXPECT_GT(trafficTravelled, 300.0) << "seed " << seed;  // and the traffic still moves
+        std::printf(
+            "seed %lu: nearest vehicle %.2f m at %.1f s, sedan travelled %.0f m, traffic %.0f m\n",
+            static_cast<unsigned long>(seed), nearest, when, travelled, trafficTravelled);
+    }
+}
+
+// The sedan on a banked, raised road (assets/worlds/banked_ring:a 5 m ring 1.5 m up, 5° of
 // superelevation falling to the inside): its demo circle is the ring's reference line. Its
 // raycast suspension stands on the road's slabs, so it stays on the banked surface at its ride
 // height, rolled with the bank, and never drops to the ground below.

@@ -156,6 +156,10 @@ struct Idm {
 /// with several lanes each way they change lanes to get past something slow. With less grip
 /// (env/friction_scale) they accelerate, brake and drive more gently; they do not skid: agents are
 /// kinematic.
+/// A robot is seen by its footprint (its root body's colliders), where it is and where it will be
+/// on its arc within kEgoHorizon, as a leader at its speed along their lane, unless they are
+/// through before it arrives; and they wait at a junction's line while a robot is in their
+/// junction lane or will be before they are through it.
 /// Pedestrians walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends, and keep
 /// away from each other and from the robot sideways by a social force (Helbing and Molnár 1995:
 /// A·exp(−d/B), A = 2 m/s², B = 0.3 m). On a world with crossings, walkers (HumanAPI_1 people named
@@ -211,6 +215,9 @@ private:
     };
     struct Ego {
         SignalId pose, twist;
+        /// Its footprint: half its length (along its x) and half its width (m), from its root
+        /// body's colliders.
+        double halfLength{2.5}, halfWidth{1.0};
     };
     /// An actuated junction: one with crossings.
     struct Controller {
