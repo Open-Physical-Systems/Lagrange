@@ -52,7 +52,7 @@ constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
      "Ctrl+2", "03-domains"},
     {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-1",
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
-    {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-3", ImGuiKey_4,
+    {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-4", ImGuiKey_4,
      "Ctrl+4", "05-signals"},
     {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-2", ImGuiKey_5,
      "Ctrl+5", "06-sensors"},
@@ -277,7 +277,8 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###ProfileDiff", right);
         ImGui::DockBuilderDockWindow("Schema", right);
     } else {
-        // Design: Signals 300 px left; Cursors over Statistics, 300 px right; scope between.
+        // Design: Signals | Saved sets 300 px left; Cursors | Measure over Statistics | FFT,
+        // 300 px right; scope between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
         ImGuiID right = ImGui::DockBuilderSplitNode(
@@ -288,6 +289,9 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Scope", centre);
         ImGui::DockBuilderDockWindow("Cursors", right);
         ImGui::DockBuilderDockWindow("Statistics", statistics);
+        ImGui::DockBuilderDockWindow("###SavedSets", left);
+        ImGui::DockBuilderDockWindow("Measure", right);
+        ImGui::DockBuilderDockWindow("FFT", statistics);
     }
     ImGui::DockBuilderFinish(dockspace);
 }
@@ -1575,6 +1579,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createSignalsPanel());
     panels.push_back(createCursorsPanel());
     panels.push_back(createStatisticsPanel());
+    for (std::unique_ptr<Panel>& panel : createSignalsTabPanels()) {
+        panels.push_back(std::move(panel));
+    }
     for (std::unique_ptr<Panel>& panel : createElectricalPanels()) {
         panels.push_back(std::move(panel));
     }

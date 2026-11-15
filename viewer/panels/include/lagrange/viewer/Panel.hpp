@@ -205,6 +205,10 @@ void setReplayCompare(const std::string& realLog, const std::string& suite, bool
 [[nodiscard]] std::unique_ptr<Panel> createSignalsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createCursorsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createStatisticsPanel();
+/// The Signals workspace's second tabs: Saved sets, Measure and FFT (05-signals).
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createSignalsTabPanels();
+/// What Measure and FFT computed last and how many sets are saved, as JSON (headless report).
+[[nodiscard]] std::string signalsTabsReport();
 [[nodiscard]] std::unique_ptr<Panel> createDomainsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createProfilePanel();
 
