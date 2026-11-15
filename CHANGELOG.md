@@ -7,11 +7,63 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ## Unreleased
 
-- **Changed (ROS topics of built-in sensor kinds):** a kind's 0/1 `valid` output (the power kinds: battery_monitor, current_sensor, voltage_sensor, esc_telemetry, tension_sensor) is now published as `std_msgs/Bool`, like every other kind's; subscribers that expected `std_msgs/Float64` on `/<name>/valid` must change. The `sensor/<n>/contamination` input is no longer published. Out-of-range kind parameters are now refused at start with a message naming the range.
+Merged into `dev` after 1.3.0 (#332–#381).
+
+### Breaking or behaviour changes
+
+- **ROS topics of built-in sensor kinds:** a kind's 0/1 `valid` output (the power kinds: battery_monitor, current_sensor, voltage_sensor, esc_telemetry, tension_sensor) is now published as `std_msgs/Bool`, like every other kind's; subscribers that expected `std_msgs/Float64` on `/<name>/valid` must change. The `sensor/<n>/contamination` input is no longer published (#370)
+- **Kind parameter ranges:** a number parameter outside the sensor catalog's `min`/`max` now refuses the run, naming the range; none is clamped or read as "not given" any more (`wheel_radius` 0, a negative `resolution`, `samples` 0): leave a parameter out for its default (#370)
+- **Sensor faults on Bool and Int quantities:** `bias`, `drift` or `noise` on one stops the start; with `nan` their dropped samples are held. A slow sensor's faults show from its first sample inside the window; `disconnect` with `nan=1` reads NaN from `at` (#370)
+- **One ground per run:** Lagrange adds its ground plane and slab only when neither the robot's nor the world's file has a floor of its own (1.3.0 added the plane over a file's floor too) (#369)
+- **Joint loops refused:** a URDF whose joints do not make one tree (a link with two parent joints, a loop off the root) is refused at load with the two joints named (#366)
+- **Demo drives:** the AMR's figure-eight is closed-loop, two 1.2 m loops that touch where it starts, so it keeps to its aisle; the sedan's demo backs away and tries again when held still for 2 s (#376)
+- **State hashes:** runs on MuJoCo whose world has static bodies (the sample AMR in the warehouse, the box pile) give new state hashes, since the static scenery is now MuJoCo world geometry; the box pile settles differently. The new demo drive changes the sample AMR's hashes too. Each run stays deterministic (#373, #376)
 
 ### Features
 
-* **viewer:** the robot builder (RFC 0016 phase 1 and Addendum A): a Builder workspace that builds a robot from shapes and meshes, joints and catalog sensors, tests it in a simulator of its own and saves it as URDF (`--workspace builder`, `--builder-open`, `--builder-save`, Ctrl B; docs/guide/builder.md)
+- **viewer:** the robot builder (RFC 0016 phase 1 and Addendum A): a Builder workspace that builds a robot from shapes and meshes, joints and catalog sensors, tests it in a simulator of its own and saves it as URDF (`--workspace builder`, `--builder-open`, `--builder-save`, Ctrl B; docs/guide/builder.md) (#340, #343–#346, #348–#350, #356)
+- **viewer:** builder meshes (STL, OBJ, DAE, glTF) and the per-link collision choice: same as the mesh, split by CoACD, template shapes with Fit to mesh, or drawn (RFC 0016 Addendum A) (#352)
+- **viewer:** the Builder view's gizmos: Move, Rotate, Joint axis, Measure and size handles (#349)
+- **viewer:** the builder's power system (buses, batteries, motors) and overlay-only sensors (GNSS, magnetometer, barometer, radar) in `<robot>.overlay.yaml` (RFC 0016 phase 3) (#361)
+- **viewer:** the builder's loads, DC-DC converters, fuses, switches and diodes as forms (#365)
+- **proto:** `ImportRobot.content` (inline robot text) and `overlay_content`, `RemoveRobot`; the builder's Test *Into the connected run* (RFC 0016 §7.2) (#354)
+- **proto:** `CommandJoint`; the builder's joint sliders drive a tested robot (RFC 0016 §7.3) (#357)
+- **mod/sensors:** the sensor catalog `modules/sensors/catalog/sensor_catalog.yaml` and its two checks (#342); a catalog sensor's needs (what it reads from the robot) checked before Test (#366)
+- **viewer:** radar detections in the 3D view (Overlays → Radar detections, `--overlays radar`: boxes by RCS, colour by radial velocity, the field of view) and a Radar view in the Sensors workspace (#360)
+- **viewer:** the ROS 2 workspace's Services, Actions, Params and TF tree tabs (#377)
+- **viewer:** the Performance workspace's six KPI cards and its Threads, GPU passes and Memory tabs (the viewer's own GPU passes by Vulkan timestamp queries) (#378)
+- **server:** `ServerStats` marks the modules that run on the GPU and reports the GPU memory the server holds (#379)
+- **viewer:** the Replay workspace's Compare, Sim vs real and Validation tabs and the Source strip; `--compare OTHER.mcap [--suite FILE.yaml]` (#380)
+- **viewer:** the Domains workspace's Modules, Coupling, Diff and Schema tabs; the substitute picker has a domain before any click (#381)
+- **viewer:** the command palette (Ctrl K): fuzzy search over commands, prims, signals and topics (#375)
+- **viewer:** the Profile panel's YAML is the draft, edited both ways with the domain rows (#374)
+- **mod/rigid_body:** a profile's `rigid_body: {substeps: N}` (1–64) divides Jolt's step, and its joint energy loss, N times; a pendulum conformance check (#353)
+- **build:** `-DLAGRANGE_MUJOCO_PACKAGE=mujoco` takes MuJoCo's own CMake package instead of `mujoco_vendor` (opt-in, for the MuJoCo 4 spike) (#364)
+
+### Fixes
+
+- **server:** the quadcopter flies with the electrical domain off; the PX4/ArduPilot ESCs bound their torque then (#341, #359)
+- **core:** `convexHullOf` closes nearly flat point sets (#355)
+- **viewer:** builder polish and QA: cancelled drags, the world root, Back's bars, warnings, bad values from a file, files, edits, Test and the robot strip; closer to its reference image (#351, #358, #368)
+- **server:** catalog-required sensor needs checked before Test; the whole refusal in Problems; a hyperperiod refusal names the two steps that line up last (#366)
+- **mod/sensors:** v1.3 sensors QA: fisheye cutoff below fov/2 in USD, rosette timing, stereo depth held inside its range, faults, ROS kind topics, `battery_state` status and capacity (#370)
+- **io:** an overlay's radar (and IMU, GNSS, magnetometer, barometer) is a sensor of the run, as the builder writes it (#372)
+- **server:** viewer QA: every running domain reported with its module, preview substitutes, the World workspace lists traffic, other robots and people, measured domain costs, a weather preset rebuilds the run once (#374)
+- **viewer:** viewer QA: small windows, Launcher, Signals rows, names, overlays, Inspector, lows (#375)
+- **server:** replay moves the scene; no spurious replay warnings; the server log says why `--lidar auto` picks the CPU (#376)
+
+### Performance
+
+- **core:** one-copy output commits on the signal bus (#359)
+- **mod/rigid_body:** MuJoCo reads only connected inputs and keeps a standing kinematic body's twist (#367); static scenery on MuJoCo's world body (#373)
+
+### Documentation
+
+- **rfcs:** RFC 0016, a robot builder in the viewer (accepted), and its Addendum A, meshes and collision (#332, #347)
+- **validation:** a measured comparison with Gazebo Jetty, MuJoCo and PyBullet (#338); the home page opens on the advanced features and that comparison (#336)
+- **plan:** the builder's phase 1 work plan (#337) and phase 4 plan with a draft RFC 0016 Addendum B (#371); the MuJoCo 4 spike and a draft RFC 0017 (#364)
+- **site:** the robot builder on the home page, a builder clip and its guide (#363); six v1.3 sensor clips (#362)
+- **guide:** the viewer's workspaces (`docs/guide/viewer.md`)
 
 ## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)
 

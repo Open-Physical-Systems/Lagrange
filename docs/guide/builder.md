@@ -107,6 +107,9 @@ The sensor's Properties: its mount (link, translate, rotate), timing (`update_ra
 `jitter`), and one section of the catalog's parameters with their units and defaults. A value
 different from its default has an accent border and its default beside it; **Reset to
 defaults** puts them all back. Output lists the signals and the ROS 2 topic the sensor will have.
+Problems checks what the server would refuse at start before Test does: a parameter the catalog
+marks required, what a kind needs from the robot (its catalog `requires`), and sensor rates the
+scheduler cannot line up.
 
 ![A rangefinder from the catalog on the new link, its range set to 20 m](../imgs/builder-catalog.png)
 
@@ -226,8 +229,8 @@ the template stays as it is.
 
 - **Test** into a world: the empty world or *Into the connected run*; *A sample world…* and *A
   world file…* are greyed.
-- Loads, converters, branches and thermal nodes in the overlay: kept as written, not edited
-  (the Power section edits batteries, buses and motors).
+- Thermal nodes, rotors and wheels in the overlay: kept as written, not edited (the Power
+  section edits buses, batteries, motors, loads, converters, fuses, switches and diodes).
 - Opening USD or SDFormat robots (phase 4); the builder opens URDF and xacro.
 - Free-form modelling: the builder places primitives and meshes, it is not a CAD tool.
 

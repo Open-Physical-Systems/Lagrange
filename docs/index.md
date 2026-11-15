@@ -255,6 +255,7 @@ guide/tutorial-heat-and-emi
 guide/autoware
 guide/run-file
 guide/builder
+guide/viewer
 guide/concepts
 guide/profiles
 guide/sensors

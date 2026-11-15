@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (22)</summary>
+<details><summary>User guide (23)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -190,6 +190,7 @@ recorded to MCAP and replayed.
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
 - [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
 - [Tutorial: a robot's power system from a schematic](docs/guide/tutorial-power.md)
+- [The viewer's workspaces](docs/guide/viewer.md)
 - [Writing a module](docs/guide/writing-a-module.md)
 - [Writing a plugin](docs/guide/writing-a-plugin.md)
 

@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: the robot builder and the viewer's workspace tabs merged into `dev` (#340–#381, unreleased). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -63,6 +63,51 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   attributes for lidar patterns and fisheye lenses), accepted by the owner on 2026-11-14 with the
   proposed answers; 0014's connection limits are in, its frame cap and 0015 follow. Until 0015, writing
   those sensors to USD is refused instead of written wrong.
+
+## 2026-11-15, on `dev` (#340–#381, unreleased)
+
+What merged (CHANGELOG "Unreleased" has every PR):
+
+- **Robot builder (RFC 0016)**, phase 1, Addendum A and phase 3: the Builder workspace (model,
+  URDF writer and reader, panels, Lit view and picking, sensor catalog, gizmos, Test, files,
+  acceptance test; #340, #342–#346, #348–#352, #356, #358, #368), meshes and the per-link collision
+  choice (#352), the power system and overlay sensors in `<robot>.overlay.yaml` (#361), loads,
+  converters, fuses, switches and diodes (#365), catalog sensor needs before Test (#366), Test
+  *Into the connected run* (`ImportRobot.content`/`overlay_content`, `RemoveRobot`; #354) and
+  joint sliders driving the tested robot (`CommandJoint`; #357). Guide `docs/guide/builder.md`,
+  clip and home page (#363). Phase 4 plan (USD, SDFormat) and a draft Addendum B (#371).
+- **Viewer workspaces**: radar detections in 3D and a Radar view (#360), ROS 2 Services, Actions,
+  Params and TF tree (#377), Performance KPI cards, Threads, GPU passes, Memory (#378, with the
+  server's `on_gpu` and GPU memory, #379), Replay Compare, Sim vs real, Validation and the Source
+  strip (#380), Domains Modules, Coupling, Diff, Schema (#381), two viewer QA passes (#374, #375:
+  command palette, editable profile YAML, World agents, measured costs). User guide page
+  `docs/guide/viewer.md`.
+- **Physics and sensors**: Jolt's pendulum energy loss explained, opt-in `rigid_body.substeps`
+  (#353); the quadcopter with electrical off (#341, #359); `convexHullOf` on flat sets (#355);
+  one ground per run (#369); joint loops refused (#366); v1.3 sensors QA: kind parameter ranges
+  refused, `valid` as Bool, faults on slow and Bool sensors, fisheye cutoff in USD, rosette
+  timing (#370); overlay radars as run sensors (#372); closed-loop demo drives, replay moving the
+  scene (#376).
+- **Speed**: one-copy bus commits (#359), MuJoCo reading only connected inputs (#367), static
+  scenery on MuJoCo's world body (#373; new state hashes for runs with static bodies,
+  `benchmarks.md`).
+- **MuJoCo 4**: spike `docs/plan/spikes/mujoco-4.md`, draft RFC 0017, opt-in
+  `-DLAGRANGE_MUJOCO_PACKAGE=mujoco` (#364).
+
+Owed, waiting on the owner:
+
+- **RFC 0017** (MuJoCo 4.x for the MuJoCo backend): Draft, the owner's decision.
+- **Builder phase 4** (USD and SDFormat robots): the open questions of
+  `docs/plan/builder-phase4-plan.md` §11, and the draft RFC 0016 Addendum B.
+- **Protocol additions** (1.x additive, owner approval): ROS 2 services and parameters in the
+  graph report (the Services and Params tabs point to the terminal until then); Performance's
+  per-module GPU time (`gpu_passes`), a determinism check and the server's threads in
+  `ServerStats`; Replay compare of a remote replay (`OpenRecording.compare_path`,
+  `RecordingInfo.compare`, `SignalInfo.compare`) and Re-simulate from here (`Command.resimulate`),
+  proposed in `docs/design/viewer.md` "Replay comparison".
+- **Design**: a colour token for radar detections (the view borrows the error colour map's ends,
+  `RadarScale.cpp`); the Launcher's 2×2 layout; where the builder's Power and Motor sections sit
+  in `docs/design/ui/12-builder/SPEC.md`.
 
 ## v0.2, item by item
 
