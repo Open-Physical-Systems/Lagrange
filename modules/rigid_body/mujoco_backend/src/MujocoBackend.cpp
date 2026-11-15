@@ -79,6 +79,59 @@ void setPose(double* position, double* orientation, const Pose& pose) {
 
 }  // namespace
 
+/// Static scenery: bodies that never move (no joint to the world and not kinematic, nor below
+/// one that has) in an articulated tree in which no moving body has geometry. Their geoms are
+/// built on MuJoCo's world body at their world poses, as world geometry: contacts with a body
+/// of its own, even one welded to the world, merge MuJoCo's constraint islands and slow its
+/// solver (benchmarks.md §4.4: 0.123 against 0.184 RTF on the 200-box pile). A tree with moving
+/// geometry keeps its static bodies, whose own collisions with it are excluded by body (no
+/// self-collision); a static body's world geoms would collide with its tree. Static bodies with
+/// nothing moving below them are left out of the model: they have no signals (movingBodies)
+/// and nothing refers to them.
+StaticScenery staticScenery(const World& world) {
+    const World::Bodies& bodies = world.bodies;
+    const std::size_t n = bodies.names.size();
+    const std::vector<bool> moving = movingBodies(world);
+    const auto rootOf = [&bodies, n](std::size_t b) {
+        for (std::size_t guard = 0;
+             guard <= n && bodies.parent[b] != kWorldBody && bodies.parent[b].index < n; ++guard) {
+            b = bodies.parent[b].index;
+        }
+        return b;
+    };
+    std::vector<bool> movingGeometry(n, false);  // per root
+    for (const BodyId owner : world.colliders.body) {
+        if (owner != kWorldBody && owner.index < n && moving[owner.index]) {
+            movingGeometry[rootOf(owner.index)] = true;
+        }
+    }
+    std::vector<bool> movingBelow(n, false);  // the body or one below it moves
+    for (std::size_t b = 0; b < n; ++b) {
+        if (!moving[b]) {
+            continue;
+        }
+        for (std::size_t a = b, guard = 0; guard <= n; ++guard) {
+            if (movingBelow[a]) {
+                break;
+            }
+            movingBelow[a] = true;
+            if (bodies.parent[a] == kWorldBody || bodies.parent[a].index >= n) {
+                break;
+            }
+            a = bodies.parent[a].index;
+        }
+    }
+    StaticScenery out;
+    out.toWorld.assign(n, false);
+    out.omitted.assign(n, false);
+    for (std::size_t b = 0; b < n; ++b) {
+        out.toWorld[b] = !moving[b] && !movingGeometry[rootOf(b)];
+        out.omitted[b] = out.toWorld[b] && !movingBelow[b];
+    }
+    out.rest = restPoses(world);
+    return out;
+}
+
 MujocoBackend::MujocoBackend() = default;
 
 MujocoBackend::~MujocoBackend() {
@@ -189,12 +242,14 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
 
     // Bodies, parents first.
     const World::Bodies& bodies = world.bodies();
+    const World::Colliders& colliders = world.colliders();
+    const StaticScenery scenery = staticScenery(world.raw());
     std::vector<mjsBody*> made(bodies.names.size(), nullptr);
     mjsBody* worldBody = mjs_findBody(spec, "world");
     for (std::size_t pass = 0; pass <= bodies.names.size(); ++pass) {
         bool progress = false;
         for (std::size_t b = 0; b < bodies.names.size(); ++b) {
-            if (made[b] != nullptr) {
+            if (made[b] != nullptr || scenery.omitted[b]) {
                 continue;
             }
             const BodyId parent = bodies.parent[b];
@@ -233,7 +288,7 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
     for (std::size_t b = 0; b < made.size(); ++b) {
-        if (made[b] == nullptr) {
+        if (made[b] == nullptr && !scenery.omitted[b]) {
             mj_deleteSpec(spec);
             return Status::error(
                 StatusCode::InvalidConfig,
@@ -293,11 +348,15 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
 
-    // Collision geometry, convex shapes only.
-    const World::Colliders& colliders = world.colliders();
+    // Collision geometry, convex shapes only. Static scenery's geoms go to the world body at
+    // their world poses (staticScenery).
     for (std::size_t c = 0; c < colliders.body.size(); ++c) {
         const BodyId owner = colliders.body[c];
-        mjsBody* body = owner == kWorldBody ? worldBody : made.at(owner.index);
+        const bool toWorld = owner == kWorldBody || scenery.toWorld[owner.index];
+        mjsBody* body = toWorld ? worldBody : made.at(owner.index);
+        const Pose placed = owner != kWorldBody && toWorld
+                                ? compose(scenery.rest[owner.index], colliders.poseInBody[c])
+                                : colliders.poseInBody[c];
         mjsGeom* geom = mjs_addGeom(body, nullptr);
         geom->type = geomType(colliders.shape[c]);
         std::copy(colliders.size[c].begin(), colliders.size[c].end(), geom->size);
@@ -315,7 +374,7 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
             mjs_setFloat(mesh->uservert, vertices.data(), static_cast<int>(vertices.size()));
             mjs_setString(geom->meshname, name.c_str());
         }
-        setPose(geom->pos, geom->quat, colliders.poseInBody[c]);
+        setPose(geom->pos, geom->quat, placed);
         if (colliders.shape[c] == ShapeType::HeightField) {
             // MuJoCo's height field: elevations scaled to [0, size[2]] above the geom's origin,
             // on a base box size[3] deep, rows along y from -y, columns along x from -x.
@@ -341,8 +400,7 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
             mjs_setFloat(hfield->userdata, elevation.data(), static_cast<int>(elevation.size()));
             mjs_setString(geom->hfieldname, name.c_str());
             // The field's origin is its lowest sample: move the geom down to it.
-            const std::array<double, 3> up =
-                rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, low});
+            const std::array<double, 3> up = rotate(placed.orientation, {0.0, 0.0, low});
             for (std::size_t i = 0; i < 3; ++i) {
                 geom->pos[i] += up.at(i);
             }
@@ -364,6 +422,9 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     };
     std::vector<std::size_t> withGeometry;
     for (std::size_t b = 0; b < bodies.names.size(); ++b) {
+        if (scenery.toWorld[b]) {
+            continue;  // its geoms are the world body's
+        }
         if (std::find(colliders.body.begin(), colliders.body.end(),
                       BodyId{static_cast<std::uint32_t>(b)}) != colliders.body.end()) {
             withGeometry.push_back(b);

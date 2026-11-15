@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <gtest/gtest.h>
+#include <mujoco/mujoco.h>
 
 namespace lagrange::rigid_body {
 namespace {
@@ -233,6 +234,66 @@ TEST(MujocoBackend, LinksOfOneTreeDoNotCollideButTreesDo) {
     ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
     // Separate trees collide: the wall was pushed.
     EXPECT_GT(read(scheduler, "body/wall/pose", 0), 1.0 + 1e-3);
+}
+
+// --- static scenery ------------------------------------------------------------------------
+
+TEST(MujocoBackend, StaticSceneryIsWorldGeometryAndFixedBasesKeepTheirBodies) {
+    World world;
+    world.gravityLocal = {0.0, 0.0, -kGravity};
+    // Scenery: a root turned 90° about z at 0.5 m, a shelf welded to it 1 m along its x, so at
+    // (0, 1, 0.5) in the world; its top at 0.55 m.
+    const double half = std::sqrt(0.5);
+    const BodyId scenery = world.addBody(
+        "scenery", kWorldBody, Pose{{0.0, 0.0, 0.5}, {half, 0.0, 0.0, half}}, 0.0, {}, {});
+    const BodyId shelf = world.addBody("shelf", scenery, Pose{{1.0, 0.0, 0.0}}, 0.0, {}, {});
+    world.addJoint("shelf_weld", JointType::Fixed, shelf, {0.0, 0.0, 1.0}, false);
+    world.addCollider(shelf, ShapeType::Box, {0.5, 0.5, 0.05}, Pose{}, 1.0);
+    // A box dropped on the shelf.
+    const BodyId box = world.addBody("box", kWorldBody, Pose{{0.0, 1.0, 0.7}}, 1.0, {},
+                                     diagonal(0.0067, 0.0067, 0.0067));
+    world.addJoint("box_free", JointType::Free, box, {0.0, 0.0, 1.0}, false);
+    world.addCollider(box, ShapeType::Box, {0.1, 0.1, 0.1}, Pose{}, 1.0);
+    // A fixed-base arm far away whose link overlaps its base: the base keeps its own body, so
+    // the overlap stays excluded and the link turns freely.
+    const BodyId base = world.addBody("base", kWorldBody, Pose{{5.0, 0.0, 0.5}}, 2.0, {},
+                                      diagonal(0.01, 0.01, 0.01));
+    world.addCollider(base, ShapeType::Box, {0.2, 0.2, 0.2}, Pose{}, 1.0);
+    const BodyId link =
+        world.addBody("link", base, Pose{{0.1, 0.0, 0.0}}, 0.5, {}, diagonal(0.01, 0.01, 0.01));
+    world.addJoint("pin", JointType::Revolute, link, {0.0, 0.0, 1.0}, true);
+    world.addCollider(link, ShapeType::Sphere, {0.15, 0.0, 0.0}, Pose{}, 1.0);
+
+    const StaticScenery split = staticScenery(world);
+    EXPECT_TRUE(split.toWorld[scenery.index] && split.omitted[scenery.index]);
+    EXPECT_TRUE(split.toWorld[shelf.index] && split.omitted[shelf.index]);
+    EXPECT_FALSE(split.toWorld[base.index]);
+    EXPECT_FALSE(split.toWorld[box.index] || split.toWorld[link.index]);
+
+    auto backend = std::make_unique<MujocoBackend>();
+    const MujocoBackend* mujoco = backend.get();
+    Scheduler scheduler;
+    scheduler.add(std::move(backend));
+    scheduler.add(std::make_unique<Constant>("joint/pin/torque", units::N_m, 0.01));
+    wire(scheduler, world);
+    const mjModel* model = mujoco->model();
+    ASSERT_NE(model, nullptr);
+    EXPECT_EQ(mj_name2id(model, mjOBJ_BODY, "scenery"), -1);
+    EXPECT_EQ(mj_name2id(model, mjOBJ_BODY, "shelf"), -1);
+    EXPECT_GE(mj_name2id(model, mjOBJ_BODY, "base"), 1);
+    ASSERT_EQ(model->body_geomnum[0], 1);
+    const int g = model->body_geomadr[0];
+    EXPECT_NEAR(model->geom_pos[3 * g + 0], 0.0, 1e-12);
+    EXPECT_NEAR(model->geom_pos[3 * g + 1], 1.0, 1e-12);
+    EXPECT_NEAR(model->geom_pos[3 * g + 2], 0.5, 1e-12);
+
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/box/pose", 1), 1.0, 1e-3);
+    EXPECT_NEAR(read(scheduler, "body/box/pose", 2), 0.65, 1e-3) << "rests on the shelf";
+    // The link spins up freely: θ = τ t² / (2 I) about its own centre, 0.5 rad after 1 s.
+    EXPECT_NEAR(read(scheduler, "joint/pin/position"), 0.01 / (2.0 * 0.01), 1e-2);
+    // The static bodies have no signals, as before.
+    EXPECT_FALSE(scheduler.bus().find("body/shelf/pose").valid());
 }
 
 // --- kinematic bodies ----------------------------------------------------------------------

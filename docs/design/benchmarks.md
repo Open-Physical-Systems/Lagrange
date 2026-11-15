@@ -355,8 +355,8 @@ around each stage, not committed) says otherwise:
   0.123 on MuJoCo (2.71 on Jolt, from 2.40): with no plane the boxes rest on the ground box in
   its static body, whose contacts merge MuJoCo's constraint islands (34.8 per step against 43.9
   with the box on the world body, 3.0 solver iterations against 2.2). MuJoCo alone with that
-  model: 0.125 (853 contacts), against 0.184 with the box on the world body. Giving static
-  bodies' geoms to the world body in the backend is the next step.
+  model: 0.125 (853 contacts), against 0.184 with the box on the world body. Done in §4.5:
+  0.180.
 - **In the town the backend's own work was large**: 42 of 93 µs with the sedan (MuJoCo's own
   steps 51), reading 663 bodies' external wrenches (1 of them connected) and 654 pose commands,
   writing every kinematic body's pose, twist and contact force, and `mj_rnePostConstraint`.
@@ -407,6 +407,58 @@ the same 201 hashes over 20 s with old and new for `amr_sample_urdf`, `sedan_cit
 `quad_x500_hover`, the sedan in the town, the town without a robot and the box pile, and each
 passes. `test_mujoco_backend` has a case for a kinematic body that stands and moves on, restored
 while it stands.
+
+### 4.5 Static scenery on MuJoCo's world body (2026-11-15)
+
+The MuJoCo backend built every world body as a MuJoCo body, so static scenery (a body welded to
+the world, as the MJCF importer makes of `worldbody` geoms, or a world file's fixed links) was a
+static body of its own, and contacts with it slowed the pile's solver (§4.4). Now
+(`staticScenery` in `MujocoBackend.cpp`) a body that never moves (`movingBodies`: no joint to
+the world, not kinematic, nor below one that is), in an articulated tree where no moving body has
+geometry, has its geoms built on MuJoCo's world body at their world poses, with the same
+friction; such a body with nothing moving below it is left out of the model. Nothing referred to
+it: static bodies have no signals (no pose, no contact force), and ray casts, the viewer and
+`--export-map` use the world tables. A tree with moving geometry (a fixed-base arm) keeps its
+static bodies, so its links' collisions with its base stay excluded. The floating origin and
+streamed tiles rebuild the run on the shifted or extended tables, so the geoms are placed anew
+(tiles' colliders were on the world body already). Jolt already makes every collider of a body
+that never moves a static Jolt body on its static layer; it is unchanged.
+
+Measured as in §4.4, the build before (`dev` at pull request 369, *old*) and this one (*new*) in
+the order old, new, new, old, three rounds; load average 1.7 to 11.4 on 20 threads. Six runs of
+each; the pile is `bench_lagrange.py` (5 s), the others `--no-ros --rtf 0` for 25 s with the
+median of the 1 s windows after the first four.
+
+| Run | Old (RTF) | New (RTF) | MuJoCo per step, old / new |
+|---|---|---|---|
+| 200-box pile, MuJoCo, 5 s (Python) | 0.113 to 0.123 (median 0.122) | 0.176 to 0.181 (median 0.180) | — |
+| 200-box pile, Jolt, 5 s (Python) | 2.50 to 2.71 | 2.67 to 2.72 | (Jolt unchanged) |
+| Sample AMR, warehouse (`--lidar cpu`) | 25.7 to 29.5 | 28.2 to 29.4 | 16.8 to 18.5 / 17.0 to 17.5 µs |
+| Sedan, city block | 11.3 to 12.4 | 11.6 to 12.4 | 12.1 to 14.2 / 12.2 to 12.7 µs |
+| Sedan in the town, 24 cars, 36 people | 3.08 to 3.25 | 3.10 to 3.67 | 86.8 to 93.8 / 86.0 to 91.1 µs |
+
+The pile runs 1.48 times as fast, as MuJoCo alone with the floor box on its world body (0.184).
+The other runs are within the noise: the warehouse's static links carry only its seven
+collision boxes, and the city block and the town (USD worlds) already had their scenery on the world body.
+
+State hashes change for runs whose world has static bodies: the MuJoCo state
+(`mjSTATE_INTEGRATION`) holds an applied wrench per MuJoCo body, and the left-out bodies are no
+longer in it. Where the scenery was already world geometry nothing changes:
+
+- **Sample AMR in the warehouse** (Python, 10 s; also `lagrange determinism` of
+  `amr_sample_urdf`, `sedan_city` and `quad_x500_hover`, which load the default warehouse): new
+  hashes, the robot's pose after 10 s the same bit for bit. The quadcopter over the warehouse
+  now gives the hash of the quadcopter alone (`e72044ab06f46b7f`).
+- **Sedan in the city block, sedan in the town, quadcopter alone**: the same hashes.
+- **The 200-box pile**: new hashes and a different pile. The floor's geom is now first in
+  MuJoCo's geom list, so contacts are found and solved in another order; the pile is chaotic, so
+  after 1 s boxes differ by 1e-6 m at the bottom and up to 3 mm at the top (box 199).
+
+Each run is still deterministic: `lagrange determinism` passes for all of them with both builds,
+and Jolt's pile gives the same hashes as before. `test_mujoco_backend`
+(`StaticSceneryIsWorldGeometryAndFixedBasesKeepTheirBodies`) checks the split, the geom's world
+pose, a box resting on a welded shelf of a turned static tree, and a fixed-base arm whose link
+overlaps its base and turns freely.
 
 ## 5. Start-up and Python throughput (2026-11-12)
 

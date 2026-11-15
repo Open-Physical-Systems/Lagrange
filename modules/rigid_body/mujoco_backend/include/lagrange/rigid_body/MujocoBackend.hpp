@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/world/World.hpp"
 
 #include <array>
 #include <cstdint>
@@ -12,12 +13,23 @@ struct mjData_;
 
 namespace lagrange::rigid_body {
 
+/// How the MuJoCo backend builds static scenery (MujocoBackend.cpp), per world body: its geoms
+/// on MuJoCo's world body (`toWorld`), the body itself left out of the model (`omitted`), and
+/// every body's rest pose in the world.
+struct StaticScenery {
+    std::vector<bool> toWorld;
+    std::vector<bool> omitted;
+    std::vector<Pose> rest;
+};
+[[nodiscard]] StaticScenery staticScenery(const World& world);
+
 /// The rigid-body domain on MuJoCo 3.12 (docs/design/domains/rigid_body.md, spike 0.2-C1).
 ///
 /// init() builds a MuJoCo model from the world tables (bodies, joints, colliders): no MJCF file
 /// and no USD are involved, so the stage stays the only source of the robot (invariant 5).
 /// Settings from the validation spike: elliptic friction cone, implicitfast integrator.
 /// Bodies of one articulated tree do not collide with each other (Gazebo's self_collide false).
+/// Static scenery (staticScenery) is MuJoCo world geometry: its geoms are on the world body.
 ///
 /// Every hinge and slide joint `j` outputs joint/j/position and velocity (rad or m). Actuated
 /// joints add (prismatic joints use N, m, m/s, m/s², kg):
