@@ -29,6 +29,7 @@ constexpr float kRowHeight = 46.0F;  // two text lines, as in the reference
 constexpr float kModuleRowHeight = 32.0F;
 // A profile fits real time when one millisecond of simulation costs under one of CPU.
 constexpr double kRealTimeBudgetMs = 1.0;
+constexpr int kListedSignals = 3;  // consumer signals named under the substitute cards
 
 ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
@@ -113,6 +114,10 @@ public:
                 }
             }
             ImGui::EndTable();
+        }
+        if (session.selectedDomain.empty()) {
+            // Select a row before any click, so the picker and the Schema tab have one.
+            session.selectedDomain = pickerDomain(session, *profile);
         }
         substitutePicker(session, *profile);
 
@@ -387,9 +392,37 @@ private:
         }
     }
 
+    /// The domain whose substitutes the picker offers: the selected row, else the first
+    /// domain with an edit waiting, else the first that is off, else the first that has
+    /// substitutes, so the picker is there before anything is clicked (SPEC 03).
+    static std::string pickerDomain(const ProfileSession& session, const ProfileInfo& profile) {
+        if (!session.selectedDomain.empty()) {
+            return session.selectedDomain;
+        }
+        const auto first = [&](auto&& wanted) -> const DomainInfo* {
+            for (const DomainInfo& info : profile.domains) {
+                const DomainView* view = session.find(info.name);
+                if (info.available && !info.substitutes.empty() && view != nullptr &&
+                    format::isPhysicsDomain(info.name) && wanted(*view)) {
+                    return &info;
+                }
+            }
+            return nullptr;
+        };
+        for (const DomainInfo* info : {first([](const DomainView& v) { return v.pending; }),
+                                       first([](const DomainView& v) { return !v.enabled; }),
+                                       first([](const DomainView&) { return true; })}) {
+            if (info != nullptr) {
+                return info->name;
+            }
+        }
+        return {};
+    }
+
     void substitutePicker(ProfileSession& session, const ProfileInfo& profile) {
-        const DomainInfo* info = profile.find(session.selectedDomain);
-        const DomainView* view = session.find(session.selectedDomain);
+        const std::string shown = pickerDomain(session, profile);
+        const DomainInfo* info = profile.find(shown);
+        const DomainView* view = session.find(shown);
         if (info == nullptr || view == nullptr || info->substitutes.empty()) {
             return;
         }
@@ -434,8 +467,16 @@ private:
             char name[96];
             std::snprintf(name, sizeof(name), "%s · %s", option.kind.c_str(), option.token.c_str());
             const bool selected = !view->enabled && view->mode == option.token;
-            if (widgets::OptionCard(option.token.c_str(), name, option.description.c_str(),
-                                    selected, ImVec2(width, px(58.0F)))) {
+            // The server's description, else what the kind means (CLAUDE.md §11.2).
+            const char* description = option.description.c_str();
+            if (option.description.empty()) {
+                description = option.kind == "ideal"      ? "the ideal value, no losses"
+                              : option.kind == "constant" ? "a fixed value or model"
+                              : option.kind == "replay"   ? "recorded channels from an MCAP file"
+                                                          : "";
+            }
+            if (widgets::OptionCard(option.token.c_str(), name, description, selected,
+                                    ImVec2(width, px(58.0F)))) {
                 chosen = option.token;
             }
         }
@@ -464,7 +505,29 @@ private:
             sourceActive_ = ImGui::IsItemActive();
             ImGui::PopFont();
         }
-        if (count != 0) {
+        // The signals the readers take from this domain, from the wiring the server would
+        // build: "→ link/base/ext_wrench [N·m] (rigid_body) will read from the substitute".
+        int listed = 0;
+        for (const WiringInfo::Wire& wire : session.wiring().wires) {
+            const WiringInfo::Node* writer = nullptr;
+            for (const WiringInfo::Node& node : session.wiring().nodes) {
+                if (node.module == wire.from) {
+                    writer = &node;
+                }
+            }
+            if (writer == nullptr || writer->domain != info->name || listed >= kListedSignals) {
+                continue;
+            }
+            ++listed;
+            widgets::Mono(c::info, "→");
+            ImGui::SameLine(0.0F, px(6.0F));
+            widgets::Mono(c::t1, "%s.%s", wire.to.c_str(), wire.signal.c_str());
+            ImGui::SameLine(0.0F, px(6.0F));
+            widgets::Caption("[%s] %s", wire.sinkUnit.c_str(),
+                             session.find(info->name)->enabled ? "would read from the substitute"
+                                                               : "will read from the substitute");
+        }
+        if (count != 0 && listed == 0) {
             widgets::Mono(c::info, "→");
             ImGui::SameLine(0.0F, px(6.0F));
             widgets::Mono(c::t1, "%s", consumers);
