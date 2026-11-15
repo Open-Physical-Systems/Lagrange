@@ -23,6 +23,7 @@ add_library(
     client/src/ProfileSession.cpp
     client/src/RecentList.cpp
     client/src/RosFrames.cpp
+    client/src/RunHistory.cpp
     client/src/SceneStore.cpp
     client/src/ScopeBuffer.cpp
     client/src/ScopeSession.cpp
@@ -203,6 +204,7 @@ add_library(
     panels/src/ReplayCompare.cpp
     panels/src/Ros2Panels.cpp
     panels/src/ScenePanel.cpp
+    panels/src/SceneTabsPanels.cpp
     panels/src/ScheduleChart.cpp
     panels/src/ScopePanel.cpp
     panels/src/ScopePlots.cpp
@@ -340,6 +342,7 @@ if(BUILD_TESTING)
         client/test/test_radar_scale.cpp
         client/test/test_recent_list.cpp
         client/test/test_ros_frames.cpp
+        client/test/test_run_history.cpp
         client/test/test_scene_store.cpp
         client/test/test_scene_fuzz.cpp
         client/test/test_scope_buffer.cpp
@@ -420,6 +423,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_performance_tabs test/test_performance_tabs.py TIMEOUT 900)
     ament_add_pytest_test(test_domains_tabs test/test_domains_tabs.py TIMEOUT 300)
     ament_add_pytest_test(test_radar_view test/test_radar_view.py TIMEOUT 600)
+    ament_add_pytest_test(test_scene_tabs test/test_scene_tabs.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)

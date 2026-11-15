@@ -20,6 +20,7 @@
 #include <memory>
 #include <numbers>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -70,6 +71,7 @@ struct Sensor {
     std::uint32_t prim{kNone};
     Kind kind{Kind::Other};
     std::shared_ptr<SensorStream> stream;  // sensors that send frames (lidar, camera, radar)
+    std::string streamName;                // what to watch for them; empty: none
     // A custom sensor's images (a built-in kind's left, right, depth, ...) by signal name, and
     // their quantities ("left") for the Camera panel's modes; a camera's depth and instance.
     std::vector<std::string> images;
@@ -86,13 +88,21 @@ struct Sensor {
 /// What the panels share: the stage's sensors, their streams and the IMU scopes.
 class SensorsState {
 public:
-    void follow(PanelContext& context) {
+    /// `watchAll`: start every sensor's frames (the Sensors workspace shows them all). The
+    /// Scene workspace's sensor tabs pass false and watch() the one they show while in front, so
+    /// that workspace streams no sensor frames until a sensor tab is opened.
+    void follow(PanelContext& context, bool watchAll = true) {
         const std::uint64_t scene = context.scene ? context.scene->statics->generation : 0;
         const std::uint64_t catalog = context.catalog ? context.catalog->generation : 0;
         if (scene != scene_ || catalog != catalog_) {
             scene_ = scene;
             catalog_ = catalog;
             discover(context);
+        }
+        if (watchAll) {
+            for (Sensor& sensor : sensors) {
+                watch(context, sensor);
+            }
         }
         if (const int frame = ImGui::GetFrameCount(); frame != frame_) {
             frame_ = frame;
@@ -123,7 +133,21 @@ public:
         selected = sensors.empty() ? 0 : std::min(selected, sensors.size() - 1);
     }
 
+    /// Starts receiving `sensor`'s frames, once (the subscription then stays, as the Sensors
+    /// workspace's do).
+    static void watch(PanelContext& context, Sensor& sensor) {
+        if (sensor.stream || sensor.streamName.empty()) {
+            return;
+        }
+        sensor.stream = context.client.watchSensor(sensor.streamName);
+        sensor.countedFrames = sensor.stream->frames();
+        sensor.countedAt = static_cast<double>(context.status.simTimeNs) * 1e-9;
+    }
+
     /// The first sensor of `kind`, preferring the selected one. Null if the stage has none.
+    [[nodiscard]] Sensor* first(Kind kind) {
+        return const_cast<Sensor*>(std::as_const(*this).first(kind));
+    }
     [[nodiscard]] const Sensor* first(Kind kind) const {
         if (selected < sensors.size() && sensors[selected].kind == kind) {
             return &sensors[selected];
@@ -188,8 +212,7 @@ private:
             }
             if (sensor.custom && !sensor.images.empty()) {
                 sensor.kind = Kind::Camera;  // drawn in the Camera panel, by its images
-                sensor.stream = context.client.watchSensor(sensor.images.front());
-                sensor.countedFrames = sensor.stream->frames();
+                sensor.streamName = sensor.images.front();
             } else if (sensor.custom && hasSignal(context, prims[i].name, "detections")) {
                 // A custom sensor with detections and no image: an imaging radar, whose frames
                 // the server sends by its prim (a kind it does not send for sends nothing).
@@ -197,9 +220,8 @@ private:
             }
             if (sensor.kind == Kind::Lidar || sensor.kind == Kind::Camera ||
                 sensor.kind == Kind::Radar) {
-                if (!sensor.stream) {
-                    sensor.stream = context.client.watchSensor(prims[i].path);
-                    sensor.countedFrames = sensor.stream->frames();
+                if (sensor.streamName.empty()) {
+                    sensor.streamName = prims[i].path;
                 }
             }
             if (sensor.kind == Kind::Radar) {
@@ -230,6 +252,33 @@ private:
     std::uint64_t scene_{0};
     std::uint64_t catalog_{0};
     int frame_{-1};
+};
+
+/// Where a sensor view is drawn: in the Sensors workspace, or as a tab beside the Scene
+/// workspace's viewport (02-scene SPEC "Dock layout": sensor views as extra tabs). A Scene tab
+/// shows only while the stage has a sensor of its kind, so a stage without one has no empty tab.
+struct ViewHome {
+    Workspace workspace{Workspace::Sensors};
+    const char* id{""};  ///< the window's identity, after "###"; layouts dock it by this
+    bool onlyWhenPresent{false};
+    /// A tab that comes when the scene arrives does not take the front from the viewport.
+    [[nodiscard]] ImGuiWindowFlags flags() const {
+        return onlyWhenPresent ? ImGuiWindowFlags_NoFocusOnAppearing : ImGuiWindowFlags_None;
+    }
+};
+
+/// Whether a view is really in front: Begin() was true this frame and the one before. A tab
+/// that just appeared, and every window on the frame a layout is built, draws once before its
+/// tab bar hides it; that frame must not start a sensor's frames.
+class InFront {
+public:
+    bool update(bool open) {
+        run_ = open ? std::min(run_ + 1, 2) : 0;
+        return run_ >= 2;
+    }
+
+private:
+    int run_{0};
 };
 
 bool emptyState(const PanelContext& context, const SensorsState& state) {
@@ -372,26 +421,43 @@ private:
 
 class LidarPanel final : public Panel {
 public:
-    explicit LidarPanel(std::shared_ptr<SensorsState> state) : state_(std::move(state)) {}
-    [[nodiscard]] const char* title() const override { return "Lidar"; }
-    [[nodiscard]] Workspace workspace() const override { return Workspace::Sensors; }
+    explicit LidarPanel(std::shared_ptr<SensorsState> state,
+                        ViewHome home = {Workspace::Sensors, "Lidar", false})
+        : state_(std::move(state)), home_(home) {}
+    [[nodiscard]] const char* title() const override { return home_.id; }
+    [[nodiscard]] Workspace workspace() const override { return home_.workspace; }
 
     void draw(PanelContext& context) override {
+        state_->follow(context, !home_.onlyWhenPresent);
+        Sensor* shownLidar = state_->first(Kind::Lidar);
+        if (home_.onlyWhenPresent && (shownLidar == nullptr || !context.scene)) {
+            front_.update(false);
+            return;
+        }
+        // Sensors: "Lidar · bird's-eye"; beside the viewport the design names the sensor:
+        // "lidar_front · BEV".
+        const std::string window =
+            home_.onlyWhenPresent
+                ? context.scene->statics->prims[shownLidar->prim].name + " · BEV###" + home_.id
+                : std::string("Lidar · bird's-eye###") + home_.id;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        const bool open = ImGui::Begin("Lidar · bird's-eye###Lidar");
+        const bool open = ImGui::Begin(window.c_str(), nullptr, home_.flags());
         ImGui::PopStyleVar();
         if (!open) {
+            front_.update(false);
             ImGui::End();
             return;
         }
-        state_->follow(context);
         if (widgets::BeginPanelTools("##lidar-tools", px(120.0F))) {
             static constexpr std::array<const char*, 2> kModes{"intensity", "range"};
             widgets::Segmented("##mode", kModes.data(), 2, &mode_);
             widgets::EndPanelTools();
         }
-        const Sensor* lidar = state_->first(Kind::Lidar);
-        if (lidar == nullptr) {
+        const Sensor* lidar = shownLidar;
+        if (lidar != nullptr && front_.update(true)) {
+            SensorsState::watch(context, *shownLidar);  // shown: its frames are wanted
+        }
+        if (lidar == nullptr || !lidar->stream) {  // a lidar always has a stream once watched
             ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context, *state_)) {
                 widgets::Caption("This stage has no lidar.");
@@ -530,6 +596,8 @@ private:
     }
 
     std::shared_ptr<SensorsState> state_;
+    ViewHome home_;
+    InFront front_;  // the Scene tab variant: in front for two frames
     int mode_{0};
     float radius_{9.0F};  // metres from the sensor to the top of the view
 };
@@ -576,20 +644,28 @@ ImU32 velocityColour(float velocity, float span) {
 /// lidar view), and "r–az", range up and azimuth across (a B-scope).
 class RadarPanel final : public Panel {
 public:
-    explicit RadarPanel(std::shared_ptr<SensorsState> state) : state_(std::move(state)) {}
-    [[nodiscard]] const char* title() const override { return "Radar"; }
-    [[nodiscard]] Workspace workspace() const override { return Workspace::Sensors; }
+    explicit RadarPanel(std::shared_ptr<SensorsState> state,
+                        ViewHome home = {Workspace::Sensors, "Radar", false})
+        : state_(std::move(state)), home_(home) {}
+    [[nodiscard]] const char* title() const override { return home_.id; }
+    [[nodiscard]] Workspace workspace() const override { return home_.workspace; }
 
     void draw(PanelContext& context) override {
-        state_->follow(context);
-        const Sensor* radar = state_->first(Kind::Radar);
+        state_->follow(context, !home_.onlyWhenPresent);
+        Sensor* radar = state_->first(Kind::Radar);
+        if (home_.onlyWhenPresent && (radar == nullptr || !context.scene)) {
+            front_.update(false);
+            return;
+        }
         const std::string name = radar != nullptr && context.scene
                                      ? context.scene->statics->prims[radar->prim].name
                                      : std::string("Radar");
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        const bool open = ImGui::Begin((name + " · range-azimuth###Radar").c_str());
+        const bool open =
+            ImGui::Begin((name + " · range-azimuth###" + home_.id).c_str(), nullptr, home_.flags());
         ImGui::PopStyleVar();
         if (!open) {
+            front_.update(false);
             ImGui::End();
             return;
         }
@@ -597,6 +673,9 @@ public:
             static constexpr std::array<const char*, 2> kModes{"fan", "r–az"};
             widgets::Segmented("##mode", kModes.data(), 2, &mode_);
             widgets::EndPanelTools();
+        }
+        if (radar != nullptr && front_.update(true)) {
+            SensorsState::watch(context, *radar);  // shown: its frames are wanted
         }
         if (radar == nullptr) {
             ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
@@ -833,6 +912,8 @@ private:
     }
 
     std::shared_ptr<SensorsState> state_;
+    ViewHome home_;
+    InFront front_;  // the Scene tab variant: in front for two frames
     int mode_{0};
     float zoom_{1.0F};  // share of the radar's range shown
     std::uint32_t zoomOf_{kNone};
@@ -883,23 +964,33 @@ private:
 
 class CameraPanel final : public Panel {
 public:
-    explicit CameraPanel(std::shared_ptr<SensorsState> state) : state_(std::move(state)) {}
-    [[nodiscard]] const char* title() const override { return "Camera"; }
-    [[nodiscard]] Workspace workspace() const override { return Workspace::Sensors; }
+    explicit CameraPanel(std::shared_ptr<SensorsState> state,
+                         ViewHome home = {Workspace::Sensors, "Camera", false})
+        : state_(std::move(state)), home_(home) {}
+    [[nodiscard]] const char* title() const override { return home_.id; }
+    [[nodiscard]] Workspace workspace() const override { return home_.workspace; }
 
     void draw(PanelContext& context) override {
-        state_->follow(context);
-        const Sensor* camera = state_->first(Kind::Camera);
+        state_->follow(context, !home_.onlyWhenPresent);
+        Sensor* camera = state_->first(Kind::Camera);
+        if (home_.onlyWhenPresent && (camera == nullptr || !context.scene)) {
+            front_.update(false);
+            return;
+        }
         // Design: the tab names the camera.
         const std::string name = camera != nullptr && context.scene
                                      ? context.scene->statics->prims[camera->prim].name
                                      : std::string("Camera");
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        const bool open = ImGui::Begin((name + "###Camera").c_str());
+        const bool open = ImGui::Begin((name + "###" + home_.id).c_str(), nullptr, home_.flags());
         ImGui::PopStyleVar();
         if (!open) {
+            front_.update(false);
             ImGui::End();
             return;
+        }
+        if (camera != nullptr && front_.update(true)) {
+            SensorsState::watch(context, *camera);  // shown: its frames are wanted
         }
         // Modes: a camera's rgb, depth and labels; a custom sensor's images by quantity.
         static constexpr std::array<const char*, 3> kModes{"rgb", "depth", "labels"};
@@ -1002,6 +1093,8 @@ private:
     }
 
     std::shared_ptr<SensorsState> state_;
+    ViewHome home_;
+    InFront front_;  // the Scene tab variant: in front for two frames
     int mode_{0};
     std::string watched_;                  // the image signal watched for this mode, if any
     std::shared_ptr<SensorStream> named_;  // its stream
@@ -1140,6 +1233,14 @@ std::vector<std::unique_ptr<Panel>> createSensorsPanels() {
     panels.push_back(std::make_unique<CameraPanel>(state));
     panels.push_back(std::make_unique<ImuPanel>(state));
     panels.push_back(std::make_unique<DegradationPanel>(state));
+    // The same views as tabs beside the Scene workspace's viewport, on the same state (so the
+    // same streams): the camera (a thermal camera too), the lidar's bird's-eye view, the radar.
+    panels.push_back(std::make_unique<CameraPanel>(
+        state, ViewHome{Workspace::Scene, scene_view_windows::kCamera, true}));
+    panels.push_back(std::make_unique<LidarPanel>(
+        state, ViewHome{Workspace::Scene, scene_view_windows::kLidar, true}));
+    panels.push_back(std::make_unique<RadarPanel>(
+        state, ViewHome{Workspace::Scene, scene_view_windows::kRadar, true}));
     return panels;
 }
 

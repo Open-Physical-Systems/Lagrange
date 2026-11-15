@@ -172,6 +172,17 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createElectricalPanels();
 /// The Sensors workspace's list, lidar view, IMU scopes and sensor summary. One shared state.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createSensorsPanels();
+/// The Scene workspace's Layers tab (beside the scene tree) and History tab (beside the
+/// Inspector). One shared state.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createSceneTabsPanels();
+/// Window IDs of the sensor views drawn as tabs beside the Scene workspace's viewport (made by
+/// createSensorsPanels(); a tab shows only while the stage has such a sensor). Layouts dock
+/// them as "###" + the ID; `--panel ###SceneCamera` brings one in front.
+namespace scene_view_windows {
+inline constexpr const char* kCamera = "SceneCamera";
+inline constexpr const char* kLidar = "SceneLidar";
+inline constexpr const char* kRadar = "SceneRadar";
+}  // namespace scene_view_windows
 /// The Domains workspace's Wiring, Unit checks and Schedule panels.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createWiringPanels();
 /// The Performance workspace's overview, scheduler, modules, history and resources panels.
