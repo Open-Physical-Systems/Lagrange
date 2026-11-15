@@ -370,6 +370,58 @@ TEST_F(KindTopicsTest, ABatteryMonitorIsABatteryState) {
     EXPECT_EQ(state->location, "pack");
 }
 
+// Sensors QA F10, F11: a power kind's Scalar `valid` goes out as a Bool like every other kind's,
+// and the weather's lens contamination (an input of the sensor) is no topic.
+TEST_F(KindTopicsTest, AValidFlagIsABoolAndAnInputIsNoTopic) {
+    world_.addCustomSensor("esc", "esc_telemetry", base_, Pose{}, 10.0, {}, {});
+    scheduler_.add(std::make_unique<FakeKinds>(
+        std::vector<Fake>{{"sensor/esc/speed", SignalType::Scalar, units::rad_per_s, {100.0}},
+                          {"sensor/esc/valid", SignalType::Scalar, units::one, {1.0}},
+                          {"sensor/esc/contamination", SignalType::Scalar, units::one, {0.002}}}));
+    ASSERT_TRUE(scheduler_.wire(WorldView(world_)));
+    const std::vector<KindTopic> topics = kindTopics(world_, 0, scheduler_.bus());
+    ASSERT_NE(find(topics, "/esc/valid"), nullptr);
+    EXPECT_EQ(find(topics, "/esc/valid")->type, "std_msgs/msg/Bool");
+    EXPECT_EQ(find(topics, "/esc/speed")->type, "std_msgs/msg/Float64");
+    EXPECT_EQ(find(topics, "/esc/contamination"), nullptr);
+}
+
+// Sensors QA I1: a full pack that gives current is discharging, FULL only at rest; without a
+// capacity of its own the monitor's design capacity is the battery's (BatteryAPI_1).
+TEST_F(KindTopicsTest, AFullPackGivingCurrentIsDischarging) {
+    const PrimId pack = world_.addPrim("/robot/pack", "pack");
+    SchemaInstance battery;
+    battery.schema = "BatteryAPI_1";
+    battery.prim = pack;
+    battery.reals["elec:battery:capacity"] = 18000.0;  // C: 5 Ah
+    world_.schemaInstances.push_back(battery);
+    world_.addCustomSensor("bms", "battery_monitor", base_, Pose{}, 10.0, {}, {});
+    world_.addCustomSensor("idle", "battery_monitor", base_, Pose{}, 10.0, {}, {});
+    const auto pack0 = [](const std::string& n, double current) {
+        return std::vector<Fake>{
+            {"sensor/" + n + "/voltage", SignalType::Scalar, units::V, {25.2}},
+            {"sensor/" + n + "/current", SignalType::Scalar, units::A, {current}},
+            {"sensor/" + n + "/soc", SignalType::Scalar, units::one, {1.0}},
+            {"sensor/" + n + "/temperature", SignalType::Scalar, units::K, {298.15}},
+            {"sensor/" + n + "/remaining_capacity", SignalType::Scalar, units::C, {18000.0}},
+            {"sensor/" + n + "/valid", SignalType::Scalar, units::one, {1.0}}};
+    };
+    std::vector<Fake> fakes = pack0("bms", 0.9);
+    for (Fake& f : pack0("idle", 0.0)) {
+        fakes.push_back(std::move(f));
+    }
+    start(std::move(fakes));
+    std::optional<sensor_msgs::msg::BatteryState> busy, idle;
+    auto a = listen("/bms/battery_state", busy);
+    auto b = listen("/idle/battery_state", idle);
+    ASSERT_TRUE(run([&] { return busy && idle; }));
+    EXPECT_EQ(busy->power_supply_status,
+              sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING);
+    EXPECT_EQ(idle->power_supply_status, sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_FULL);
+    EXPECT_FLOAT_EQ(busy->design_capacity, 5.0F);
+    EXPECT_FLOAT_EQ(busy->capacity, 5.0F);
+}
+
 // Joint torque as sensor_msgs/JointState (the joint that moves its body), a force-torque sensor as
 // geometry_msgs/WrenchStamped and the flow of an optical flow sensor in its optical frame.
 TEST_F(KindTopicsTest, TorquesWrenchesAndFlow) {

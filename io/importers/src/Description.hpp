@@ -56,6 +56,7 @@ struct SensorDesc {
     std::map<std::string, double, std::less<>> settings;  // as World::Sensors::settings
     std::string kind;  // a custom sensor's (RFC 0008 §3), as World::Sensors::kind
     std::map<std::string, std::string, std::less<>> text;  // its text parameters
+    std::string problem;  // why the file's sensor cannot be read; non-empty refuses the model
 };
 
 struct LinkDesc {

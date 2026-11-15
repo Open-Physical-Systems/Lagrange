@@ -623,6 +623,31 @@ TEST_F(SedanServerTest, RadarFramesCarryDetectionsWithVelocity) {
     }
 }
 
+// Sensors QA F9: a viewer that starts watching the radar of a run that stands still (paused, or
+// stepped before it connected) gets the last scan at once, not at a next scan that never comes.
+TEST_F(SedanServerTest, AViewerThatWatchesAPausedRadarGetsItsLastScan) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope step = command(5);
+    step.mutable_command()->mutable_step()->set_duration_ns(1'000'000'000);
+    send(step);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 5;
+    }));
+    for (const v1::Envelope& e : received_) {
+        ASSERT_FALSE(e.has_sensor_frame()) << "nobody watched it yet";
+    }
+    const std::uint64_t before = server_->now().ns;
+    v1::Envelope watch = command(6);
+    watch.mutable_command()->mutable_subscribe_sensor()->set_sensor("/sedan/base_link/front_radar");
+    watch.mutable_command()->mutable_subscribe_sensor()->set_enabled(true);
+    send(watch);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_sensor_frame() && e.sensor_frame().points().count() > 0;
+    }));
+    EXPECT_EQ(received_.back().sensor_frame().sensor(), "/sedan/base_link/front_radar");
+    EXPECT_EQ(server_->now().ns, before) << "no step was needed";
+}
+
 /// The cut-in scenario with the sedan as its ego, on the scenario's own roads.
 class ScenarioServerTest : public ServerTest {
 protected:

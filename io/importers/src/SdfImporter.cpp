@@ -471,6 +471,11 @@ private:
             for (double angle = 0.0; text >> angle; ++ring) {
                 out.settings["vertical_angle_" + std::to_string(ring)] = angle;
             }
+            // A word that is not a number ended the table there, silently (sensors QA F7).
+            if (!text.eof()) {
+                out.problem = "<lagrange:angles> '" + *angles +
+                              "' is not a list of numbers (rad, one per channel)";
+            }
         }
         if (const sdf::ElementPtr rosette = lagrangeChild(lidar, "rosette")) {
             for (const auto& [element, key] :

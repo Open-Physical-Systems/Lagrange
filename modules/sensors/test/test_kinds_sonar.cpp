@@ -6,6 +6,8 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <string>
+#include <utility>
 
 namespace lagrange::sensors::kinds {
 inline namespace extra2 {
@@ -181,8 +183,12 @@ TEST(Sonar, NoiseAndResolution) {
 TEST(Sonar, AWaterTemperatureInKelvinIsRefused) {
     // water_temperature is in °C: 283.15 (10 °C in K, §9's SI habit) made Mackenzie's equation
     // read 3886 m/s, every range 2.6 times short. It is refused, as a salinity of 100.
-    for (const Settings& settings : {Settings{{"water_temperature", 283.15}},
-                                     Settings{{"water_temperature", 10.0}, {"salinity", 100.0}}}) {
+    // Refused with the catalog's range and unit (sensors QA F2).
+    for (const auto& [settings, words] :
+         {std::pair{Settings{{"water_temperature", 283.15}},
+                    std::string("water_temperature = 283.15: must be from -2 to 40 °C")},
+          std::pair{Settings{{"water_temperature", 10.0}, {"salinity", 100.0}},
+                    std::string("salinity = 100: must be from 0 to 45 PSU")}}) {
         KindRun r;
         rig(r.world, "alt", "sonar", down(), 10.0, settings);
         addWater(r.world);
@@ -190,8 +196,8 @@ TEST(Sonar, AWaterTemperatureInKelvinIsRefused) {
         r.scheduler->add(createBuiltinKind(r.world, 0, false, nullptr, nullptr));
         auto wired = r.scheduler->wire(WorldView(r.world));
         ASSERT_FALSE(wired);
-        EXPECT_NE(to_string(wired.error().front()).find("water_temperature is in"),
-                  std::string::npos);
+        EXPECT_NE(to_string(wired.error().front()).find(words), std::string::npos)
+            << to_string(wired.error().front());
     }
 }
 

@@ -884,14 +884,17 @@ private:
         if (cutoff && !(*cutoff > 0.0 && *cutoff <= FisheyeLens::kPi)) {
             return Unexpected{path + ": sensor:camera:cutoffAngle must lie in (0, π]"};
         }
-        // Unauthored, the cutoff follows the field of view (FisheyeLens::from): invert up to π.
-        // A lens that folds back is refused where the camera starts, as from URDF.
-        lens.cutoff = cutoff.value_or(FisheyeLens::kPi);
+        // The angle across the width is the lens's, whatever the cutoff: a cutoff below half of
+        // it leaves the pixels beyond it black, as from URDF and SDFormat (and Gazebo). So
+        // invert up to π; unauthored, the cutoff then follows the field of view
+        // (FisheyeLens::from). A lens that folds back is refused where the camera starts, as from
+        // URDF.
+        lens.cutoff = FisheyeLens::kPi;
         const std::optional<double> half = lens.undistorted(aperture / 2.0 / focal);
         if (!half || !(*half > 0.0)) {
             return Unexpected{path +
-                              ": the fisheye cannot reach horizontalAperture / (2 focalLength) "
-                              "before its cutoff angle"};
+                              ": the fisheye's θ_d never reaches horizontalAperture / "
+                              "(2 focalLength) within π off its axis"};
         }
         settings["horizontal_fov"] = 2.0 * *half;
         settings["projection"] = 1.0;

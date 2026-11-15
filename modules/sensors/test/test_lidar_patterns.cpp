@@ -15,6 +15,7 @@
 #include <numbers>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -227,6 +228,28 @@ TEST(LidarPatterns, ARosettesCoverageGrowsWithIntegrationTime) {
 // --- the lidar module -----------------------------------------------------------------------
 
 /// A wall at x = 5 m and a lidar on a post at the origin, 1 m up; `extra` its settings.
+TEST(LidarPatterns, ColumnsFireThroughThePeriodAndARosettesPointsAtItsPointRate) {
+    // A rotating lidar: column c at (c + 1) / columns of the period, bit for bit as before.
+    const LidarLayout grid = LidarLayout::from(Settings{{"samples", 1800}});
+    for (std::uint32_t c = 0; c < 1800; ++c) {
+        ASSERT_EQ(grid.firedFraction(c, 10.0), static_cast<double>(c + 1) / 1800);
+    }
+    // Sensors QA F3: 2000 points at 100 000/s, 10 Hz: 1e-5 s apart, the last at the scan's end,
+    // the first 19.99 ms before it, not spread over the 100 ms period.
+    const LidarLayout rosette = LidarLayout::from(
+        Settings{{"pattern", 2}, {"samples", 2000}, {"rosette_point_rate", 100000}});
+    constexpr double kPeriod = 0.1;
+    EXPECT_EQ(rosette.perPeriod(10.0), 10000.0);
+    EXPECT_EQ(rosette.firedFraction(1999, 10.0), 1.0);
+    EXPECT_NEAR((1.0 - rosette.firedFraction(0, 10.0)) * kPeriod, 1999e-5, 1e-15);
+    EXPECT_NEAR((rosette.firedFraction(1, 10.0) - rosette.firedFraction(0, 10.0)) * kPeriod, 1e-5,
+                1e-15);
+    // samples = point_rate / rate: the whole period, as a rotating lidar's.
+    const LidarLayout whole = LidarLayout::from(Settings{{"pattern", 2}, {"samples", 10000}});
+    EXPECT_EQ(whole.firedFraction(0, 10.0), 1e-4);
+    EXPECT_EQ(whole.firedFraction(9999, 10.0), 1.0);
+}
+
 World wall(const Settings& extra) {
     World world;
     world.addCollider(kWorldBody, ShapeType::Box, {0.1, 50.0, 50.0}, Pose{{5.1, 0, 1}}, 1.0);
@@ -354,6 +377,45 @@ TEST(LidarPatterns, AFlashLidarMustLookThroughAFocalPlane) {
     auto wired = scheduler.wire(WorldView(world));
     ASSERT_FALSE(wired);
     EXPECT_NE(to_string(wired.error().front()).find("π/2"), std::string::npos);
+}
+
+// Sensors QA F7: pattern parameters out of reach are refused, naming what is wrong.
+TEST(LidarPatterns, PatternParametersOutOfReachAreRefused) {
+    const std::vector<std::pair<Settings, std::string>> cases{
+        {{{"samples", 8}, {"vertical_angle_0", -0.2}, {"vertical_angle_1", 2.5}},
+         "channel elevations"},
+        {{{"pattern", 2}, {"samples", 100}, {"rosette_fov", -0.5}}, "rosette fov"},
+        {{{"pattern", 2}, {"samples", 100}, {"rosette_fov", 4.0}}, "rosette fov"},
+        {{{"pattern", 2}, {"samples", 100}, {"rosette_prism_ratio", -1.0}}, "prism_ratio"},
+        {{{"pattern", 2}, {"samples", 100}, {"rosette_speed_1", 0.0}, {"rosette_speed_2", 0.0}},
+         "speed_1 and speed_2"},
+    };
+    for (const auto& [settings, words] : cases) {
+        const World world = wall(settings);
+        Scheduler scheduler;
+        for (auto& module : createSensorModules(world)) {
+            scheduler.add(std::move(module));
+        }
+        auto wired = scheduler.wire(WorldView(world));
+        ASSERT_FALSE(wired) << words;
+        EXPECT_NE(to_string(wired.error().front()).find(words), std::string::npos)
+            << to_string(wired.error().front());
+    }
+    // The edges are taken: a channel at ±π/2, a cone of π, prisms of ratio 0.
+    for (const Settings& settings :
+         {Settings{{"samples", 8},
+                   {"vertical_angle_0", -std::numbers::pi / 2},
+                   {"vertical_angle_1", std::numbers::pi / 2}},
+          Settings{{"pattern", 2}, {"samples", 100}, {"rosette_fov", std::numbers::pi}},
+          Settings{{"pattern", 2}, {"samples", 100}, {"rosette_prism_ratio", 0.0}}}) {
+        const World world = wall(settings);
+        Scheduler scheduler;
+        for (auto& module : createSensorModules(world)) {
+            scheduler.add(std::move(module));
+        }
+        auto wired = scheduler.wire(WorldView(world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    }
 }
 
 TEST(LidarPatterns, ACountOutOfReachIsRefusedBeforeItIsAllocated) {

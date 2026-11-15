@@ -258,3 +258,20 @@ def test_sensor_faults_are_what_python_reads() -> None:
         lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=["compass=stuck"])
     with pytest.raises(RuntimeError, match="sensor-fault needs"):
         lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=["imu=broken"])
+
+
+def test_the_loaders_notes_are_printed_and_kept(tmp_path, capfd) -> None:
+    # Sensors QA F8: the CLI logs what the loader took its own way as [import]; Python did not.
+    urdf = tmp_path / "noted.urdf"
+    urdf.write_text(
+        '<?xml version="1.0"?><robot name="noted"><link name="base">'
+        '<inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" '
+        'ixz="0" iyz="0"/></inertial></link><gazebo reference="base">'
+        '<sensor name="x" type="ray"><update_rate>10</update_rate><ray>'
+        "<pattern>spiral</pattern><scan><horizontal><samples>8</samples></horizontal>"
+        "</scan></ray></sensor></gazebo></robot>"
+    )
+    sim = lagrange.Simulation(str(urdf), world=None)
+    notes = sim.notes()
+    assert any("lidar pattern 'spiral' is not known" in n for n in notes), notes
+    assert "[import] x: lidar pattern 'spiral'" in capfd.readouterr().err

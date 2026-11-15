@@ -663,9 +663,11 @@ double firstStddev(const tinyxml2::XMLElement* element) {
 /// A lidar's opt-in scan pattern (LidarLayout.hpp; sensors.md, "Lidar scan patterns (as
 /// built)"): <pattern> grid | flash | rosette, a channel table <scan><vertical><angles> (rad,
 /// one per channel, any order) and the rosette's <rosette> (fov, point_rate, speed_1, speed_2,
-/// prism_ratio). Returns a note for a pattern it does not know, else an empty string.
+/// prism_ratio). Returns a note for a pattern it does not know, else an empty string; sets
+/// `refused` when the file's table cannot be read.
 std::string lidarPattern(const tinyxml2::XMLElement* ray,
-                         std::map<std::string, double, std::less<>>& settings) {
+                         std::map<std::string, double, std::less<>>& settings,
+                         std::string& refused) {
     if (ray == nullptr) {
         return {};
     }
@@ -695,6 +697,11 @@ std::string lidarPattern(const tinyxml2::XMLElement* ray,
         std::size_t ring = 0;
         for (double angle = 0.0; text >> angle; ++ring) {
             settings["vertical_angle_" + std::to_string(ring)] = angle;
+        }
+        // A word that is not a number ended the table there, silently (sensors QA F7).
+        if (!text.eof()) {
+            refused = std::string("<scan><vertical><angles> '") + angles->GetText() +
+                      "' is not a list of numbers (rad, one per channel)";
         }
     }
     if (const tinyxml2::XMLElement* rosette = ray->FirstChildElement("rosette")) {
@@ -928,10 +935,11 @@ void addThermalElements(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId
 }
 
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
-void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
+/// Why a sensor of the file cannot be read (it refuses the model), or empty.
+std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
     tinyxml2::XMLDocument document;
     if (document.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS) {
-        return;
+        return {};
     }
     const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
     World& world = robot.world;
@@ -1098,8 +1106,12 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 if (childNumber(ray, {"motion_distortion"}, 1.0) == 0.0) {
                     settings["motion_distortion"] = 0.0;
                 }
-                if (std::string note = lidarPattern(ray, settings); !note.empty()) {
+                std::string refused;
+                if (std::string note = lidarPattern(ray, settings, refused); !note.empty()) {
                     robot.notes.push_back(std::string(name) + ": " + note);
+                }
+                if (!refused.empty()) {
+                    return "sensor '" + std::string(name) + "': " + refused;
                 }
                 typeName = "Lidar";
             } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
@@ -1147,6 +1159,7 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             robot.sensorPrim.push_back(static_cast<std::uint32_t>(robot.scene.prims.size() - 1));
         }
     }
+    return {};
 }
 
 }  // namespace
@@ -1238,7 +1251,9 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
             robot.bodyRestPose[b].position[2] += lift;
         }
     }
-    addSensors(robot, path, firstBody);
+    if (std::string refused = addSensors(robot, path, firstBody); !refused.empty()) {
+        return Unexpected{path + ": " + refused};
+    }
     return {};
 }
 

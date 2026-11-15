@@ -123,6 +123,19 @@ public:
                                              std::string(to_string(fault.mode)) +
                                              " applies to numbers only");
                 }
+                // A Bool or a count reads 0/1 or whole numbers: an offset or noise would make it
+                // read 1.78 or 3.5 (sensors QA F6). Those take dropout, stuck and disconnect, and
+                // their dropped samples are held, never NaN.
+                target.integral = spec.type == SignalType::Bool || spec.type == SignalType::Int;
+                if (target.integral && numericMode(fault.mode)) {
+                    return Status::error(StatusCode::InvalidConfig,
+                                         "sensor fault " + to_string(fault) + ": " + spec.name +
+                                             " is a " +
+                                             (spec.type == SignalType::Bool ? "Bool" : "count") +
+                                             "; " + std::string(to_string(fault.mode)) +
+                                             " applies to measured numbers only (dropout, stuck "
+                                             "and disconnect apply to it)");
+                }
                 if (!target.handle && fault.component >= 0 &&
                     static_cast<std::size_t>(fault.component) >= target.components) {
                     return Status::error(StatusCode::InvalidConfig,
@@ -227,7 +240,21 @@ public:
             }
             group.open = true;
             if (bus.held(target.id)) {
-                continue;  // no new sample this step (or an earlier fault dropped it)
+                // No new sample this step (or an earlier fault dropped it). A sensor
+                // disconnected with nan=1 reads NaN from the fault's start, not from its next
+                // sample (sensors QA F5): once, while what it delivered last is not NaN.
+                if (fault.mode == FaultMode::Disconnect && fault.nan && !target.handle &&
+                    !target.integral && drop_[target.fault] != 0) {
+                    const std::span<const double> last = bus.readBatch(target.id);
+                    if (std::any_of(last.begin(), last.end(),
+                                    [](double v) { return !std::isnan(v); })) {
+                        bus.release(target.id);
+                        const std::span<double> values = bus.writeBatch(target.id);
+                        std::fill(values.begin(), values.end(),
+                                  std::numeric_limits<double>::quiet_NaN());
+                    }
+                }
+                continue;
             }
             apply(fault, target, group, context, t, bus);
         }
@@ -340,6 +367,7 @@ private:
         std::string name;
         SignalId id;
         bool handle{false};
+        bool integral{false};  // a Bool or an Int: never NaN, never offset
         std::size_t components{0};
         std::uint32_t group{0};
         bool frozen{false};                          // stuck: the value is taken
@@ -385,7 +413,7 @@ private:
                 return;
             }
             group.droppedNow = true;
-            if (fault.nan && !target.handle) {
+            if (fault.nan && !target.handle && !target.integral) {
                 const std::span<double> values = bus.writeBatch(target.id);
                 std::fill(values.begin(), values.end(), std::numeric_limits<double>::quiet_NaN());
             } else {

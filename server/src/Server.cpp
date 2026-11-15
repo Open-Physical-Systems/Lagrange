@@ -1871,6 +1871,24 @@ struct Server::Impl {
     }
     std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
 
+    /// A viewer that starts watching a sensor gets its latest frame now, not at its next scan:
+    /// a paused run takes none (a viewer connecting to it drew no radar, sensors QA F9), and a
+    /// slow sensor's next one may be seconds away. Others watching it get the frame again.
+    void resendSensorFrame(const std::string& sensor) {
+        if (!scheduler || scheduler->now().ns == 0) {
+            return;  // nothing taken yet: the first step sends it
+        }
+        namedImageSent.erase(sensor);
+        const World::Sensors& table = robot.world.sensors;
+        for (std::size_t k = 0; k < table.names.size() && k < lidarSent.size(); ++k) {
+            if (k < robot.sensorPrim.size() &&
+                robot.scene.prims[robot.sensorPrim[k]].path == sensor) {
+                lidarSent[k] = SimTime{-1};  // no sample has this stamp
+            }
+        }
+        sendSensorFrames();
+    }
+
     /// A radar's latest scan (RadarAPI_1, or an imaging_radar), once per new scan: its
     /// detections (sensor/<n>/detections: range, azimuth, elevation, radial velocity, RCS, SNR;
     /// NaN beyond the count) as points in the sensor frame (x forward, z up) with fields x, y, z,
@@ -3579,6 +3597,7 @@ struct Server::Impl {
             case v1::Command::kSubscribeSensor:
                 if (command.subscribe_sensor().enabled()) {
                     session.sensors.insert(command.subscribe_sensor().sensor());
+                    resendSensorFrame(command.subscribe_sensor().sensor());
                 } else {
                     session.sensors.erase(command.subscribe_sensor().sensor());
                 }
@@ -7376,6 +7395,10 @@ SimTime Server::now() const {
 
 const World& Server::world() const {
     return impl_->robot.world;
+}
+
+const std::vector<std::string>& Server::importNotes() const {
+    return impl_->robot.notes;
 }
 
 Expected<std::uint64_t, Status> Server::stateHash() const {

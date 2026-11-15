@@ -27,6 +27,7 @@ add_library(
     src/WeatherEffects.cpp
     src/ThermalCamera.cpp
     src/kinds/Kinds.cpp
+    src/kinds/ParamRanges.cpp
     src/kinds/ImagingRadar.cpp
     src/kinds/CameraKinds.cpp
     src/kinds/EventCamera.cpp

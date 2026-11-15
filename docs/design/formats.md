@@ -609,7 +609,8 @@ camera a fisheye (Kannala–Brandt; k1..k4 from `distortionModel = "equidistant"
 `distortionCoeffs`, or `"none"` for all zero; `"plumb_bob"` is refused): its angle across the
 width is `2 θ_d⁻¹(horizontalAperture / (2 focalLength))` through the lens's own mapping, so a
 200° fisheye has a positive focal length; `cutoffAngle` (at most π) defaults to the larger of
-half that angle and π/2. `UsdGeomCamera.projection` stays `perspective` (the only other token
+half that angle and π/2, and may be below half that angle (the pixels beyond it are black, as from
+URDF). `UsdGeomCamera.projection` stays `perspective` (the only other token
 OpenUSD allows is `orthographic`). The stage writer writes all of it, so URDF → `lagrange_import`
 → USD → run gives the same beams bit for bit and the same lens (to the float precision of
 `focalLength`). A file using them, opened by Lagrange 1.2 or older, runs as a grid lidar and a

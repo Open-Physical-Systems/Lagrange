@@ -11,6 +11,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -122,7 +123,7 @@ struct Trace {
 /// Runs the kind for 1 s in its world with `numbers` and `text`, sampling every number signal
 /// sensor/probe/... every millisecond.
 Trace run(const std::string& kind, std::map<std::string, double, std::less<>> numbers,
-          std::map<std::string, std::string, std::less<>> text) {
+          std::map<std::string, std::string, std::less<>> text, int steps = 1000) {
     Trace trace;
     Setup s = cases().at(kind).make();
     s.world.addCustomSensor(kProbe, kind, s.body, s.mount, s.rateHz, std::move(numbers),
@@ -194,8 +195,7 @@ Trace run(const std::string& kind, std::map<std::string, double, std::less<>> nu
             ids.push_back(bus.find(spec.name));
         }
     }
-    constexpr int kSteps = 1000;  // 1 s in 1 ms
-    for (int k = 1; k <= kSteps; ++k) {
+    for (int k = 1; k <= steps; ++k) {  // 1 ms each
         if (Status ok = scheduler.stepUntil(SimTime{std::int64_t{k} * 1'000'000}); !ok.ok()) {
             trace.error = "step: " + ok.message;
             return trace;
@@ -362,6 +362,136 @@ TEST(SensorCatalog, AKindWithItsDefaultsStartsOrTheCatalogSaysWhatItNeeds) {
     }
 }
 
+/// Values just outside a parameter's catalog range: below `min`, at `min_exclusive`, above
+/// `max`, at `max_exclusive`.
+std::vector<double> outOfRange(const YAML::Node& param) {
+    std::vector<double> out;
+    const bool integer = param["type"].as<std::string>() == "int";
+    const auto beyond = [integer](double edge, double sign) {
+        return integer ? edge + sign : edge + (sign * std::max(1e-3, std::abs(edge) * 0.5));
+    };
+    if (param["min"]) {
+        out.push_back(beyond(param["min"].as<double>(), -1.0));
+    }
+    if (param["min_exclusive"]) {
+        out.push_back(param["min_exclusive"].as<double>());
+    }
+    if (param["max"]) {
+        out.push_back(beyond(param["max"].as<double>(), 1.0));
+    }
+    if (param["max_exclusive"]) {
+        out.push_back(param["max_exclusive"].as<double>());
+    }
+    return out;
+}
+
+/// A bare robot (one free link) carrying sensor `probe` of `kind` with `numbers`: why the run
+/// refuses to start, or empty. For the kinds that need a Vulkan device, whose range refusal
+/// comes before they look for one.
+std::string bareRefusal(const std::string& kind,
+                        std::map<std::string, double, std::less<>> numbers) {
+    World world;
+    world.robots.push_back("robot");
+    const BodyId base =
+        world.addBody("base_link", kWorldBody, Pose{}, 1.0, {}, {0.01, 0.01, 0.01, 0, 0, 0});
+    world.addJoint("base_link_floating", JointType::Free, base, {0, 0, 1}, false);
+    world.addCustomSensor(kProbe, kind, base, Pose{}, 10.0, std::move(numbers), {});
+    const auto index = static_cast<std::uint32_t>(world.sensors.names.size() - 1);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    auto module = createBuiltinKind(world, index, false, nullptr, nullptr, nullptr);
+    if (!module) {
+        return "createBuiltinKind gave nothing";
+    }
+    scheduler.add(std::move(module));
+    if (auto wired = scheduler.wire(WorldView(world)); !wired) {
+        return to_string(wired.error().front());
+    }
+    return {};
+}
+
+class OutOfRangeIsRefused : public testing::TestWithParam<std::string> {};
+
+// Sensors QA F2 (2026-11-15): every number parameter outside the catalog's range is refused by
+// the kind, with a message naming the parameter, so the builder's form and the run agree and no
+// value is silently clamped or ignored. Parameters of another mode run in that mode.
+TEST_P(OutOfRangeIsRefused, EveryCatalogRange) {
+    const std::string kind = GetParam();
+    const bool bare = builtinKindRenders(kind) || kNeedsTheCameraScene.contains(kind);
+    ASSERT_TRUE(bare || cases().contains(kind));
+    const YAML::Node params = catalog()["kinds"][kind]["params"];
+    for (const auto& param : params) {
+        const std::string type = param["type"].as<std::string>();
+        if (type != "number" && type != "int") {
+            continue;
+        }
+        const std::string path = param["path"].as<std::string>();
+        catalogtest::Setup world = bare ? catalogtest::Setup{} : cases().at(kind).make();
+        // Its mode: the first choice of each `only_when` the world does not already give.
+        if (!bare && !readInMode(param, params, world)) {
+            for (const auto& item : param["only_when"]) {
+                const std::string choice = item.second.as<std::string>();
+                world.text[item.first.as<std::string>()] = choice.substr(0, choice.find('|'));
+            }
+        }
+        for (const double bad : outOfRange(param)) {
+            auto numbers = world.numbers;
+            numbers[path] = bad;
+            const std::string error =
+                bare ? bareRefusal(kind, numbers) : run(kind, numbers, world.text, 2).error;
+            EXPECT_FALSE(error.empty()) << kind << ": " << path << " = " << bad
+                                        << " is outside the catalog's range but the kind starts";
+            EXPECT_NE(error.find(path + " = "), std::string::npos)
+                << kind << ": " << path << " = " << bad << " refused without naming it: " << error;
+        }
+    }
+}
+
+// The code's range table (ParamRanges.cpp) is the catalog's, row for row, and a value on an
+// inclusive edge is taken.
+TEST(SensorCatalog, TheRangeTableIsTheCatalogs) {
+    std::set<std::string> inCatalog;
+    std::set<std::string> inCode;
+    const auto row = [](std::string_view kind, std::string_view path, double lo, double hi,
+                        bool loEx, bool hiEx) {
+        std::ostringstream out;
+        out << std::setprecision(17) << kind << " " << path << " " << lo << (loEx ? ")" : "]")
+            << " " << hi << (hiEx ? "(" : "[");
+        return out.str();
+    };
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    for (const auto& item : catalog()["kinds"]) {
+        const auto kind = item.first.as<std::string>();
+        for (const auto& param : item.second["params"]) {
+            const auto type = param["type"].as<std::string>();
+            if (type != "number" && type != "int") {
+                continue;
+            }
+            const bool loEx = static_cast<bool>(param["min_exclusive"]);
+            const bool hiEx = static_cast<bool>(param["max_exclusive"]);
+            const double lo = param["min"]             ? param["min"].as<double>()
+                              : param["min_exclusive"] ? param["min_exclusive"].as<double>()
+                                                       : -kInf;
+            const double hi = param["max"]             ? param["max"].as<double>()
+                              : param["max_exclusive"] ? param["max_exclusive"].as<double>()
+                                                       : kInf;
+            if (std::isfinite(lo) || std::isfinite(hi)) {
+                inCatalog.insert(row(kind, param["path"].as<std::string>(), lo, hi, loEx, hiEx));
+            }
+        }
+    }
+    for (const KindParamRange& r : builtinKindParamRanges()) {
+        inCode.insert(row(r.kind, r.path, r.min, r.max, r.minExclusive, r.maxExclusive));
+        EXPECT_TRUE(isBuiltinKind(r.kind)) << r.kind;
+        if (!r.minExclusive && std::isfinite(r.min)) {
+            EXPECT_TRUE(r.contains(r.min)) << r.kind << " " << r.path;
+        }
+        if (!r.maxExclusive && std::isfinite(r.max)) {
+            EXPECT_TRUE(r.contains(r.max)) << r.kind << " " << r.path;
+        }
+    }
+    EXPECT_EQ(inCatalog, inCode);
+}
+
 std::vector<std::string> allKinds() {
     std::vector<std::string> out;
     for (std::string_view k : builtinKinds()) {
@@ -372,6 +502,8 @@ std::vector<std::string> allKinds() {
 
 INSTANTIATE_TEST_SUITE_P(SensorCatalog, ExplicitDefaultsChangeNothing,
                          testing::ValuesIn(allKinds()),
+                         [](const testing::TestParamInfo<std::string>& p) { return p.param; });
+INSTANTIATE_TEST_SUITE_P(SensorCatalog, OutOfRangeIsRefused, testing::ValuesIn(allKinds()),
                          [](const testing::TestParamInfo<std::string>& p) { return p.param; });
 
 }  // namespace

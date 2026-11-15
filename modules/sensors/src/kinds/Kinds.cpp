@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -151,6 +153,41 @@ std::vector<std::string_view> builtinKinds() {
     return out;
 }
 
+std::string builtinKindRangeProblem(const World& world, std::uint32_t sensor) {
+    const std::string& kind = world.sensors.kind[sensor];
+    const auto& settings = world.sensors.settings[sensor];
+    const auto text = [](double x) {
+        std::ostringstream out;
+        out << std::setprecision(12) << x;
+        return out.str();
+    };
+    for (const KindParamRange& r : builtinKindParamRanges()) {
+        if (r.kind != kind) {
+            continue;
+        }
+        const auto it = settings.find(r.path);
+        if (it == settings.end() || r.contains(it->second)) {
+            continue;
+        }
+        const bool hasMin = std::isfinite(r.min);
+        const bool hasMax = std::isfinite(r.max);
+        std::string bound;
+        if (hasMin && hasMax) {
+            bound = "from " + text(r.min) + (r.minExclusive ? " (excluded)" : "") + " to " +
+                    text(r.max) + (r.maxExclusive ? " (excluded)" : "");
+        } else if (hasMin) {
+            bound = (r.minExclusive ? "above " : "at least ") + text(r.min);
+        } else {
+            bound = (r.maxExclusive ? "below " : "at most ") + text(r.max);
+        }
+        if (r.unit != "1") {
+            bound += " " + std::string(r.unit);
+        }
+        return std::string(r.path) + " = " + text(it->second) + ": must be " + bound;
+    }
+    return {};
+}
+
 std::unique_ptr<IModule> createBuiltinKind(const World& world, std::uint32_t sensor,
                                            bool groundTruth,
                                            std::shared_ptr<gpu::RayContext> rayContext,
@@ -179,6 +216,14 @@ std::unique_ptr<IModule> createBuiltinKind(const World& world, std::uint32_t sen
                                                  world.sensors.names[sensor] + ": parameter " +
                                                  key + " is not a number");
         }
+    }
+    // Outside the catalog's range: refused, never clamped or read as "not given" (sensors QA F2:
+    // a negative resolution turned quantisation off, a wheel_radius of 0 meant "from the
+    // colliders", averages of 0 became 1).
+    if (std::string problem = builtinKindRangeProblem(world, sensor); !problem.empty()) {
+        return std::make_unique<Refused>(
+            world, sensor,
+            world.sensors.kind[sensor] + " " + world.sensors.names[sensor] + ": " + problem);
     }
     const kinds::KindContext context{std::move(rayContext), std::move(cameraScene), scene};
     return e->factory(world, sensor, groundTruth, context);

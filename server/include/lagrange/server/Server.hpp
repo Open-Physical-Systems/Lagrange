@@ -286,6 +286,9 @@ public:
     [[nodiscard]] SimTime now() const;
     /// After load(): the world (bodies, joints, colliders, sensors) as loaded.
     [[nodiscard]] const World& world() const;
+    /// After load(): what the loader noted about the robot's files and took its own way (an
+    /// unknown lidar pattern, a lens it does not draw, ...); start() logs them as [import].
+    [[nodiscard]] const std::vector<std::string>& importNotes() const;
     /// One iteration: waits up to `timeoutMs` for viewers, advances simulation time by the wall
     /// time that passed (times the real-time factor), and sends what changed.
     void runOnce(int timeoutMs);
