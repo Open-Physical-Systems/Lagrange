@@ -40,6 +40,9 @@ struct ImportOptions {
 ///   with their compiled triangles.
 /// - Joints driven by an actuator are actuated, with the force range (or the control range
 ///   times the gear) as the effort limit.
+/// - A hinge's or slide's armature is the joint's `armature` plus each joint actuator's
+///   `armature` times its gear squared (MuJoCo's reflected rotor inertia); a ball or free
+///   joint's is noted and dropped. USD has no attribute for it yet, so `lagrange_import` loses it.
 /// - A site with a gyro or an accelerometer becomes an IMU at the physics rate (MJCF sensors
 ///   have no rate of their own), with the sensors' noise.
 [[nodiscard]] Expected<Model, std::string> importMjcf(const std::string& path,

@@ -224,6 +224,9 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
     // Joints, in order per body; a body without joints is welded to its parent.
     std::vector<bool> actuated(static_cast<std::size_t>(m.njnt), false);
     std::vector<double> effort(static_cast<std::size_t>(m.njnt), 0.0);
+    // Rotor inertia reflected through an actuator's gear (MuJoCo 3.12 actuator `armature`, added
+    // to the joint as armature·gear², as MuJoCo's mass matrix has it), kg·m² or kg.
+    std::vector<double> actuatorArmature(static_cast<std::size_t>(m.njnt), 0.0);
     for (int a = 0; a < static_cast<int>(m.nactuator); ++a) {
         if (m.actuator_trntype[a] != mjTRN_JOINT) {
             detail::note(model, "actuator '" + nameOf(m, mjOBJ_ACTUATOR, a) +
@@ -233,6 +236,7 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
         const int joint = m.actuator_trnid[2 * a];
         actuated[joint] = true;
         const double gear = std::abs(m.actuator_gear[6 * m.actuator_outadr[a]]);
+        actuatorArmature[joint] += m.actuator_armature[a] * gear * gear;
         const int control = m.actuator_ctrladr[a];
         if (m.actuator_forcelimited[a] != 0) {
             effort[joint] = std::max(std::abs(m.actuator_forcerange[2 * a]),
@@ -298,6 +302,13 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
             joint.effort = effort[j];
             joint.damping = m.dof_damping[m.jnt_dofadr[j]];
             joint.friction = m.dof_frictionloss[m.jnt_dofadr[j]];
+            if (joint.type != JointType::Free && joint.type != JointType::Spherical) {
+                joint.armature = m.dof_armature[m.jnt_dofadr[j]] + actuatorArmature[j];
+            } else if (m.dof_armature[m.jnt_dofadr[j]] != 0.0) {
+                detail::note(model, "joint '" + joint.name + "' has an armature; a " +
+                                        (joint.type == JointType::Free ? "free" : "ball") +
+                                        " joint's is not held");
+            }
             const int address = m.jnt_qposadr[j];
             if ((joint.type == JointType::Revolute || joint.type == JointType::Continuous ||
                  joint.type == JointType::Prismatic) &&

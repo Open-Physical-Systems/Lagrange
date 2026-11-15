@@ -1248,6 +1248,7 @@ and requires a whole number of nanoseconds (architecture §2).
         "backend": { "enum": ["physx", "mujoco", "jolt"] },
         "solver_iterations": { "type": "integer", "minimum": 1 },
         "substeps": { "type": "integer", "minimum": 1, "maximum": 64, "default": 1, "description": "Jolt steps per rigid-body step: each divides Jolt's joint energy loss and multiplies its cost (rigid_body.md §8.1)." },
+        "noslip_iterations": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0, "description": "MuJoCo's noslip post-solver iterations (mjOption.noslip_iterations); 0 is off. Stops soft contacts creeping on slopes at more cost per step and changes transients where feet must slip (docs/plan/spikes/legged-contact.md §6). Other backends ignore it." },
         "gpu": { "type": "boolean", "default": false },
         "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }
       },
@@ -1644,7 +1645,10 @@ scene as the URDF loader, and `lagrange_import` writes any of the three as USD
 and MJCF (the URDF loader reads them through `lagrange_meshes`), cameras and other
 sensors without a Lagrange model, URDF planar joints, and MJCF
 tendons, flex, servo actuators (their joints take torque commands instead) and equalities other than one joint copying another. Each is listed in
-the import report. MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
+the import report. An MJCF hinge's or slide's `armature` (with a joint actuator's `armature`
+times its gear squared) is the joint's armature in the world tables, as the motors' rotor
+inertia is (§3.1), but USD has no joint attribute for it yet, so `lagrange_import` drops it (a
+`joint:armature` on `JointDynamicsAPI_1` would need the owner, RFC 0007). MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
 
 Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
 **overlay** file that applies our API schemas by link or joint name:

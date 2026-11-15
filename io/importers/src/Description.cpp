@@ -350,6 +350,7 @@ private:
         m_.world.joints.velocityLimit.back() = joint.velocity;
         m_.world.joints.damping.back() = joint.damping;
         m_.world.joints.friction.back() = joint.friction;
+        m_.world.joints.armature.back() = joint.armature;
         jointNames_[joint.name] = static_cast<std::uint32_t>(m_.world.joints.names.size() - 1);
         m_.jointPrim.push_back(kNoIndex);  // set once the child's prim exists
         if (actuated) {

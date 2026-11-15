@@ -243,8 +243,8 @@ its first 2 s and 0.89 mm in the next 2 s on MuJoCo here, against 0.916 mm in co
 
 ## 6. MuJoCo `noslip` and armature, standalone
 
-RFC §4 asks whether MuJoCo's `noslip` iterations remove the creep. Lagrange does not expose them,
-so the same models ran in standalone MuJoCo 3.12.0 (`legged/mj_noslip.py`; the Python package is
+RFC §4 asks whether MuJoCo's `noslip` iterations remove the creep. Lagrange did not expose them
+when this spike ran (it does now, §6.1), so the same models ran in standalone MuJoCo 3.12.0 (`legged/mj_noslip.py`; the Python package is
 a test tool here, not a dependency) with Lagrange's settings and the same impedance law.
 
 Creep rate over 3–6 s (mm/s; 1 ms; the 1–3 s creep in `results/mj_noslip.json`):
@@ -279,6 +279,48 @@ MuJoCo's inverse weights after the change), no `noslip`:
   20° tipped over with `noslip`, where without it its feet slid a little while the legs folded.
   5 and 20 iterations give the same numbers. Cost: about 55 → 91 µs per step for the quadruped
   model in standalone MuJoCo (one indicative measurement at load 44).
+
+### 6.1 The same levers in Lagrange
+
+After the spike, Lagrange takes both levers itself, opt-in, defaults unchanged (state hashes of
+the sample AMR in the warehouse, the AMR as MJCF, the powered AMR, the hovering quadcopter and
+this spike's quadruped and hexapod are bit-identical before and after the change):
+
+- `domains.rigid_body.noslip_iterations: N` (profile, 0 to 100, default 0 = off) sets MuJoCo's
+  `mjOption.noslip_iterations` (`MujocoBackend::init`); other backends ignore it with a profile
+  warning (Jolt does not creep, §5).
+- Joint armature from MJCF: a hinge's or slide's `armature`, plus a joint actuator's `armature`
+  times its gear squared (as MuJoCo 3.12's mass matrix adds it), reaches
+  `World::Joints::armature` and so MuJoCo's `dof_armature` and Jolt's armature torques. Motors
+  already did this before the spike: `elec:rotorInertia · elec:gearRatio²` is added to the joint's
+  armature by `electrical::applyRotorInertia` for every `ElectricalMotorAPI_1` (the example
+  quadruped has no motors, which is why its legs had none). URDF and SDFormat 1.12 have no
+  armature or rotor inertia element; USD has no joint attribute for it yet (`JointDynamicsAPI_1`
+  is frozen), so `lagrange_import` of an MJCF drops it.
+
+Re-run through Lagrange (`legged/noslip_armature.py`, MuJoCo, 1 ms; creep rate over 3–6 s in
+mm/s; `results/noslip_armature.json`; load 9.6):
+
+| Case | noslip 0 | noslip 5 | noslip 20 | armature 0.005 | armature 0.02 |
+|---|---|---|---|---|---|
+| Rigid quadruped, 10° | 0.444 | −0.0007 | −0.0007 | | |
+| Rigid quadruped, 25° | 1.609 | 0.935 | 0.935 | | |
+| Legged, 10° | 5.68 | −0.022 (after −1.2 mm while standing up) | same as 5 | 4.87 | 3.84 |
+| Legged, 20° | 11.6 | 0 — **tipped over** while standing up (feet 0.92 m, base 0.52 m lower) | same as 5 | 10.2 | 8.04 |
+
+- The numbers are standalone MuJoCo's (§6) within the impedance law's timing: noslip stops the
+  steady creep on 10° (rigid to 0.7 µm/s, legged to 0.02 mm/s), leaves half of it at 25° near
+  the friction limit, and the legged robot standing up on 20° falls over with it, as standalone.
+  Armature cuts the legged creep in proportion to the shin's inverse weight (4.87 and 3.84 against
+  standalone 4.81 and 3.77).
+- Cost: the rigid robot's step went from 4.9 to 6.4 µs at 10° and from 5.9 to 9.3 µs at 25°
+  (+30 to +60 %; one run each on a shared machine); the legged runs are dominated by the Python
+  impedance law (+8 %).
+- Tests: `MujocoBackend.NoslipIterationsStopTheCreepOnASlope` (the comparison's box on 10°),
+  `Profile.RigidBodyNoslipIterationsReachTheSettings`, `ImportMjcf.JointAndActuatorArmatureReachTheWorld`,
+  `MujocoBackend.ArmatureAddsToTheJointsEffectiveInertia`, and `python/test/test_contact_options.py`
+  (the profile key end to end, an MJCF wheel's 0.02 + 0.005 + 0.0001·10² kg·m², and the powered
+  AMR's wheels carrying 0.00012·20² = 0.048 kg·m² more than the bare URDF's).
 
 ## 7. Rimless wheel (test 6)
 
@@ -408,7 +450,9 @@ asynchronous learner sees); `ParallelEnvs` steps them in lock step through pipes
   MuJoCo armature cuts creep in proportion to the foot's inverse weight and is physically right
   anyway. Proposed: model the armature from `elec:rotorInertia · N²` (RFC §5 already plans the
   motor-side inertia), offer `noslip_iterations` as a profile key off by default, and state the
-  remaining creep in the guide. `ContactAPI_1`'s `solref`/`solimp` should reach MuJoCo as
+  remaining creep in the guide. (Done since, §6.1: the profile key exists, MJCF armature is
+  imported, and motors already gave their joints `elec:rotorInertia · N²`; a legged sample needs
+  motors, or MJCF armature, to get it.) `ContactAPI_1`'s `solref`/`solimp` should reach MuJoCo as
   planned (menagerie tunes them).
 - **RFC §5 Impedance mode.** Implement it inside the physics step, not as a torque from the previous
   state: in MuJoCo as a position actuator with `kp` and implicit `kd` (`implicitfast` integrates
@@ -428,6 +472,12 @@ asynchronous learner sees); `ParallelEnvs` steps them in lock step through pipes
   (c) Lagrange's default joint loops
   (8 Hz) cannot hold a legged robot up; `LagrangeEnv(mode="position")` inherits that until
   impedance mode exists.
+- **For the owner (schema, RFC 0007).** MJCF armature is imported into the world tables, but a
+  USD robot cannot carry a joint armature without a motor: `JointDynamicsAPI_1` has damping,
+  friction and mimic only, so `lagrange_import` of an MJCF with `armature` loses it. Adding
+  `double joint:armature` (kg·m² or kg) to `JointDynamicsAPI_1` (additive, 1.x-compatible) or a
+  `JointDynamicsAPI_2` needs the owner; until then a USD legged robot gets armature only from
+  `ElectricalMotorAPI_1`'s `elec:rotorInertia` and `elec:gearRatio`.
 
 ## 12. Files
 
@@ -435,6 +485,8 @@ asynchronous learner sees); `ParallelEnvs` steps them in lock step through pipes
 - [`legged/contact_tests.py`](legged/contact_tests.py): tests 1–6, 10, the gain sweep and the RTF.
 - [`legged/rl_speed.py`](legged/rl_speed.py): `LagrangeEnv` and `ParallelEnvs` speed.
 - [`legged/mj_noslip.py`](legged/mj_noslip.py): standalone MuJoCo, `noslip` and armature.
+- [`legged/noslip_armature.py`](legged/noslip_armature.py): the same through Lagrange's profile
+  key and MJCF armature (§6.1).
 - [`legged/plots.py`](legged/plots.py), [`legged/plots/`](legged/plots/): the figures.
 - [`legged/results/`](legged/results/): every number above as JSON, with the load and the
   Lagrange module used.

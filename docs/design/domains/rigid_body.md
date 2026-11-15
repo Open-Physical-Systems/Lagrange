@@ -249,6 +249,23 @@ and position reproduce it to the last digit (−4.898281 mm). Float32 velocity w
 positions gives −4.900 mm. Jolt's double precision covers positions only, so turning it on would
 remove 2 of the 7 µm.
 
+### 8.2 MuJoCo's creep on slopes: noslip and armature
+
+MuJoCo's soft contacts let a body that friction should hold creep down a slope: the comparison's
+box on 10° at 0.44 mm/s, a quadruped standing on impedance-held legs at 5.7 mm/s on 10° and
+11.6 mm/s on 20° (docs/plan/spikes/legged-contact.md §5, §6). Two opt-in levers:
+
+- `domains.rigid_body.noslip_iterations: N` (profile, 0 to 100, default 0 = off): MuJoCo's noslip
+  post-solver (`mjOption.noslip_iterations`). 5 stops the steady creep on 10° (to under 1 µm/s on
+  the rigid robot), halves it near the friction limit, costs 30–60 % more per step, and changes
+  transients where feet must slip (the legged robot standing up on 20° falls over with it). Jolt
+  has none and needs none (its contacts do not creep); other backends ignore the key, with a
+  profile warning. `MujocoBackend.NoslipIterationsStopTheCreepOnASlope`.
+- Joint armature (`World::Joints::armature`): a motor's `elec:rotorInertia · elec:gearRatio²`
+  (`electrical::applyRotorInertia`, always) and an MJCF joint's `armature` plus its actuators'
+  `armature · gear²`. MuJoCo takes it as `dof_armature`, Jolt as armature torques (above). Creep
+  falls in proportion to the foot's inverse weight. URDF and SDFormat have no such element.
+
 ## Contact force
 
 `body/<b>/contact_force` (N, in the world frame) is the sum of what touches a moving body pushes it with, read from each step's contacts, for force sensing and foot contact. On a robot at rest the bodies' forces add up to its weight (`test_contact_forces_on_a_robot_at_rest_carry_its_weight`). Jolt's contact listener gives no impulses per step, so on Jolt it is what is left of a group's momentum change: `m·Δv/Δt − m·g` less its external forces and its joints' forces (below), by Newton's second law; a group of bodies fixed together (one Jolt body) gets it on its root body. `contact/points` above is still MuJoCo only.
