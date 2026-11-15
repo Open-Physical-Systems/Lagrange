@@ -284,6 +284,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_TILED_TOWN="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/tiled_town/tiled_town.usda"
             LAGRANGE_TEST_AMR_SDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.sdf"
             LAGRANGE_TEST_AMR_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.xml"
+            LAGRANGE_TEST_HEXAPOD_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../docs/plan/spikes/legged/models/hexapod.xml"
             LAGRANGE_TEST_ARM_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/primitives_arm/primitives_arm.urdf"
             LAGRANGE_TEST_AMR_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.usda"
             LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
@@ -443,6 +444,21 @@ if(BUILD_TESTING)
         PRIVATE LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
     lagrange_target_defaults(test_ros_topics)
+    # simulation_interfaces' /spawn_entity names a robot given as text by its <robot name>.
+    find_package(simulation_interfaces REQUIRED)
+    ament_add_gtest(
+        test_spawn_service
+        test/test_spawn_service.cpp
+        ENV ROS_DOMAIN_ID=87 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        TIMEOUT 120
+    )
+    target_link_libraries(
+        test_spawn_service
+        lagrange_server
+        rclcpp::rclcpp
+        ${simulation_interfaces_TARGETS}
+    )
+    lagrange_target_defaults(test_spawn_service)
     # The built-in kinds' default topics end to end (sensors.md §9), with no --ros-topics map.
     find_package(nav_msgs REQUIRED)
     ament_add_gtest(

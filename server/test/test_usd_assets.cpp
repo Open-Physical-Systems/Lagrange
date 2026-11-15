@@ -130,6 +130,52 @@ TEST(UsdAssets, TheSdfAndMjcfVersionsConvertToUsd) {
     }
 }
 
+// lagrange_import of an MJCF body with several joints (the legged spike's hexapod: each upper
+// leg has a swing and a lift hinge) writes the helper frame between them as a body of its own,
+// 1 g, beside its link. The USD carries every body's mass as the importer made it, so the robot
+// read back weighs what the imported one weighs, helpers and links alike.
+TEST(UsdAssets, AnMjcfWithMultiJointBodiesKeepsItsMassThroughUsd) {
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_usd_assets";
+    std::filesystem::create_directories(dir);
+    auto source = loadModel(LAGRANGE_TEST_HEXAPOD_MJCF);
+    ASSERT_TRUE(source) << source.error();
+    const std::string usda = (dir / "hexapod.usda").string();
+    ASSERT_TRUE(stage::writeStage(*source, usda));
+    auto usd = loadModel(usda);
+    ASSERT_TRUE(usd) << usd.error();
+
+    const auto total = [](const World& world) {
+        double sum = 0.0;
+        for (const double m : world.bodies.mass) {
+            sum += m;
+        }
+        return sum;
+    };
+    constexpr double kFloat = 2e-5;  // UsdPhysics stores masses as float
+    // Every body with a mass reads back with it; the massless static "worldbody" (the
+    // floor's) becomes a world collider in USD, not a body.
+    std::size_t helpers = 0;
+    for (std::size_t i = 0; i < source->world.bodies.names.size(); ++i) {
+        const std::string& name = source->world.bodies.names[i];
+        if (source->world.bodies.mass[i] <= 0.0) {
+            continue;
+        }
+        const std::size_t j = named(usd->world.bodies.names, name);
+        ASSERT_LT(j, usd->world.bodies.names.size()) << name;
+        EXPECT_NEAR(usd->world.bodies.mass[j], source->world.bodies.mass[i], kFloat) << name;
+        helpers += name.ends_with("_frame") ? 1 : 0;
+    }
+    EXPECT_EQ(helpers, 6U) << "one helper frame per upper leg";
+    EXPECT_NEAR(total(usd->world), total(source->world), 1e-5);
+    // The MJCF's own mass: a 4 kg body and six legs of 0.15 + 0.1 kg. The helpers' 1 g each
+    // comes out of their links when the importer takes it from them (Description.cpp, branch
+    // fix/jolt-friction-mjcf-joints, not merged here yet); until then the robot weighs 6 g more.
+    // TODO: once that fix is on dev, tighten this to 1e-5 (the USD then reads back 5.5 kg).
+    constexpr double kMjcfMass = 4.0 + 6 * (0.15 + 0.1);
+    EXPECT_NEAR(total(usd->world), kMjcfMass, 6 * 1e-3 + 1e-5);
+}
+
 TEST(UsdAssets, TheWarehouseInUsdMapsLikeItsUrdf) {
     // The scenery becomes world colliders in USD (static, massless links need no body); the
     // occupancy map, which only sees fixed geometry, must come out the same.

@@ -605,6 +605,33 @@ TEST_F(ServerTest, ThePreviewOfADomainOffShowsItsSubstitute) {
     EXPECT_GT(sensors, 0);
 }
 
+// The aerodynamics domain off: its zero substitute (still air) stands in, in the preview's
+// wiring as in the run, as the other domains' substitutes do.
+TEST_F(QuadServerTest, ThePreviewOfTheAirOffShowsItsZeroSubstitute) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_profile_state(); }));
+    std::string yaml = received_.back().profile_state().yaml();
+    const std::string on = "  aerodynamics: {enabled: true, fidelity: drag}\n";
+    ASSERT_NE(yaml.find(on), std::string::npos) << yaml;
+    yaml.replace(yaml.find(on), on.size(), "  aerodynamics: {enabled: false, substitute: zero}\n");
+    v1::Envelope check = command(1);
+    check.mutable_command()->mutable_validate_profile()->set_yaml(yaml);
+    send(check);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 1;
+    }));
+    const v1::ProfileValidation& validation = received_.back().command_result().validation();
+    EXPECT_TRUE(validation.valid());
+    int air = 0;
+    for (const v1::Wiring::Node& node : validation.wiring().nodes()) {
+        if (node.domain() == "aerodynamics") {
+            ++air;
+            EXPECT_TRUE(node.substitute());
+            EXPECT_EQ(node.detail(), "zero");
+        }
+    }
+    EXPECT_EQ(air, 1) << "the zero substitute, in place of drag";
+}
+
 // Viewer QA M9: a weather preset's values, sent together, rebuild the run once; wind with the
 // aerodynamics domain off is said to push nothing.
 TEST_F(ServerTest, SiteValuesSentTogetherRebuildTheRunOnce) {
@@ -1466,9 +1493,10 @@ TEST(DemoDrive, TheSampleAmrKeepsToItsFigureEightInTheWarehouse) {
 TEST(DemoDrive, TheSedanBacksAwayFromWhatHoldsItAndDrivesOn) {
     ServerOptions options;
     options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
-    options.worldPath = (std::filesystem::path(LAGRANGE_TEST_CITY_USDA).parent_path().parent_path() /
-                         "town" / "town.usda")
-                            .string();
+    options.worldPath =
+        (std::filesystem::path(LAGRANGE_TEST_CITY_USDA).parent_path().parent_path() / "town" /
+         "town.usda")
+            .string();
     options.ros = false;
     Server server(options);
     ASSERT_TRUE(server.load().ok());

@@ -1079,8 +1079,7 @@ struct Server::Impl {
         // aerodynamics config's own density, else rotor_aero's.
         // Rotors too: the domain carries their downwash (rotor_aero.md §2).
         bool downwashInRun = false;
-        if ((!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) &&
-            !off("aerodynamics")) {
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) {
             ModuleConfigData aero;
             aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
             aero.values["weather"] = weatherInRun;    // its wind grid, if any
@@ -1091,7 +1090,15 @@ struct Server::Impl {
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }
-            if (aero.values.contains("air_density")) {
+            if (!aero.values.contains("air_density")) {
+                // the domain does not run without the site's air density
+            } else if (off("aerodynamics") && addPluginSubstitute("aerodynamics", aero)) {
+                // the plugin stands in for the air
+            } else if (off("aerodynamics")) {
+                // Still air (invariant 3, aerodynamics.md §5): no drag, no wind; the rotors
+                // fly in no wind or downwash from it.
+                next->add(std::make_unique<aerodynamics::ZeroAero>(), ModuleConfig(aero));
+            } else {
                 downwashInRun =
                     hasRotors() && ModuleConfig(aero).get<bool>("downwash").value_or(true);
                 next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
@@ -5942,9 +5949,14 @@ struct Server::Impl {
         return now;
     }
 
-    /// Whether the aerodynamics domain runs (its gust signal is on the bus).
+    /// Whether the aerodynamics domain runs (its gust signal is on the bus), not its zero
+    /// substitute (still air).
     bool aeroRuns() const {
-        return scheduler != nullptr && scheduler->bus().find("env/wind/gust").valid();
+        return scheduler != nullptr && scheduler->bus().find("env/wind/gust").valid() &&
+               std::ranges::any_of(scheduler->plan(), [](const ScheduledModule& m) {
+                   const ModuleInfo info = m.module->info();
+                   return info.domain == "aerodynamics" && !info.isSubstitute;
+               });
     }
 
     /// The rotors' wakes now, from the rotor signals on the bus (Downwash, rotor_aero.md §2),
@@ -7331,6 +7343,8 @@ public:
         }
         std::string path;
         bool temporary = false;
+        std::string name = request.name;
+        bool allowRenaming = request.allowRenaming || request.name.empty();
         if (!request.uri.empty()) {
             auto resolved =
                 meshes::resolveMeshUri(request.uri, std::filesystem::current_path().string());
@@ -7345,11 +7359,16 @@ public:
             }
             path = *written;
             temporary = true;
+            // Unnamed text is named by its own <robot name> (renamed on a clash), as the
+            // viewer's ImportRobot does, not after its temporary file.
+            if (name.empty()) {
+                name = modelNameOf(request.resource);
+                allowRenaming = true;
+            }
         } else {
             return {{SimResult::NoResource, "give the robot file as uri or resource_string"}, ""};
         }
-        return s_.spawn(path, request.name, request.allowRenaming || request.name.empty(), at,
-                        temporary);
+        return s_.spawn(path, name, allowRenaming, at, temporary);
     }
 
     ros2::SimOutcome remove(const std::string& name) override { return s_.remove(name); }
