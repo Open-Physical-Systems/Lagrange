@@ -243,6 +243,10 @@ One PR each, in order:
 - The viewer draws a cable as its centre line and four lines at its radius (the existing line
   path; a cable a few millimetres thick is under a pixel beyond a few metres).
 
+- Step 6 (2026-11-15): the server gives the aerodynamics domain each cable's node count; it
+  reads `tether/<n>/nodes` and writes the rotors' wake at each node as `tether/<n>/downwash`,
+  which the tether module adds to the wind (rotor_aero.md §2.9). No module calls the other.
+
 ## Resolutions on acceptance (2026-11-10)
 
 The owner accepted the design and asked for the physics in Lagrange and the drawing in its

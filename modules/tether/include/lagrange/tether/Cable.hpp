@@ -78,6 +78,9 @@ struct Air {
     Vec3 gravity{0.0, 0.0, -9.80665};  // m/s²
     double density{0.0};               // kg/m³; 0: no drag
     Vec3 wind{};                       // m/s
+    /// More air at each mass (m/s, world), the rotors' downwash, counted from the attach end:
+    /// stream[k] is at mass count − 1 − k. Masses beyond it have none; empty: none anywhere.
+    std::span<const Vec3> stream{};
 };
 
 /// What the cable did to a moving body over the last step: a force at its centre of mass and a
@@ -94,6 +97,9 @@ public:
     /// distance); it falls into place.
     /// `bodies` is how many moving bodies obstacles may name.
     Cable(const CableParams& params, const Vec3& anchor, const Vec3& attach, std::size_t bodies);
+
+    /// The most masses a cable of these parameters can have (capacity()).
+    [[nodiscard]] static std::size_t capacityFor(const CableParams& params);
 
     /// One step of `dt`: the ends move in a straight line from where they were to these.
     void step(double dt, const Vec3& anchor, const Vec3& attach,

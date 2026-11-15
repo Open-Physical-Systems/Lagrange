@@ -1150,6 +1150,20 @@ struct Server::Impl {
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }
+            // The rotors' downwash on the tethers (RFC 0011 step 6): each cable's node count,
+            // so the domain can read its nodes and write the air at them.
+            if (hasTethers() && !off("tether") && hasRotors()) {
+                std::string problem;
+                std::vector<std::string> nodes;
+                for (const tether::TetherSpec& t :
+                     tether::tethersOf(WorldView(robot.world), problem)) {
+                    nodes.push_back(t.name + "=" +
+                                    std::to_string(tether::Cable::capacityFor(t.params)));
+                }
+                if (!nodes.empty()) {
+                    aero.values["tether_nodes"] = std::move(nodes);
+                }
+            }
             if (!aero.values.contains("air_density")) {
                 // the domain does not run without the site's air density
             } else if (off("aerodynamics") && addPluginSubstitute("aerodynamics", aero)) {
