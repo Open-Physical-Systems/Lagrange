@@ -2511,7 +2511,9 @@ struct Server::Impl {
         std::string data;
         for (std::uint32_t i = 0; i < robot.scene.prims.size(); ++i) {
             const ScenePrim& prim = robot.scene.prims[i];
-            if (prim.body == kNoIndex || !bodyPose[prim.body].valid()) {
+            // A replay has no bodies: its prims move by their recorded pose signals.
+            const bool replayed = i < replayPose.size() && replayPose[i].valid();
+            if (!replayed && (prim.body == kNoIndex || !bodyPose[prim.body].valid())) {
                 continue;  // static: never changes
             }
             d.add_transform_prims(i);

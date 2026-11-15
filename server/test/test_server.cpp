@@ -1250,11 +1250,33 @@ TEST_F(ReplayServerTest, TheRecordingReplaysSampleForSampleAndSeeks) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
     EXPECT_GT(received_.back().snapshot().prims_size(), 20);
     EXPECT_EQ(received_.back().snapshot().nets_size(), 1);
+    const std::string start = received_.back().snapshot().transforms().inline_();
 
     v1::Envelope step = command(2);
     step.mutable_command()->mutable_step()->set_duration_ns(1'500'000'000);
     ASSERT_TRUE(run(step).ok());
     expectPose(at15_);
+    // QA 2026-11-14 (L10): the scene sent to viewers moves with the recorded poses, so the robot
+    // drives in the viewer as it did in the run (it stood still, at 0.00 m/s).
+    const auto late = [](const v1::Envelope& e) {
+        return e.has_delta() && e.delta().sim_time().ns() >= 1'000'000'000;
+    };
+    if (std::ranges::none_of(received_, late)) {
+        ASSERT_TRUE(pumpUntil(late));
+    }
+    const v1::SceneDelta moved = std::find_if(received_.rbegin(), received_.rend(), late)->delta();
+    ASSERT_GT(moved.transform_prims_size(), 0);
+    double farthest = 0.0;
+    for (int k = 0; k < moved.transform_prims_size(); ++k) {
+        constexpr std::size_t kSnapshotPose = 52;  // position, orientation, scale
+        constexpr std::size_t kDeltaPose = 40;     // position, orientation
+        std::array<double, 3> was{};
+        std::array<double, 3> now{};
+        std::memcpy(was.data(), start.data() + moved.transform_prims(k) * kSnapshotPose, 24);
+        std::memcpy(now.data(), moved.transform_data().data() + k * kDeltaPose, 24);
+        farthest = std::max(farthest, std::hypot(now[0] - was[0], now[1] - was[1]));
+    }
+    EXPECT_GT(farthest, 0.3);  // m: the sample AMR's demo drive in 1 s or more
     // Back, then forward again past a checkpoint: the same samples.
     ASSERT_TRUE(seekTo(500'000'000, 3).ok());
     EXPECT_EQ(server_->simTime().ns, 500'000'000);
