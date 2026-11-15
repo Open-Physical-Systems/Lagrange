@@ -231,12 +231,12 @@ Expected<std::vector<Vehicle>, std::string> vehiclesOf(const WorldView& world) {
                 const std::array<double, 6>& in = raw.bodies.inertiaLocal[wheelBody.index];
                 wheel.spinInertia = a[0] * a[0] * in[0] + a[1] * a[1] * in[1] + a[2] * a[2] * in[2];
             }
-            const auto required = [&](const char* name, double& out) -> bool {
+            const auto required = [&](const char* name, double& into) -> bool {
                 const auto value = w->real(name);
                 if (!value || *value <= 0.0) {
                     return false;
                 }
-                out = *value;
+                into = *value;
                 return true;
             };
             if (!required("wheel:radius", wheel.radius) ||

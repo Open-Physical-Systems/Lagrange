@@ -3,6 +3,7 @@
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -195,6 +196,40 @@ TEST(Jolt, SubstepsKeepTheReactionAndInventNoContact) {
         for (std::size_t k = 0; k < 3; ++k) {
             EXPECT_NEAR(contact[k], 0.0, 0.05) << substeps << " axis " << k;
         }
+    }
+}
+
+TEST(Jolt, SubstepsInventNoContactOnASwingingPendulum) {
+    // A bob swinging from 2 rad: the pivot's force changes within a step, so a reaction taken
+    // from the last sub-step alone leaves part of the momentum change to "contact" (QA3 F2,
+    // 4 % of m g at 4 sub-steps). The mean over every sub-step leaves next to none.
+    for (const std::int64_t substeps : {std::int64_t{1}, std::int64_t{4}, std::int64_t{8}}) {
+        const World world = pendulum(2.0);
+        ModuleConfigData config;
+        config.values["substeps"] = substeps;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+        ASSERT_TRUE(scheduler.wire(WorldView(world)));
+        const SignalBus& bus = scheduler.bus();
+        const SignalId contactId = bus.find("body/bob/contact_force");
+        const SignalId reactionId = bus.find("joint/pivot/reaction");
+        double worst = 0.0;
+        double strongest = 0.0;
+        for (int k = 0; k < 3000; ++k) {
+            ASSERT_TRUE(scheduler.stepTick().ok());
+            if (k < 2) {
+                continue;  // the first step's momentum change is from rest
+            }
+            const std::span<const double> c = bus.readN(contactId);
+            worst = std::max(worst, std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]));
+            const std::span<const double> r = bus.readN(reactionId);
+            strongest = std::max(strongest, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]));
+        }
+        std::printf("swinging pendulum, %lld sub-steps: largest contact %.4f N, pivot %.2f N\n",
+                    static_cast<long long>(substeps), worst, strongest);
+        EXPECT_LT(worst, 0.01) << substeps;
+        // At the bottom the pivot holds m g (3 − 2 cos 2) = 3.83 m g (less what the joint loses).
+        EXPECT_NEAR(strongest, 9.80665 * (3.0 - 2.0 * std::cos(2.0)), 0.5) << substeps;
     }
 }
 

@@ -18,9 +18,10 @@ from ament_index_python.packages import get_package_share_directory
 # the path would hide the others (the mock server then fails to import its messages).
 __path__ = pkgutil.extend_path(__path__, __name__)
 
-from lagrange._lagrange import Simulation
+from lagrange._lagrange import JointCommand, Simulation
 
 __all__ = [
+    "JointCommand",
     "Simulation",
     "sample_city",
     "sample_profile",

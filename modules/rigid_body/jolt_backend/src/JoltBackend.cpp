@@ -36,6 +36,7 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/PhysicsStepListener.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/RegisterTypes.h>
@@ -58,6 +59,8 @@ constexpr double kMaxDampingShare = 1.0;
 // The most sub-steps a profile may ask of Jolt per step (domains.rigid_body.substeps): each one
 // is a whole Jolt step, collision detection included, so the cost grows with the count.
 constexpr std::int64_t kMaxSubsteps = 64;
+// The impulses a joint constraint keeps (JoltBackend::Impl::jointLambdas).
+constexpr std::size_t kLambdas = 7;
 
 // Share of a step's new armature torque estimate taken (JoltBackend::Impl::updateArmatureTorques).
 constexpr double kArmatureRelaxation = 0.5;
@@ -331,8 +334,36 @@ struct JoltBackend::Impl {
         std::uint32_t childBody{0};    // world body
         std::int32_t parentGroup{-1};  // -1: the world or static scenery
         SignalId reaction;             // what the parent does to the child, at the child
+        /// The constraint's impulses (see jointLambdas), summed over the step's sub-steps,
+        /// then their mean over one sub-step.
+        std::array<double, kLambdas> lambdaSum{};
+        std::array<double, kLambdas> lambda{};
     };
     std::vector<Joint> joints;
+    int lambdaCount{0};  // sub-steps summed into the joints' lambdaSum this step
+
+    /// A joint constraint's impulses over the last sub-step (Jolt's GetTotalLambda*): a slider's
+    /// position (2), limits, motor, rotation (3); a hinge's position (3), rotation (2), limits,
+    /// motor.
+    static std::array<double, kLambdas> jointLambdas(const Joint& j);
+    /// Adds every joint's impulses over the sub-step just solved to its lambdaSum.
+    void sumLambdas();
+
+    /// Called by Jolt before each sub-step: from the second one on, the constraints hold the
+    /// previous sub-step's impulses, which would be lost to the next solve.
+    class SubstepListener final : public JPH::PhysicsStepListener {
+    public:
+        explicit SubstepListener(Impl& impl) : impl_(impl) {}
+        void OnStep(const JPH::PhysicsStepListenerContext& context) override {
+            if (!context.mIsFirstStep) {
+                impl_.sumLambdas();
+            }
+        }
+
+    private:
+        Impl& impl_;
+    };
+    std::unique_ptr<SubstepListener> substepListener;
 
     struct Body {
         std::uint32_t body{0};
@@ -780,6 +811,8 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
     s.jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
     s.system = std::make_unique<JPH::PhysicsSystem>();
     s.system->Init(4096, 0, 8192, 8192, s.broadPhase, s.objectVsBroadPhase, s.objectPairs);
+    s.substepListener = std::make_unique<Impl::SubstepListener>(s);
+    s.system->AddStepListener(s.substepListener.get());
     s.system->SetGravity(jv(world.gravityLocal));
     // Contact friction is the larger of the two colliders' (each a sub-shape of its body), as
     // MuJoCo combines its geoms' (Jolt's default is the geometric mean of the bodies').
@@ -1223,11 +1256,23 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
     }
 
     const double dt = context.dt.seconds();
+    for (Impl::Joint& j : s.joints) {
+        j.lambdaSum.fill(0.0);
+    }
+    s.lambdaCount = 0;
     const JPH::EPhysicsUpdateError error =
         s.system->Update(static_cast<float>(dt), s.substeps, s.temp.get(), s.jobs.get());
     if (error != JPH::EPhysicsUpdateError::None) {
         return Status::error(StatusCode::Diverged, "jolt: physics update error " +
                                                        std::to_string(static_cast<int>(error)));
+    }
+    // The last sub-step's impulses, then the mean over the sub-steps the listener saw (all of
+    // them while a body moves; Jolt skips the listener when every body sleeps).
+    s.sumLambdas();
+    for (Impl::Joint& j : s.joints) {
+        for (std::size_t k = 0; k < kLambdas; ++k) {
+            j.lambda[k] = j.lambdaSum[k] / s.lambdaCount;
+        }
     }
 
     for (Impl::Joint& j : s.joints) {
@@ -1237,14 +1282,14 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.prismatic) {
             const auto& slider = static_cast<JPH::SliderConstraint&>(*j.constraint);
             io.write(j.position, slider.GetCurrentPosition());
-            limitLambda = slider.GetTotalLambdaPositionLimits();
+            limitLambda = j.lambda[2];
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
             // Jolt's angle wraps at ±π; a joint's position counts turns, as MuJoCo's does.
             j.angle += std::remainder(static_cast<double>(hinge.GetCurrentAngle()) - j.angle,
                                       2.0 * std::numbers::pi);
             io.write(j.position, j.angle);
-            limitLambda = hinge.GetTotalLambdaRotationLimits();
+            limitLambda = j.lambda[5];
         }
         velocity = s.jointVelocity(j, axis);
         io.write(j.velocity, velocity);
@@ -1252,7 +1297,7 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.acceleration.valid()) {
             // Jolt has no joint-space acceleration: the change of velocity over the step.
             io.write(j.acceleration, j.lastAcceleration);
-            // The limit's impulse over the last sub-step (Jolt's total lambda restarts each
+            // The limit's mean impulse over a sub-step (Jolt's total lambda restarts each
             // sub-step), on the child along the axis. Contacts are not projected onto the joint
             // (MuJoCo's qfrc_constraint includes them).
             io.write(j.constraintTorque, limitLambda / (dt / s.substeps));
@@ -1292,15 +1337,52 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
 }
 
 // Jolt keeps its contact impulses to itself, but its constraints give theirs (GetTotalLambda*:
-// the impulse over the last sub-step, dt / substeps, since each sub-step solves afresh from
-// its warm start; + on body 2, the child, − on body 1, the parent; the hinge's
-// rotation impulse in its basis b2 = a2⊥, c2 = a2 × b2, as HingeRotationConstraintPart builds
-// it). So a joint's reaction is its constraint impulses over the step plus the effort applied
-// through it, and what touches a group is what is left of its momentum change: m·Δv/Δt − m·g −
-// its external forces − the joints' forces on it (Newton's second law).
+// the impulse over a sub-step, dt / substeps, since each sub-step solves afresh from its warm
+// start; summed over every sub-step by the step listener and averaged, so the joints' share
+// matches the whole step's momentum change even while the joint force changes within it; + on body
+// 2, the child, − on body 1, the parent; the hinge's rotation impulse in its basis b2 = a2⊥, c2 =
+// a2 × b2, as HingeRotationConstraintPart builds it). So a joint's reaction is its constraint
+// impulses over the step plus the effort applied through it, and what touches a group is what is
+// left of its momentum change: m·Δv/Δt − m·g − its external forces − the joints' forces on it
+// (Newton's second law).
+std::array<double, kLambdas> JoltBackend::Impl::jointLambdas(const Joint& j) {
+    if (j.prismatic) {
+        const auto& slider = static_cast<const JPH::SliderConstraint&>(*j.constraint);
+        const JPH::Vector<2> across = slider.GetTotalLambdaPosition();
+        const JPH::Vec3 rotation = slider.GetTotalLambdaRotation();
+        return {across[0],
+                across[1],
+                slider.GetTotalLambdaPositionLimits(),
+                slider.GetTotalLambdaMotor(),
+                rotation.GetX(),
+                rotation.GetY(),
+                rotation.GetZ()};
+    }
+    const auto& hinge = static_cast<const JPH::HingeConstraint&>(*j.constraint);
+    const JPH::Vec3 position = hinge.GetTotalLambdaPosition();
+    const JPH::Vector<2> bend = hinge.GetTotalLambdaRotation();
+    return {position.GetX(),
+            position.GetY(),
+            position.GetZ(),
+            bend[0],
+            bend[1],
+            hinge.GetTotalLambdaRotationLimits(),
+            hinge.GetTotalLambdaMotor()};
+}
+
+void JoltBackend::Impl::sumLambdas() {
+    for (Joint& j : joints) {
+        const std::array<double, kLambdas> l = jointLambdas(j);
+        for (std::size_t k = 0; k < kLambdas; ++k) {
+            j.lambdaSum[k] += l[k];
+        }
+    }
+    ++lambdaCount;
+}
+
 void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
     const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
-    // The time the constraint impulses are over: one sub-step.
+    // The time the (mean) constraint impulses are over: one sub-step.
     const auto h = static_cast<float>(dt / substeps);
     std::vector<Vec3> jointForce(groups.size(), Vec3{});  // on each group, from its joints
     const auto rotationOf = [&](JPH::BodyID id) {
@@ -1320,10 +1402,11 @@ void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
             const JPH::Vec3 axis = (r1 * frame.GetAxisX()).Normalized();
             const JPH::Vec3 n1 = (r1 * frame.GetAxisY()).Normalized();
             const JPH::Vec3 n2 = (r1 * frame.GetAxisZ()).Normalized();
-            const JPH::Vector<2> across = slider.GetTotalLambdaPosition();
-            force = n1 * across[0] + n2 * across[1] +
-                    axis * (slider.GetTotalLambdaPositionLimits() + slider.GetTotalLambdaMotor());
-            torque = slider.GetTotalLambdaRotation();
+            const auto& l = j.lambda;
+            force = n1 * static_cast<float>(l[0]) + n2 * static_cast<float>(l[1]) +
+                    axis * static_cast<float>(l[2] + l[3]);
+            torque = JPH::Vec3(static_cast<float>(l[4]), static_cast<float>(l[5]),
+                               static_cast<float>(l[6]));
             force = force / h + axis * static_cast<float>(j.applied);
             torque = torque / h;
         } else {
@@ -1332,12 +1415,15 @@ void JoltBackend::Impl::writeReactionsAndContacts(SignalIo& io, double dt) {
             const JPH::Vec3 a2 = (r2 * hinge.GetLocalSpaceHingeAxis2()).Normalized();
             const JPH::Vec3 b2 = a2.GetNormalizedPerpendicular();
             const JPH::Vec3 c2 = a2.Cross(b2);
-            const JPH::Vector<2> bend = hinge.GetTotalLambdaRotation();
-            force = hinge.GetTotalLambdaPosition() / h;
-            torque = (b2.Cross(a1) * bend[0] + c2.Cross(a1) * bend[1] +
-                      a1 * (hinge.GetTotalLambdaRotationLimits() + hinge.GetTotalLambdaMotor())) /
-                         h +
-                     a2 * static_cast<float>(j.applied);
+            const auto& l = j.lambda;
+            force = JPH::Vec3(static_cast<float>(l[0]), static_cast<float>(l[1]),
+                              static_cast<float>(l[2])) /
+                    h;
+            torque =
+                (b2.Cross(a1) * static_cast<float>(l[3]) + c2.Cross(a1) * static_cast<float>(l[4]) +
+                 a1 * static_cast<float>(l[5] + l[6])) /
+                    h +
+                a2 * static_cast<float>(j.applied);
         }
         // The forces act at the anchor; the torque goes to the child body's origin.
         const Vec3 f = dv(force);

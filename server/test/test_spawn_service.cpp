@@ -1,6 +1,6 @@
 // simulation_interfaces' /spawn_entity on the server: a robot given as text is named by its own
-// <robot name>, renamed on a clash, as the viewer's ImportRobot names it (docs/guide/cli.md
-// "Spawning robots").
+// <robot name>, as the viewer's ImportRobot names it, renamed on a clash when allow_renaming
+// says so (docs/guide/cli.md "Spawning robots").
 #include "lagrange/server/Server.hpp"
 
 #include <chrono>
@@ -52,10 +52,12 @@ TEST(SpawnService, ARobotGivenAsTextIsNamedByItsRobotName) {
     auto client = node->create_client<si::srv::SpawnEntity>("/spawn_entity");
     rclcpp::executors::SingleThreadedExecutor executor;
     executor.add_node(node);
-    const auto call = [&](const std::string& name) {
+    const auto call = [&](const std::string& name, bool allowRenaming,
+                          const std::string& text = kCrate) {
         auto request = std::make_shared<si::srv::SpawnEntity::Request>();
         request->name = name;
-        request->entity_resource.resource_string = kCrate;
+        request->allow_renaming = allowRenaming;
+        request->entity_resource.resource_string = text;
         request->initial_pose.pose.orientation.w = 1.0;
         auto future = client->async_send_request(request);
         const auto deadline = std::chrono::steady_clock::now() + 60s;
@@ -74,15 +76,40 @@ TEST(SpawnService, ARobotGivenAsTextIsNamedByItsRobotName) {
     }
     ASSERT_TRUE(client->service_is_ready());
 
-    const auto first = call("");
+    const auto first = call("", false);
     EXPECT_EQ(first->result.result, si::msg::Result::RESULT_OK) << first->result.error_message;
     EXPECT_EQ(first->entity_name, "/crate") << "named by <robot name>, not its temporary file";
-    const auto second = call("");
+    const auto second = call("", true);
     EXPECT_EQ(second->result.result, si::msg::Result::RESULT_OK) << second->result.error_message;
     EXPECT_EQ(second->entity_name, "/crate_2") << "renamed on a clash";
-    const auto named = call("pallet");
+    // allow_renaming false: the file's own name taken is NAME_NOT_UNIQUE, given or not (QA3 F4).
+    const auto clash = call("", false);
+    EXPECT_EQ(clash->result.result, si::srv::SpawnEntity::Response::NAME_NOT_UNIQUE)
+        << clash->result.error_message;
+    const auto clashNamed = call("crate", false);
+    EXPECT_EQ(clashNamed->result.result, si::srv::SpawnEntity::Response::NAME_NOT_UNIQUE);
+    const auto named = call("pallet", false);
     EXPECT_EQ(named->result.result, si::msg::Result::RESULT_OK) << named->result.error_message;
     EXPECT_EQ(named->entity_name, "/pallet") << "a name in the request wins";
+
+    // Text that names no robot: NAME_INVALID unless renaming is allowed; then the parser's own
+    // message comes back, not a temporary file's path.
+    const std::string nameless = R"(<?xml version="1.0"?>
+<robot>
+  <link name="lonely"/>
+</robot>
+)";
+    const auto unnamed = call("", false, nameless);
+    EXPECT_EQ(unnamed->result.result, si::srv::SpawnEntity::Response::NAME_INVALID)
+        << unnamed->result.error_message;
+    const auto parsed = call("", true, nameless);
+    EXPECT_EQ(parsed->result.result, si::srv::SpawnEntity::Response::RESOURCE_PARSE_ERROR)
+        << parsed->result.error_message;
+    const std::string& message = parsed->result.error_message;
+    EXPECT_NE(message.find("resource_string is not a valid URDF: "), std::string::npos) << message;
+    EXPECT_NE(message.find("name"), std::string::npos) << "urdfdom's own reason: " << message;
+    EXPECT_EQ(message.find("console"), std::string::npos) << message;
+    EXPECT_EQ(message.find("/lagrange"), std::string::npos) << "no temporary path: " << message;
 }
 
 }  // namespace

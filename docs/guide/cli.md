@@ -68,7 +68,11 @@ ros2 service call /delete_entity simulation_interfaces/srv/DeleteEntity "{entity
 ```
 
 The file is a URDF, SDFormat, MJCF or USD path (`file://` and `package://` URIs too), or its text
-in `resource_string`; xacro is run first (`xacro robot.urdf.xacro > robot.urdf`). The pose is in
+in `resource_string`; xacro is run first (`xacro robot.urdf.xacro > robot.urdf`). Without a
+`name`, text is named by its own `<robot name>` and a file after its file name; a name that is
+taken fails with `NAME_NOT_UNIQUE` unless `allow_renaming: true`, which numbers it (`crate_2`),
+and text that names no robot fails with `NAME_INVALID` unless renaming is allowed. A file that
+does not parse comes back as `RESOURCE_PARSE_ERROR` with the parser's own message. The pose is in
 the frame `world`, the frame of `/odom`'s origin; the robot is placed as `--spawn` places it, its
 lowest collision shape just above z.
 

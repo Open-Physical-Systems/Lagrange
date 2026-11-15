@@ -214,5 +214,77 @@ TEST(BenchMode, AReplayedRunDrivesTheElectricalDomainAsTheOriginalDid) {
                 0.05 * std::abs(original[2]) + 0.05);
 }
 
+/// Records `options` for `seconds`, then replays the file: the replay starts, its signals play
+/// as recorded, and the camera's image (a buffer, which recordings do not hold) has no frame.
+void recordAndReplay(ServerOptions options, const std::string& tag, const std::string& camera) {
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / ("lagrange_camera_replay_" + tag);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "run.mcap";
+    std::filesystem::remove(file);
+    constexpr std::int64_t kEnd = 3'000'000'000;
+    options.realTimeFactor = 0.0;
+    options.ros = false;
+    std::vector<double> poseAt2;
+    {
+        ServerOptions record = options;
+        record.endpoint = proto::Endpoint::unixSocket((dir / "a.sock").string());
+        record.recordPath = file.string();
+        Server server(record);
+        const Status started = server.start();
+        ASSERT_TRUE(started.ok()) << started.message;
+        while (server.simTime().ns < 2'000'000'000) {
+            server.runOnce(0);
+        }
+        poseAt2 = server.read("body/base_link/pose");
+        EXPECT_NE(server.readImage("sensor/" + camera + "/image"), nullptr)
+            << "the live camera renders";
+        while (server.simTime().ns < kEnd) {
+            server.runOnce(0);
+        }
+    }
+    ASSERT_EQ(poseAt2.size(), 7U);
+
+    ServerOptions replay;
+    replay.endpoint = proto::Endpoint::unixSocket((dir / "b.sock").string());
+    replay.replayPath = file.string();
+    replay.realTimeFactor = 0.0;
+    replay.ros = false;
+    Server server(replay);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    while (server.simTime().ns < 2'000'000'000) {
+        server.runOnce(0);
+        ASSERT_TRUE(server.running());
+    }
+    const std::vector<double> pose = server.read("body/base_link/pose");
+    ASSERT_EQ(pose.size(), 7U);
+    for (std::size_t i = 0; i < 3; ++i) {
+        EXPECT_NEAR(pose[i], poseAt2[i], 1e-9) << i;
+    }
+    // The camera is there, with no frame: the recording holds no images.
+    bool listed = false;
+    for (const Server::SignalEntry& entry : server.signals()) {
+        listed = listed || entry.name == "sensor/" + camera + "/image";
+    }
+    EXPECT_TRUE(listed);
+    EXPECT_EQ(server.readImage("sensor/" + camera + "/image"), nullptr);
+}
+
+TEST(Recorder, ARunWithACameraReplays) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+    options.worldPath = "";
+    recordAndReplay(options, "sedan", "front_camera");
+}
+
+TEST(Recorder, ARunWithAThermalCameraReplays) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_THERMAL_USDA;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.ambientTemperatureK = 293.15;
+    recordAndReplay(options, "thermal", "thermal_camera");
+}
+
 }  // namespace
 }  // namespace lagrange::server

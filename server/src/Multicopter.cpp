@@ -577,11 +577,11 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
         const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;
-        double command = feedForward + speedGain_ * (speed - now);
+        double torqueCommand = feedForward + speedGain_ * (speed - now);
         if (r.torqueLimit > 0.0) {
-            command = std::clamp(command, -r.torqueLimit, r.torqueLimit);
+            torqueCommand = std::clamp(torqueCommand, -r.torqueLimit, r.torqueLimit);
         }
-        bus.write(r.command, command);
+        bus.write(r.command, torqueCommand);
     }
     return {};
 }

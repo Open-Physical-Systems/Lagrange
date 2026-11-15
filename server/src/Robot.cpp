@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <console_bridge/console.h>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -1162,13 +1163,56 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
     return {};
 }
 
+/// While it lives, console_bridge's errors (urdfdom's parse errors) are kept for the load's
+/// message, and still printed; it puts the previous handler back. Loading runs on one thread at
+/// a time.
+class ParserMessages final : public console_bridge::OutputHandler {
+public:
+    ParserMessages() : previous_(console_bridge::getOutputHandler()) {
+        console_bridge::useOutputHandler(this);
+    }
+    ~ParserMessages() override { console_bridge::restorePreviousOutputHandler(); }
+    ParserMessages(const ParserMessages&) = delete;
+    ParserMessages& operator=(const ParserMessages&) = delete;
+    ParserMessages(ParserMessages&&) = delete;
+    ParserMessages& operator=(ParserMessages&&) = delete;
+
+    void log(const std::string& text, console_bridge::LogLevel level, const char* file,
+             int line) override {
+        if (previous_ != nullptr) {
+            previous_->log(text, level, file, line);
+        }
+        if (level < console_bridge::CONSOLE_BRIDGE_LOG_ERROR) {
+            return;
+        }
+        if (!text_.empty()) {
+            text_ += "; ";
+        }
+        text_ += text;
+    }
+    [[nodiscard]] std::string text() const { return text_; }
+
+private:
+    console_bridge::OutputHandler* previous_;
+    std::string text_;
+};
+
 }  // namespace
 
 Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
                                     const LoadOptions& options) {
-    const urdf::ModelInterfaceSharedPtr model = urdf::parseURDFFile(path);
+    urdf::ModelInterfaceSharedPtr model;
+    std::string parserSaid;
+    {
+        // urdfdom says what is wrong through console_bridge: kept for the message (a spawn
+        // service's caller or the viewer never sees the server's console).
+        const ParserMessages messages;
+        model = urdf::parseURDFFile(path);
+        parserSaid = messages.text();
+    }
     if (!model) {
-        return Unexpected{path + " is not a valid URDF (the parser's message is on the console)"};
+        return Unexpected{path + " is not a valid URDF" +
+                          (parserSaid.empty() ? "" : ": " + parserSaid)};
     }
     const urdf::LinkConstSharedPtr root = model->getRoot();
     if (!root) {
