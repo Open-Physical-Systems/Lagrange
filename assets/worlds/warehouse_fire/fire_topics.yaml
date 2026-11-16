@@ -1,0 +1,5 @@
+# The pallet fire's state on ROS (RFC 0022; --ros-topics, writing-a-plugin.md §4).
+publish:
+  - {signal: fire/pallet/hrr, topic: /fire/pallet/hrr, type: std_msgs/msg/Float64}
+  - {signal: fire/pallet/state, topic: /fire/pallet/state, type: std_msgs/msg/Int64}
+  - {signal: fire/pallet/water_rate, topic: /fire/pallet/water_rate, type: std_msgs/msg/Float64}

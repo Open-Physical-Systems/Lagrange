@@ -1076,6 +1076,45 @@ In a URDF, on the link (read by the server):
 is on the link's own prim and is named after the link; with either it is a prim of its own under
 the link, at `xyz` (default its origin), named `name` (default: the element's name).
 
+**`NozzleAPI_1`** (single-apply, RFC 0022 §8). The prim's origin is the nozzle's exit.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:nozzle:diameter` | double | m | — | The exit's bore. Required |
+| `act:nozzle:dischargeCoefficient` | double | 1 | — | `C_d`, 0 to 1. Required |
+| `act:nozzle:pressure` | double | Pa | — | The pump's gauge pressure at the nozzle. Required |
+| `act:nozzle:agent` | token | — | `water` | `water`, `foam` or `co2` |
+| `act:nozzle:foamExpansion` | double | 1 | `0` | Finished foam per solution volume; required for foam |
+| `act:nozzle:sprayHalfAngle` | double | rad | `0` | 0: a solid stream |
+| `act:nozzle:pumpEfficiency` | double | 1 | `0` | 0: no pump power |
+| `act:nozzle:axis` | double3 | 1 | `(1, 0, 0)` | The jet's direction in the prim's frame |
+| `act:nozzle:tank` | rel | — | — | A prim with `TankAPI_1`; none: a hose |
+
+**`TankAPI_1`** (single-apply). Its agent is a weight at the prim's origin.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:tank:capacity` | double | m³ | — | Required |
+| `act:tank:initial` | double | 1 | `1` | How full it starts |
+| `act:tank:density` | double | kg/m³ | `998.2` | Water at 20 °C |
+
+In a URDF, on the links:
+
+```xml
+<gazebo reference="tank_link">
+  <water_tank name="tank" capacity="0.04" initial="1"/>
+</gazebo>
+<gazebo reference="tilt_link">
+  <nozzle name="nozzle" xyz="0.12 0 0" axis="1 0 0" diameter="0.008" discharge_coefficient="0.95"
+          pressure="50000" agent="water" spray_half_angle="0.03" pump_efficiency="0.5" tank="tank"/>
+</gazebo>
+```
+
+`<water_tank>` takes `capacity`, `initial`, `density`, `name` and `xyz`; `<nozzle>` takes
+`diameter`, `discharge_coefficient`, `pressure`, `agent`, `foam_expansion`, `spray_half_angle`,
+`pump_efficiency`, `axis`, `tank` (a `<water_tank>`'s name, or its link's when it has none), `name`
+and `xyz`, placed as the grippers are.
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file

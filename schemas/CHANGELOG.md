@@ -19,6 +19,10 @@ and `test_schemas.py` checks it.
   vacuum generator's flow and ultimate pressure, seal tolerances, an open cup's ISO 6358
   conductance) and `MagnetGripperAPI_1` (an electromagnet or electropermanent magnet: turns, pole
   area, iron path, saturation, coil). New library, nothing to migrate.
+- **Actuator library** (RFC 0022 §8): `NozzleAPI_1` (a water, foam or CO2 nozzle: bore,
+  discharge coefficient, pump pressure, agent, foam expansion, spray half angle, pump efficiency,
+  axis, the tank it draws from) and `TankAPI_1` (capacity, how full it starts, the agent's
+  density). Additions, nothing to migrate.
 
 - **Electrical library** (RFC 0020 §4.4): `elec:gearBackEfficiency` on `ElectricalMotorAPI_1`
   (fallback −1: the same as `elec:gearEfficiency`, today's behaviour), a gear's efficiency when

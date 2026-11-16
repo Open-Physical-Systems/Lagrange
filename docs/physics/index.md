@@ -59,7 +59,7 @@ inside one step. See [Concepts](../guide/concepts.md) for the scheduler and subs
 | [Humans](humans.md) | People as moving capsules: walking with planted feet, steering round robots and each other |
 | [Tethers](tether.md) | A cable from a winch to a drone or any body: sag, drag, snagging, tangling, its pull and its hits |
 | [Lights](lights.md) | Lamps on robots: headlights, indicators, beacons; their beam, blinking, dimming, power and heat |
-| [Grippers and lead screws](actuators.md) | Suction cups and magnets: the cup's vacuum, its seal and leaks, the magnet's pull across a gap; holding by forces and friction. Lead screws: efficiencies from the thread, self-locking as a load-dependent friction |
+| [Actuators](actuators.md) | Suction cups and magnets: the cup's vacuum, its seal and leaks, the magnet's pull across a gap; holding by forces and friction. Lead screws: efficiencies from the thread, self-locking as a load-dependent friction. Nozzles and tanks: the jet's flow, reaction and path, the tank's weight |
 | [Heat conduction](heat-conduction.md) | Temperatures inside each part from its material: hot spots of LEDs and chips, contacts, convection |
 | [Fire](fire.md) | Fuel items that grow, burn out, heat robots and spread; water, foam and wind put them out |
 

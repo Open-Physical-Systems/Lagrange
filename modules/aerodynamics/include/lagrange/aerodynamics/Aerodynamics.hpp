@@ -168,6 +168,12 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 /// world, the same layout): every robot's wake at each node, its own drone's included, without
 /// the wind and gust the tether already takes from env/wind/velocity.
 ///
+/// Fires (config "fire_names", the fires the server names when the fire domain runs; RFC 0022
+/// §5.2): with rotors and the downwash on, it reads each fire's fire/<n>/base (m, world) and
+/// fire/<n>/flame_height and writes fire/<n>/downwash (m/s, world): every robot's wake half way
+/// up the flame (at the base itself, on the fuel, a wake stagnates), without the wind the fire
+/// already takes from env/wind/velocity.
+///
 /// Config "downwash_model": "fitted" (the default, above) or "lbm" (rotor_aero.md §8): the first
 /// multirotor's air is computed live in a lattice Boltzmann box that follows it (LiveAir, on a
 /// hardware GPU; config "downwash_lbm_cell", m, default 0.04; "downwash_lbm_cpu": the CPU
@@ -213,6 +219,9 @@ private:
         SignalId nodes, downwash;
         std::vector<double> values;
     };
+    struct FireBase {  // a fire's base and flame height in, the rotors' air at it out
+        SignalId base, height, downwash;
+    };
     struct RotorLink {
         double radius{0.0};
         std::size_t group{0};
@@ -231,6 +240,7 @@ private:
     bool downwashOn_{true};
     std::vector<RotorLink> rotors_;
     std::vector<TetherNodes> cables_;
+    std::vector<FireBase> fires_;
     std::size_t groupCount_{0};
     Downwash downwash_;
     std::array<double, 3> groundNormal_{0.0, 0.0, 1.0};

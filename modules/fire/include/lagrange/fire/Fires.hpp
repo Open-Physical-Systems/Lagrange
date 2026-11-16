@@ -8,9 +8,11 @@
 // loss_power, which the thermal network adds to that node: robots near it heat, and fuel near
 // it ignites. Water at or above the fuel's critical rate stops its growth and decays it (Evans,
 // NISTIR 5254), except on burning liquids; foam smothers it; a wind over its blow-off speed blows
-// a small one out. Its soot rises and drifts as puffs (Smoke.hpp, RFC 0022 §4), rasterised at
-// 2 Hz into env/smoke/extinction, the field the cameras, lidars and visibility sensors see.
-// Step 100 ms, deterministic, no random numbers.
+// a small one out. Nozzles' jets (act/<z>/flow, impact, footprint, RFC 0022 §8) wet a fire by the
+// share of their landing disc over its burning area, and the rotors' wake at its base
+// (fire/<n>/downwash) adds to the wind. Its soot rises and drifts as puffs (Smoke.hpp, RFC 0022
+// §4), rasterised at 2 Hz into env/smoke/extinction, the field the cameras, lidars and visibility
+// sensors see. Step 100 ms, deterministic, no random numbers.
 //
 // Substitutes: zero (no fires: hrr 0, nothing heated) and constant (every fire at its full
 // involvement from the start, unaffected by water, foam and wind: a steady fire for tests).
@@ -56,6 +58,7 @@ struct FireSpec {
     PrimId prim{};
     BodyId body{kWorldBody};
     Vec3 baseInBody{};  // m: the top centre of its collider, or the prim's origin
+    double depth{0.0};  // m: from the base down to the bottom of its colliders
     FireClass fireClass{FireClass::A};
     Growth growth{Growth::TSquared};
     double alpha{0.0};             // W/s²
@@ -184,6 +187,13 @@ private:
         double hrr{0.0};       // W
         double diameter{0.0};  // m
     };
+    struct Nozzle {  // a NozzleAPI_1's jet, read from the actuators domain (RFC 0022 §8)
+        SignalId flow{}, impact{}, footprint{};
+        bool foam{false};  // its agent is foam solution, else water (CO2: step 7)
+        bool co2{false};
+        double expansion{0.0};   // finished foam per solution volume
+        double density{1000.0};  // kg/m³ of what it sprays
+    };
     struct Schedule {  // water from the run's options: a sprinkler's rate from a time on
         std::size_t fire{};
         double rate{0.0};   // kg/(m²·s)
@@ -206,6 +216,7 @@ private:
     std::vector<Out> out_;
     std::vector<Target> targets_;
     std::vector<Schedule> schedule_;
+    std::vector<Nozzle> nozzles_;
     std::vector<int> movingIndex_;  // per world body: index into poses_, or -1
     std::vector<SignalId> poses_;
     std::vector<Pose> rest_;

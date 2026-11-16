@@ -1,0 +1,14 @@
+# The firefighting sample AMR in the burning sample warehouse (RFC 0022 §8,
+# docs/guide/tutorial-fire.md): the pallet ignites at the start; the robot waits 4 m in front of
+# it with a full 40 L tank, its monitor level and its valve shut. Aim it and open the valve from
+# ROS (/joint_commands for pan_joint and tilt_joint, /nozzle/command 0 to 1); /nozzle/impact says
+# where the jet lands, /nozzle/tank what is left, /fire/pallet/hrr how the fire is doing.
+#   lagrange assets/worlds/warehouse_fire/warehouse_fire_amr.yaml
+robot: ../../robots/amr_firefighter/amr_firefighter.urdf
+world: warehouse_fire.usda
+spawn: [1.6, 1.3, 0.0, 0.0]
+control: joints              # each joint on /joint_commands: the wheels, the pan and the tilt
+ros_topics: fire_topics.yaml
+site:                        # the plume needs the air's temperature and density to rise
+  temperature: 293.15
+  air_density: 1.2

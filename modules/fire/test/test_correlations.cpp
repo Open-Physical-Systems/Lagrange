@@ -285,5 +285,24 @@ TEST(Burner, SaveAndRestoreContinueIdentically) {
     }
 }
 
+// Two discs: the lens of two unit circles a radius apart is 2π/3 − √3/2; one inside the other
+// shares the smaller; apart, nothing. The spray's share is that over its own disc.
+TEST(Spray, TheOverlapOfTwoDiscsIsTheLens) {
+    EXPECT_NEAR(discOverlapArea(1.0, 1.0, 1.0), 2.0 * std::numbers::pi / 3.0 - std::sqrt(3.0) / 2.0,
+                1e-12);
+    EXPECT_NEAR(discOverlapArea(0.2, 0.1, 1.0), std::numbers::pi * 0.01, 1e-15);
+    EXPECT_EQ(discOverlapArea(2.1, 1.0, 1.0), 0.0);
+    EXPECT_NEAR(discOverlapArea(0.0, 0.3, 0.5), std::numbers::pi * 0.09, 1e-15);
+    // Symmetric in the radii, and continuous where one disc starts to leave the other.
+    EXPECT_NEAR(discOverlapArea(0.7, 0.3, 1.0), discOverlapArea(0.7, 1.0, 0.3), 1e-15);
+    EXPECT_NEAR(discOverlapArea(0.7 + 1e-9, 0.3, 1.0), std::numbers::pi * 0.09, 1e-6);
+    // Half a small disc on the edge of a large one: close to ½ (the edge curves away).
+    EXPECT_NEAR(sprayHitFraction(10.0, 0.1, 10.0), 0.5, 0.005);
+    EXPECT_EQ(sprayHitFraction(0.0, 0.0, 0.5), 1.0);
+    EXPECT_EQ(sprayHitFraction(0.6, 0.0, 0.5), 0.0);
+    EXPECT_EQ(sprayHitFraction(0.2, 0.1, 0.5), 1.0);
+    EXPECT_EQ(sprayHitFraction(5.0, 0.1, 0.5), 0.0);
+}
+
 }  // namespace
 }  // namespace lagrange::fire

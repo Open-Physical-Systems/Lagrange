@@ -26,6 +26,12 @@ constexpr double kWaterDensity = 1000.0;  // kg/m³: a rain rate in m/s as kg/(m
 // "overly conservative within a few fire diameters"). TODO(verify): a published R/D limit.
 constexpr double kNearFieldDiameters = 2.0;
 constexpr double kSameSpot = 1e-3;  // m: a collider at a prim's origin is the prim's own
+// TankAPI_1's fallback density, kg/m³: liquid water at 20 °C (NIST Chemistry WebBook, 998.21).
+constexpr double kTankDensity = 998.2;
+// How far above a fire's base, or below the bottom of its fuel, a jet may land and still count
+// as on the fuel (m): the step between the jet's chords and a collider's face (a tolerance, not a
+// model value).
+constexpr double kLandingTolerance = 0.05;
 
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
     SignalSpec s;
@@ -287,6 +293,12 @@ std::vector<FireSpec> firesOf(const WorldView& world, std::string& error) {
         f.baseInBody = pose.position;
         if (!f.colliders.empty()) {
             f.baseInBody[2] = top;
+            double bottom = top;
+            for (const std::uint32_t c : f.colliders) {
+                bottom = std::min(bottom, colliders.poseInBody[c].position[2] -
+                                              halfHeight(colliders.shape[c], colliders.size[c]));
+            }
+            f.depth = top - bottom;
         }
         out.push_back(std::move(f));
     }
@@ -598,6 +610,30 @@ Status Fires::declare(const WorldView& world, const ModuleConfig& config, Signal
     airTemperature_ = d.input(
         optionalInput("env/air_temperature", SignalType::Scalar, units::K, siteTemperature_));
     rain_ = d.input(optionalInput("env/rain_rate", SignalType::Scalar, units::m_per_s, 0.0));
+    // The nozzles' jets (RFC 0022 §8), read as the actuators domain writes them.
+    nozzles_.clear();
+    for (const SchemaInstance* s : world.instancesOf("NozzleAPI_1")) {
+        Nozzle z;
+        const std::string base = "act/" + std::string(world.signalInstanceName(s->prim)) + "/";
+        const std::string agent(s->token("act:nozzle:agent").value_or("water"));
+        z.foam = agent == "foam";
+        z.co2 = agent == "co2";
+        z.expansion = s->real("act:nozzle:foamExpansion").value_or(0.0);
+        if (const auto tank = s->rel("act:nozzle:tank"); !tank.empty()) {
+            for (const SchemaInstance* t : world.instancesOf("TankAPI_1")) {
+                if (t->prim == tank.front()) {
+                    z.density = t->real("act:tank:density").value_or(kTankDensity);
+                }
+            }
+        } else {
+            z.density = kTankDensity;
+        }
+        z.flow = d.input(optionalInput(base + "flow", SignalType::Scalar, kKgPerS, 0.0));
+        z.impact = d.input(optionalInput(base + "impact", SignalType::Vec3, units::m,
+                                         std::numeric_limits<double>::quiet_NaN(), "world_local"));
+        z.footprint = d.input(optionalInput(base + "footprint", SignalType::Scalar, units::m, 0.0));
+        nozzles_.push_back(z);
+    }
     warned_.assign(specs_.size(), std::vector<bool>(targets_.size(), false));
     std::vector<Vec3> bases;
     for (const FireSpec& f : specs_) {
@@ -737,12 +773,35 @@ Status Fires::step(const StepContext& context, SignalBus& bus) {
         if (mode_ == Mode::Simulate) {
             Exposure e;
             e.waterRate = bus.read(o.waterSupply) + rain;
+            // Each jet that lands on the fuel wets it by the share of its disc over the burning
+            // area (RFC 0022 §8), spread over that area.
+            const double area = b.burningArea();
+            const double radius = std::sqrt(area / std::numbers::pi);
+            for (const Nozzle& z : nozzles_) {
+                const double flow = bus.read(z.flow);
+                const std::span<const double> at = bus.readN(z.impact);
+                if (!(flow > 0.0) || z.co2 || at.size() != 3 || !std::isfinite(at[2]) ||
+                    !(area > 0.0)) {
+                    continue;
+                }
+                const bool onFuel = at[2] <= base[2] + kLandingTolerance &&
+                                    at[2] >= base[2] - f.depth - kLandingTolerance;
+                const double share =
+                    onFuel ? sprayHitFraction(std::hypot(at[0] - base[0], at[1] - base[1]),
+                                              bus.read(z.footprint), radius)
+                           : 0.0;
+                if (z.foam) {
+                    e.foamSupply += flow / z.density * z.expansion * share / area;
+                } else {
+                    e.waterRate += flow * share / area;
+                }
+            }
             for (const Schedule& s : schedule_) {
                 if (s.fire == k && t + 1e-9 >= s.start) {
                     e.waterRate += s.rate;
                 }
             }
-            e.foamSupply = bus.read(o.foamSupply);
+            e.foamSupply += bus.read(o.foamSupply);
             e.airSpeed = norm(air);
             e.ignite = bus.read(o.ignite) != 0.0;
             e.nodeTemperature = o.hasNodeTemperature ? bus.read(o.nodeTemperature) : 0.0;

@@ -1,5 +1,6 @@
 #include "Recorder.hpp"
 #include "lagrange/actuators/Grippers.hpp"
+#include "lagrange/actuators/Nozzles.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
@@ -1081,6 +1082,25 @@ struct Server::Impl {
                           ModuleConfig(grip));
             }
         }
+        // Nozzles and tanks (RFC 0022 §8): jets traced through the run's colliders at the
+        // bodies' poses; the fire domain reads where they land.
+        if (hasNozzles()) {
+            ModuleConfigData spray;
+            if (!(off("actuators") && !hasGrippers() && addPluginSubstitute("actuators", spray))) {
+                auto scene = std::make_shared<sensors::BodyScene>(robot.world);
+                // `ideal` sprays as the model does (a nozzle has no dynamics to idealise);
+                // `zero` and `constant` keep every valve shut.
+                const auto token = settings.substituteTokens.find("actuators");
+                const bool ideal =
+                    token != settings.substituteTokens.end() && token->second == "ideal";
+                next->add(std::make_unique<actuators::Nozzles>(
+                              off("actuators") && !ideal ? actuators::Nozzles::Mode::Shut
+                                                         : actuators::Nozzles::Mode::Full,
+                              [scene](const SignalBus& bus) { return &scene->at(bus); },
+                              actuatorCommands),
+                          ModuleConfig(spray));
+            }
+        }
         // People (RFC 0009): moved like traffic agents, around the robots.
         if (hasHumans()) {
             ModuleConfigData people;
@@ -1283,6 +1303,17 @@ struct Server::Impl {
             }
             // The rotors' downwash on the tethers (RFC 0011 step 6): each cable's node count,
             // so the domain can read its nodes and write the air at them.
+            // The rotors' downwash at each fire's base (RFC 0022 §5.2), as for the tethers.
+            if (hasFires() && !off("fire") && hasRotors()) {
+                std::string problem;
+                std::vector<std::string> names;
+                for (const fire::FireSpec& f : fire::firesOf(WorldView(robot.world), problem)) {
+                    names.push_back(f.name);
+                }
+                if (!names.empty()) {
+                    aero.values["fire_names"] = std::move(names);
+                }
+            }
             if (hasTethers() && !off("tether") && hasRotors()) {
                 std::string problem;
                 std::vector<std::string> nodes;
@@ -1855,6 +1886,8 @@ struct Server::Impl {
         return !view.instancesOf("SuctionGripperAPI_1").empty() ||
                !view.instancesOf("MagnetGripperAPI_1").empty();
     }
+    /// Whether the stage has nozzles (RFC 0022 §8).
+    bool hasNozzles() const { return !WorldView(robot.world).instancesOf("NozzleAPI_1").empty(); }
     bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
@@ -2830,6 +2863,34 @@ struct Server::Impl {
                 overlay.set_data(std::move(bytes));
             }
         }
+        // Every nozzle's jet (RFC 0022 §8) while it sprays, drawn as a line as the EMI wires are
+        // until the viewer draws streams (RFC 0022 step 8, Overlay KIND_PATH).
+        if (scheduler && hasNozzles()) {
+            std::string problem;
+            for (const actuators::NozzleSpec& z :
+                 actuators::nozzlesOf(WorldView(robot.world), problem).nozzles) {
+                const SignalId path = scheduler->bus().find("act/" + z.name + "/path");
+                if (!path.valid()) {
+                    continue;
+                }
+                const std::span<const double> xyz = scheduler->bus().readN(path);
+                std::size_t count = 0;
+                while (3 * count + 2 < xyz.size() && std::isfinite(xyz[3 * count])) {
+                    ++count;
+                }
+                if (count < 2) {
+                    continue;
+                }
+                constexpr double kDrawnRadius = 0.01;  // m: a stream, to see where it goes
+                v1::Overlay& overlay = *d.add_overlays();
+                overlay.set_kind(v1::Overlay::KIND_CABLE);
+                overlay.set_count(static_cast<std::uint32_t>(count));
+                std::string bytes((1 + 3 * count) * sizeof(double), '\0');
+                std::memcpy(bytes.data(), &kDrawnRadius, sizeof(double));
+                std::memcpy(bytes.data() + sizeof(double), xyz.data(), 3 * count * sizeof(double));
+                overlay.set_data(std::move(bytes));
+            }
+        }
         return envelope;
     }
 
@@ -3514,7 +3575,8 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "lights" && hasLamps()) {
                 yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
                                               : "  lights: {enabled: true}\n";
-            } else if (std::string_view(row.domain) == "actuators" && hasGrippers()) {
+            } else if (std::string_view(row.domain) == "actuators" &&
+                       (hasGrippers() || hasNozzles())) {
                 yaml += substituted("actuators")
                             ? "  actuators: {enabled: false, substitute: zero}\n"
                             : "  actuators: {enabled: true}\n";
@@ -3631,7 +3693,8 @@ struct Server::Impl {
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
             : domain == "fire"          ? "no fires in the stage (FireAPI_1)"
             : domain == "actuators"
-                ? "no grippers in the stage (SuctionGripperAPI_1, MagnetGripperAPI_1)"
+                ? "no grippers or nozzles in the stage (SuctionGripperAPI_1, MagnetGripperAPI_1, "
+                  "NozzleAPI_1)"
                 : "no module in this build yet; the substitute stands in");
     }
 
@@ -5810,7 +5873,7 @@ struct Server::Impl {
         if (hasLamps()) {
             context.modules.insert("lights");
         }
-        if (hasGrippers()) {
+        if (hasGrippers() || hasNozzles()) {
             context.modules.insert("actuators");
         }
         for (const auto& [key, value] : options.weather) {
@@ -8086,6 +8149,28 @@ Status Server::load() {
                         "");
                 }
             }
+            // Every nozzle's (RFC 0022 §8): /<z>/command (the valve, 0 to 1) and
+            // /<z>/pressure_command (Pa) in; /<z>/tank (kg), /<z>/flow (kg/s) and /<z>/impact
+            // (where the jet lands, m, in the world frame of the ground truth; NaN when it does
+            // not) out.
+            const actuators::NozzleSet nozzles =
+                actuators::nozzlesOf(WorldView(s.robot.world), problem);
+            for (const actuators::NozzleSpec& z : nozzles.nozzles) {
+                const std::string act = "act/" + z.name + "/";
+                const std::string topic = "/" + z.name + "/";
+                add(maps.subscribe, act + "command", topic + "command", "std_msgs/msg/Float64", "");
+                add(maps.subscribe, act + "pressure_command", topic + "pressure_command",
+                    "std_msgs/msg/Float64", "");
+                for (ros2::TopicMap& m : maps.subscribe) {
+                    if (m.signal == act + "pressure_command") {
+                        m.unit = "Pa";
+                    }
+                }
+                add(maps.publish, act + "tank_mass", topic + "tank", "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "flow", topic + "flow", "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "impact", topic + "impact",
+                    "geometry_msgs/msg/Vector3Stamped", "world");
+            }
         }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
@@ -8284,6 +8369,13 @@ bool Server::commandActuator(const std::string& name, double value) {
     for (const actuators::GripperSpec& g :
          actuators::grippersOf(WorldView(impl_->robot.world), error)) {
         if (g.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    for (const actuators::NozzleSpec& z :
+         actuators::nozzlesOf(WorldView(impl_->robot.world), error).nozzles) {
+        if (z.name == name) {
             impl_->actuatorCommands->set(name, value);
             return true;
         }

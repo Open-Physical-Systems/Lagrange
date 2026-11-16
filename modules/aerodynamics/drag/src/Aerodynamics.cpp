@@ -433,6 +433,27 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
             cables_.push_back(std::move(cable));
         }
     }
+    // Fires (RFC 0022 §5.2): the rotors' air at each fire's base, as for the tethers.
+    fires_.clear();
+    if (const auto* named = config.find<std::vector<std::string>>("fire_names");
+        named != nullptr && !rotors_.empty()) {
+        for (const std::string& name : *named) {
+            const std::string base = "fire/" + name + "/";
+            SignalSpec at = spec(base + "base", SignalType::Vec3, units::m, "world_local");
+            at.optional = true;
+            at.feedback = true;
+            at.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            SignalSpec height = spec(base + "flame_height", SignalType::Scalar, units::m);
+            height.optional = true;
+            height.feedback = true;
+            FireBase fire;
+            fire.base = d.input(at);
+            fire.height = d.input(height);
+            fire.downwash =
+                d.output(spec(base + "downwash", SignalType::Vec3, units::m_per_s, "world_local"));
+            fires_.push_back(fire);
+        }
+    }
     if (hasGround_) {
         downwash_.setGround(groundPoint_, groundNormal_);
     } else {
@@ -542,6 +563,9 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     for (TetherNodes& cable : cables_) {
         std::ranges::fill(cable.values, std::numeric_limits<double>::quiet_NaN());
         bus.writeN(cable.downwash, cable.values);
+    }
+    for (const FireBase& fire : fires_) {
+        bus.writeN(fire.downwash, Vec3{});
     }
     downwash_.update({});
     others_.update({});
@@ -739,6 +763,18 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
                       cable.values.begin() + static_cast<std::ptrdiff_t>(3 * i));
         }
         bus.writeN(cable.downwash, cable.values);
+    }
+    // Every robot's wake at each fire (RFC 0022 §5.2), half way up its flame: the base itself
+    // is on the fuel, where a wake that meets it stops (its stagnation point).
+    for (const FireBase& fire : fires_) {
+        const std::span<const double> at = bus.readN(fire.base);
+        const double up = 0.5 * std::max(bus.read(fire.height), 0.0);
+        Vec3 w{};
+        if (at.size() == 3 && std::isfinite(at[0]) && std::isfinite(at[1]) &&
+            std::isfinite(at[2])) {
+            w = wakeAt(Vec3{at[0], at[1], at[2] + up}, Downwash::kNoGroup);
+        }
+        bus.writeN(fire.downwash, w);
     }
     // The fountain under each low multirotor: a push up its thrust axis on its first link.
     std::vector<Vec3> fountain(groupCount_, Vec3{});
