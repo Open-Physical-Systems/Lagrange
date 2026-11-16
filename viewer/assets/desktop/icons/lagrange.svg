@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Lagrange's app icon: the square mark of docs/imgs/repo-logo (scaled 0.7, centred) on a
+     rounded tile. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect x="32" y="32" width="448" height="448" rx="96" ry="96" fill="#FFFFFF" stroke="#D5DBE3" stroke-width="4"/>
+  <rect x="109" y="109" width="56" height="294" rx="28" ry="28" fill="#10233F"/>
+  <rect x="109" y="347" width="294" height="56" rx="28" ry="28" fill="#10233F"/>
+  <circle cx="137" cy="375" r="15.4" fill="#FFFFFF"/>
+  <circle cx="256" cy="168.5" r="31.5" fill="#E8772E"/>
+</svg>

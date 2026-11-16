@@ -51,6 +51,10 @@ namespace lagrange::viewer {
 
 namespace {
 
+/// The desktop app id (reverse DNS of the project's GitHub organisation, Flathub's rule for
+/// io.github ids: '-' becomes '_'). The desktop entry's file name and StartupWMClass match it.
+constexpr const char* kDesktopAppId = "io.github.Open_Physical_Systems.Lagrange";
+
 // The lidar bird's-eye view's two tones (design 06-sensors: the sensor colour, strong and
 // attenuated), and the intensity between them; the viewport overlay draws in the same.
 const ImVec4 kLidarStrong = theme::kDomainColor[static_cast<int>(theme::Domain::Sensors)];
@@ -2789,6 +2793,10 @@ bool createSwapchain(const gpu::Device& device, SDL_Window* window, Swapchain& s
 }
 
 int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspace workspace) {
+    // The app id names the window to the desktop (Wayland's xdg-shell app_id, X11's WM_CLASS),
+    // so the dock and app grid group it under Lagrange's desktop entry and icon, whose file is
+    // <id>.desktop with StartupWMClass=<id> (viewer/assets/desktop/). Set before SDL_Init.
+    SDL_SetAppMetadata("Lagrange", nullptr, kDesktopAppId);
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "error: cannot initialise the window system: %s\n", SDL_GetError());
         return 3;

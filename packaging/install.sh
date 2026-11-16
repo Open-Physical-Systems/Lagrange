@@ -8,6 +8,8 @@
 #   LAGRANGE_VERSION=1.2.0    a release (default: the latest)
 #   LAGRANGE_DEBS=DIR         install the debs in DIR instead of downloading (packaging/debs)
 #   LAGRANGE_YES=1            do not ask before installing
+#   LAGRANGE_DESKTOP=user     the app grid entry and icon: user (default, ~/.local/share),
+#                             system (/usr/share, through sudo) or none
 # It uses sudo for apt. Nothing is built: it takes a few minutes and about 3 GB of disk.
 set -euo pipefail
 
@@ -101,12 +103,24 @@ source /opt/ros/lyrical/setup.bash
 set -u
 ros2 run lagrange_server lagrange info --version >/dev/null || fail "lagrange did not start"
 say "Lagrange $(ros2 run lagrange_server lagrange info --version | awk '{print $2}') is installed"
+
+# 5. An app button: the desktop entry and icon in the app grid and dock, opening the viewer's
+# launcher with ROS sourced. Run as root (no sudo), it is for every user.
+desktop="${LAGRANGE_DESKTOP:-user}"
+[ -z "$sudo" ] && [ "$desktop" = "user" ] && desktop="system"
+entry_script=/opt/ros/lyrical/share/lagrange_viewer/desktop/install_desktop_entry.sh
+if [ "$desktop" != "none" ] && [ -x "$entry_script" ]; then
+    flags=(--setup /opt/ros/lyrical/setup.bash)
+    [ "$desktop" = "system" ] && flags+=(--system)
+    "$entry_script" "${flags[@]}" || say "could not add Lagrange to the app grid (run $entry_script)"
+fi
 cat <<'EOF'
 
   source /opt/ros/lyrical/setup.bash      (add it to ~/.bashrc to have it in every shell)
   lagrange amr                            the sample AMR in its warehouse, with the viewer
   lagrange quad                           a quadcopter
   lagrange samples                        everything else
+  Lagrange in the app grid                the viewer's launcher, like Gazebo's button
 
   Tutorials: https://open-physical-systems.github.io/Lagrange/guide/tutorial-amr.html
 EOF

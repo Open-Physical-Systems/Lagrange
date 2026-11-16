@@ -391,6 +391,11 @@ PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install -c packaging/pip-constraints.txt mcap c
 packaging/test_install.sh ~/lagrange_debs              # optional: the clean-machine test
 ```
 
+To give Lagrange an app button (app grid and dock, opening the viewer's launcher with ROS
+sourced): `/opt/ros/lyrical/share/lagrange_viewer/desktop/install_desktop_entry.sh` for the
+debs (the one-line installer does it for you), or `tools/desktop/install_desktop_entry.sh` from
+a clone after a source build; `--uninstall` removes it ([The app button](docs/guide/install.md#the-app-button)).
+
 Or build from source:
 
 ## Build

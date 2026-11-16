@@ -279,6 +279,28 @@ install(
     PATTERN "*.ttf"
     PATTERN "OFL.txt"
 )
+# The desktop entry and icons (app grid and dock): share/lagrange_viewer/desktop holds them with
+# the script that installs them for a user or the system (packaging/install.sh runs it for the
+# debs, tools/desktop/install_desktop_entry.sh for a colcon install) and the launcher it points at.
+install(
+    FILES assets/desktop/lagrange.desktop.in
+    DESTINATION share/${PROJECT_NAME}/desktop
+)
+install(
+    FILES
+        assets/desktop/icons/lagrange.svg
+        assets/desktop/icons/lagrange-48.png
+        assets/desktop/icons/lagrange-128.png
+        assets/desktop/icons/lagrange-256.png
+        assets/desktop/icons/lagrange-512.png
+    DESTINATION share/${PROJECT_NAME}/desktop/icons
+)
+install(
+    PROGRAMS
+        assets/desktop/lagrange-desktop
+        assets/desktop/install_desktop_entry.sh
+    DESTINATION share/${PROJECT_NAME}/desktop
+)
 
 # The profile schema (profiles/schema.json): lagrange_profiles owns it; the viewer build-depends
 # on that package for this data file only and installs a copy, which the Domains workspace's
