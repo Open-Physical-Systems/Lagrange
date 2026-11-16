@@ -4,6 +4,7 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -137,8 +138,8 @@ TEST(Jolt, ALimitHoldsTheJointAndReportsItsTorque) {
 
 /// The energy a pendulum from 1 rad keeps after 60 s at 1 ms on `substeps` Jolt steps per step,
 /// as a fraction of its start (I = 1 + 1e-6 kg·m² about the pivot, m g d = g).
-double energyKept(std::int64_t substeps) {
-    const World world = pendulum(1.0);
+double energyKept(std::int64_t substeps, double bobInertia = 1e-6, double release = 1.0) {
+    const World world = pendulum(release, 0.0, -INFINITY, INFINITY, bobInertia);
     ModuleConfigData config;
     config.values["substeps"] = substeps;
     Scheduler scheduler(SchedulerOptions{.deterministic = true});
@@ -147,33 +148,106 @@ double energyKept(std::int64_t substeps) {
     const SignalId q = scheduler.bus().find("joint/pivot/position");
     const SignalId w = scheduler.bus().find("joint/pivot/velocity");
     const auto energy = [&] {
-        const double theta = 1.0 + scheduler.bus().read(q);
+        const double theta = release + scheduler.bus().read(q);
         const double omega = scheduler.bus().read(w);
-        return 0.5 * (1.0 + 1e-6) * omega * omega + 9.80665 * (1.0 - std::cos(theta));
+        return 0.5 * (1.0 + bobInertia) * omega * omega + 9.80665 * (1.0 - std::cos(theta));
     };
-    const double start = energy();
+    const double first = energy();
     for (int k = 0; k < 60'000; ++k) {
         EXPECT_TRUE(scheduler.stepTick().ok());
     }
-    return energy() / start;
+    return energy() / first;
 }
 
-TEST(Jolt, APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt) {
+TEST(Jolt, APendulumKeepsItsEnergy) {
     // Jolt keeps each body free and holds the joint by projecting velocities: a body turned by
     // ω Δt over a step has that share of its velocity made radial, and the projection takes it
     // off, (ω Δt)² of the kinetic energy each step. Semi-implicit Euler with that projection, on
-    // a point mass in double precision, loses 16.35 % of this pendulum's energy in 60 s at 1 ms
-    // (rigid_body.md §8.1); Jolt, in single precision, 16.4 %. Nothing of Lagrange's damps it:
-    // the body damping is zero and the joint has no friction or motor.
-    const double one = energyKept(1);
+    // a point mass in double precision, loses 16.35 % of this pendulum's energy in 60 s at 1 ms,
+    // and Jolt did lose 16.4 % (from 2 rad 35 %, from 3 rad 40 %). The backend gives half of the
+    // turn's impulse back after each step (kHingeTurnShare), which keeps the energy to leading
+    // order: measured 0.13 % lost from 1 rad, 0.04 % from 2 rad and 0.004 % from 3 rad. The bound,
+    // 1 % over 60 s at 1 ms, is MuJoCo's order (rigid-body.md) with room for single precision; a
+    // gain over 0.5 % would be the share overshooting (0.6 gains 4 %).
+    for (const double release : {1.0, 2.0, 3.0}) {
+        const double kept = energyKept(1, 1e-6, release);
+        std::printf("energy kept over 60 s from %.0f rad: %.5f\n", release, kept);
+        EXPECT_GT(kept, 0.99) << release;
+        EXPECT_LT(kept, 1.005) << release;
+    }
+    // Sub-steps shorten Jolt's step but no longer help: 0.65 % lost at 4 (single precision over
+    // four times the steps, TODO(verify) the cause; 5.3 % before the share).
     const double four = energyKept(4);
-    std::printf("energy kept over 60 s: %.4f (1 step), %.4f (4 sub-steps)\n", one, four);
-    EXPECT_NEAR(1.0 - one, 0.1635, 0.01);
-    // Four sub-steps: a quarter of the step, a quarter of the loss (and a little more in single
-    // precision: 5.3 %, against 4.65 % for the double-precision model).
-    EXPECT_LT(1.0 - four, 0.06);
-    EXPECT_GT(1.0 - four, 0.03);
-    EXPECT_LE(four, 1.0) << "never gains";
+    std::printf("energy kept over 60 s with 4 sub-steps: %.5f\n", four);
+    EXPECT_GT(four, 0.985);
+    EXPECT_LT(four, 1.005);
+}
+
+/// Energy kept by a double pendulum (two 1 kg balls of 5 cm radius on two massless 1 m rods)
+/// released with both
+/// rods `start` rad out, after `seconds`, with the lowest and highest ratio seen on the way.
+struct Kept {
+    double end{1.0}, lowest{1.0}, highest{1.0};
+};
+Kept doublePendulumKept(double start, double seconds) {
+    World world;
+    world.robots.push_back("double");
+    const Pose released{{0, 0, 3.0}, {std::cos(start / 2), 0, std::sin(start / 2), 0}};
+    constexpr double kBallInertia =
+        0.4 * 1.0 * 0.05 * 0.05;  // kg·m², a solid ball about its centre
+    constexpr std::array<double, 6> kBall{kBallInertia, kBallInertia, kBallInertia, 0, 0, 0};
+    const BodyId upper = world.addBody("upper", kWorldBody, released, 1.0, {0, 0, -1.0}, kBall);
+    const BodyId lower =
+        world.addBody("lower", upper, Pose{{0, 0, -1.0}, {1, 0, 0, 0}}, 1.0, {0, 0, -1.0}, kBall);
+    world.bodies.robot[upper.index] = 0;
+    world.bodies.robot[lower.index] = 0;
+    world.addJoint("shoulder", JointType::Continuous, upper, {0, 1, 0}, true);
+    world.addJoint("elbow", JointType::Continuous, lower, {0, 1, 0}, true);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>());
+    EXPECT_TRUE(scheduler.wire(WorldView(world)));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId q1 = bus.find("joint/shoulder/position");
+    const SignalId q2 = bus.find("joint/elbow/position");
+    const SignalId w1 = bus.find("joint/shoulder/velocity");
+    const SignalId w2 = bus.find("joint/elbow/velocity");
+    constexpr double kG = 9.80665;
+    const auto energy = [&] {
+        // Absolute rod angles from hanging, and their rates.
+        const double a = start + bus.read(q1);
+        const double b = a + bus.read(q2);
+        const double da = bus.read(w1);
+        const double db = da + bus.read(w2);
+        const double kinetic = da * da + 0.5 * db * db + da * db * std::cos(a - b) +
+                               0.5 * kBallInertia * (da * da + db * db);
+        return kinetic + kG * (3.0 - 2.0 * std::cos(a) - std::cos(b));  // 0 hanging still
+    };
+    const double first = energy();
+    Kept kept;
+    const auto steps = static_cast<int>(seconds * 1000.0);
+    for (int k = 0; k < steps; ++k) {
+        EXPECT_TRUE(scheduler.stepTick().ok());
+        const double ratio = energy() / first;
+        kept.lowest = std::min(kept.lowest, ratio);
+        kept.highest = std::max(kept.highest, ratio);
+        kept.end = ratio;
+    }
+    return kept;
+}
+
+TEST(Jolt, ADoublePendulumKeepsItsEnergy) {
+    // A chain's anchors share bodies, so the turn's impulses are given back together (a
+    // Gauss-Seidel solve); each anchor's alone with its own effective mass blew this up within
+    // seconds. Before the share Jolt lost 7.1 % from 1 rad and 41 % from 2 rad (where the lower
+    // rod flips over, chaotic) in 30 s; measured now: 1.0002 for both at the end, swinging
+    // within 0.998–1.001 and 0.991–1.008 on the way.
+    for (const double start : {1.0, 2.0}) {
+        const Kept kept = doublePendulumKept(start, 30.0);
+        std::printf("double pendulum from %.1f rad, 30 s: kept %.4f (lowest %.4f, highest %.4f)\n",
+                    start, kept.end, kept.lowest, kept.highest);
+        EXPECT_LT(kept.highest, 1.01) << start;
+        EXPECT_GT(kept.lowest, 0.99) << start;
+    }
 }
 
 TEST(Jolt, SubstepsKeepTheReactionAndInventNoContact) {
