@@ -2,6 +2,7 @@
 #include "lagrange/electrical/Models.hpp"
 
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -95,6 +96,93 @@ TEST(MotorModel, BrushedDcTorqueSpeedLineMatchesTheClosedForm) {
     EXPECT_NEAR(settle(p, 1e3, noLoad, kVolts).motorTorque, 0.0, 1e-6);
     // Within its capability it delivers the torque asked.
     EXPECT_NEAR(settle(p, 0.5, 0.3 * noLoad, kVolts).motorTorque, 0.5, 5e-3 * 0.5);
+}
+
+// --- lead screws (RFC 0020 §4.4) -------------------------------------------------------------
+
+/// A brushed motor on a 2 mm-lead screw: gearRatio 2π/lead rad/m, η forward 0.27, self-locking.
+MotorParams screwDrive(double backEfficiency) {
+    MotorParams p;
+    p.dq = false;
+    p.resistance = 0.5;
+    p.inductanceD = p.inductanceQ = 0.0005;
+    p.torqueConstant = 0.1;
+    p.maxCurrent = 15.0;
+    p.currentLoopBandwidth = 3000.0;
+    p.gearRatio = 2.0 * std::numbers::pi / 0.002;
+    p.gearEfficiency = 0.27;
+    p.gearBackEfficiency = backEfficiency;
+    return p;
+}
+
+TEST(LeadScrew, ThrustIsTwoPiEtaTorqueOverLead) {
+    // Driving the load (and at standstill), F = 2π·η·T/lead: the motor's torque asked through
+    // the forward efficiency, and the joint's force from the torque it makes.
+    const MotorParams p = screwDrive(0.0);
+    constexpr double kForce = 800.0;  // N, asked
+    const MotorOutputs still = settle(p, kForce, 0.0, 24.0);
+    EXPECT_NEAR(still.jointTorque,
+                2.0 * std::numbers::pi * p.gearEfficiency * still.motorTorque / 0.002,
+                1e-9 * kForce);
+    EXPECT_NEAR(still.jointTorque, kForce, 1e-3 * kForce) << "the drive gives what is asked";
+    EXPECT_NEAR(still.motorTorque, kForce * 0.002 / (2.0 * std::numbers::pi * 0.27), 1e-3 * 0.95);
+    const MotorOutputs lifting = settle(p, kForce, 0.01, 24.0);  // 10 mm/s with the force
+    EXPECT_NEAR(lifting.jointTorque,
+                2.0 * std::numbers::pi * p.gearEfficiency * lifting.motorTorque / 0.002,
+                1e-9 * kForce);
+}
+
+TEST(LeadScrew, BackDrivenItPassesItsMotorTorqueAndTheGearFrictionTakesTheRest) {
+    // Back-driven (sinking under the load), T = η_back·F·lead/(2π): the motor's torque reaches
+    // the joint whole (N·T) and the rest of the load, (1 − η_back)·F, is the gear's friction.
+    constexpr double kBack = 0.6;
+    const MotorParams p = screwDrive(kBack);
+    constexpr double kLoad = -500.0;  // N, the weight, down the axis
+    const double holding =
+        kBack * 500.0 * 0.002 / (2.0 * std::numbers::pi);   // N·m, the back-driven torque
+    const double ask = holding * p.gearRatio;               // N the drive is asked for, up
+    const MotorOutputs out = settle(p, ask, -0.005, 24.0);  // sinking at 5 mm/s
+    EXPECT_NEAR(out.jointTorque, p.gearRatio * out.motorTorque, 1e-9 * ask) << "no 1/η";
+    EXPECT_NEAR(out.motorTorque, holding, 1e-3 * holding);
+    const double friction = screwFrictionLimit(p, out.jointTorque, kLoad, -0.005);
+    EXPECT_DOUBLE_EQ(friction, (1.0 - kBack) * 500.0);
+    // In balance: the motor's force and the friction hold the weight, so it sinks steadily.
+    EXPECT_NEAR(out.jointTorque + friction + kLoad, 0.0, 1e-3 * 500.0);
+}
+
+TEST(LeadScrew, TheFrictionFollowsWhoDrives) {
+    const MotorParams screw = screwDrive(0.0);
+    constexpr double kLoad = -981.0;  // N, 100 kg on a vertical screw
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 0.0, kLoad, 0.0), 981.0)
+        << "unpowered and self-locking: it holds the whole load";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 1200.0, kLoad, 0.0), 0.0)
+        << "a motor that out-pulls the load lifts it through the forward efficiency";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 1200.0, kLoad, 0.01), 0.0) << "lifting";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 1200.0, kLoad, -0.01), 981.0)
+        << "still sinking: the load drives until the motor has stopped it";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 500.0, kLoad, 0.0), 981.0)
+        << "too weak to lift: the screw holds";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 500.0, kLoad, 0.01), 0.0)
+        << "still going up: the motor drives while it slows";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, 1200.0, kLoad, -1e-6), 0.0)
+        << "creeping down a µm/s is still: a motor that out-pulls the load starts to lift";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screw, -300.0, kLoad, -0.01), 981.0)
+        << "pushed down with the load";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screwDrive(0.9), 0.0, 100.0, 0.0), 10.0)
+        << "a ball screw, the load either way";
+    EXPECT_DOUBLE_EQ(screwFrictionLimit(screwDrive(-1.0), 0.0, kLoad, 0.0), 0.0)
+        << "not a screw: no friction";
+}
+
+TEST(LeadScrew, WithoutABackEfficiencyTheGearIsAsBefore) {
+    // elec:gearBackEfficiency's fallback −1: back-driven, the joint sees the motor torque over η.
+    MotorParams p = screwDrive(-1.0);
+    EXPECT_FALSE(p.screw());
+    EXPECT_DOUBLE_EQ(p.gearFactor(true), 0.27);
+    EXPECT_DOUBLE_EQ(p.gearFactor(false), 1.0 / 0.27);
+    p.gearBackEfficiency = 0.0;
+    EXPECT_TRUE(p.screw());
+    EXPECT_DOUBLE_EQ(p.gearFactor(false), 1.0);
 }
 
 TEST(MotorModel, PmsmDeliversTheCommandAndConservesPower) {

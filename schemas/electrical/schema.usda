@@ -184,6 +184,14 @@ class "ElectricalMotorAPI_1" (
         lagrangeUnit = "1"
         doc = "Gear efficiency, 0 to 1."
     )
+    double elec:gearBackEfficiency = -1 (
+        lagrangeUnit = "1"
+        doc = """Gear efficiency when the load drives the motor (back-driven), 0 to 1; 0 is a
+        self-locking gear (a lead screw or worm whose friction angle is at least its lead angle).
+        When set, the gear's back-driven losses are a Coulomb friction on the joint that grows with
+        its load (joint/<j>/friction_limit, RFC 0020 4.4), so a self-locking gear holds with the
+        motor off. -1: the same as gearEfficiency (the behaviour of files without it)."""
+    )
     double elec:maxCurrent (
         lagrangeUnit = "A"
         doc = "Drive current limit (peak). Required."

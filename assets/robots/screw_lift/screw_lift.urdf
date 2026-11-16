@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!-- Two vertical lifts on lead screws (RFC 0020 §4.4), the sample of docs/physics/actuators.md
+     "Lead screws": lift_a on a self-locking trapezoidal screw carrying 100 kg, lift_b on a ball
+     screw carrying 20 kg. Their motors, battery and screws are in screw_lift.overlay.yaml.
+     Dimensions are illustrative, not a real product. -->
+<robot name="screw_lift">
+  <link name="world"/>
+  <link name="base">
+    <inertial>
+      <origin xyz="0 0 0.025"/>
+      <mass value="40"/>
+      <inertia ixx="0.31" iyy="1.21" izz="1.5" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.025"/>
+      <geometry><box size="0.6 0.3 0.05"/></geometry>
+      <material name="grey"><color rgba="0.45 0.47 0.5 1"/></material>
+    </visual>
+    <visual>
+      <origin xyz="-0.15 -0.1 0.55"/>
+      <geometry><cylinder radius="0.006" length="1.0"/></geometry>
+      <material name="steel"><color rgba="0.75 0.76 0.78 1"/></material>
+    </visual>
+    <visual>
+      <origin xyz="0.15 -0.1 0.55"/>
+      <geometry><cylinder radius="0.008" length="1.0"/></geometry>
+      <material name="steel"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.025"/>
+      <geometry><box size="0.6 0.3 0.05"/></geometry>
+    </collision>
+  </link>
+  <joint name="base_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="base"/>
+  </joint>
+
+  <!-- Lift A: 100 kg on a Tr12x2 screw. -->
+  <link name="carriage_a">
+    <inertial>
+      <mass value="100"/>
+      <inertia ixx="0.375" iyy="0.375" izz="0.375" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.15 0.15 0.15"/></geometry>
+      <material name="orange"><color rgba="0.95 0.55 0.15 1"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="0.15 0.15 0.15"/></geometry>
+    </collision>
+  </link>
+  <joint name="lift_a" type="prismatic">
+    <parent link="base"/>
+    <child link="carriage_a"/>
+    <origin xyz="-0.15 0 0.6"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.4" upper="0.3" effort="2000" velocity="0.2"/>
+  </joint>
+
+  <!-- Lift B: 20 kg on a 16x5 ball screw. -->
+  <link name="carriage_b">
+    <inertial>
+      <mass value="20"/>
+      <inertia ixx="0.033" iyy="0.033" izz="0.033" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+      <material name="blue"><color rgba="0.2 0.45 0.85 1"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </collision>
+  </link>
+  <joint name="lift_b" type="prismatic">
+    <parent link="base"/>
+    <child link="carriage_b"/>
+    <origin xyz="0.15 0 0.6"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.45" upper="0.3" effort="2000" velocity="0.2"/>
+  </joint>
+</robot>

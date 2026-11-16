@@ -337,6 +337,9 @@ struct JoltBackend::Impl {
         double armature{0.0};  // kg·m² or kg: the rotor inertia the joint drives
         SignalId position, velocity, torque, loadTorque;
         SignalId acceleration, effectiveInertia, constraintTorque;
+        SignalId frictionLimit;      // joint/<j>/friction_limit, optional (RFC 0020 §4.4)
+        double staticFriction{0.0};  // N or N·m, JointDynamicsAPI_1's
+        double appliedFriction{0.0};
         double lastVelocity{0.0};      // at the end of the previous step: for the acceleration
         double lastAcceleration{0.0};  // over the previous step
         double armatureTorque{0.0};    // applied over the previous step
@@ -753,6 +756,11 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config, 
                                                   prismatic ? units::kg : units::kg_m2));
             out.constraintTorque =
                 io.output(spec(base + "/constraint_torque", SignalType::Scalar, effort));
+            // A Coulomb limit for the step on top of the joint's own friction (a screw's gear),
+            // the latest value: the constraint's maximum friction force or torque.
+            SignalSpec friction = spec(base + "/friction_limit", SignalType::Scalar, effort);
+            friction.optional = true;
+            out.frictionLimit = io.input(friction);
         }
         s.joints.push_back(out);
     }
@@ -1075,6 +1083,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                 slider.mLimitsMax = static_cast<float>(upper);
             }
             slider.mMaxFrictionForce = static_cast<float>(world.joints.friction[j.joint]);
+            j.staticFriction = j.appliedFriction = world.joints.friction[j.joint];
             slider.mMotorSettings.mSpringSettings.mFrequency = kMimicMotorHz;
             j.constraint = slider.Create(parentBody, childBody);
         } else {
@@ -1088,6 +1097,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                 hinge.mLimitsMax = static_cast<float>(upper);
             }
             hinge.mMaxFrictionTorque = static_cast<float>(world.joints.friction[j.joint]);
+            j.staticFriction = j.appliedFriction = world.joints.friction[j.joint];
             hinge.mMotorSettings.mSpringSettings.mFrequency = kMimicMotorHz;
             j.constraint = hinge.Create(parentBody, childBody);
         }
@@ -1229,6 +1239,21 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
                         static_cast<float>(std::remainder(target, 2.0 * std::numbers::pi)));
             }
         }
+        if (j.frictionLimit.valid()) {
+            // Jolt 5.6: SliderConstraint::SetMaxFrictionForce, HingeConstraint::
+            // SetMaxFrictionTorque, used by the next update.
+            const double total = j.staticFriction + std::max(0.0, io.read(j.frictionLimit));
+            if (total != j.appliedFriction) {
+                j.appliedFriction = total;
+                if (j.prismatic) {
+                    static_cast<JPH::SliderConstraint&>(*j.constraint)
+                        .SetMaxFrictionForce(static_cast<float>(total));
+                } else {
+                    static_cast<JPH::HingeConstraint&>(*j.constraint)
+                        .SetMaxFrictionTorque(static_cast<float>(total));
+                }
+            }
+        }
         const double rotor = j.armatureTorque;
         // Explicit damping: never more than a step can take without turning the joint round.
         const double damper =
@@ -1325,14 +1350,16 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.prismatic) {
             const auto& slider = static_cast<JPH::SliderConstraint&>(*j.constraint);
             io.write(j.position, slider.GetCurrentPosition());
-            limitLambda = j.lambda[2];
+            // The limit's and the motor's, which is the joint's friction while it has no motor
+            // (and a mimic joint's drive), as MuJoCo's qfrc_constraint has both.
+            limitLambda = j.lambda[2] + j.lambda[3];
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
             // Jolt's angle wraps at ±π; a joint's position counts turns, as MuJoCo's does.
             j.angle += std::remainder(static_cast<double>(hinge.GetCurrentAngle()) - j.angle,
                                       2.0 * std::numbers::pi);
             io.write(j.position, j.angle);
-            limitLambda = j.lambda[5];
+            limitLambda = j.lambda[5] + j.lambda[6];
         }
         velocity = s.jointVelocity(j, axis);
         io.write(j.velocity, velocity);

@@ -328,9 +328,57 @@ private:
                 continue;
             }
             for (const auto& value : schema.second) {
-                setProperty(prim, name, value.first.as<std::string>(), value.second);
+                const std::string property = value.first.as<std::string>();
+                if (property == "lead_screw" && name == "ElectricalMotorAPI_1") {
+                    applyLeadScrew(prim, schema.second, value.second);
+                    continue;
+                }
+                setProperty(prim, name, property, value.second);
             }
         }
+    }
+
+    /// `lead_screw: {lead, diameter, friction, thread_angle}` on a motor (RFC 0020 §4.4): its
+    /// gear ratio and both efficiencies from the thread.
+    void applyLeadScrew(UsdPrim& prim, const YAML::Node& motor, const YAML::Node& value) {
+        const std::string where = prim.GetPath().GetString() + ": lead_screw";
+        for (const char* set :
+             {"elec:gearRatio", "elec:gearEfficiency", "elec:gearBackEfficiency"}) {
+            if (motor[set]) {
+                errors_.push_back(where + " sets " + set + "; give one or the other");
+                return;
+            }
+        }
+        if (!value.IsMap() || !value["lead"] || !value["diameter"] || !value["friction"]) {
+            errors_.push_back(where + " is a map of lead, diameter, friction and thread_angle");
+            return;
+        }
+        for (const auto& key : value) {
+            const std::string k = key.first.as<std::string>();
+            if (k != "lead" && k != "diameter" && k != "friction" && k != "thread_angle") {
+                errors_.push_back(where + ": " + k +
+                                  " is not one of lead, diameter, friction, thread_angle");
+                return;
+            }
+        }
+        LeadScrew screw;
+        try {
+            screw.lead = value["lead"].as<double>();
+            screw.diameter = value["diameter"].as<double>();
+            screw.friction = value["friction"].as<double>();
+            screw.threadAngle = value["thread_angle"] ? value["thread_angle"].as<double>() : 0.0;
+        } catch (const YAML::Exception& e) {
+            errors_.push_back(where + ": " + e.what());
+            return;
+        }
+        const Expected<ScrewGear, std::string> gear = leadScrewGear(screw);
+        if (!gear) {
+            errors_.push_back(prim.GetPath().GetString() + ": " + gear.error());
+            return;
+        }
+        prim.GetAttribute(TfToken("elec:gearRatio")).Set(gear->gearRatio);
+        prim.GetAttribute(TfToken("elec:gearEfficiency")).Set(gear->efficiency);
+        prim.GetAttribute(TfToken("elec:gearBackEfficiency")).Set(gear->backEfficiency);
     }
 
     void setProperty(UsdPrim& prim, const std::string& schema, const std::string& property,

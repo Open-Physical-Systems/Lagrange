@@ -143,6 +143,14 @@ profile's `rigid_body: {backend: NAME}`. Its contract is §3 and §5, binding:
   world, or one of its ancestors', is not fixed): `body/<b>/pose`, `twist` (world_local),
   `acceleration` (proper acceleration, body frame: what an IMU feels).
 - **Inputs**: `joint/<j>/torque` and `load_torque` (window average, optional);
+  `joint/<j>/friction_limit` (N or N·m, the latest value, optional, since RFC 0020): a Coulomb
+  friction limit for the step added to the joint's own (`JointDynamicsAPI_1`) friction, which a
+  screw's or worm's gear sets from its load (MuJoCo: the dof's `frictionloss`, its friction row
+  stiffened to `solimp` 0.9999 and `solref` 2·dt while the input has a writer, rebuilt with
+  `mj_step1` when the value changes; Jolt 5.6: `SliderConstraint::SetMaxFrictionForce`,
+  `HingeConstraint::SetMaxFrictionTorque`). `constraint_torque` includes the friction the joint
+  applied (MuJoCo's `qfrc_constraint` row; on Jolt the limit's and the motor part's impulses, the
+  motor part being the joint's friction);
   `body/<b>/external_wrench` (world_local, at the body origin, optional);
   `body/<b>/pose_command` for kinematic bodies (optional: without one the body stays);
   `env/friction_scale` (optional, default 1).
@@ -194,6 +202,8 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 | A stack of three boxes | stands for 10 s: the top box within 1 cm of its place |
 | The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
 | Determinism and state | two runs bit-identical; a saved state restored runs on bit-identically |
+| A self-locking screw | the sample screw lift's Tr12x2 (`friction_limit` from the electrical domain) holds 100 kg for 60 s with its motor shorted: settles within 0.1 mm, then moves < 0.5 mm |
+| A back-drivable screw | its 16x5 ball screw under 20 kg, motor shorted, sinks at `η_back·m·g·R/((2π/lead)²·Kt²)` within 2 %, and on bit for bit from a restored checkpoint |
 
 MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
 `modules/rigid_body/jolt_backend/src/jolt_plugin.cpp`, `--plugin lagrange_jolt`) pass it; Jolt and

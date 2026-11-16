@@ -198,7 +198,7 @@ recorded to MCAP and replayed.
 
 <details><summary>Physics reference (21)</summary>
 
-- [Grippers: suction cups and magnets](docs/physics/actuators.md)
+- [Actuators: grippers and lead screws](docs/physics/actuators.md)
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)

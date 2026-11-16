@@ -18,7 +18,12 @@ struct MotorParams {
     /// Motor revolutions per joint revolution; on a slide, motor radians per metre of travel
     /// (2π / a screw's lead). Joint torque, speed and inertia are then force, m/s and mass.
     double gearRatio{1.0};
-    double gearEfficiency{1.0};           // 0..1
+    double gearEfficiency{1.0};  // 0..1
+    /// Efficiency when the load drives the motor (elec:gearBackEfficiency), 0..1; 0 self-locks.
+    /// Negative (the schema's −1): unset, the back-driven direction divides by gearEfficiency.
+    /// Set, the back-driven losses are a load-dependent Coulomb friction on the joint instead
+    /// (screwFrictionLimit), so that a self-locking screw holds with the motor off (RFC 0020 §4.4).
+    double gearBackEfficiency{-1.0};
     double maxCurrent{0.0};               // A, peak
     double referenceTemperature{298.15};  // K
     double resistanceTempCoeff{0.0};      // 1/K
@@ -31,6 +36,12 @@ struct MotorParams {
     [[nodiscard]] double backEmfConstant() const;
     /// Winding resistance at `temperature` (K).
     [[nodiscard]] double resistanceAt(double temperature) const;
+    /// Whether the gear's back-driven losses are a joint friction (gearBackEfficiency set).
+    [[nodiscard]] bool screw() const { return gearBackEfficiency >= 0.0; }
+    /// Joint torque per motor torque times gearRatio: gearEfficiency while the motor drives the
+    /// joint (motor torque and speed of one sign); back-driven, 1 / gearEfficiency, or 1 for a
+    /// screw, whose back-driven losses are screwFrictionLimit's friction.
+    [[nodiscard]] double gearFactor(bool motoring) const;
 };
 
 struct MotorState {
@@ -72,6 +83,17 @@ struct MotorOutputs {
 /// use the speed and currents at the start of the step).
 void advanceCurrents(const MotorParams& p, MotorState& s, double vd, double vq,
                      double motorVelocity, double resistance, double dt);
+
+/// The Coulomb friction limit (N on a slide, N·m on a hinge) a screw's gear puts on its joint
+/// this step (RFC 0020 §4.4): (1 − gearBackEfficiency)·|load| while the load drives the screw or
+/// holds still against it, and 0 while the motor lifts the load (its losses are then
+/// gearEfficiency on its torque). `motorForce` is the drive's force at the joint, `load` the
+/// joint's other generalised force (gravity, what it carries; signed along the joint's axis) and
+/// `velocity` the joint's. The motor lifts while the joint moves against the load, and, about
+/// still (under 1 mm/s or mrad/s), once its force opposes the load and is larger. 0 for a motor
+/// that is not a screw (p.screw() false).
+[[nodiscard]] double screwFrictionLimit(const MotorParams& p, double motorForce, double load,
+                                        double velocity);
 
 /// One step of the drive: current references from the torque command (limited by maxCurrent and
 /// derating), PI current control with decoupling, the voltage limit of the bus (|v| ≤ Vbus/√3

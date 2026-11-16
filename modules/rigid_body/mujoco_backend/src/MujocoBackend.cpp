@@ -192,6 +192,11 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
         s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, true));
         s.loadTorque =
             declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort, true));
+        // A Coulomb limit for the step on top of the joint's own friction: a screw's or worm's
+        // gear, which grows with the load (RFC 0020 §4.4). The latest value, not an average.
+        SignalSpec friction = spec(base + "/friction_limit", SignalType::Scalar, effort);
+        friction.optional = true;
+        s.frictionLimit = declarer.input(friction);
         s.acceleration = declarer.output(spec(base + "/acceleration", SignalType::Scalar,
                                               prismatic ? units::m_per_s2 : units::rad_per_s2));
         s.effectiveInertia = declarer.output(spec(base + "/effective_inertia", SignalType::Scalar,
@@ -314,7 +319,15 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
 
-    // Joints.
+    // Joints. Those whose friction limit has a writer (a screw that holds its load) get a stiff
+    // friction row: MuJoCo's soft constraints let a joint held by frictionloss creep at about
+    // r·f/b (r its regularisation, b its damping), 5 mm/s for a held weight at the default
+    // solref and solimp; at the stiffest impedance (mjMAXIMP) and the shortest time constant
+    // the step allows (2 dt, mjDSBL_REFSAFE's floor) it is about 1 µm/s.
+    std::vector<bool> stiffFriction(world.joints().names.size(), false);
+    for (const JointSignals& s : joints_) {
+        stiffFriction[s.joint] = s.frictionLimit.valid() && bus.connected(s.frictionLimit);
+    }
     const World::Joints& joints = world.joints();
     for (std::size_t j = 0; j < joints.names.size(); ++j) {
         if (joints.type[j] == JointType::Fixed) {
@@ -345,6 +358,12 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
         joint->damping[0] = joints.damping[j];
         joint->frictionloss = joints.friction[j];
+        if (stiffFriction[j]) {
+            joint->solref_friction[0] = 2.0 * dt.seconds();  // s, time constant
+            joint->solref_friction[1] = 1.0;                 // critically damped
+            joint->solimp_friction[0] = mjMAXIMP;
+            joint->solimp_friction[1] = mjMAXIMP;
+        }
         if (joints.type[j] != JointType::Continuous &&
             joints.lowerLimit[j] < joints.upperLimit[j]) {
             joint->limited = mjLIMITED_TRUE;
@@ -478,11 +497,17 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     model_ = model;
     data_ = mj_makeData(model_);
 
-    for (JointSignals& s : joints_) {
+    frictionInputs_.clear();
+    for (std::uint32_t i = 0; i < joints_.size(); ++i) {
+        JointSignals& s = joints_[i];
         const int id = mj_name2id(model_, mjOBJ_JOINT, joints.names[s.joint].c_str());
         s.qposAddress = model_->jnt_qposadr[id];
         s.dofAddress = model_->jnt_dofadr[id];
         s.mujocoBody = model_->jnt_bodyid[id];
+        s.staticFriction = model_->dof_frictionloss[s.dofAddress];
+        if (s.frictionLimit.valid() && bus.connected(s.frictionLimit)) {
+            frictionInputs_.push_back(i);
+        }
     }
     for (BodySignals& s : bodies_) {
         s.mujocoBody = mj_name2id(model_, mjOBJ_BODY, bodies.names[s.body].c_str());
@@ -582,6 +607,21 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
             std::copy_n(p.begin(), 3, data_->mocap_pos + 3 * s.mocap);
             std::copy_n(p.begin() + 3, 4, data_->mocap_quat + 4 * s.mocap);
         }
+    }
+    // Friction limits: MuJoCo builds a step's constraint rows, frictionloss among them, in
+    // mj_step1, which ran at the end of the last step. A changed limit builds them again (the
+    // same state, so the same rows but this one).
+    bool rebuild = false;
+    for (const std::uint32_t i : frictionInputs_) {
+        const JointSignals& s = joints_[i];
+        const double total = s.staticFriction + std::max(0.0, bus.read(s.frictionLimit));
+        if (total != model_->dof_frictionloss[s.dofAddress]) {
+            model_->dof_frictionloss[s.dofAddress] = total;
+            rebuild = true;
+        }
+    }
+    if (rebuild && model_->nv > 0) {
+        mj_step1(model_, data_);
     }
     const double scale = bus.read(frictionScale_);
     if (scale != appliedFrictionScale_) {
@@ -772,6 +812,11 @@ Status MujocoBackend::saveState(StateWriter& writer) const {
     writer.put(kStateVersion);
     writer.put(appliedFrictionScale_);
     writer.putDoubles(state);
+    // The joints' frictionloss with their friction limits, which the next step's rows start
+    // from (only joints whose limit has a writer: other runs' states keep their layout).
+    for (const std::uint32_t i : frictionInputs_) {
+        writer.put(model_->dof_frictionloss[joints_[i].dofAddress]);
+    }
     return {};
 }
 
@@ -928,6 +973,13 @@ Status MujocoBackend::restoreState(StateReader& reader) {
     if (!reader.get(version) || version != kStateVersion || !reader.get(scale) ||
         !reader.getDoubles(state)) {
         return Status::error(StatusCode::InvalidConfig, "MuJoCo state of another model or version");
+    }
+    for (const std::uint32_t i : frictionInputs_) {
+        double total = 0.0;
+        if (!reader.get(total)) {
+            return Status::error(StatusCode::InvalidConfig, "MuJoCo state without its frictions");
+        }
+        model_->dof_frictionloss[joints_[i].dofAddress] = total;
     }
     mj_setState(model_, data_, state.data(), mjSTATE_INTEGRATION);
     for (std::size_t g = 0; g < baseFriction_.size(); ++g) {

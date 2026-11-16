@@ -1,4 +1,4 @@
-# Grippers: suction cups and magnets
+# Actuators: grippers and lead screws
 
 Grippers that hold a part without fingers (RFC 0020, phase 1): a suction cup
 (`SuctionGripperAPI_1`) and an electromagnet or electropermanent magnet (`MagnetGripperAPI_1`).
@@ -171,6 +171,96 @@ coil's load on the robot's power bus (its power is a signal; wiring it to a bus 
 step). A gripper on a body that does not move (welded to the world) cannot tell its own colliders
 from the world's: put it on a moving body.
 
+## Lead screws
+
+A motor on a prismatic joint turns a screw: `elec:gearRatio` is motor radians per metre, 2π over
+the lead. A screw loses more one way than the other, and a screw whose thread is steep enough
+for its friction holds its load with the motor off. For a thread of lead angle `λ`
+(`tan λ = lead / (π·dm)`, `dm` the pitch diameter) and friction angle `φ`
+(`tan φ = μ / cos αn`, `αn` the flank's angle in the plane normal to the thread), the two
+efficiencies are those of the power-screw equations (Budynas and Nisbett, *Shigley's Mechanical
+Engineering Design*, chapter 8, "The Mechanics of Power Screws"):
+
+```
+η        = tan λ / tan(λ + φ)       the motor drives the load
+η_back   = tan(λ − φ) / tan λ       the load drives the motor; ≤ 0 when φ ≥ λ: self-locking
+```
+
+`elec:gearBackEfficiency` on `ElectricalMotorAPI_1` holds `η_back` (0 for a self-locking screw;
+its fallback −1 means "the same as `gearEfficiency`", which is how every gear behaved before).
+When it is set, the back-driven losses are not a factor on the motor's torque but a Coulomb
+friction on the joint that grows with the load, `joint/<j>/friction_limit`:
+
+```
+friction = (1 − η_back)·|F|     while the load drives the screw, or it stands against the load
+friction = 0                    while the motor drives against the load (its torque then reaches
+                                the joint through η: F = 2π·η·T / lead)
+```
+
+`F` is what the joint carries besides the drive: effective inertia × acceleration − the drive's
+force − the joint's constraint force (friction and limits), all from physics, one physics step
+old. Moving, the direction decides who drives; about still (under 1 mm/s) the motor drives once
+its force is larger than the load. A self-locking screw (η_back = 0) then holds the whole load
+with the motor shorted, off or failed; a back-drivable one sinks until the motor's braking
+force carries `η_back` of the load. Both rigid-body engines take the friction limit as an input
+(MuJoCo: the dof's `frictionloss`; Jolt: the slider's or hinge's maximum friction), so the
+holding is the engine's own Coulomb friction, and a worm gear on a hinge works the same way.
+With the electrical domain off the friction limit is not written: the ideal torque source has
+no screw.
+
+### Using it
+
+An overlay gives the thread and the loader works out the gear:
+
+```yaml
+  - prim: lift_a
+    create_child: lift_a_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: dc_brushed
+        # ... resistance, inductance, torque constant, current limit, joint, power port
+        lead_screw: {lead: 0.002, diameter: 0.011, friction: 0.15, thread_angle: 0.2618}
+```
+
+`lead` and `diameter` (the pitch diameter) in m, `friction` the flanks' coefficient (a ball
+screw's rolling friction, with `thread_angle` 0), `thread_angle` the flank's half-angle in rad
+(0 square, 15° metric trapezoidal, 14.5° Acme; 0 when left out). It sets `elec:gearRatio`,
+`gearEfficiency` and `gearBackEfficiency`, and is refused beside any of them. The friction
+coefficient is the user's: lubrication, materials and wear change it more than anything here.
+
+The sample, `assets/robots/screw_lift`, is two vertical lifts on one base: `lift_a` carries
+100 kg on a Tr12x2 (η 0.269, self-locking), `lift_b` 20 kg on a 16x5 ball screw (η 0.952,
+η_back 0.949), each with a brushed motor in voltage mode on a 24 V bus:
+
+```bash
+lagrange assets/robots/screw_lift/screw_lift.urdf --world none \
+    --overlay assets/robots/screw_lift/screw_lift.overlay.yaml
+```
+
+Under `lagrange` (`--joint-control`) both drives hold 0 V until told volts, so `lift_a` stays
+where it is and `lift_b` sinks to its stop at 47 mm/s; `/joint_commands` with 24 V in the
+effort field for `lift_a` lifts it at 58 mm/s. Signals: `joint/<j>/friction_limit` beside the
+motor's `motor/<m>/*`.
+
+### Checked
+
+| Check | Reference | Result |
+|---|---|---|
+| Efficiencies of a ball screw 16x5 (μ 0.005) and a Tr12x2 (μ 0.15, 15°) | Shigley's raising and lowering torques | equal to 1e-12 for square threads (0.9517 and 0.9493); 0.2691 within 1e-4 for the trapezoid (Shigley takes α where the code takes αn), self-locking where Shigley's lowering torque is positive |
+| Thrust | `F = 2π·η·T / lead` | to 1e-9, at rest and driving |
+| Back-driven torque | `T = η_back·F·lead / (2π)` with the friction `(1 − η_back)·F` | the drive's torque within 0.1 %, motor force plus friction balance the load to 0.1 % |
+| Friction limit as an engine input | a 10 kg slide at 120 N; at half its weight; on a hinge | held: 9.8 µm in 10 s on MuJoCo (its soft friction, stiffened for these joints), 0 on Jolt; falls at g/2 and turns at (τ − limit)/I within 1 %; a changing limit restores bit for bit |
+| A self-locking screw holds 100 kg, motor shorted, 60 s (conformance suite) | | settles 24 µm (MuJoCo), 31 µm (Jolt, `jolt_abi`) in 0.1 s, then moves 59 µm (MuJoCo) and 0 (Jolt) in 60 s |
+| The same screw lifts it at 24 V | `i = m·g/(η·N·Kt)`, `v = (V − R·i)/(Kt·N)` | 0.05793 m/s and 11.60 A against 0.05793 and 11.60, friction 0, every engine |
+| A ball screw sinks, 20 kg, motor shorted | `v = η_back·m·g·R / (N²·Kt²)` | 0.04716 m/s against 0.04716 on MuJoCo, Jolt and `jolt_abi`; from a restored checkpoint bit for bit |
+| The same run twice | `lagrange determinism` on the sample with `--joint-control` | 121 state hashes over 12 s identical |
+
+What it leaves out: the screw's own inertia beyond the motor's `elec:rotorInertia`, its
+stiffness and backlash, the change of friction with speed (a single Coulomb coefficient), the
+motor's extra torque to lower a self-locking screw (with η_back clamped at 0 the friction equals
+the load, so lowering needs only a push), and end-of-travel switches (the joint's limits).
+`lagrange check` still sizes a screw's holding by its motor.
+
 ## References
 
 - J. Schmalz GmbH, "Theoretical holding force of a suction cup" (vacuum knowledge, system design
@@ -181,4 +271,7 @@ from the world's: put it on a moving body.
   standards are sold; the critical ratio here is the ideal nozzle's, `(2/(γ+1))^(γ/(γ−1))`).
 - E. P. Furlani, *Permanent Magnet and Electromechanical Devices*, Academic Press, 2001, the chapter
   "Electromechanical Devices" (TODO(verify) the equation and its page, as RFC 0020 notes).
+- R. G. Budynas and J. K. Nisbett, *Shigley's Mechanical Engineering Design*, 11th ed.,
+  McGraw-Hill, chapter 8, "The Mechanics of Power Screws" (TODO(verify) the page and equation
+  numbers, as RFC 0020 notes; the equations used are the standard raising and lowering torques).
 - The design: [RFC 0020](https://github.com/Open-Physical-Systems/Lagrange/blob/main/rfcs/0020-actuators.md).

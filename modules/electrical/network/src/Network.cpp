@@ -296,12 +296,22 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         p.polePairs = static_cast<int>(s->integer("elec:polePairs").value_or(1));
         p.gearRatio = s->real("elec:gearRatio").value_or(1.0);
         p.gearEfficiency = s->real("elec:gearEfficiency").value_or(1.0);
+        p.gearBackEfficiency = s->real("elec:gearBackEfficiency").value_or(-1.0);
         p.maxCurrent = *imax;
         p.referenceTemperature = s->real("elec:referenceTemperature").value_or(kAmbientK);
         p.resistanceTempCoeff = s->real("elec:resistanceTempCoeff").value_or(0.0);
         p.currentLoopBandwidth = s->real("elec:currentLoopBandwidth").value_or(6283.0);
         if (p.polePairs < 1 || p.gearRatio <= 0.0 || p.gearEfficiency <= 0.0) {
             problems.add(where, "polePairs, gearRatio and gearEfficiency must be positive");
+            continue;
+        }
+        // −1 (the fallback) leaves it unset; anything else is a fraction (RFC 0020 §4.4).
+        if (p.gearBackEfficiency != -1.0 &&
+            !(p.gearBackEfficiency >= 0.0 && p.gearBackEfficiency <= 1.0)) {
+            problems.add(where, "elec:gearBackEfficiency is " +
+                                    std::to_string(p.gearBackEfficiency) +
+                                    ": it must be from 0 (self-locking) to 1, or -1 for the same "
+                                    "as gearEfficiency");
             continue;
         }
         if (const auto ke = s->real("elec:backEmfConstant")) {
@@ -494,6 +504,20 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             d.input(optionalInput("thermal/" + m.name + "/temperature", units::K, kAmbientK));
         m.derating = d.input(optionalInput("thermal/" + m.name + "/derating", units::one, 1.0));
         m.torque = d.output(scalar(joint + "torque", effort));
+        if (m.params.screw()) {
+            // A screw's back-driven losses are a friction on the joint that grows with its load
+            // (RFC 0020 §4.4). The load is what the joint's motion leaves of its other forces:
+            // effective inertia × acceleration − the drive's force − the constraints' (friction
+            // and limits), all from physics.
+            SignalSpec acceleration = optionalInput(
+                joint + "acceleration", m.slide ? units::m_per_s2 : units::rad_per_s2, 0.0);
+            acceleration.feedback = true;
+            m.acceleration = d.input(acceleration);
+            SignalSpec constraint = optionalInput(joint + "constraint_torque", effort, 0.0);
+            constraint.feedback = true;
+            m.constraintTorque = d.input(constraint);
+            m.frictionLimit = d.output(scalar(joint + "friction_limit", effort));
+        }
         m.currentD = d.output(scalar(motor + "current_d", units::A));
         m.currentQ = d.output(scalar(motor + "current_q", units::A));
         m.voltageD = d.output(scalar(motor + "voltage_d", units::V));
@@ -642,6 +666,10 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         m.predicted = m.loadEstimate = m.lastSample = m.torqueSum = 0.0;
         m.stepsSince = 0;
         m.synced = false;
+        m.lastTorque = 0.0;
+        if (m.params.screw()) {
+            bus.write(m.frictionLimit, 0.0);
+        }
         for (const SignalId id : {m.torque, m.currentD, m.currentQ, m.voltageD, m.voltageQ,
                                   m.busCurrent, m.loss, m.fault}) {
             bus.write(id, 0.0);
@@ -1080,6 +1108,14 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
             }
         }
         buses_[m.bus].sink += out.busCurrent;
+        if (m.params.screw()) {
+            const double inertia =
+                bus.read(m.effectiveInertia) > 0.0 ? bus.read(m.effectiveInertia) : m.worldInertia;
+            const double load =
+                inertia * bus.read(m.acceleration) - m.lastTorque - bus.read(m.constraintTorque);
+            bus.write(m.frictionLimit, screwFrictionLimit(m.params, out.jointTorque, load, sample));
+        }
+        m.lastTorque = out.jointTorque;
         bus.write(m.torque, out.jointTorque);
         bus.write(m.currentD, m.state.id);
         bus.write(m.currentQ, m.state.iq);
@@ -1208,6 +1244,9 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
         writer.put(m.torqueSum);
         writer.put(m.stepsSince);
         writer.put(m.synced);
+        if (m.params.screw()) {
+            writer.put(m.lastTorque);
+        }
     }
     for (const Battery& b : batteries_) {
         writer.put(b.state.soc);
@@ -1238,6 +1277,9 @@ Status ElectricalNetwork::restoreState(StateReader& reader) {
         ok = ok && reader.get(m.state) && reader.get(m.tripped) && reader.get(m.velocityIntegral) &&
              reader.get(m.predicted) && reader.get(m.loadEstimate) && reader.get(m.lastSample) &&
              reader.get(m.torqueSum) && reader.get(m.stepsSince) && reader.get(m.synced);
+        if (m.params.screw()) {
+            ok = ok && reader.get(m.lastTorque);
+        }
     }
     for (Battery& b : batteries_) {
         ok = ok && reader.get(b.state.soc) && reader.get(b.state.v1) && reader.get(b.state.v2) &&

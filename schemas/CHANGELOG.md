@@ -20,6 +20,10 @@ and `test_schemas.py` checks it.
   conductance) and `MagnetGripperAPI_1` (an electromagnet or electropermanent magnet: turns, pole
   area, iron path, saturation, coil). New library, nothing to migrate.
 
+- **Electrical library** (RFC 0020 §4.4): `elec:gearBackEfficiency` on `ElectricalMotorAPI_1`
+  (fallback −1: the same as `elec:gearEfficiency`, today's behaviour), a gear's efficiency when
+  the load drives it; 0 is self-locking. Addition, nothing to migrate.
+
 - **Sensor-material library** (RFC 0020): `sensmat:airPermeability` on `SensorMaterialAPI_1` (fallback
   0, airtight), what a suction cup on the surface leaks. Addition, nothing to migrate.
 
