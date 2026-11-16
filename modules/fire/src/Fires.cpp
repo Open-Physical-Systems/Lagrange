@@ -1,4 +1,5 @@
 // The fire domain (RFC 0022 step 3); rules on the classes in Fires.hpp.
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/fire/Fires.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -462,9 +463,28 @@ Status Fires::declare(const WorldView& world, const ModuleConfig& config, Signal
         out_[k].hrr = d.output(spec(base + "hrr", SignalType::Scalar, units::W));
         out_[k].state = d.output(spec(base + "state", SignalType::Int, units::one));
     }
+    // The smoke's field and mass in the air, written in every mode (none under zero).
+    smokeOn_ = config.get<bool>("smoke").value_or(true);
+    smokeField_ = d.output(spec("env/smoke/extinction", SignalType::Field3D, units::per_m));
+    smokeMass_ = d.output(spec("env/smoke/mass", SignalType::Scalar, units::kg));
     if (mode_ == Mode::Zero) {
+        smokeOn_ = false;
         return {};
     }
+    SmokeSettings smoke;
+    smoke.voxel = config.get<double>("smoke_voxel").value_or(smoke.voxel);
+    smoke.reach = config.get<double>("smoke_reach").value_or(smoke.reach);
+    smoke.height = config.get<double>("smoke_height").value_or(smoke.height);
+    const double most =
+        config.get<double>("smoke_max_puffs").value_or(static_cast<double>(smoke.maxPuffs));
+    smokePeriod_ = config.get<double>("smoke_period").value_or(0.5);
+    if (!(smoke.voxel > 0.0) || !(smoke.reach > 0.0) || !(smoke.height > 0.0) || !(most >= 2.0) ||
+        !(smokePeriod_ > 0.0)) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "fire: smoke_voxel, smoke_reach, smoke_height and smoke_period must "
+                             "be > 0, smoke_max_puffs at least 2");
+    }
+    smoke.maxPuffs = static_cast<std::size_t>(most);
     extinguishFraction_ = config.get<double>("extinguish_fraction").value_or(0.01);
     if (!(extinguishFraction_ > 0.0 && extinguishFraction_ < 1.0)) {
         return Status::error(StatusCode::InvalidConfig, "fire.extinguish_fraction must be 0 to 1");
@@ -579,12 +599,20 @@ Status Fires::declare(const WorldView& world, const ModuleConfig& config, Signal
         optionalInput("env/air_temperature", SignalType::Scalar, units::K, siteTemperature_));
     rain_ = d.input(optionalInput("env/rain_rate", SignalType::Scalar, units::m_per_s, 0.0));
     warned_.assign(specs_.size(), std::vector<bool>(targets_.size(), false));
+    std::vector<Vec3> bases;
+    for (const FireSpec& f : specs_) {
+        bases.push_back(pointIn(
+            f.body == kWorldBody || f.body.index >= rest_.size() ? Pose{} : rest_[f.body.index],
+            f.baseInBody));
+    }
+    smoke_.configure(smoke, bases);
     return {};
 }
 
 Status Fires::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     burners_.clear();
     flames_.assign(specs_.size(), Flame{});
+    plumes_.assign(specs_.size(), PlumeSource{});
     for (const FireSpec& f : specs_) {
         burners_.emplace_back(f, extinguishFraction_);
         if (mode_ == Mode::Constant) {
@@ -604,6 +632,11 @@ Status Fires::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     for (const Target& t : targets_) {
         bus.write(t.power, 0.0);
     }
+    if (mode_ != Mode::Zero) {
+        smoke_.clear();
+    }
+    bus.publishBuffer(smokeField_, fields::fieldBuffer(nullptr));
+    bus.write(smokeMass_, 0.0);
     return {};
 }
 
@@ -680,6 +713,7 @@ Status Fires::step(const StepContext& context, SignalBus& bus) {
             bus.write(o.hrr, 0.0);
             bus.write(o.state, 0.0);
         }
+        bus.write(smokeMass_, 0.0);
         return {};
     }
     const double t = context.t.seconds();
@@ -727,6 +761,18 @@ Status Fires::step(const StepContext& context, SignalBus& bus) {
         }
         flames[k] = {add(base, scale(axis, 0.5 * height)), b.hrr(), diameter};
         writeOutputs(k, base, axis, height, bus);
+        if (smokeOn_) {
+            PlumeSource& plume = plumes_[k];
+            plume.base = base;
+            plume.tip = add(base, scale(axis, height));
+            plume.hrr = b.hrr();
+            plume.radiativeFraction = f.radiativeFraction;
+            plume.virtualOriginHeight = virtualOrigin(b.hrr(), diameter);
+            plume.sootRate = f.sootYield * b.hrr() / f.heatOfCombustion;
+        }
+    }
+    if (smokeOn_) {
+        stepSmoke(t, dt, wind, density, airTemperature, g, bus);
     }
     // Radiation into the thermal nodes in sight (point source, §3).
     for (std::size_t j = 0; j < targets_.size(); ++j) {
@@ -758,12 +804,40 @@ Status Fires::step(const StepContext& context, SignalBus& bus) {
     return {};
 }
 
+void Fires::stepSmoke(double t, double dt, const Vec3& wind, double density, double temperature,
+                      double gravity, SignalBus& bus) {
+    SmokeAir air;
+    air.wind = wind;
+    air.gravity = gravity;
+    air.density = density;
+    air.temperature = temperature;
+    if (!(density > 0.0 && temperature > 0.0) && !smokeWarned_) {
+        smokeWarned_ = true;
+        services::log(services::LogLevel::Warning, "fire",
+                      "no air density or ambient temperature in the run (--air-density, "
+                      "--ambient-temperature or the weather): the smoke drifts but does not rise");
+    }
+    smoke_.step(dt, plumes_, air, scenery_.get());
+    bus.write(smokeMass_, smoke_.mass());
+    // The field at its own rate: when this step crosses a multiple of the period.
+    constexpr double kTimeSlack = 1e-9;  // s, against rounding of the step's end
+    if (std::floor((t + dt + kTimeSlack) / smokePeriod_) >
+        std::floor((t + kTimeSlack) / smokePeriod_)) {
+        const std::shared_ptr<const fields::Field> field = smoke_.raster();
+        bus.publishBuffer(smokeField_, fields::fieldBuffer(field.get()));
+    }
+}
+
 Status Fires::saveState(StateWriter& writer) const {
     std::vector<double> state;
     for (const Burner& b : burners_) {
         b.save(state);
     }
     writer.putDoubles(state);
+    std::vector<double> smoke;
+    smoke_.save(smoke);
+    writer.put<std::uint64_t>(smoke.size());
+    writer.putDoubles(smoke);
     return {};
 }
 
@@ -776,6 +850,15 @@ Status Fires::restoreState(StateReader& reader) {
         if (!burners_[k].restore(std::span<const double>(state).subspan(11 * k, 11))) {
             return Status::error(StatusCode::Internal, "fire: state does not fit");
         }
+    }
+    std::uint64_t size = 0;
+    constexpr std::uint64_t kMostSmokeValues = 1ULL << 28;
+    if (!reader.get(size) || size > kMostSmokeValues) {
+        return Status::error(StatusCode::Internal, "fire: short state");
+    }
+    std::vector<double> smoke(size);
+    if (!reader.getDoubles(smoke) || !smoke_.restore(smoke)) {
+        return Status::error(StatusCode::Internal, "fire: smoke state does not fit");
     }
     return {};
 }

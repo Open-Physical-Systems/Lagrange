@@ -1491,7 +1491,11 @@ Signals: `visibility` (m: the meteorological optical range), `extinction` (1/m, 
 `valid`. Model: MOR = −ln 0.05 / σ ≈ 3/σ (Koschmieder with WMO's 5 % threshold, WMO-No. 8 Vol. I
 ch. 9), σ the weather's `env/extinction/visible` (fog, rain, snow and dust). The weather's
 `visibility` is at a 2 % threshold (σ = 3.912/V), so a fog of V reads an MOR of 0.766·V, as a
-real sensor would. Check: `test_kinds_visibility_sensor`.
+real sensor would. In a run with fires (RFC 0022) it adds the smoke's σ where it is
+(`env/smoke/extinction`) and writes `sign_visibility` and `light_visibility`, `S = C/σ` with C = 3
+and 8 (physics/fire.md "Smoke"); it can be fixed in the scenery (a `CustomSensorAPI_1` prim of a
+world stage). Lidars and cameras take the smoke's optical depth too, a lidar's scaled by
+633 nm/λ. Check: `test_kinds_visibility_sensor`.
 
 They are on ROS by default ("ROS topics of the built-in kinds" above); a `--ros-topics` map
 puts them elsewhere, which replaces the defaults it covers:

@@ -1,8 +1,15 @@
 # A pallet fire in the sample warehouse (RFC 0022, docs/physics/fire.md): the pallet ignites at
-# the start and grows as a fast t-squared fire; at 60 s a sprinkler's rate of water, 0.133 mm/s
-# (the top of the range Evans' suppression law was fitted to, NISTIR 5254), reaches it and its
-# heat release rate decays with the time constant 3.0 * 0.133^-1.85 = 125 s.
+# the start and grows as a fast t-squared fire; its smoke rises to the roof and spreads under it,
+# where the sample AMR's upper lidar beams and the visibility meter see it. At 60 s a sprinkler's
+# rate of water, 0.133 mm/s (the top of the range Evans' suppression law was fitted to, NISTIR
+# 5254), reaches it and its heat release rate decays with the time constant
+# 3.0 * 0.133^-1.85 = 125 s.
 #   lagrange assets/worlds/warehouse_fire/warehouse_fire.yaml
+robot: ../../robots/amr_diffdrive/amr_diffdrive.urdf
 world: warehouse_fire.usda
+spawn: [-2.0, 1.0, 0.0, 0.0]
+site:                        # the plume needs the air's temperature and density to rise
+  temperature: 293.15
+  air_density: 1.2
 fire_water:
   - {fire: pallet, rate: 0.133, at: 60}

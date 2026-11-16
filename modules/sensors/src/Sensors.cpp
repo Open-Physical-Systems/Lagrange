@@ -474,6 +474,24 @@ public:
             clutter_.reflectivity =
                 setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
         }
+        // The fires' smoke (config "smoke": a fire domain runs, RFC 0022 §4): its field's σ at
+        // 633 nm, scaled to the lidar's wavelength, along each beam and at the sensor.
+        smoke_ = config.get<bool>("smoke").value_or(false) && !groundTruth_;
+        if (smoke_) {
+            SignalSpec field = spec("env/smoke/extinction", SignalType::Field3D, units::per_m);
+            field.feedback = true;
+            field.optional = true;
+            smokeField_ = d.input(field);
+            smokeScale_ = smokeBandScale(setting(sensors, sensor_, "wavelength", 905e-9));
+            if (!weather_) {  // the clutter's settings, as in weather
+                clutter_.pulseLength =
+                    setting(sensors, sensor_, "pulse_length", clutter_.pulseLength);
+                clutter_.beamDiameter =
+                    setting(sensors, sensor_, "beam_diameter", clutter_.beamDiameter);
+                clutter_.reflectivity =
+                    setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
+            }
+        }
         return {};
     }
 
@@ -611,15 +629,22 @@ public:
                 nearest_[i] = kNoHit;
             }
         });
-        if (weather_) {
-            // A fog field: its optical depth along each beam up to the hit, and its value at the
-            // sensor for the clutter near it (taken as the extinction at the lidar's wavelength).
-            const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
+        if (weather_ || smoke_) {
+            // A fog field and the smoke: their optical depth along each beam up to the hit, and
+            // their value at the sensor for the clutter near it (taken as the extinction at the
+            // lidar's wavelength; smoke's backscatter as fog's, RFC 0022 §4).
+            const std::shared_ptr<const fields::Field> fog =
+                weather_ ? fogFieldSignal_.read(bus, fogField_) : nullptr;
+            const std::shared_ptr<const fields::Field> smoke =
+                smoke_ ? smokeFieldSignal_.read(bus, smokeField_) : nullptr;
             const fields::Vec3 at = sensor.position;
-            const double local = field ? field->sampleScalar(at) : 0.0;
-            const SensorWeather w{bus.read(extinction_), bus.read(fogExtinction_) + local,
-                                  bus.read(rainRate_) + (kSnowClutter * bus.read(snowRate_)),
-                                  bus.read(contamination_)};
+            const double local = (fog ? fog->sampleScalar(at) : 0.0) +
+                                 (smoke ? smokeScale_ * smoke->sampleScalar(at) : 0.0);
+            const SensorWeather w =
+                weather_ ? SensorWeather{bus.read(extinction_), bus.read(fogExtinction_) + local,
+                                         bus.read(rainRate_) + (kSnowClutter * bus.read(snowRate_)),
+                                         bus.read(contamination_)}
+                         : SensorWeather{0.0, local, 0.0, 0.0};
             tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
                 // Its own stream, so that the range noise below is the same with or without.
                 random::Stream rng(context.seed, context.stepIndex, kWeatherStream + i);
@@ -627,13 +652,15 @@ public:
                 const double u2 = rng.uniform();
                 const double u3 = rng.uniform();
                 double depth = 0.0;
-                if (field && std::isfinite(nearest_[i])) {
+                if ((fog || smoke) && std::isfinite(nearest_[i])) {
                     const Pose& from = columnPose_[i % layout_.horizontal];
                     const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
                     const double to = std::min(nearest_[i], maxRange_);
                     const Vec3& o = from.position;
-                    depth = field->integrate(
-                        o, {o[0] + dir[0] * to, o[1] + dir[1] * to, o[2] + dir[2] * to});
+                    const fields::Vec3 end{o[0] + dir[0] * to, o[1] + dir[1] * to,
+                                           o[2] + dir[2] * to};
+                    depth = (fog ? fog->integrate(o, end) : 0.0) +
+                            (smoke ? smokeScale_ * smoke->integrate(o, end) : 0.0);
                 }
                 const double hit = nearest_[i];
                 nearest_[i] =
@@ -953,6 +980,10 @@ private:
     bool weather_{false};
     LidarClutter clutter_;
     SignalId extinction_, fogExtinction_, rainRate_, snowRate_, contamination_, fogField_;
+    bool smoke_{false};
+    SignalId smokeField_;
+    double smokeScale_{1.0};  // the smoke field's σ (633 nm) at the lidar's wavelength
+    fields::FieldSignal smokeFieldSignal_;
     // Flakes return more false echoes than the same water as drops: taken as this much rain.
     // Illustrative: no published snow-to-rain clutter ratio was found (Rasshofer, Spies and Spies,
     // Adv. Radio Sci. 9, 2011, give snow's extinction, not its false echoes).
@@ -1261,6 +1292,15 @@ public:
             field.feedback = true;
             fogField_ = d.input(field);
         }
+        // The fires' smoke (config "smoke", RFC 0022 §6): the field is σ in the visible, as the
+        // veil takes it. A thermal camera's band is not measured for soot (TODO(verify)).
+        smoke_ = config.get<bool>("smoke").value_or(false) && !groundTruth_ && !thermal_;
+        if (smoke_) {
+            SignalSpec field = spec("env/smoke/extinction", SignalType::Field3D, units::per_m);
+            field.feedback = true;
+            field.optional = true;
+            smokeField_ = d.input(field);
+        }
         return {};
     }
 
@@ -1440,15 +1480,18 @@ private:
                 // The colour keeps whatever was drawn: a far clip limits the range, not the view.
             }
         }
-        if (weather_) {
-            const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
-            if (field) {
-                fieldDepth(*field, sensorPose_);
+        if (weather_ || smoke_) {
+            const std::shared_ptr<const fields::Field> fog =
+                weather_ ? fogFieldSignal_.read(bus, fogField_) : nullptr;
+            const std::shared_ptr<const fields::Field> smoke =
+                smoke_ ? smokeFieldSignal_.read(bus, smokeField_) : nullptr;
+            if (fog || smoke) {
+                fieldDepth(fog.get(), smoke.get(), sensorPose_);
             } else {
                 fieldDepth_.clear();
             }
-            applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
-                               bus.read(contamination_), fieldDepth_);
+            applyCameraWeather(images_.rgba, images_.depth, weather_ ? bus.read(extinction_) : 0.0,
+                               weather_ ? bus.read(contamination_) : 0.0, fieldDepth_);
         }
         if (thermal_ && !gpuThermal_) {
             stepThermal(frameContext_, bus);
@@ -1752,9 +1795,10 @@ private:
     std::vector<gpu::RasterInstance> instances_;
     gpu::RasterImages images_;
     SignalId image_, depth_, instance_;
-    /// A fog field's optical depth along each pixel's ray up to its depth (the far clip for the
-    /// sky), integrated once per kFieldBlock² pixels and shared across the block.
-    void fieldDepth(const fields::Field& field, const Pose& sensor) {
+    /// The optical depth of a fog field and the smoke (either may be null) along each pixel's
+    /// ray up to its depth (the far clip for the sky), integrated once per kFieldBlock² pixels
+    /// and shared across the block.
+    void fieldDepth(const fields::Field* fog, const fields::Field* smoke, const Pose& sensor) {
         constexpr std::uint32_t kFieldBlock = 8;
         const std::uint32_t w = camera_.width;
         const std::uint32_t h = camera_.height;
@@ -1772,8 +1816,10 @@ private:
                 const Vec3 ray = rotate(optical, {(u - camera_.cx) / camera_.fx * z,
                                                   (v - camera_.cy) / camera_.fy * z, z});
                 const fields::Vec3 from = sensor.position;
-                const auto tau = static_cast<float>(
-                    field.integrate(from, {from[0] + ray[0], from[1] + ray[1], from[2] + ray[2]}));
+                const fields::Vec3 to{from[0] + ray[0], from[1] + ray[1], from[2] + ray[2]};
+                const auto tau =
+                    static_cast<float>((fog != nullptr ? fog->integrate(from, to) : 0.0) +
+                                       (smoke != nullptr ? smoke->integrate(from, to) : 0.0));
                 for (std::uint32_t y = by * kFieldBlock; y < std::min(h, (by + 1) * kFieldBlock);
                      ++y) {
                     for (std::uint32_t x = bx * kFieldBlock;
@@ -1788,6 +1834,9 @@ private:
     bool weather_{false};
     SignalId extinction_, contamination_, fogField_;
     fields::FieldSignal fogFieldSignal_;
+    bool smoke_{false};
+    SignalId smokeField_;
+    fields::FieldSignal smokeFieldSignal_;
     std::vector<float> fieldDepth_;
     // The thermal camera.
     struct Surface {

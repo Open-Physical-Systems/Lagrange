@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -103,5 +104,13 @@ struct DenseBox {
 /// empty.
 [[nodiscard]] std::shared_ptr<const Field> vectorField(
     const std::string& name, const DenseBox& box, const std::function<Vec3(const Vec3&)>& value);
+
+/// A scalar field kept in memory, from one value per voxel of `box` (x slowest, z fastest:
+/// index (i·count[1] + j)·count[2] + k), for a field made while the run goes (the fire's smoke,
+/// RFC 0022 §4). Zero values are left inactive (the background), so an empty region costs
+/// nothing; the bounds are those of the active voxels. Null when the box is empty, the values
+/// do not fill it, or every value is zero.
+[[nodiscard]] std::shared_ptr<const Field> scalarField(const std::string& name, const DenseBox& box,
+                                                       std::span<const float> values);
 
 }  // namespace lagrange::fields

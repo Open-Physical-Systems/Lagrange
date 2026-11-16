@@ -16,6 +16,9 @@ flowchart LR
     B --> R["point source at half the flame's height,<br/>blocked by the fixed scenery"]
     R --> T["fire_radiation/node/loss_power<br/>(the thermal network heats the node)"]
     T -->|"its node's temperature"| IGN
+    B --> S["smoke puffs: rise with the plume,<br/>drift in the wind, spread under roofs"]
+    S --> F["env/smoke/extinction (2 Hz)"]
+    F --> SEN["lidars, cameras,<br/>visibility_sensor"]
 ```
 
 ## Using it
@@ -42,8 +45,8 @@ or from an overlay or a URDF `<gazebo reference="L"><fire alpha="fast" .../></ga
 values come from its data, with their source. The presets (`fire:preset`) ship empty until their
 cited values are confirmed (RFC 0022 open question 3).
 
-The sample is a pallet fire in the sample warehouse, which a sprinkler's rate of water reaches at
-60 s:
+The sample is a pallet fire in the sample warehouse under a roof 3 m up, with the sample AMR and
+a visibility meter near the roof; a sprinkler's rate of water reaches the fire at 60 s:
 
 ```bash
 lagrange assets/worlds/warehouse_fire/warehouse_fire.yaml
@@ -124,6 +127,49 @@ water absorbing its whole heat release.
 out when it is covered (state 7). Without a blanket thickness foam does nothing. NFPA 11's
 application rates and thicknesses are not openly readable (TODO(verify)), so there is no default.
 
+**Smoke.** The soot made, `ṁ_s = y_s·Q/ΔH_c` (`fire/<n>/soot_rate`), leaves each flame's tip as
+one Lagrangian puff per step: a Gaussian of mass `ṁ_s·dt`, `σ_h` across and `σ_v` up. A puff rises
+at Heskestad's plume centreline velocity `u0` at its height above its fire's virtual origin (the
+flame section above, with `env/air_temperature` and `env/air_density` or the site's; without them
+it drifts but does not rise, and the module says so once) and is carried by `env/wind/velocity`.
+While it rises its width is the plume's, `σ = b/√(2 ln 2)` with `b = 0.12·(z − z0)` (the half-value
+radius; TODO(verify) the coefficient and its temperature factor, SFPE Handbook ch. 13, which was not
+readable), never under half a voxel. A ray up through the fixed scenery finds the ceiling above it:
+nothing of the puff is above that, and once its top reaches it the puff stops a `σ_v` below it and
+spreads sideways at the plume velocity it arrived with, `dσ_h/dt = 0.12/√(2 ln 2)·u0` (a modelling
+choice; a ceiling-jet law, Alpert 1972, is owed). It leaves beyond the smoke box, 30 m across from
+the fires and 20 m above them. Beyond 2000 puffs the two
+oldest merge, keeping their mass, centre and second moments. There is no deposition, no flow round
+walls and no filling: a layer under a roof keeps its depth instead of coming down as the room
+fills, and smoke passes through walls. It is deterministic, with no random numbers.
+
+At 2 Hz the puffs are spread over the voxels within 3σ of them (0.5 m voxels), their weights normalised so that the field holds each puff's mass, into
+`env/smoke/extinction`: `σ = K_m·ρ_soot` (1/m), with `K_m = 8700 m²/kg`, the specific extinction
+coefficient of flame-generated smoke at 633 nm (Mulholland and Croarkin, *Fire and Materials* 24,
+2000; the FDS 6.11.1 guides give "8700 m²/kg ± 1100 m²/kg at a wavelength of 633 nm"). The viewer's
+Environment workspace shows it as the field *smoke extinction* (horizontal and upright slices).
+
+What the sensors see of it (sensors.md):
+
+- **Lidars** add its optical depth along each beam, scaled to their wavelength by `633 nm/λ`
+  (0.70 at 905 nm, 0.41 at 1550 nm), to the fog's in the lidar equation, `r·e^(σr + τ) ≤ R`:
+  a return is kept only when its target is within the range the smoke leaves. Smoke at the sensor
+  adds to the fog's clutter (false near returns) through the same model. Soot's extinction goes as
+  `1/λ` from 543.5 to 1565 nm (Zhu, Choi, Mulholland et al., *Proc. Combust. Inst.* 29, 2002:
+  `K_m·ρ_s·λ` roughly constant), which is where the scaling comes from.
+- **Cameras** veil each pixel through it as through fog, `L = L0·e^(−τ) + L_air·(1 − e^(−τ))`,
+  τ its optical depth to the pixel's depth. The air light is the weather's grey, not soot's black
+  (the viewer's smoke drawing is a later step). Thermal cameras do not take smoke yet: soot's
+  extinction in 8–14 µm is not measured (TODO(verify)).
+- **`visibility_sensor`** adds the smoke's σ at its place to the weather's, and also writes
+  `sign_visibility` and `light_visibility`, `S = C/σ` with `C = 3` for a light-reflecting sign and
+  `C = 8` for a light-emitting one (FDS 6.11.1 User's Guide eq. 22.23, `VISIBILITY_FACTOR`, after
+  Mulholland's SFPE Handbook chapter). A meter can be fixed in the scenery, as the sample's is.
+
+How far to trust it: the puffs put roughly the right mass in roughly the right place above and
+downwind of a fire, and under a roof; they do not reproduce a filling room, smoke round obstacles,
+or the plume's own turbulence. For those, compare with FDS (RFC 0022 step 9).
+
 **Wind.** A flame with `fire:blowOffSpeed` (from a measurement; there is no general correlation
 for fuel items) goes out at the step the air speed at it passes that speed, while its Q is below
 `fire:blowOffMaxHrr` if given. Large fires do not blow off: they lean. Wind does not raise a pool
@@ -140,7 +186,7 @@ fire's burning rate in this model (RFC 0022 open question 8).
 | `fire/<n>/base` | Vec3 | m | the centre of the flame's base, world-local |
 | `fire/<n>/radiative_power` | Scalar | W | χ_r·Q |
 | `fire/<n>/fuel_remaining` | Scalar | kg | |
-| `fire/<n>/soot_rate` | Scalar | kg/s | `y_s·Q/ΔH_c`, for the smoke (RFC 0022 step 4) |
+| `fire/<n>/soot_rate` | Scalar | kg/s | `y_s·Q/ΔH_c`, the smoke's source |
 | `fire/<n>/water_rate` | Scalar | kg/(m²·s) | applied, over the burning area |
 | `fire/<n>/water_cooling` | Scalar | W | heat the water takes up |
 | `fire/<n>/steam_rate` | Scalar | kg/s | |
@@ -151,17 +197,21 @@ fire's burning rate in this model (RFC 0022 open question 8).
 | `fire/<n>/foam_supply` | Scalar | m/s | in |
 | `fire/<n>/downwash` | Vec3 | m/s | in, from the aerodynamics domain (step 6) |
 | `fire_radiation/<node>/loss_power` | Scalar | W | per thermal node with a radiative area |
+| `env/smoke/extinction` | Field3D | 1/m | the smoke's σ at 633 nm, at 2 Hz |
+| `env/smoke/mass` | Scalar | kg | soot in the smoke box |
 
 ## Not yet
 
-Smoke and what it does to cameras and lidars, flames seen by thermal and visible cameras, the
-nozzle and tank, the downwash at fires, compartments and oxygen, the viewer's flames and smoke,
-heat flux on people, and `lagrange fds` are later steps of RFC 0022.
+Flames seen by thermal and visible cameras (and smoke in the thermal band), the nozzle and tank,
+the downwash at fires (and on the puffs), smoke in the live air box, compartments and oxygen, the
+viewer's flames and smoke volume, heat flux on people, and `lagrange fds` are later steps of RFC
+0022.
 
 ## Checked against
 
-`modules/fire/test/test_correlations.cpp` and `test_fires.cpp`; each test states its tolerance and
-source.
+`modules/fire/test/test_correlations.cpp`, `test_fires.cpp` and `test_smoke.cpp`, and the sensors'
+smoke tests (`test_sensors`, `test_camera`, `test_kinds_visibility_sensor`,
+`test_weather_effects`); each test states its tolerance and source.
 
 | Check | Against | Tolerance |
 |---|---|---|
@@ -177,7 +227,15 @@ source.
 | Blow-off | out at the step the air passes the speed | at the step |
 | Burn-out | energy released `M·ΔH_c` less the 1 % tail | 0.5 % |
 | Spread | ignites within a step of its node reaching the ignition temperature | 2 steps |
-| Determinism | the same run twice; save and restore | identical |
+| Smoke: one puff | peak `K_m·m/((2π)^(3/2)·σ_h²·σ_v)`; the field holds its mass | 1 %; 0.1 % |
+| Smoke: steady source in wind | a Gaussian line, `K_m·ṁ/(2π·u·σ_h·σ_v)` on its axis | 2 % |
+| Smoke: rise | `(z − z0)^(4/3)` grows as `(4/3)·A·t` (Heskestad's `u0 = A·(z − z0)^(−1/3)`) | 0.5 % |
+| Smoke under a roof | stops a σ below it, spreads; nothing above it; mass in the field | 2 % |
+| Smoke mass | the field's integral against `∫ṁ_s dt` while no puff has left | 2 % |
+| Lidar in smoke | walls kept within `lidarDetectionRange` at σ·633/905, lost beyond | exact |
+| Camera in smoke | `L0·e^(−σd) + L_air·(1 − e^(−σd))` | 1 code |
+| Visibility | a uniform smoke box: `3/σ` and `8/σ`, alone and with the weather's σ | 1 % |
+| Determinism | the same run twice; save and restore (smoke too) | identical |
 
 Not yet checked: a measured pool-fire radiant flux with all its inputs (RFC 0022 Validation,
 TODO(verify)), and Lagrange against an FDS run.

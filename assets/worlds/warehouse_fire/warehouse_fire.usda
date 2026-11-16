@@ -2,8 +2,9 @@
 (
     defaultPrim = "warehouse_small"
     doc = """The sample warehouse with its pallet on fire (RFC 0022, docs/physics/fire.md): a
-    wood pallet stack that ignites at the start and grows as a fast t-squared fire. The run file
-    warehouse_fire.yaml brings a sprinkler's rate of water onto it at 60 s."""
+    wood pallet stack that ignites at the start and grows as a fast t-squared fire, under a flat
+    roof 3 m up that its smoke spreads beneath, with a visibility meter near the roof. The run
+    file warehouse_fire.yaml brings the sample AMR and a sprinkler's rate of water at 60 s."""
     kilogramsPerUnit = 1
     metersPerUnit = 1
     subLayers = [
@@ -39,5 +40,54 @@ over "warehouse_small"
         # TODO(verify) the critical rate for wood cribs: Tamanini 1976, as NISTIR 5254 cites it.
         double fire:criticalWaterRate = 0.02
         double fire:ignitionTime = 0
+    }
+
+    # A flat roof 3 m up over the whole floor (collision only, so the viewer's camera sees in):
+    # the smoke stops under it and spreads (RFC 0022 §4), and the lidars' upper beams reach it.
+    def Xform "roof"
+    {
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0, 3.1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token purpose = "guide"
+            double size = 1
+            quatd xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (18.4, 9.4, 0.2)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    # A visibility meter on a post by the north rack, 2.7 m up, where the smoke layer forms: the
+    # kind visibility_sensor (sensors.md §9) reads the smoke there, S = C/sigma with C = 3 and 8.
+    # The post is a body welded to the ground, as a sensor rides on a rigid body.
+    def Xform "meter_post" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 1
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (3, 2.6, 2.7)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Xform "smoke_meter" (
+            prepend apiSchemas = ["SensorAPI_1", "CustomSensorAPI_1"]
+        )
+        {
+            uniform string sensor:custom:kind = "visibility_sensor"
+            double sensor:custom:param:range:min = 1
+            double sensor:custom:param:time_constant = 5
+            double sensor:rate = 2
+        }
+    }
+
+    def PhysicsFixedJoint "meter_post_weld"
+    {
+        rel physics:body1 = </warehouse_small/meter_post>
     }
 }
