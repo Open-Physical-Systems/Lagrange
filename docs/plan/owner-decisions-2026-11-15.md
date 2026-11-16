@@ -21,8 +21,9 @@ are as of `origin/dev` at `bc081b4` (#399).
   scenery, Jolt substeps, `noslip_iterations`, MJCF armature), and Python `ParallelEnvs` over
   shared memory.
 
-The full list is in [CHANGELOG.md, Unreleased](../../CHANGELOG.md#unreleased). It covers #332 to
-#381, so the list for #382 to #399 is still owed (F2).
+The full list is in [CHANGELOG.md, 1.4.0](../../CHANGELOG.md#140-2026-11-15), which covers #332
+to #423. **Update 2026-11-17:** v1.4.0 was released on 2026-11-15 (#425), so section F is done
+except where marked; sections A to E still wait. RFCs 0020 to 0022 came after: section G.
 
 Count: **77 decisions**. 63 are decisions (D1–D63), 9 are actions only the owner can take (E1–E9), and 5 are
 about the release (F1–F5). Rows that tie to another row say so; the shared item is counted once.
@@ -165,17 +166,17 @@ The radiation schemas are decided under D5.
 | E8 | Run Geant4 offline on the `hot_cell` sample for RFC 0018 test 9 | run / delegate | A maintainer runs it when step 4 lands | Needs Geant4, which does not ship | D16 | rfcs/0018 L329–335 |
 | E9 | The second approval on the B and C PRs (CLAUDE.md §9: 2 approvals) | owner + one / owner-delegated as before | Owner's call | Governance | B, C | `GOVERNANCE.md` |
 
-## F. Release: should `dev` become v1.4.0?
+## F. Release: should `dev` become v1.4.0? (done: v1.4.0 released 2026-11-15, #425)
 
 | # | Decision | Options | Proposed | Why | Blocks what | Where |
 |---|---|---|---|---|---|---|
-| F1 | Release `dev` as v1.4.0 | now / after B and C land / wait | **Yes, now**, as a 1.x minor without the drafts. B and C go into 1.5 | 64 PRs, a whole new workspace (the builder), and behaviour changes users should get labelled | — | [CHANGELOG](../../CHANGELOG.md#unreleased) |
-| F2 | Before tagging: the changelog for #382–#399, a full local check on the `dev` head (per-PR checks passed, e.g. #394: 0 failures, but not on `bc081b4` itself), the debs archive | do / skip | Do all three | Unreleased stops at #381; each release needs its debs uploaded | F1 | — |
-| F3 | CLAUDE.md §2 still says v1.2.0 is the current release; 1.3.0 shipped 2026-11-14 | update with F1 / now | Update in the release PR | Stale phase text | — | CLAUDE.md §2 |
-| F4 | Is "Breaking or behaviour changes" acceptable in a minor under RFC 0007? These are: `valid` topics now `Bool`, out-of-range parameters refuse, faults on Bool/Int refuse, joint loops refused, one ground, new state hashes | minor / hold for a deprecation | Minor. These are fixes of wrong behaviour, and schemas, ABI and protocol change only by addition | — | F1 | CHANGELOG Unreleased |
-| F5 | MuJoCo 4 in 1.4.0 | in / out | Out. The vendor package isn't ready (D2) | — | — | rfcs/0017 L45–50 |
+| F1 | **Done** (release 1.4.0, #425, 2026-11-15). Release `dev` as v1.4.0 | now / after B and C land / wait | **Yes, now**, as a 1.x minor without the drafts. B and C go into 1.5 | 64 PRs, a whole new workspace (the builder), and behaviour changes users should get labelled | — | [CHANGELOG](../../CHANGELOG.md#unreleased) |
+| F2 | **Done**: the changelog (1.4.0 lists #332–#423), a full local check at #423 (2506 tests, 0 failures after #424), and the debs archive (51 debs, clean-machine install test passed, uploaded to the v1.4.0 release). Before tagging: the changelog for #382–#399, a full local check on the `dev` head (per-PR checks passed, e.g. #394: 0 failures, but not on `bc081b4` itself), the debs archive | do / skip | Do all three | Unreleased stops at #381; each release needs its debs uploaded | F1 | — |
+| F3 | **Done** (CLAUDE.md §2 now says v1.4.0 is released). CLAUDE.md §2 still said v1.2.0 is the current release; 1.3.0 shipped 2026-11-14 | update with F1 / now | Update in the release PR | Stale phase text | — | CLAUDE.md §2 |
+| F4 | **Done** (1.4.0 ships a "Breaking or behaviour changes" section as a minor). Is "Breaking or behaviour changes" acceptable in a minor under RFC 0007? These are: `valid` topics now `Bool`, out-of-range parameters refuse, faults on Bool/Int refuse, joint loops refused, one ground, new state hashes | minor / hold for a deprecation | Minor. These are fixes of wrong behaviour, and schemas, ABI and protocol change only by addition | — | F1 | CHANGELOG Unreleased |
+| F5 | **Done** (1.4.0 has only the opt-in `LAGRANGE_MUJOCO_PACKAGE` option, #364). MuJoCo 4 in 1.4.0 | in / out | Out. The vendor package isn't ready (D2) | — | — | rfcs/0017 L45–50 |
 
-### What v1.4.0 would contain
+### What v1.4.0 contained
 
 - **Robot builder.** RFC 0016 phase 1, Addendum A and phase 3:
   - shapes, meshes, joints and catalog sensors
@@ -222,3 +223,70 @@ The radiation schemas are decided under D5.
   - the MuJoCo 4 and legged-contact spikes
 - **Behaviour changes to label.** See F4. State hashes change for MuJoCo worlds with static
   bodies.
+
+## G. RFCs 0020 to 0022 (Draft, added 2026-11-17)
+
+Reply "accept all" to take every proposed answer, or override by number, e.g. "accept all except
+RFC 0021 Q5". Each RFC's own acceptance is the first line of its group. Each ends with a pre-approval
+question for its gated schema merges; "Yes" there means the owner pre-approves them.
+
+### G1. RFC 0020, actuators ([rfcs/0020-actuators.md](../../rfcs/0020-actuators.md))
+
+Adds the actuators Lagrange lacks (suction and magnetic grippers, hobby and smart servos, lead
+screws and linear actuators, steppers, solenoids; later pneumatic and hydraulic cylinders), each with
+equations, a reference, signals, authoring, ROS 2 interface, tier behaviour and a substitute.
+
+- Accept RFC 0020 → accept (not stated in the RFC; Status is Draft).
+- Q1 — grasped objects held by force pairs or temporary welds? → Force pairs (pull-off, slip, peel; no engine change; works on plugin backends).
+- Q2 — one `actuators` domain or one per family? → One domain, a module per family running only when its prims exist; `--domain actuators=off` turns all off.
+- Q3 — porosity of target surfaces? → Add optional `sensmat:airPermeability` (fallback 0, airtight) to `SensorMaterialAPI_1`, plus a `cardboard` preset value (TODO(verify) a published value).
+- Q4 — `elec:gearBackEfficiency` fallback? → −1, meaning "use `gearEfficiency`", so every 1.x file behaves as before.
+- Q5 — servo pulse input or angle input as primary command? → Both: `pulse_width` for flight controllers and hobby boards, `goal_position` for ROS and ros2_control; the pulse goes through the servo's own map.
+- Q6 — smart-servo overload shutdown? → Model the overload and overheating flags only (current over limit too long; winding temperature from the thermal node); the error-status bit layout is out of scope.
+- Q7 — the Dynamixel serial protocol (Protocol 2.0 over a virtual port)? → Not in this RFC; ros2_control and topics cover it. An emulator only if users ask.
+- Q8 — stepper `lost_steps`, which no real driver reports? → Keep it as a documented ground-truth signal; back-EMF stall detection is a later addition (TODO(verify) which drivers publish their method).
+- Q9 — pneumatics and hydraulics here or in their own RFC? → Their own RFC before phase 3; this RFC only reserves `fluid_power`, `FluidSupplyAPI_1`, `ValveAPI_1`, `CylinderAPI_1`.
+- Q10 — does the `ideal` servo substitute replace `JointControl`? → No; `JointControl` stays the motor-less tool, and a joint with `ServoAPI_1` follows its servo instead and logs it once.
+- Q11 — pre-approve gated schema merges of phase 1 (as for RFC 0011)? → Yes, phase 1 only; phases 2 and 3 return to the owner.
+- Q12 — plugin ABI? → No change; plugins already write `body/<b>/wrench/<source>`, `joint/<j>/torque_command`, `load/<n>/power_demand`, and substitute through RFC 0008.
+
+### G2. RFC 0021, lights ([rfcs/0021-lights.md](../../rfcs/0021-lights.md))
+
+Lamps on robots and in scenes (headlights, indicators, brake lights, LEDs, beacons, street and traffic
+lights): candela over a beam, colour, rise time, blink patterns, power from the bus, seen by cameras and
+light sensors.
+
+- Accept RFC 0021 → accept (not stated in the RFC; Status is Draft).
+- Q1 — built in (`lights` domain plus renderer) or a plugin as asked? → Built in; a plugin remains the way to give a lamp custom behaviour.
+- Q2 — which axis is the beam? → +X of the lamp's prim, stated in the schema doc; the SDFormat importer rotates its −Z `<light>`.
+- Q3 — Lagrange's own `lamp:` attributes or UsdLux's? → Own, for photometric units from datasheets; write matching UsdLux for other tools, read bare UsdLux lights with a warning.
+- Q4 — one schema for every lamp kind or one per kind? → One, with `lamp:kind`.
+- Q5 — how many lamps per frame? → 64 in a storage buffer, nearest and brightest first by `I/d²`, one log line when more exist.
+- Q6 — add luminous intensity as a unit dimension? → Yes (cd, lx); the unit strings `cd` and `lx` are new text.
+- Q7 — filament inrush current? → Not modelled; a docs note, a later optional attribute.
+- Q8 — lamp shadows in phase 1? → No, phase 2; the limit is stated.
+- Q9 — lamp light scattered by fog (veiling luminance)? → Phase 2, with the per-pixel fog veil and single-scattering closed form (TODO(verify) reference).
+- Q10 — plugin ABI additions (`world_lamp` getter, tokens)? → None now; plugins control lamps through signals; a getter would be an ABI MINOR in its own RFC.
+- Q11 — pre-approve gated schema merges of steps 2–7? → Yes.
+- Q12 — model the moon's phase in `env/sky_illuminance`? → Not in phase 1 (moonless 0.8 mlx at night, documented); needs the moon's position, phase and a cited illuminance.
+
+### G3. RFC 0022, fire ([rfcs/0022-fire.md](../../rfcs/0022-fire.md))
+
+Fires that start, grow, spread, heat parts, make smoke that blinds cameras and lidars, and are put out
+by water, wind or smothering, using fire-protection engineering correlations; depends on RFC 0020 (the
+nozzle) and RFC 0021 (flames light the scene).
+
+- Accept RFC 0022 → accept (not stated in the RFC; Status is Draft). Its nozzle needs RFC 0020 accepted.
+- Q1 — built-in domain or plugin? → Built in, as tethers are (fire feeds thermal, sensors, renderers and the viewer).
+- Q2 — FDS as a separate program, files only? → Yes; one rule for offline solvers, nothing linked.
+- Q3 — ship fuel presets with SFPE Handbook and Babrauskas numbers? → Yes, as individual cited values, once the owner confirms that is acceptable; until then presets ship empty and samples author their own values with sources.
+- Q4 — χ_r fallback 0.3 or required? → Required; presets give it (no device values in fallbacks).
+- Q5 — burn-out decay over the last 20 % of fuel? → Yes, both: `fire:decayFraction` (fallback 0.2) and an `fire:hrrCurve` table that replaces §2 entirely.
+- Q6 — smoke by puffs or by the live LBM air box? → Puffs first (any size, any tier, deterministic); advecting smoke in `LbmBox` is a later step.
+- Q7 — blow-off with no general correlation? → A user parameter, off by default, plus optional `fire:blowOffMaxHrr`; search the literature before step 3 (TODO(verify)).
+- Q8 — wind raising a pool fire's burning rate? → Not in phase 1; documented.
+- Q9 — local CO2 dilution in open air? → Behind `fire.co2_open_air: true` (default false), documented as unvalidated.
+- Q10 — dry powder and clean agents? → Not in this RFC.
+- Q11 — lidar returns from flames? → None; revisit if a published measurement is found.
+- Q12 — tank sloshing and inertia? → Left out; the tank is a weight only, and the docs say a large tank's inertia is understated.
+- Q13 — pre-approve gated schema merges of steps 2–7? → Yes.
