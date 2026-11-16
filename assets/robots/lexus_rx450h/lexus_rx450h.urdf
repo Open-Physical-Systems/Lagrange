@@ -9,8 +9,10 @@
   mid-wheelbase (front engine), both estimates.
 
   The body is Autoware's lexus.dae (Apache-2.0), too large for this repository: fetch it with
-  `ros2 run lagrange_assets fetch_assets lexus_rx450h`. Without it the car runs and shows only
-  its sensors. The mesh includes the wheels, so they do not turn or steer on screen. As in the
+  `ros2 run lagrange_assets fetch_assets lexus_rx450h`, which also splits it into the body
+  (lexus_body.dae) and four wheels (lexus_wheel_*.dae, each re-centred on its wheel; the
+  `derive:` entry of assets/external_assets.yaml), so that the wheels spin and steer on screen.
+  Without them the car runs with boxes in the meshes' place. As in the
   sample sedan, the wheels carry no collision shapes (vehicle dynamics casts rays for the ground)
   and base_link's origin is at the wheel centres' height, between the axles. Vehicle dynamics,
   tyres and powertrain come from lexus_rx450h.overlay.yaml.
@@ -28,7 +30,7 @@
       <!-- Autoware's placement of the mesh (Y up, x backwards, origin mid-wheelbase on the
            ground), moved down to the ground from the wheel centres. -->
       <origin xyz="0 0 -0.383" rpy="1.5707963 0 3.1415927"/>
-      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus.dae"/></geometry>
+      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus_body.dae"/></geometry>
     </visual>
     <collision>
       <origin xyz="-0.05 0 0.37"/>
@@ -45,8 +47,12 @@
     <limit lower="-0.70" upper="0.70" effort="3000" velocity="3"/>
   </joint>
   <link name="front_left_wheel">
-    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <!-- 235/65 R18 tyre on an alloy wheel: its part of lexus.dae, in the mesh's axes. -->
     <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5707963 0 3.1415927"/>
+      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus_wheel_front_left.dae"/></geometry>
+    </visual>
   </link>
   <joint name="front_left_spin" type="continuous">
     <parent link="front_left_knuckle"/><child link="front_left_wheel"/>
@@ -61,24 +67,36 @@
     <limit lower="-0.70" upper="0.70" effort="3000" velocity="3"/>
   </joint>
   <link name="front_right_wheel">
-    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <!-- 235/65 R18 tyre on an alloy wheel: its part of lexus.dae, in the mesh's axes. -->
     <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5707963 0 3.1415927"/>
+      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus_wheel_front_right.dae"/></geometry>
+    </visual>
   </link>
   <joint name="front_right_spin" type="continuous">
     <parent link="front_right_knuckle"/><child link="front_right_wheel"/>
     <origin xyz="0 0 0"/><axis xyz="0 1 0"/>
   </joint>
   <link name="rear_left_wheel">
-    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <!-- 235/65 R18 tyre on an alloy wheel: its part of lexus.dae, in the mesh's axes. -->
     <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5707963 0 3.1415927"/>
+      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus_wheel_rear_left.dae"/></geometry>
+    </visual>
   </link>
   <joint name="rear_left_spin" type="continuous">
     <parent link="base_link"/><child link="rear_left_wheel"/>
     <origin xyz="-1.395 0.820 0"/><axis xyz="0 1 0"/>
   </joint>
   <link name="rear_right_wheel">
-    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <!-- 235/65 R18 tyre on an alloy wheel: its part of lexus.dae, in the mesh's axes. -->
     <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5707963 0 3.1415927"/>
+      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus_wheel_rear_right.dae"/></geometry>
+    </visual>
   </link>
   <joint name="rear_right_spin" type="continuous">
     <parent link="base_link"/><child link="rear_right_wheel"/>

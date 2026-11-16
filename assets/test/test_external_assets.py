@@ -31,4 +31,18 @@ def test_robot_files_name_only_listed_assets() -> None:
     assert named, "the Lexus and the X500 V2 name fetched meshes"
     for uri in named:
         asset_id, _, name = uri.partition("/")
-        assert name in MANIFEST["assets"].get(asset_id, {}).get("files", {}), uri
+        asset = MANIFEST["assets"].get(asset_id, {})
+        derived = set()
+        for spec in asset.get("derive", {}).values():
+            derived |= {spec["body"], *spec["wheels"]}
+        assert name in asset.get("files", {}) or name in derived, uri
+
+
+def test_derived_files_come_from_fetched_files() -> None:
+    for asset_id, asset in MANIFEST["assets"].items():
+        for kind, spec in asset.get("derive", {}).items():
+            assert kind == "wheel_split", asset_id
+            assert spec["source"] in asset["files"], asset_id
+            names = [spec["body"], *spec["wheels"]]
+            assert len(set(names)) == len(names), asset_id
+            assert not set(names) & set(asset["files"]), asset_id

@@ -199,7 +199,14 @@ def asset_fetched(asset_id: str) -> bool:
         / "lagrange"
         / "assets"
     )
-    return (Path(root) / asset_id / "NOTICE").is_file()
+    if not (Path(root) / asset_id / "NOTICE").is_file():
+        return False
+    # Files made from the fetched ones (the Lexus's body and wheels) that a copy fetched by an
+    # older fetch_assets lacks: made now, without the network.
+    subprocess.run(
+        [executable("lagrange_assets", "fetch_assets"), "--derive", asset_id], check=False
+    )
+    return True
 
 
 def usage() -> None:
