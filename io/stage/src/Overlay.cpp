@@ -276,7 +276,11 @@ private:
                 return;
             }
             const SdfValueTypeName type = attribute.GetTypeName();
-            if (type == SdfValueTypeNames->Double) {
+            if (type == SdfValueTypeNames->Double && property == "fire:alpha" && value.IsScalar() &&
+                fireGrowthAlpha(value.Scalar())) {
+                // RFC 0022 §2: a t² growth class by name.
+                attribute.Set(*fireGrowthAlpha(value.Scalar()));
+            } else if (type == SdfValueTypeNames->Double) {
                 attribute.Set(value.as<double>());
             } else if (type == SdfValueTypeNames->Int) {
                 attribute.Set(value.as<int>());

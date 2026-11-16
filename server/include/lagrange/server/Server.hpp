@@ -121,6 +121,9 @@ struct ServerOptions {
         double length{0.0};
     };
     std::vector<Tether> tethers;
+    /// --fire-water NAME=RATE[@T] (RFC 0022): water at RATE kg/(m²·s) (mm/s) over the burning area
+    /// of fire NAME from T s on, a sprinkler's rate until nozzles and sprinklers place it.
+    std::vector<std::string> fireWater;
     /// --emi-motor-leads SPACING[,X,Y,Z] (RFC 0013): a wire on the robot's root link from the
     /// battery (at X,Y,Z in that link's frame; else the battery prim, when it is on the robot) to
     /// every motor, carrying its bus current, its return SPACING m above it; every magnetometer a

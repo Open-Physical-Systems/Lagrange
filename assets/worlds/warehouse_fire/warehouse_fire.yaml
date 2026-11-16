@@ -1,0 +1,8 @@
+# A pallet fire in the sample warehouse (RFC 0022, docs/physics/fire.md): the pallet ignites at
+# the start and grows as a fast t-squared fire; at 60 s a sprinkler's rate of water, 0.133 mm/s
+# (the top of the range Evans' suppression law was fitted to, NISTIR 5254), reaches it and its
+# heat release rate decays with the time constant 3.0 * 0.133^-1.85 = 125 s.
+#   lagrange assets/worlds/warehouse_fire/warehouse_fire.yaml
+world: warehouse_fire.usda
+fire_water:
+  - {fire: pallet, rate: 0.133, at: 60}

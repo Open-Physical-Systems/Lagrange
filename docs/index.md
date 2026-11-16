@@ -286,6 +286,7 @@ physics/traffic
 physics/humans
 physics/tether
 physics/heat-conduction
+physics/fire
 ```
 
 ```{toctree}

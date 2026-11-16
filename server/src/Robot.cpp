@@ -936,6 +936,71 @@ void addThermalElements(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId
     }
 }
 
+/// A link's <fire> (RFC 0022) as FireAPI_1 on its prim: attributes as in USD, in snake case;
+/// alpha also takes a t² growth class (slow, medium, fast, ultrafast); hrr_curve is "t Q t Q
+/// ...". What cannot be read is a note and the element is skipped.
+void addFireElement(Robot& robot, const tinyxml2::XMLElement& fire, PrimId prim) {
+    SchemaInstance s;
+    s.schema = "FireAPI_1";
+    s.prim = prim;
+    constexpr std::array<std::pair<const char*, const char*>, 3> kTokens{{
+        {"preset", "fire:preset"},
+        {"class", "fire:class"},
+        {"growth", "fire:growth"},
+    }};
+    for (const auto& [xml, attribute] : kTokens) {
+        if (const char* text = fire.Attribute(xml); text != nullptr) {
+            s.tokens[attribute] = text;
+        }
+    }
+    constexpr std::array<std::pair<const char*, const char*>, 19> kReals{{
+        {"hrr_per_area", "fire:hrrPerArea"},
+        {"area", "fire:area"},
+        {"fuel_mass", "fire:fuelMass"},
+        {"heat_of_combustion", "fire:heatOfCombustion"},
+        {"radiative_fraction", "fire:radiativeFraction"},
+        {"soot_yield", "fire:sootYield"},
+        {"pool_burning_rate", "fire:poolBurningRate"},
+        {"pool_extinction", "fire:poolExtinction"},
+        {"flame_temperature", "fire:flameTemperature"},
+        {"flame_absorption", "fire:flameAbsorption"},
+        {"ignition_temperature", "fire:ignitionTemperature"},
+        {"ignition_time", "fire:ignitionTime"},
+        {"blow_off_speed", "fire:blowOffSpeed"},
+        {"blow_off_max_hrr", "fire:blowOffMaxHrr"},
+        {"critical_water_rate", "fire:criticalWaterRate"},
+        {"oxygen_limit", "fire:oxygenLimit"},
+        {"decay_fraction", "fire:decayFraction"},
+        {"foam_blanket_thickness", "fire:foamBlanketThickness"},
+        {"alpha", "fire:alpha"},
+    }};
+    for (const auto& [xml, attribute] : kReals) {
+        const char* text = fire.Attribute(xml);
+        if (text == nullptr) {
+            continue;
+        }
+        double value = 0.0;
+        if (fire.QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+            s.reals[attribute] = value;
+        } else if (std::string_view(xml) == "alpha" && stage::fireGrowthAlpha(text)) {
+            s.reals[attribute] = *stage::fireGrowthAlpha(text);
+        } else {
+            robot.notes.push_back(std::string("fire: ") + xml + "=\"" + text +
+                                  "\" is not a number: the fire is skipped");
+            return;
+        }
+    }
+    if (const char* curve = fire.Attribute("hrr_curve"); curve != nullptr) {
+        std::istringstream in(curve);
+        std::vector<double> values;
+        for (double v = 0.0; in >> v;) {
+            values.push_back(v);
+        }
+        s.realArrays["fire:hrrCurve"] = std::move(values);
+    }
+    robot.world.schemaInstances.push_back(std::move(s));
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 /// Why a sensor of the file cannot be read (it refuses the model), or empty.
 std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
@@ -994,6 +1059,21 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
                                       reference);
             } else {
                 addThermalElements(robot, *gazebo, *prim);
+            }
+        }
+        // RFC 0022: <fire alpha="fast" hrr_per_area= fuel_mass= .../> on the link: FireAPI_1.
+        if (const tinyxml2::XMLElement* fire = gazebo->FirstChildElement("fire");
+            fire != nullptr && reference != nullptr) {
+            std::optional<PrimId> prim;
+            for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.names[b] == reference) {
+                    prim = world.bodies.prim[b];
+                }
+            }
+            if (!prim) {
+                robot.notes.push_back(std::string("fire: no link ") + reference);
+            } else {
+                addFireElement(robot, *fire, *prim);
             }
         }
         // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how

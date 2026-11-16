@@ -5,6 +5,7 @@
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/fire/Fires.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/humans/Body.hpp"
 #include "lagrange/humans/Humans.hpp"
@@ -494,7 +495,7 @@ struct DomainRow {
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 15> kDomains{{
+constexpr std::array<DomainRow, 16> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -510,6 +511,7 @@ constexpr std::array<DomainRow, 15> kDomains{{
     {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
     {"tether", "zero", "constant"},
+    {"fire", "zero", "constant"},
 }};
 
 /// Writes a robot given as text to a temporary file the loaders read (defined below).
@@ -1051,6 +1053,33 @@ struct Server::Impl {
             }
         } else if (!idealTorqueLast && !addPluginSubstitute("electrical")) {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
+        }
+        // Fire (RFC 0022), before thermal, which finds its heat by name: fire_radiation/<node>/
+        // loss_power. Radiation is blocked by the fixed scenery.
+        if (hasFires()) {
+            ModuleConfigData burning;
+            if (settings.airDensityKgM3) {
+                burning.values["air_density"] = *settings.airDensityKgM3;
+            }
+            if (settings.ambientTemperatureK) {
+                burning.values["ambient_temperature"] = *settings.ambientTemperatureK;
+            }
+            if (!options.fireWater.empty()) {
+                burning.values["water_schedule"] = options.fireWater;
+            }
+            if (!(off("fire") && addPluginSubstitute("fire", burning))) {
+                const auto token = settings.substituteTokens.find("fire");
+                const fire::Fires::Mode mode =
+                    !off("fire") ? fire::Fires::Mode::Simulate
+                    : token != settings.substituteTokens.end() && token->second == "constant"
+                        ? fire::Fires::Mode::Constant
+                        : fire::Fires::Mode::Zero;
+                std::vector<std::uint32_t> colliders;
+                auto scenery = fixedScenery(&colliders);
+                next->add(
+                    std::make_unique<fire::Fires>(mode, std::move(scenery), std::move(colliders)),
+                    ModuleConfig(burning));
+            }
         }
         // Thermal, after electrical: it reads the losses. It needs the site's ambient
         // temperature; without one nothing stands in, and the electrical network keeps its
@@ -1720,6 +1749,7 @@ struct Server::Impl {
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
+    bool hasFires() const { return !WorldView(robot.world).instancesOf("FireAPI_1").empty(); }
     bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
@@ -1764,7 +1794,8 @@ struct Server::Impl {
     }
     /// A scene query over the fixed scenery's shapes (not the ground plane, not what moves), for
     /// the walls between radios.
-    std::shared_ptr<const services::SceneQuery> fixedScenery() const {
+    std::shared_ptr<const services::SceneQuery> fixedScenery(
+        std::vector<std::uint32_t>* colliderOfShape = nullptr) const {
         const World& world = robot.world;
         const std::vector<Pose> rest = restPoses(world);
         const std::vector<bool> moving = movingBodies(world);
@@ -1788,6 +1819,9 @@ struct Server::Impl {
                               ? &world.heightfields.at(world.colliders.hull[c])
                               : nullptr;
             shapes.push_back(shape);
+            if (colliderOfShape != nullptr) {
+                colliderOfShape->push_back(static_cast<std::uint32_t>(c));
+            }
         }
         if (shapes.empty()) {
             return nullptr;
@@ -3362,6 +3396,13 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "traffic" && hasTraffic()) {
                 yaml += substituted("traffic") ? "  traffic: {enabled: false, substitute: zero}\n"
                                                : "  traffic: {enabled: true, backend: builtin}\n";
+            } else if (std::string_view(row.domain) == "fire" && hasFires()) {
+                const auto token = appliedSubstituteTokens.find("fire");
+                const bool steady =
+                    token != appliedSubstituteTokens.end() && token->second == "constant";
+                yaml += !substituted("fire") ? "  fire: {enabled: true}\n"
+                        : steady             ? "  fire: {enabled: false, substitute: constant}\n"
+                                             : "  fire: {enabled: false, substitute: zero}\n";
             } else if (std::string_view(row.domain) == "tether" && hasTethers()) {
                 yaml += substituted("tether") ? "  tether: {enabled: false, substitute: zero}\n"
                                               : "  tether: {enabled: true}\n";
@@ -3380,7 +3421,8 @@ struct Server::Impl {
                        std::string_view(row.domain) == "vehicle_dynamics" ||
                        std::string_view(row.domain) == "rotor_aero" ||
                        std::string_view(row.domain) == "hydrodynamics" ||
-                       std::string_view(row.domain) == "tether") {
+                       std::string_view(row.domain) == "tether" ||
+                       std::string_view(row.domain) == "fire") {
                 continue;  // not in the profile of a ground robot
             } else {
                 yaml += "  " + std::string(row.domain) +
@@ -3473,6 +3515,7 @@ struct Server::Impl {
             : domain == "rotor_aero"    ? "not used by this robot (no RotorAPI_1)"
             : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
+            : domain == "fire"          ? "no fires in the stage (FireAPI_1)"
                                         : "no module in this build yet; the substitute stands in");
     }
 
@@ -5644,6 +5687,9 @@ struct Server::Impl {
         }
         if (hasTethers()) {
             context.modules.insert("tether");
+        }
+        if (hasFires()) {
+            context.modules.insert("fire");
         }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);

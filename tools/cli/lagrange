@@ -352,6 +352,7 @@ DOMAIN_OFF = {
     "vehicle_dynamics": "vehicle_dynamics",
     "traffic": "traffic",
     "humans": "humans",
+    "fire": "fire",
 }
 RUN_KEYS = {
     "robot",
@@ -371,6 +372,7 @@ RUN_KEYS = {
     "water",
     "sensor_timing",
     "sensor_faults",
+    "fire_water",
 }
 SITE_KEYS = {
     "gravity",
@@ -506,6 +508,16 @@ def run_file_args(path: str) -> list[str]:
             fail("water: each is {at: [x, y, surface height], size: [x, y], depth: m}")
         numbers = [*body["at"], *body["size"], body["depth"]]
         args += ["--water", ",".join(str(float(v)) for v in numbers)]
+    for water in run.get("fire_water") or []:
+        if (
+            not isinstance(water, dict)
+            or set(water) - {"fire", "rate", "at"}
+            or "fire" not in water
+        ):
+            fail("fire_water: each is {fire: NAME, rate: kg/(m2.s), at: s}")
+        assert isinstance(water, dict)
+        rate, start = float(water.get("rate", 0)), float(water.get("at", 0))
+        args += ["--fire-water", f"{water['fire']}={rate}@{start}"]
     if "record" in run:
         args += ["--record", str(base / str(run["record"]))]
     control = run.get("control", "joints")

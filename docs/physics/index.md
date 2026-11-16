@@ -59,6 +59,7 @@ inside one step. See [Concepts](../guide/concepts.md) for the scheduler and subs
 | [Humans](humans.md) | People as moving capsules: walking with planted feet, steering round robots and each other |
 | [Tethers](tether.md) | A cable from a winch to a drone or any body: sag, drag, snagging, tangling, its pull and its hits |
 | [Heat conduction](heat-conduction.md) | Temperatures inside each part from its material: hot spots of LEDs and chips, contacts, convection |
+| [Fire](fire.md) | Fuel items that grow, burn out, heat robots and spread; water, foam and wind put them out |
 
 Radiation is not built yet; its zero substitute stands in ([radiation.md](../design/domains/radiation.md)).
 

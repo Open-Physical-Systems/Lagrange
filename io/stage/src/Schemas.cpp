@@ -35,10 +35,10 @@ namespace {
 
 // Property namespaces of the project's schema libraries (RFC 0002 convention 2): an applied
 // schema whose properties live in one of them is collected into World::schemaInstances.
-constexpr std::array<std::string_view, 18> kSchemaNamespaces{
-    "elec:",    "thermal:", "aero:",  "weather:", "emi:",   "rad:",
-    "sensmat:", "sensor:",  "world:", "comms:",   "can:",   "vehicle:",
-    "wheel:",   "lane:",    "human:", "water:",   "joint:", "tether:"};
+constexpr std::array<std::string_view, 19> kSchemaNamespaces{
+    "elec:",   "thermal:", "aero:",  "weather:", "emi:",     "rad:",   "sensmat:",
+    "sensor:", "world:",   "comms:", "can:",     "vehicle:", "wheel:", "lane:",
+    "human:",  "water:",   "joint:", "tether:",  "fire:"};
 
 // Loader checks of RFC 0002 ("Loading") that the schema definitions cannot express.
 struct PairedArrays {
@@ -49,11 +49,14 @@ constexpr std::array<PairedArrays, 1> kPairedArrays{
 struct Fraction {
     std::string_view schema, attribute;
 };
-constexpr std::array<Fraction, 4> kFractions{
+constexpr std::array<Fraction, 7> kFractions{
     {{"BatteryAPI_1", "elec:battery:initialSoc"},
      {"ElectricalMotorAPI_1", "elec:gearEfficiency"},
      {"ElectricalConverterAPI_1", "elec:conv:efficiency"},
-     {"ThermalMaterialAPI_1", "thermal:material:emissivity"}}};
+     {"ThermalMaterialAPI_1", "thermal:material:emissivity"},
+     {"FireAPI_1", "fire:radiativeFraction"},
+     {"FireAPI_1", "fire:decayFraction"},
+     {"FireAPI_1", "fire:oxygenLimit"}}};
 struct JointTarget {
     std::string_view schema, relationship;
 };
@@ -119,6 +122,29 @@ std::optional<SchemaAttribute> schemaAttribute(const std::string& schema,
         }
     }
     return out;
+}
+
+std::optional<double> fireGrowthAlpha(std::string_view name) {
+    // NBSIR 85-3167 (Evans and Stroup 1985), the DETACT-T2 listing: W/s².
+    constexpr double kSlow = 2.9306;
+    constexpr double kMedium = 11.722;
+    constexpr double kFast = 46.889;
+    // 1000 Btu/s (1055.056 W per Btu/s, the International Table Btu) reached at 75 s.
+    // TODO(verify): the ultrafast class against NFPA 72's annex, not openly readable.
+    constexpr double kUltrafast = 1.055056e6 / (75.0 * 75.0);
+    if (name == "slow") {
+        return kSlow;
+    }
+    if (name == "medium") {
+        return kMedium;
+    }
+    if (name == "fast") {
+        return kFast;
+    }
+    if (name == "ultrafast") {
+        return kUltrafast;
+    }
+    return std::nullopt;
 }
 
 std::optional<std::string> checkSchemaReal(const std::string& schema, const std::string& attribute,

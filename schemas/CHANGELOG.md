@@ -8,6 +8,11 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Fire library** (RFC 0022): `FireAPI_1`, a fuel item that can burn: its class, growth law
+  (t², pool, or a measured `hrrCurve`), fuel mass and heat of combustion, radiative fraction, soot
+  yield, ignition (time, temperature), blow-off speed, critical water rate, oxygen limit, decay
+  fraction and foam blanket thickness. New library, nothing to migrate.
+
 - **Sensor library** (RFC 0015): `flash` and `rosette` appended to `sensor:lidar:scanPattern`;
   `sensor:lidar:channelElevations` (a channel table) and five `sensor:lidar:rosette:*` (fov,
   pointRate, speed1, speed2, prismRatio; no fallbacks) on `LidarAPI_1`; `sensor:camera:lensType`

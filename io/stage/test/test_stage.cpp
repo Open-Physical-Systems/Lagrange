@@ -1086,6 +1086,98 @@ apply:
     EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
 }
 
+// RFC 0022: a fuel item in USD keeps its fire attributes; an overlay names a t² growth class
+// for fire:alpha (NBSIR 85-3167's fast, 46.889 W/s²), and a radiative fraction over 1 is refused.
+TEST(Overlay, AppliesAFire) {
+    auto model = loadStage(writeText("firebot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+    }
+    def Cube "tray" ( prepend apiSchemas = ["PhysicsCollisionAPI", "FireAPI_1"] )
+    {
+        double size = 1
+        token fire:growth = "pool"
+        uniform token fire:class = "b"
+        double fire:poolBurningRate = 0.1
+        double fire:poolExtinction = 1.1
+        double fire:fuelMass = 5
+        double fire:heatOfCombustion = 4.4e7
+        double fire:radiativeFraction = 0.3
+        double fire:sootYield = 0.03
+        double[] fire:hrrCurve = [0, 0, 10, 1000]
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    {
+        const SchemaInstance* tray = only(model->world, "FireAPI_1");
+        ASSERT_NE(tray, nullptr);
+        EXPECT_EQ(tray->token("fire:growth"), "pool");
+        EXPECT_EQ(tray->token("fire:class"), "b");
+        EXPECT_EQ(tray->real("fire:poolExtinction"), 1.1);
+        EXPECT_EQ(tray->real("fire:ignitionTime"), -1.0);  // the fallback
+        EXPECT_EQ(tray->real("fire:decayFraction"), 0.2);  // the fallback
+        EXPECT_FALSE(tray->real("fire:alpha"));            // no fallback
+        EXPECT_EQ(tray->realArray("fire:hrrCurve").size(), 4U);
+    }
+    const std::filesystem::path overlay = writeText("firebot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: base
+    schemas:
+      FireAPI_1:
+        fire:alpha: fast
+        fire:hrrPerArea: 5.0e5
+        fire:fuelMass: 20
+        fire:heatOfCombustion: 1.2e7
+        fire:radiativeFraction: 0.3
+        fire:sootYield: 0.015
+        fire:criticalWaterRate: 0.05
+        fire:ignitionTime: 2.5
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string()));
+    const WorldView view(model->world);
+    const SchemaInstance* base = nullptr;
+    for (const SchemaInstance* s : view.instancesOf("FireAPI_1")) {
+        if (view.signalInstanceName(s->prim) == "base") {
+            base = s;
+        }
+    }
+    ASSERT_NE(base, nullptr);
+    EXPECT_EQ(base->real("fire:alpha"), 46.889);
+    EXPECT_EQ(base->real("fire:ignitionTime"), 2.5);
+    EXPECT_EQ(base->token("fire:growth"), "t_squared");  // the fallback
+    EXPECT_FALSE(fireGrowthAlpha("brisk"));
+    ASSERT_TRUE(fireGrowthAlpha("ultrafast"));
+    EXPECT_NEAR(*fireGrowthAlpha("ultrafast") * 75.0 * 75.0, 1.055056e6, 1e-3);
+
+    auto bad = loadStage(writeText("firebot2.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Cube "tray" ( prepend apiSchemas = ["PhysicsCollisionAPI", "FireAPI_1"] )
+    {
+        double fire:radiativeFraction = 1.4
+    }
+}
+)")
+                             .string());
+    ASSERT_FALSE(bad);
+    EXPECT_NE(bad.error().find("fire:radiativeFraction"), std::string::npos) << bad.error();
+}
+
 // A radar from an overlay, as the robot builder writes one (catalog `overlay_only`), is the
 // robot's radar with the settings the stage reader gives the same prim in USD: the schema's
 // fallbacks for what is left out. Its required attributes are reported together, and a sensor

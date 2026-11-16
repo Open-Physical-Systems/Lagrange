@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::stage {
@@ -68,6 +69,12 @@ struct SchemaAttribute {
 [[nodiscard]] std::optional<std::string> checkSchemaReal(const std::string& schema,
                                                          const std::string& attribute,
                                                          double value);
+
+/// The growth coefficient alpha (W/s²) of a named t² growth class, for `fire:alpha` in overlays
+/// and URDF (RFC 0022 §2): slow, medium and fast as Evans and Stroup's DETACT-T2 listing sets
+/// them (NBSIR 85-3167, 1985: 2.9306, 11.722, 46.889 W/s², 1000 Btu/s at 600, 300 and 150 s);
+/// ultrafast is 1000 Btu/s at 75 s. Nothing for another name.
+[[nodiscard]] std::optional<double> fireGrowthAlpha(std::string_view name);
 
 /// Applies an overlay file (docs/design/formats.md §9) to a loaded model: the project's API
 /// schemas by name, for robots from formats without them (URDF, SDFormat, MJCF) or added to a USD
