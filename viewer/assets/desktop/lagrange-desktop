@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# What Lagrange's desktop entry runs: sources a ROS 2 setup (the first argument, default
+# /opt/ros/lyrical/setup.bash; a colcon install's setup.bash for a source build) and opens the
+# viewer on its launcher. There is no terminal, so the output goes to a log:
+#   ${XDG_STATE_HOME:-~/.local/state}/lagrange/desktop.log
+setup="${1:-/opt/ros/lyrical/setup.bash}"
+[ $# -gt 0 ] && shift
+
+log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/lagrange"
+mkdir -p "$log_dir"
+log="$log_dir/desktop.log"
+exec >>"$log" 2>&1
+echo "--- $(date '+%F %T') lagrange-desktop: $setup"
+
+fail() {
+    echo "error: $*"
+    if command -v notify-send >/dev/null; then
+        notify-send --app-name=Lagrange -i io.github.Open_Physical_Systems.Lagrange \
+            "Lagrange did not start" "$* (log: $log)"
+    fi
+    exit 1
+}
+
+[ -f "$setup" ] || fail "no ROS 2 setup at $setup"
+# shellcheck disable=SC1090
+source "$setup" || fail "sourcing $setup failed"
+
+if command -v lagrange >/dev/null; then
+    exec lagrange viewer "$@"
+fi
+command -v ros2 >/dev/null || fail "ros2 is not on the PATH after sourcing $setup"
+exec ros2 run lagrange_viewer lagrange_viewer "$@"

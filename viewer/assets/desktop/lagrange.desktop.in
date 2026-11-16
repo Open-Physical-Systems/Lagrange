@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Lagrange
+GenericName=Robot Simulator
+Comment=Simulate robots with physics, power, heat, weather and sensors, with ROS 2
+Exec=@EXEC@
+Icon=io.github.Open_Physical_Systems.Lagrange
+Terminal=false
+Categories=Science;Education;Development;
+Keywords=robot;simulator;simulation;ROS;ROS 2;physics;drone;AMR;URDF;Gazebo;
+StartupNotify=true
+StartupWMClass=io.github.Open_Physical_Systems.Lagrange
