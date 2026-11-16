@@ -124,3 +124,86 @@ class "MagnetGripperAPI_1" (
         doc = "The direction the pole faces look, in this prim's frame."
     )
 }
+
+class "NozzleAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A water or foam nozzle (RFC 0022 section 8) on this prim: its origin is the nozzle's
+    exit and act:nozzle:axis the jet's direction. A pump holds act:nozzle:pressure (gauge) behind
+    it while act/<name>/command opens its valve (0 to 1, the share of the full flow). The exit
+    velocity is C_d sqrt(2 dp / rho), the mass flow rho A v0 times the opening, and the jet
+    pushes the nozzle's body back with the flow times v0. The jet flies ballistically, drag-free,
+    from the exit until it meets a collider, where its water lands on a disc that widens with
+    sprayHalfAngle; a fire whose burning area the disc covers takes the water (or foam). The
+    agent comes out of the tank it names until that is empty; with no tank, from a hose that
+    never runs dry."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:nozzle:diameter (
+        lagrangeUnit = "m"
+        doc = "Bore of the nozzle's exit. Required."
+    )
+    double act:nozzle:dischargeCoefficient (
+        lagrangeUnit = "1"
+        doc = "The nozzle's discharge coefficient C_d, 0 to 1, from its datasheet. Required."
+    )
+    double act:nozzle:pressure (
+        lagrangeUnit = "Pa"
+        doc = """The pump's pressure at the nozzle, gauge, while the valve is open. Required.
+        act/<name>/pressure_command (over 0) replaces it while given."""
+    )
+    uniform token act:nozzle:agent = "water" (
+        allowedTokens = ["water", "foam", "co2"]
+        doc = """What it sprays: water, foam solution (finished foam = the solution's volume
+        times foamExpansion), or CO2 (carried and weighed; its effect on fires is RFC 0022
+        step 7)."""
+    )
+    double act:nozzle:foamExpansion = 0 (
+        lagrangeUnit = "1"
+        doc = "The foam's expansion ratio: finished foam volume per solution volume. Required for foam."
+    )
+    double act:nozzle:sprayHalfAngle = 0 (
+        lagrangeUnit = "rad"
+        doc = "Half the spray cone's angle; 0 is a solid stream."
+    )
+    double act:nozzle:pumpEfficiency = 0 (
+        lagrangeUnit = "1"
+        doc = """The pump's efficiency, 0 to 1: it then draws dp Q / efficiency (act/<name>/
+        pump_power, and the power_demand of a signal-model ElectricalLoadAPI_1 on this prim).
+        0: no pump power."""
+    )
+    double3 act:nozzle:axis = (1, 0, 0) (
+        lagrangeUnit = "1"
+        doc = "The direction the jet leaves in, in this prim's frame."
+    )
+    rel act:nozzle:tank (
+        doc = "The prim with TankAPI_1 the agent comes from. None: a hose that never runs dry."
+    )
+}
+
+class "TankAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A tank of firefighting agent (RFC 0022 section 8) on this prim, which nozzles draw
+    from. Its liquid is carried as a weight at the prim's origin, shrinking as it empties: the
+    body's own mass is the empty tank's, and the tank's inertia and sloshing are left out."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:tank:capacity (
+        lagrangeUnit = "m3"
+        doc = "The volume of agent the tank holds when full. Required."
+    )
+    double act:tank:initial = 1 (
+        lagrangeUnit = "1"
+        doc = "How full it starts, 0 to 1."
+    )
+    double act:tank:density = 998.2 (
+        lagrangeUnit = "kg/m3"
+        doc = """The agent's density; the fallback is liquid water at 20 degrees C (998.2 kg/m3,
+        NIST Chemistry WebBook, saturated water)."""
+    )
+}

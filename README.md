@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (23)</summary>
+<details><summary>User guide (24)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -186,6 +186,7 @@ recorded to MCAP and replayed.
 - [Tutorial: test your own drone, step by step](docs/guide/tutorial-custom-drone.md)
 - [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
 - [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
+- [Tutorial: a robot puts out a fire](docs/guide/tutorial-fire.md)
 - [Tutorial: heat in the parts, and a robot's own interference](docs/guide/tutorial-heat-and-emi.md)
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
 - [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
@@ -198,7 +199,7 @@ recorded to MCAP and replayed.
 
 <details><summary>Physics reference (21)</summary>
 
-- [Actuators: grippers and lead screws](docs/physics/actuators.md)
+- [Actuators: grippers, lead screws, nozzles and tanks](docs/physics/actuators.md)
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)

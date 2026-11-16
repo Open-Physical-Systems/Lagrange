@@ -436,6 +436,35 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_SUCTION_SDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_suction.sdf"
     )
     lagrange_target_defaults(test_grippers_run)
+    # RFC 0022 §8: the firefighting AMR puts out the sample pallet fire.
+    ament_add_gtest(
+        test_nozzle_run
+        test/test_nozzle_run.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
+        TIMEOUT 300
+    )
+    target_link_libraries(test_nozzle_run lagrange_server)
+    target_compile_definitions(
+        test_nozzle_run
+        PRIVATE
+            LAGRANGE_TEST_FIREFIGHTER_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_firefighter/amr_firefighter.urdf"
+            LAGRANGE_TEST_WAREHOUSE_FIRE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_fire/warehouse_fire.usda"
+    )
+    lagrange_target_defaults(test_nozzle_run)
+    # RFC 0022 §5.2: a quadcopter's downwash blows out a small fire under it.
+    ament_add_gtest(
+        test_fire_downwash
+        test/test_fire_downwash.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
+        TIMEOUT 300
+    )
+    target_link_libraries(test_fire_downwash lagrange_server)
+    target_compile_definitions(
+        test_fire_downwash
+        PRIVATE
+            LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+    )
+    lagrange_target_defaults(test_fire_downwash)
     # The rigid-body conformance suite (RFC 0008 §5), also installed for third-party backends.
     ament_add_gtest(
         lagrange_physics_conformance

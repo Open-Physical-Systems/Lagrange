@@ -121,4 +121,32 @@ double curveHrr(std::span<const double> curve, double sinceIgnition) {
     return curve[2 * n - 1];
 }
 
+double discOverlapArea(double distance, double r1, double r2) {
+    const double d = std::abs(distance);
+    if (!(r1 > 0.0) || !(r2 > 0.0) || d >= r1 + r2) {
+        return 0.0;
+    }
+    const double small = std::min(r1, r2);
+    if (d <= std::abs(r1 - r2)) {
+        return std::numbers::pi * small * small;
+    }
+    // The lens: r1² acos(c1) + r2² acos(c2) − ½ √((−d+r1+r2)(d+r1−r2)(d−r1+r2)(d+r1+r2)).
+    const double c1 = std::clamp((d * d + r1 * r1 - r2 * r2) / (2.0 * d * r1), -1.0, 1.0);
+    const double c2 = std::clamp((d * d + r2 * r2 - r1 * r1) / (2.0 * d * r2), -1.0, 1.0);
+    const double k = (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2);
+    return r1 * r1 * std::acos(c1) + r2 * r2 * std::acos(c2) - 0.5 * std::sqrt(std::max(k, 0.0));
+}
+
+double sprayHitFraction(double distance, double footprint, double burningRadius) {
+    if (!(burningRadius > 0.0) || !std::isfinite(distance)) {
+        return 0.0;
+    }
+    if (!(footprint > 0.0)) {
+        return std::abs(distance) <= burningRadius ? 1.0 : 0.0;
+    }
+    return std::clamp(discOverlapArea(distance, footprint, burningRadius) /
+                          (std::numbers::pi * footprint * footprint),
+                      0.0, 1.0);
+}
+
 }  // namespace lagrange::fire

@@ -10,9 +10,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -1138,6 +1140,71 @@ void addGrippers(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId linkPr
     }
 }
 
+/// A link's <nozzle> and <water_tank> (RFC 0022 §8) as NozzleAPI_1 and TankAPI_1: on the link's
+/// prim, or with name= or xyz= on a prim of their own under it. A nozzle's tank= names the tank
+/// (its name=, else its link), resolved once every link is read: into `tanks` go the nozzle's
+/// schema instance and that name.
+void addNozzles(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId linkPrim, BodyId body,
+                std::vector<std::pair<std::size_t, std::string>>& tanks) {
+    World& world = robot.world;
+    const auto prim = [&](const tinyxml2::XMLElement& e, const char* fallback) {
+        const auto xyz = threeNumbers(e, "xyz");
+        const char* name = e.Attribute("name");
+        const bool named = name != nullptr && *name != '\0';
+        if (!xyz && !named) {
+            return linkPrim;
+        }
+        const std::string own = named ? name : fallback;
+        const PrimId p = world.addPrim(world.prims.paths[linkPrim.index] + "/" + own, own);
+        world.prims.body[p.index] = body;
+        if (xyz) {
+            world.prims.poseInBody[p.index].position = {(*xyz)[0], (*xyz)[1], (*xyz)[2]};
+        }
+        return p;
+    };
+    const auto reals = [](const tinyxml2::XMLElement& e, SchemaInstance& s, const char* prefix,
+                          std::initializer_list<std::pair<const char*, const char*>> names) {
+        for (const auto& [xml, attribute] : names) {
+            double value = 0.0;
+            if (e.QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                s.reals[std::string(prefix) + attribute] = value;
+            }
+        }
+    };
+    for (const tinyxml2::XMLElement* e = gazebo.FirstChildElement("water_tank"); e != nullptr;
+         e = e->NextSiblingElement("water_tank")) {
+        SchemaInstance s;
+        s.schema = "TankAPI_1";
+        s.prim = prim(*e, "water_tank");
+        reals(*e, s, "act:tank:",
+              {{"capacity", "capacity"}, {"initial", "initial"}, {"density", "density"}});
+        world.schemaInstances.push_back(std::move(s));
+    }
+    for (const tinyxml2::XMLElement* e = gazebo.FirstChildElement("nozzle"); e != nullptr;
+         e = e->NextSiblingElement("nozzle")) {
+        SchemaInstance s;
+        s.schema = "NozzleAPI_1";
+        s.prim = prim(*e, "nozzle");
+        reals(*e, s, "act:nozzle:",
+              {{"diameter", "diameter"},
+               {"discharge_coefficient", "dischargeCoefficient"},
+               {"pressure", "pressure"},
+               {"foam_expansion", "foamExpansion"},
+               {"spray_half_angle", "sprayHalfAngle"},
+               {"pump_efficiency", "pumpEfficiency"}});
+        if (const char* agent = e->Attribute("agent"); agent != nullptr) {
+            s.tokens["act:nozzle:agent"] = agent;
+        }
+        if (const auto axis = threeNumbers(*e, "axis")) {
+            s.realArrays["act:nozzle:axis"] = *axis;
+        }
+        world.schemaInstances.push_back(std::move(s));
+        if (const char* tank = e->Attribute("tank"); tank != nullptr && *tank != '\0') {
+            tanks.emplace_back(world.schemaInstances.size() - 1, tank);
+        }
+    }
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 /// Why a sensor of the file cannot be read (it refuses the model), or empty.
 std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
@@ -1147,10 +1214,27 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
     }
     const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
     World& world = robot.world;
+    std::vector<std::pair<std::size_t, std::string>> nozzleTanks;
     for (const tinyxml2::XMLElement* gazebo = top != nullptr ? top->FirstChildElement("gazebo")
                                                              : nullptr;
          gazebo != nullptr; gazebo = gazebo->NextSiblingElement("gazebo")) {
         const char* reference = gazebo->Attribute("reference");
+        // RFC 0022 §8: <water_tank capacity= initial=/> and <nozzle diameter=
+        // discharge_coefficient= pressure= tank= .../> on the link.
+        if (reference != nullptr && (gazebo->FirstChildElement("nozzle") != nullptr ||
+                                     gazebo->FirstChildElement("water_tank") != nullptr)) {
+            bool found = false;
+            for (std::size_t b = firstBody; b < world.bodies.names.size() && !found; ++b) {
+                if (world.bodies.names[b] == reference) {
+                    addNozzles(robot, *gazebo, world.bodies.prim[b],
+                               BodyId{static_cast<std::uint32_t>(b)}, nozzleTanks);
+                    found = true;
+                }
+            }
+            if (!found) {
+                robot.notes.push_back(std::string("nozzle/water_tank: no link ") + reference);
+            }
+        }
         // <sensor_material preset="asphalt" reflectivity_905="0.1" reflectivity_1550="0.1"
         // specular="0" transmission="0" retroreflective="false"/>: what a lidar sees of the link.
         if (const tinyxml2::XMLElement* surface = gazebo->FirstChildElement("sensor_material");
@@ -1435,6 +1519,19 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
             robot.scene.prims.push_back(std::move(prim));
             robot.sensorPrim.push_back(static_cast<std::uint32_t>(robot.scene.prims.size() - 1));
         }
+    }
+    // Each nozzle's tank=, by the tank's prim name (its name=, else its link's).
+    for (const auto& [instance, name] : nozzleTanks) {
+        std::optional<PrimId> tank;
+        for (const SchemaInstance& s : world.schemaInstances) {
+            if (s.schema == "TankAPI_1" && world.prims.instanceNames[s.prim.index] == name) {
+                tank = s.prim;
+            }
+        }
+        if (!tank) {
+            return "nozzle: tank=\"" + name + "\" names no <water_tank>";
+        }
+        world.schemaInstances[instance].relationships["act:nozzle:tank"] = {*tank};
     }
     return {};
 }

@@ -1,4 +1,4 @@
-# Actuators: grippers and lead screws
+# Actuators: grippers, lead screws, nozzles and tanks
 
 Grippers that hold a part without fingers (RFC 0020, phase 1): a suction cup
 (`SuctionGripperAPI_1`) and an electromagnet or electropermanent magnet (`MagnetGripperAPI_1`).
@@ -260,6 +260,66 @@ stiffness and backlash, the change of friction with speed (a single Coulomb coef
 motor's extra torque to lower a self-locking screw (with η_back clamped at 0 the friction equals
 the load, so lowering needs only a push), and end-of-travel switches (the joint's limits).
 `lagrange check` still sizes a screw's holding by its motor.
+## The nozzle and tank
+
+A water, foam or CO2 nozzle (`NozzleAPI_1`, RFC 0022 §8) on a link, fed from a tank
+(`TankAPI_1`) or a hose, its valve on `act/<z>/command` (0 to 1).
+
+**Flow.** Behind the pump's gauge pressure Δp (`act:nozzle:pressure`, or
+`act/<z>/pressure_command` while over 0), the exit velocity is Bernoulli's with the nozzle's
+discharge coefficient, `v0 = C_d·√(2Δp/ρ)`, and the mass flow `ṁ = u·ρ·A·v0`, `A = πd²/4`, `u` the
+valve's opening. The opening scales the flow at the same exit velocity (a valve pulsing between
+shut and open); a throttling valve's pressure drop is not modelled: lower the pressure instead.
+The pump draws `Δp·Q/η` (`act/<z>/pump_power`, and the `power_demand` of a signal-model
+`ElectricalLoadAPI_1` on the nozzle's prim, so the bus carries it).
+
+**Reaction.** The jet pushes the nozzle's body back with `F = ṁ·v0` against the jet, at the
+exit (`body/<b>/wrench/nozzle`): 4.5 N for the sample's 0.48 kg/s at 9.5 m/s, enough to roll a
+robot on free wheels (the tutorial holds them).
+
+**Path.** Ballistic and drag-free from the exit, `x(t) = x0 + v0·t + g·t²/2`, cast as 5 cm chords
+against every collider at the bodies' poses (the scene rays the lidar uses) until one is met,
+passing through the nozzle's own robot (its bodies joined by joints) and whatever the exit is
+inside. On level ground it lands where the projectile does,
+`R = v·cos θ·(v·sin θ + √(v²·sin²θ + 2gh))/g`. A real stream breaks up and falls short of this
+(RFC 0022 §8: no openly readable fire-stream reach correlation was found, TODO(verify)), so
+treat the reach as an upper bound. The landing disc's radius is `d/2 + L·tan(sprayHalfAngle)`, `L`
+the path's length. The fire domain turns the impact, flow and disc into each fire's water
+([fire.md](fire.md#water-from-a-nozzle)).
+
+**Tank.** Its agent is a weight `m·g` at the tank's prim (`body/<b>/wrench/tank`), `m` falling by
+`ṁ·dt` each step until empty; open nozzles share what is left by their demand. The body's own
+mass is the empty tank's: the engines' masses do not change during a run, and the water's
+inertia and sloshing are left out (RFC 0022 open question 12), which understates the inertia of
+a drone carrying a large tank.
+
+| Signal | Type | Unit | |
+|---|---|---|---|
+| `act/<z>/command` | Scalar | 1 | in: the valve, 0 to 1 |
+| `act/<z>/pressure_command` | Scalar | Pa | in: over 0 replaces `act:nozzle:pressure` |
+| `act/<z>/flow` | Scalar | kg/s | |
+| `act/<z>/velocity` | Scalar | m/s | exit velocity while it sprays |
+| `act/<z>/reaction` | Scalar | N | `ṁ·v0` |
+| `act/<z>/impact` | Vec3 | m | where the jet lands, world-local; NaN when it does not |
+| `act/<z>/landed` | Bool | 1 | |
+| `act/<z>/footprint` | Scalar | m | radius of the landing disc |
+| `act/<z>/path` | ScalarArray | m | 32 points along the jet, NaN past its end |
+| `act/<z>/tank_mass` | Scalar | kg | |
+| `act/<z>/pump_power` | Scalar | W | |
+| `body/<b>/wrench/nozzle`, `body/<b>/wrench/tank` | Wrench | N | |
+
+ROS: `/<z>/command` and `/<z>/pressure_command` (`std_msgs/Float64`) in; `/<z>/tank`,
+`/<z>/flow` (`std_msgs/Float64`) and `/<z>/impact` (`geometry_msgs/Vector3Stamped`, frame
+`world`) out. `Server::commandActuator(name, value)` opens it from code. The substitutes: `ideal`
+sprays as the model does (a nozzle has no dynamics to idealise), `zero` and `constant` keep every
+valve shut. Everything runs on the CPU on every tier, deterministically, at 10 ms.
+
+Checked by `modules/actuators/test/test_nozzle.cpp`: Bernoulli's `v0` and `ṁ`; the landing point
+against the closed form at 0°, 15°, 30°, 45° and 60° from 0.5 m (worst 2.4e-5, against RFC
+0022's 0.5 %); 45° the longest on level ground, 30° and 60° landing together, straight up rising
+`v²/2g` and coming back down; the reaction `ρAv0²` and its moment; the tank at `m0 − ṁ·t` and its
+weight, empty at `m0/ṁ`; the shut substitute; the same run twice. `server/test/test_nozzle_run.cpp`
+runs the firefighting AMR (docs/guide/tutorial-fire.md).
 
 ## References
 

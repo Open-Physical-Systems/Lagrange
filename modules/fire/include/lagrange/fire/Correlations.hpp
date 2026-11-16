@@ -71,4 +71,14 @@ inline constexpr double kLatentHeatWater = 2.256e6;  // J/kg at 100 °C (RFC 002
 /// value after its end, 0 before its start.
 [[nodiscard]] double curveHrr(std::span<const double> curve, double sinceIgnition);
 
+/// The area (m²) two discs of radii `r1` and `r2` (m) share when their centres are `distance`
+/// (m) apart: the lens of two circles, π min(r)² when one holds the other, 0 when apart.
+[[nodiscard]] double discOverlapArea(double distance, double r1, double r2);
+
+/// The share of a nozzle's spray that lands on a fire (RFC 0022 §8): the overlap of its landing
+/// disc (radius `footprint`, m, centred `distance` m from the fire's centre, horizontally) with
+/// the burning area taken as a disc of the same area (radius `burningRadius`), over the landing
+/// disc's area. A footprint of 0 (a point) is 1 inside the burning disc and 0 outside.
+[[nodiscard]] double sprayHitFraction(double distance, double footprint, double burningRadius);
+
 }  // namespace lagrange::fire

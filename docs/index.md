@@ -225,6 +225,7 @@ print(sim.read("body/base_link/pose"))
 | Find a sensor, add it, read it, break it | [Sensors](guide/sensors.md): every sensor Lagrange simulates, by robot |
 | Drive a car, or run Autoware | [Tutorial: a car in a city block](guide/tutorial-cars.md), then [Autoware](guide/autoware.md) |
 | Heat, and a robot's own EMI | [Tutorial: heat in the parts and a robot's own interference](guide/tutorial-heat-and-emi.md) |
+| Fight a fire | [Tutorial: a robot puts out a fire](guide/tutorial-fire.md) |
 | Know how a number is computed | [Physics reference](physics/index.md): every model, its equations and its checks |
 | Extend it | [Writing a module](guide/writing-a-module.md), [Writing a plugin](guide/writing-a-plugin.md) |
 
@@ -252,6 +253,7 @@ guide/tutorial-arm
 guide/tutorial-cars
 guide/tutorial-humans
 guide/tutorial-heat-and-emi
+guide/tutorial-fire
 guide/autoware
 guide/run-file
 guide/builder

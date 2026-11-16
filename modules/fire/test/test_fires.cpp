@@ -7,6 +7,8 @@
 #include "lagrange/thermal/ThermalNetwork.hpp"
 
 #include <cmath>
+#include <cstdio>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -345,6 +347,162 @@ TEST(Fires, TheSameRunTwiceIsIdentical) {
         return p->seen;
     };
     EXPECT_EQ(once(), once());
+}
+
+// ------------------------------------------------------------------ nozzles (RFC 0022 §8)
+
+/// Stands in for the actuators domain: one nozzle's jet, landing at a fixed point from `from` s.
+class Jet final : public IModule {
+public:
+    Jet(double flow, Vec3 impact, double footprint, double from)
+        : flow_(flow), impact_(impact), footprint_(footprint), from_(from) {}
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"actuators", "jet", 1, 0, false, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 10_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        const auto out = [&d](const char* name, SignalType type, Unit unit) {
+            SignalSpec s;
+            s.name = name;
+            s.type = type;
+            s.unit = unit;
+            s.frame = type == SignalType::Vec3 ? "world_local" : "";
+            return d.output(s);
+        };
+        flowId_ = out("act/hose/flow", SignalType::Scalar, Unit{{.mass = 1, .time = -1}});
+        impactId_ = out("act/hose/impact", SignalType::Vec3, units::m);
+        footprintId_ = out("act/hose/footprint", SignalType::Scalar, units::m);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        write(bus, false);
+        return {};
+    }
+    Status step(const StepContext& c, SignalBus& bus) override {
+        write(bus, c.t.seconds() + 1e-9 >= from_);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    void write(SignalBus& bus, bool on) const {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        bus.write(flowId_, on ? flow_ : 0.0);
+        bus.writeN(impactId_, on ? impact_ : Vec3{nan, nan, nan});
+        bus.write(footprintId_, on ? footprint_ : 0.0);
+    }
+    double flow_;
+    Vec3 impact_;
+    double footprint_, from_;
+    SignalId flowId_, impactId_, footprintId_;
+};
+
+/// The pallet with a nozzle prim of `agent` (its jet comes from Jet).
+World palletAndHose(const char* agent = "water") {
+    World w = palletAnd({});
+    SchemaInstance s;
+    s.schema = "NozzleAPI_1";
+    s.prim = primAt(w, "hose", {-4.0, 0.0, 0.5});
+    s.reals = {{"act:nozzle:diameter", 0.008},
+               {"act:nozzle:dischargeCoefficient", 0.95},
+               {"act:nozzle:pressure", 5e4},
+               {"act:nozzle:foamExpansion", 8.0}};
+    s.tokens["act:nozzle:agent"] = agent;
+    w.schemaInstances.push_back(s);
+    return w;
+}
+
+struct HoseRun {
+    std::vector<double> hrr, rate, state, foam;
+};
+HoseRun hoseRun(const World& world, double flow, const Vec3& impact, double footprint, double from,
+                double until) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<Fires>());
+    scheduler.add(std::make_unique<Jet>(flow, impact, footprint, from));
+    auto hrr = std::make_unique<Probe>("fire/pallet/hrr", units::W);
+    auto rate = std::make_unique<Probe>("fire/pallet/water_rate",
+                                        Unit{{.length = -2, .mass = 1, .time = -1}});
+    auto state = std::make_unique<Probe>("fire/pallet/state", units::one, SignalType::Int);
+    auto foam = std::make_unique<Probe>("fire/pallet/foam_coverage", units::one);
+    Probe* q = hrr.get();
+    Probe* w = rate.get();
+    Probe* st = state.get();
+    Probe* blanket = foam.get();
+    scheduler.add(std::move(hrr));
+    scheduler.add(std::move(rate));
+    scheduler.add(std::move(state));
+    scheduler.add(std::move(foam));
+    const auto wired = scheduler.wire(WorldView(world));
+    EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(until * 1e9)}).ok());
+    return {q->seen, w->seen, st->seen, blanket->seen};
+}
+
+// The water a jet gives a fire is its flow times the share of its landing disc on the burning
+// area, over that area: all of it in the middle, the lens's share on the edge, none on the floor
+// beside it or on anything above it.
+TEST(Fires, AJetWetsTheFireByTheShareOfItsDiscOnIt) {
+    const World world = palletAndHose();
+    const double area = 1.0;  // the pallet's 1 m × 1 m
+    const double radius = std::sqrt(area / std::numbers::pi);
+    const double flow = 0.3;
+    const auto rateAt = [&](const Vec3& impact, double footprint) {
+        return hoseRun(world, flow, impact, footprint, 1.0, 3.0).rate.back();
+    };
+    EXPECT_NEAR(rateAt({0.1, 0.0, 0.6}, 0.2), flow / area, 1e-12);
+    // On the side of the fuel, halfway up: still the fuel.
+    EXPECT_NEAR(rateAt({-0.5, 0.0, 0.3}, 0.0), flow / area, 1e-12);
+    const double share = discOverlapArea(radius, 0.2, radius) / (std::numbers::pi * 0.04);
+    EXPECT_NEAR(rateAt({radius, 0.0, 0.6}, 0.2), flow * share / area, 1e-12);
+    std::printf("on the edge: %.4f of the spray lands (%.5f kg/(m2 s))\n", share,
+                flow * share / area);
+    EXPECT_EQ(rateAt({2.0, 0.0, 0.0}, 0.2), 0.0);  // the floor beside it
+    EXPECT_EQ(rateAt({0.0, 0.0, 2.5}, 0.2), 0.0);  // a ceiling over it
+}
+
+// A jet above the critical rate decays the fire as Evans gives it, Q(t_a)·e^(−(t − t_a)/τ) with
+// τ = 3.0·w''^(−1.85), and puts it out when Q is down to 1 % of Q(t_a): at τ·ln 100 after the
+// water arrives, to the step.
+TEST(Fires, AJetAboveTheCriticalRatePutsTheFireOutInEvansTime) {
+    const World world = palletAndHose();
+    const double flow = 0.3;  // kg/s over 1 m²: 0.3 mm/s, ten times the critical rate
+    const double tau = 3.0 * std::pow(flow, -1.85);
+    const double arrives = 30.0;
+    // The fire reads the jet's previous step: on from 29.95 s, it is there at the 30.0 s step.
+    const HoseRun r = hoseRun(world, flow, {0.0, 0.0, 0.6}, 0.1, arrives - 0.05, 200.0);
+    // Index i ends at 0.1·(i + 1) s; the step from 30.0 is the first with water.
+    const double before = r.hrr[299];
+    EXPECT_NEAR(before, 46.889 * 30.0 * 30.0, 1e-6 * before);
+    EXPECT_NEAR(r.hrr[349], before * std::exp(-5.0 / tau), 1e-6 * before);
+    const double out = tau * std::log(100.0);
+    std::size_t first = 0;
+    while (first < r.state.size() && r.state[first] != 4.0) {
+        ++first;
+    }
+    ASSERT_LT(first, r.state.size());
+    const double when = 0.1 * static_cast<double>(first + 1) - arrives;
+    std::printf("w'' %.2f mm/s: tau %.2f s, out after %.1f s (tau ln 100 = %.2f s)\n", flow, tau,
+                when, out);
+    EXPECT_NEAR(when, out, 0.1 + 1e-9);
+    EXPECT_EQ(r.hrr.back(), 0.0);
+    // Below the critical rate it still grows.
+    const HoseRun weak = hoseRun(world, 0.01, {0.0, 0.0, 0.6}, 0.1, arrives - 0.05, 40.0);
+    EXPECT_GT(weak.hrr.back(), weak.hrr[299]);
+}
+
+// A foam nozzle lays a blanket instead: no water, the coverage grows.
+TEST(Fires, AFoamJetSmothers) {
+    World world = palletAndHose("foam");
+    for (SchemaInstance& s : world.schemaInstances) {
+        if (s.schema == "FireAPI_1") {
+            s.reals["fire:foamBlanketThickness"] = 0.05;
+        }
+    }
+    const HoseRun r = hoseRun(world, 0.3, {0.0, 0.0, 0.6}, 0.1, 1.0, 5.0);
+    EXPECT_EQ(r.rate.back(), 0.0);
+    EXPECT_GT(r.foam.back(), 0.0);
 }
 
 }  // namespace

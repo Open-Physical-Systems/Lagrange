@@ -55,8 +55,9 @@ lagrange assets/worlds/warehouse_fire/warehouse_fire.yaml
 ```
 
 `--fire-water NAME=RATE[@T]` (run file `fire_water: [{fire, rate, at}]`) puts water on a fire at
-RATE kg/(m²·s), which is mm/s of water, from T s on. It stands in for a sprinkler until nozzles
-and sprinklers are placed in the scene (RFC 0022 step 6). Plugins and ROS topic inputs can write
+RATE kg/(m²·s), which is mm/s of water, from T s on. It stands in for a sprinkler. A robot's
+nozzle (`NozzleAPI_1`, [the nozzle and tank](actuators.md#the-nozzle-and-tank)) wets the fire its
+jet lands on, by the share of the jet's landing disc that covers the burning area. Plugins and ROS topic inputs can write
 `fire/<n>/water_supply` and `fire/<n>/foam_supply` instead; rain (`env/rain_rate`) falls on every
 fire when the weather runs.
 
@@ -84,7 +85,8 @@ This is a modelling choice (RFC 0022 open question 5), not a measured law.
 Handbook 5th ed. ch. 13), never below 0. In wind it leans by the AGA correlation as Mudan and
 Croce give it: `u* = u_w/(g·ṁ''·D/ρ_a)^(1/3)`, `cos θ = 1` for `u* ≤ 1` and `u*^(−1/2)` above, with
 `u_w` the horizontal wind (`env/wind/velocity`) plus the rotors' wake at the fire
-(`fire/<n>/downwash`, which the aerodynamics domain will write, RFC 0022 step 6) and `ṁ''` the
+(`fire/<n>/downwash`, which the aerodynamics domain writes whenever rotors fly: every robot's
+wake half way up the flame, since at the base itself, on the fuel, a wake stagnates) and `ṁ''` the
 fire's mass burning flux. ρ_a is `env/air_density` or the site's; without either the flame stays
 upright. `fire/<n>/flame_tilt` is the flame's axis.
 
@@ -175,6 +177,24 @@ for fuel items) goes out at the step the air speed at it passes that speed, whil
 `fire:blowOffMaxHrr` if given. Large fires do not blow off: they lean. Wind does not raise a pool
 fire's burning rate in this model (RFC 0022 open question 8).
 
+## Water from a nozzle
+
+Each nozzle's jet (actuators.md) ends at `act/<z>/impact` with `act/<z>/flow` kg/s spread over a
+disc of radius `act/<z>/footprint`. A jet that lands on a fire's fuel (from the bottom of its
+colliders to the base, within 5 cm) gives it
+
+`w'' = ṁ·f/A`, with `f = A_overlap(d, r_f, R)/(π·r_f²)`,
+
+`A` the burning area, `R = √(A/π)` the disc of the same area, `r_f` the footprint, `d` the
+horizontal distance from the fire's centre to the impact and `A_overlap` the lens two circles
+share. A solid stream (footprint 0) counts whole inside the disc and not at all outside it. Foam
+solution lays `ṁ/ρ·expansion·f/A` m/s of finished foam instead; CO2 waits for RFC 0022 step 7.
+With `w''` over the fuel's critical rate the fire decays by Evans' law, `τ = 3.0·w''^(−1.85)` s,
+and is out at `τ·ln 100` after the water arrives (the 1 % threshold). The sample robot's 0.48 kg/s
+over the 0.96 m² pallet is 0.50 mm/s, above the 0.026 to 0.133 mm/s Evans fitted, so its τ of
+10.9 s is an extrapolation of the power law (`test_nozzle_run` checks the run against it, not the
+law against a crib test).
+
 ## Signals
 
 | Signal | Type | Unit | |
@@ -195,21 +215,24 @@ fire's burning rate in this model (RFC 0022 open question 8).
 | `fire/<n>/ignite` | Bool | 1 | in |
 | `fire/<n>/water_supply` | Scalar | kg/(m²·s) | in |
 | `fire/<n>/foam_supply` | Scalar | m/s | in |
-| `fire/<n>/downwash` | Vec3 | m/s | in, from the aerodynamics domain (step 6) |
+| `fire/<n>/downwash` | Vec3 | m/s | in, from the aerodynamics domain |
+| `act/<z>/flow`, `impact`, `footprint` | | | in, every nozzle's jet (actuators.md) |
 | `fire_radiation/<node>/loss_power` | Scalar | W | per thermal node with a radiative area |
 | `env/smoke/extinction` | Field3D | 1/m | the smoke's σ at 633 nm, at 2 Hz |
 | `env/smoke/mass` | Scalar | kg | soot in the smoke box |
 
 ## Not yet
 
-Flames seen by thermal and visible cameras (and smoke in the thermal band), the nozzle and tank,
-the downwash at fires (and on the puffs), smoke in the live air box, compartments and oxygen, the
+Flames seen by thermal and visible cameras (and smoke in the thermal band), the downwash on the
+smoke puffs, smoke in the live air box, compartments and oxygen, the
 viewer's flames and smoke volume, heat flux on people, and `lagrange fds` are later steps of RFC
 0022.
 
 ## Checked against
 
-`modules/fire/test/test_correlations.cpp`, `test_fires.cpp` and `test_smoke.cpp`, and the sensors'
+`modules/fire/test/test_correlations.cpp` (the lens of two discs), `test_fires.cpp` (a jet's
+water by its share, Evans' decay under a jet and the fire out at `τ·ln 100` to the step, foam),
+`test_smoke.cpp`, `server/test/test_nozzle_run.cpp`, `test_fire_downwash.cpp`, and the sensors'
 smoke tests (`test_sensors`, `test_camera`, `test_kinds_visibility_sensor`,
 `test_weather_effects`); each test states its tolerance and source.
 
