@@ -22,6 +22,7 @@ find_package(lagrange_traffic REQUIRED)
 find_package(lagrange_humans REQUIRED)
 find_package(lagrange_hydrodynamics REQUIRED)
 find_package(lagrange_tether REQUIRED)
+find_package(lagrange_fire REQUIRED)
 find_package(lagrange_opendrive REQUIRED)
 find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
@@ -102,6 +103,7 @@ target_link_libraries(
         lagrange_humans::lagrange_humans
         lagrange_hydrodynamics::lagrange_hydrodynamics
         lagrange_tether::lagrange_tether
+        lagrange_fire::lagrange_fire
         lagrange_opendrive::lagrange_opendrive
         lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
@@ -253,10 +255,11 @@ if(BUILD_TESTING)
         test/test_sensor_faults.cpp
         test/test_multicopter.cpp
         test/test_tether_run.cpp
+        test/test_fire_run.cpp
         test/test_downwash_pair.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire"
         # About 110 s alone on a 20-core laptop; a loaded machine (parallel builds) needs more.
         TIMEOUT 400
     )
@@ -393,7 +396,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire"
         TIMEOUT 180
     )
     target_link_libraries(

@@ -1,0 +1,133 @@
+#usda 1.0
+(
+    """Lagrange fire schemas (RFC 0022). Codeless: the fire domain reads the attributes by name.
+    FireAPI_1 makes a prim a fuel item (a pallet, a pool tray, a bin) that can burn: its heat
+    release rate grows and burns out, it heats what is near it, it spreads, and water, foam
+    and wind put it out. Units: the lagrangeUnit field of each attribute. Required values come
+    from the fuel's data, with a source; none is a fallback."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeFire"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "FireAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A fuel item that can burn (RFC 0022), on its prim: its collider gives the burning
+    footprint and the top of the flame's base, its pose places it, and it moves with its body."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    token fire:preset (
+        doc = """A fuel preset; explicit attributes override it. Presets ship empty until their
+        cited values are confirmed (RFC 0022 open question 3)."""
+    )
+    uniform token fire:class = "a" (
+        allowedTokens = ["a", "b", "c"]
+        doc = """a: ordinary combustible solids; b: flammable liquids (water does not put it
+        out); c: energised electrical equipment (water raises the hazard flag). OSHA 29 CFR
+        1910.155(c)."""
+    )
+    uniform token fire:growth = "t_squared" (
+        allowedTokens = ["t_squared", "pool"]
+        doc = """t_squared: Q = alpha (t - t_ignition)^2 up to hrrPerArea times the area; pool:
+        Babrauskas' pool fire, Q = poolBurningRate (1 - exp(-poolExtinction D)) heatOfCombustion
+        times the area. hrrCurve replaces both."""
+    )
+    double fire:alpha (
+        lagrangeUnit = "W/s2"
+        doc = """Growth coefficient. Required for t_squared. Overlays and URDF also take slow,
+        medium, fast (NBSIR 85-3167) and ultrafast."""
+    )
+    double fire:hrrPerArea (
+        lagrangeUnit = "W/m2"
+        doc = "Heat release rate per unit area at full involvement. Required for t_squared."
+    )
+    double fire:area (
+        lagrangeUnit = "m2"
+        doc = "Burning area at full involvement; unauthored: the footprint of the prim's collider."
+    )
+    double fire:fuelMass (
+        lagrangeUnit = "kg"
+        doc = "Combustible mass: it burns out when this is gone. Required."
+    )
+    double fire:heatOfCombustion (
+        lagrangeUnit = "J/kg"
+        doc = "Effective heat of combustion. Required."
+    )
+    double fire:radiativeFraction (
+        lagrangeUnit = "1"
+        doc = "chi_r, the share of the heat release radiated, 0 to 1. Required."
+    )
+    double fire:sootYield (
+        lagrangeUnit = "kg/kg"
+        doc = "Soot per mass of fuel burnt. Required."
+    )
+    double fire:poolBurningRate (
+        lagrangeUnit = "kg/(m2.s)"
+        doc = "m''_inf, the large-pool mass burning rate. Required for pool."
+    )
+    double fire:poolExtinction (
+        lagrangeUnit = "1/m"
+        doc = "k beta, the pool's extinction-absorption product. Required for pool."
+    )
+    double fire:flameTemperature (
+        lagrangeUnit = "K"
+        doc = "For thermal cameras. Required when a camera sees the flame."
+    )
+    double fire:flameAbsorption (
+        lagrangeUnit = "1/m"
+        doc = "Soot absorption coefficient kappa of the flame. Required when a camera sees it."
+    )
+    double fire:ignitionTemperature (
+        lagrangeUnit = "K"
+        doc = """It ignites when the thermal node on its prim (ThermalAPI_1) reaches this;
+        unauthored: never ignited by heat."""
+    )
+    double fire:ignitionTime = -1 (
+        lagrangeUnit = "s"
+        doc = "When the run ignites it; below 0: not burning at the start."
+    )
+    double fire:blowOffSpeed (
+        lagrangeUnit = "m/s"
+        doc = """Air speed at the flame that blows it out, from a measurement; unauthored: it
+        never blows off."""
+    )
+    double fire:blowOffMaxHrr (
+        lagrangeUnit = "W"
+        doc = "Blow-off applies only while the heat release rate is below this; unauthored: always."
+    )
+    double fire:criticalWaterRate (
+        lagrangeUnit = "kg/(m2.s)"
+        doc = """Water application rate at and above which the fire stops growing and decays
+        (Evans, NISTIR 5254). Required for classes a and c."""
+    )
+    double fire:oxygenLimit (
+        lagrangeUnit = "1"
+        doc = "Oxygen mole fraction below which the flame goes out. Required in a compartment."
+    )
+    double fire:decayFraction = 0.2 (
+        lagrangeUnit = "1"
+        doc = """Share of the fuel mass over which the heat release rate falls linearly to zero
+        as the fuel runs out (a modelling choice, RFC 0022 open question 5)."""
+    )
+    double[] fire:hrrCurve (
+        lagrangeUnit = "1"
+        doc = """A measured curve that replaces the growth law: pairs of time since ignition (s)
+        and heat release rate (W), times increasing."""
+    )
+    double fire:foamBlanketThickness (
+        lagrangeUnit = "m"
+        doc = """Depth of finished foam that covers the whole burning area; unauthored: foam
+        does nothing."""
+    )
+}

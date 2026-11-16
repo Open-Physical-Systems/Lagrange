@@ -44,6 +44,7 @@ EXPECTED = {
     "joint": ["JointDynamicsAPI_1"],
     "world": ["WorldTileAPI_1"],
     "tether": ["TetherAPI_1"],
+    "fire": ["FireAPI_1"],
 }
 
 

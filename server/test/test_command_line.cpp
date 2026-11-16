@@ -66,6 +66,10 @@ TEST(CommandLine, RefusesNumbersThatAreNotFiniteOrDoNotFit) {
              {"--emi-motor-leads", "inf"},
              {"--emi-motor-leads", "0.1,1,2"},
              {"--tether", "0,0,3,base_link,inf"},
+             {"--fire-water", "pallet=inf"},
+             {"--fire-water", "pallet=0.1@nan"},
+             {"--fire-water", "=0.1"},
+             {"--fire-water", "pallet"},
              {"--weather", "temperature=nan,pressure=101325,relative_humidity=0.5"},
              {"--spawn", "1,2,3,4,5"},
              {"--spawn", "1,2,"},
@@ -95,6 +99,8 @@ TEST(CommandLine, RefusesNumbersThatAreNotFiniteOrDoNotFit) {
     EXPECT_EQ(parse({"--humans", "3,seed=4294967296,radius=7"}).options.humanSeed, 4294967296U);
     EXPECT_EQ(*parse({"--emi-motor-leads", "0.01,0.1,0,0.05"}).options.emiMotorLeads, 0.01);
     EXPECT_EQ(parse({"--tether", "0,0,3,base_link,12"}).options.tethers.at(0).length, 12.0);
+    EXPECT_EQ(parse({"--fire-water", "pallet=0.133@60"}).options.fireWater.at(0),
+              "pallet=0.133@60");
     EXPECT_EQ(parse({"--traffic", "vehicles=3,seed=99999999999"}).options.trafficSeed,
               99999999999U);
 }

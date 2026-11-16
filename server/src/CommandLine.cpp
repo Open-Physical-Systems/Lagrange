@@ -117,6 +117,8 @@ void printServerOptions(std::FILE* out) {
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --tether X,Y,Z,LINK[,LENGTH]  a cable from the world point X,Y,Z to LINK (RFC 0011;\n"
         "                     repeatable; LENGTH m, default the distance plus 10 %%)\n"
+        "  --fire-water NAME=RATE[@T]  water on fire NAME (RFC 0022; repeatable): RATE kg/(m2.s)\n"
+        "                     (mm/s) over its burning area from T s on, as a sprinkler\n"
         "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
         "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
         "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
@@ -740,6 +742,23 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             }
             t.link = rest;
             options.tethers.push_back(std::move(t));
+        } else if (arg == "--fire-water") {
+            const char* text = value();
+            const std::string entry = text != nullptr ? text : "";
+            const std::size_t eq = entry.find('=');
+            char* end = nullptr;
+            const double rate =
+                eq == std::string::npos ? -1.0 : std::strtod(entry.c_str() + eq + 1, &end);
+            double start = 0.0;
+            if (end != nullptr && *end == '@') {
+                start = std::strtod(end + 1, &end);
+            }
+            if (eq == 0 || eq == std::string::npos || end == nullptr || *end != '\0' ||
+                !(rate >= 0.0) || !std::isfinite(rate) || !std::isfinite(start)) {
+                return "--fire-water needs NAME=RATE[@T]: a fire's name, the water rate in "
+                       "kg/(m²·s) (mm/s) and when it starts (s)";
+            }
+            options.fireWater.push_back(entry);
         } else if (arg == "--hydro-coefficients") {
             const char* text = value();
             if (text == nullptr) {

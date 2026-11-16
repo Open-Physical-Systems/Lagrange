@@ -881,6 +881,72 @@ In a URDF, on the link (read by the server and `lagrange_import`, which writes t
 `conductivity_along`, `axis`, `contact_conductance`, `initial_temperature`, `max_temperature`;
 `<heat_source>` takes `name` (required), `power`, `power_signal`, `efficiency`, `xyz`, `size`.
 
+### 3.14 `schemas/fire/schema.usda`
+
+Added in 1.x by RFC 0022 and simulated by the fire domain (`modules/fire/`,
+docs/physics/fire.md).
+
+**`FireAPI_1`** (single-apply), on a fuel item's prim (a pallet, a pool tray, a bin). Its collider
+gives the burning footprint and the flame's base (the top of the colliders at the prim's origin, or
+of every collider of a link whose own prim it is); its pose places it, and it moves with its body.
+Required values come from the fuel's data, with a source; none is a fallback.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `fire:preset` | token | — | — | A fuel preset; explicit attributes override it. The presets ship empty until their cited values are confirmed (RFC 0022 Q3) |
+| `fire:class` | token | — | `a` | `a` solids, `b` flammable liquids (water does not put it out), `c` energised equipment (water raises `hazard`), OSHA 29 CFR 1910.155(c) |
+| `fire:growth` | token | — | `t_squared` | `t_squared` or `pool` |
+| `fire:alpha` | double | W/s² | — | Growth coefficient; required for `t_squared` |
+| `fire:hrrPerArea` | double | W/m² | — | At full involvement; required for `t_squared` |
+| `fire:area` | double | m² | the colliders' footprint | Burning area at full involvement |
+| `fire:fuelMass` | double | kg | — | Required |
+| `fire:heatOfCombustion` | double | J/kg | — | Effective; required |
+| `fire:radiativeFraction` | double | 1 | — | χ_r, 0 to 1; required |
+| `fire:sootYield` | double | kg/kg | — | Required |
+| `fire:poolBurningRate` | double | kg/(m²·s) | — | ṁ''∞; required for `pool` |
+| `fire:poolExtinction` | double | 1/m | — | kβ; required for `pool` |
+| `fire:flameTemperature` | double | K | — | For thermal cameras (required once cameras see flames, RFC 0022 step 5) |
+| `fire:flameAbsorption` | double | 1/m | — | Soot absorption κ of the flame (as above) |
+| `fire:ignitionTemperature` | double | K | — | It ignites when the `ThermalAPI_1` node on its prim reaches this |
+| `fire:ignitionTime` | double | s | `-1` | When the run ignites it; below 0 not at all |
+| `fire:blowOffSpeed` | double | m/s | — | Air speed at the flame that blows it out, measured; none: never |
+| `fire:blowOffMaxHrr` | double | W | — | Blow-off only below this HRR |
+| `fire:criticalWaterRate` | double | kg/(m²·s) | — | Water rate that stops its growth; required for classes `a`, `c` |
+| `fire:oxygenLimit` | double | 1 | — | Oxygen mole fraction it goes out below (compartments, RFC 0022 step 7) |
+| `fire:decayFraction` | double | 1 | `0.2` | Share of the fuel over which Q falls with the remaining mass |
+| `fire:hrrCurve` | double[] | — | — | `t, Q` pairs (s, W): a measured curve that replaces the growth law |
+| `fire:foamBlanketThickness` | double | m | — | Finished foam depth that covers the burning area; none: foam does nothing |
+
+An overlay or a URDF may give `fire:alpha` as a t² growth class: `slow`, `medium`, `fast` (2.9306,
+11.722, 46.889 W/s², NBSIR 85-3167) or `ultrafast` (1000 Btu/s at 75 s, TODO(verify) against NFPA
+72's annex).
+
+```yaml
+apply:
+  - prim: pallet
+    schemas:
+      FireAPI_1:
+        fire:alpha: fast
+        fire:hrrPerArea: 1.0e6
+        fire:fuelMass: 25.0
+        fire:heatOfCombustion: 1.2e7
+        fire:radiativeFraction: 0.3
+        fire:sootYield: 0.015
+        fire:criticalWaterRate: 0.03
+        fire:ignitionTime: 0.0
+```
+
+In a URDF, on the link (snake case; `hrr_curve` is `"t Q t Q ..."`):
+
+```xml
+<gazebo reference="pallet">
+  <fire alpha="fast" hrr_per_area="1.0e6" fuel_mass="25" heat_of_combustion="1.2e7"
+        radiative_fraction="0.3" soot_yield="0.015" critical_water_rate="0.03" ignition_time="0"/>
+</gazebo>
+```
+
+The numbers above show the form only; a fuel's own values come from its data with their source.
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file
