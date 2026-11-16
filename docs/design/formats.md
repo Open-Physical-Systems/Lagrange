@@ -712,6 +712,7 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
   offset, lane sections with width polynomials, lane heights (`<height>`) and `@level`, road
   marks.
 - **Links:** lane, road and junction links.
+- **Objects and signals** (after 1.4): `<object>` with `<repeat>` and outlines, `<signal>` (below).
 
 **Cross section.** Superelevation is the roll of the cross section about the reference line, a
 cubic in s (rad), positive falling to the right (ASAM OpenDRIVE 1.8 §10.5.2). t is measured
@@ -725,7 +726,7 @@ requires) stays level at the height of the first level lane's inner border. Road
 faces, road marks and the lanes' `lane:centreLine` (its z) all follow the cross section, and the
 meshes' normals are the surface's.
 
-Objects and signals are not read yet. Road surfaces become meshes per lane type, road marks
+Road surfaces become meshes per lane type, road marks
 become thin meshes (broken marks are 3 m on and 6 m off, illustrative), and every driving,
 biking, parking or sidewalk lane becomes a `RoadLaneAPI_1` prim with its links. A road on the
 ground (no elevation, superelevation or lane height) has no colliders: its surfaces lie 1 cm
@@ -736,6 +737,46 @@ surface and 0.3 m thick (`ConvertOptions::colliderStep`, `colliderDepth`), writt
 in its lanes' heights. A raised road below z = 0 is under the ground plane, which is hit first:
 lift such a network with its elevation. Sample: `assets/worlds/banked_ring` (a 5 m ring 1.5 m
 up, 5° of bank falling to the inside, a 0.15 m kerb).
+
+**Objects** (`<objects><object>`, ASAM OpenDRIVE 1.8 §13). An object's origin is at its s and
+t on the road surface (`pointAt`: elevation and superelevation, not lane heights), `zOffset`
+above it; it is turned by `hdg` from the road's direction there, then `pitch` and `roll`
+(z-y'-x''). The standard does not say where the origin sits in the bounding box: the importer
+takes it as the bottom centre, the box `length` along u, `width` along v, `height` up (a
+missing length or width is 0.1 m), or a cylinder of `radius`. `<repeat>` places a copy every
+`distance` m from its `s` over its `length` (⌊length/distance⌋ + 1 copies), t, zOffset,
+height, width, length and radius linear from their start to their end values (the standard
+leaves the interpolation open), the object's own where a record gives none; distance 0 is one
+continuous object along the path (a guard rail, a wall), its cross section width × height;
+`detachFromReferenceLine` runs it on the straight line from start to end. With repeats the
+object itself is not placed again. An outline (`<outline>` under the object, as in 1.4, or
+`<outlines>`) of `cornerRoad` (s, t, dz on the road surface) or `cornerLocal` (u, v, z in the
+object's frame) corners supersedes the box: a closed one is a prism up each corner's `height`,
+an open one a wall 0.1 m thick along its corners. Standing objects (taller than 1 mm) are fixed
+scenery on the world: a box collider for a box (which the rotor downwash also takes as an
+obstacle), a cylinder for a round one, a convex hull for an outline (a hull per triangle of a
+concave footprint, by ear clipping) and every 2 m of a continuous repeat; flat ones are paint
+1.3 cm above the surface, without colliders: a crosswalk box as stripes 0.5 m wide across its
+longer side, a parking space as its border (open at +u), anything else filled. They are drawn
+as one mesh per road and material, `road_<id>_objects_<material>`, the material from the type
+(`pole`, `streetLamp`, `gantry` steel; `barrier`, `railing` steel; `soundBarrier`, `obstacle`,
+`trafficIsland` concrete; `building`; `tree`, `vegetation` foliage; `crosswalk`, `roadMark`,
+`parkingSpace` white paint; `patch`, `roadSurface` asphalt; vehicles and people painted; other
+types grey). Not read: `<objectReference>`, `<tunnel>`, `<bridge>`, `<skeleton>`, `<material>`,
+`<markings>`, `<borders>`, `validity` and `parkingSpace` access.
+
+**Signals** (`<signals><signal>`, §14). A signal's board has its bottom centre at s and t on the
+road surface, `zOffset` up, and faces the traffic it applies to: orientation `+` (traffic along
+s) looks back against s, `-` and `none` along it, turned counter-clockwise by `hOffset`, then
+`pitch` and `roll`. It is `width` wide and `height` tall (0.6 m by 0.6 m when not given, 3 cm
+thick); a dynamic signal (`dynamic="yes"`, a traffic light) is a dark housing (0.35 m by 1.0 m
+by 0.3 m when not given) with its red, yellow and green lamps drawn unlit. A steel pole
+(radius 4 cm) behind it rises from the road surface to its top when zOffset is above the road.
+Board and pole collide. The traffic module (traffic.md §8) still places and lights its own
+signal heads at the ends of the lanes into each junction: a file's signals do not drive it,
+since the lanes have no attribute to carry a signal's place and passing one would take a schema
+addition; `<signalReference>`, `<controller>` and the signals' country codes and values are not
+read.
 
 ### 3.12 `schemas/tether/schema.usda`
 

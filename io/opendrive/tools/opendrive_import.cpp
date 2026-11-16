@@ -2,8 +2,9 @@
 //
 // An OpenDRIVE road network as a USD layer (OpenDrive.hpp): road surfaces and marks to draw
 // (roads on the ground plane, which the loader adds, need nothing more; raised roads, with
-// elevation, superelevation or lane heights, also get convex slabs to drive on) and
-// RoadLaneAPI_1 lanes for traffic. Compose it with a world's other layers by sublayering.
+// elevation, superelevation or lane heights, also get convex slabs to drive on),
+// RoadLaneAPI_1 lanes for traffic, and the roads' objects and signals as fixed scenery. Compose it
+// with a world's other layers by sublayering.
 #include "lagrange/opendrive/OpenDrive.hpp"
 #include "lagrange/stage/Stage.hpp"
 
@@ -47,8 +48,8 @@ int main(int argc, char** argv) {
     }
     lagrange::stage::WriteOptions write;
     write.doc = "Converted from " + positional[0] + " by lagrange_opendrive_import.";
-    // Raised roads' slabs under the layer's own root, so that layers composed side by side
-    // keep theirs apart.
+    // Raised roads' slabs and the objects' colliders under the layer's own root, so that layers
+    // composed side by side keep theirs apart.
     write.staticColliders = "/" + options.root + "/colliders";
     if (const auto status = lagrange::stage::writeStage(*model, positional[1], write); !status) {
         std::fprintf(stderr, "%s\n", status.error().c_str());
