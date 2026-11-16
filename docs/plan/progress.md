@@ -122,6 +122,7 @@ Every open decision, each with a proposed answer: [owner-decisions-2026-11-15.md
 
 - **RFC 0017** (MuJoCo 4.x for the MuJoCo backend): Draft, the owner's decision.
 - **RFC 0018** (radiation) and **RFC 0019** (legged robots): Draft, the owner's decision.
+- **RFC 0020** (actuators), **RFC 0021** (lights) and **RFC 0022** (fire): Draft, the owner's decision; each open question with its proposed answer is in section G of the decisions file ("accept all" or override by number). v1.4.0 is released (2026-11-15), so its release items there are done.
 - **Builder phase 4** (USD and SDFormat robots): the open questions of
   `docs/plan/builder-phase4-plan.md` §11, and the draft RFC 0016 Addendum B.
 - **Protocol additions** (1.x additive, owner approval): ROS 2 services and parameters in the
