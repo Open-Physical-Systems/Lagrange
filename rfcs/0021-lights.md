@@ -82,7 +82,8 @@ axis of URDF links and cameras' bodies; open question 2). It moves with its body
 | `lamp:initialCommand` | double | 1 | 0 | brightness at t = 0 |
 
 The 50 % and 10 % definitions of beam and field angle are those of ANSI C78.379 for reflector
-lamps (TODO(verify) the clause). The intensity between them falls smoothly (a cosine-squared
+lamps (TODO(verify) the clause: ANSI C78.379 is sold, not openly readable, and was not opened).
+The intensity between them falls smoothly (a cosine-squared
 taper, a drawing choice to replace with a measured profile when LM-63 comes). Required numbers
 are the lamp's datasheet values. No fallback is a device value.
 
@@ -91,17 +92,21 @@ same prim (it exists, RFC 0010). One that heats a thermal node needs a `ThermalA
 same name, or a `HeatSourceAPI_1` with `power_signal` for the conduction fidelity.
 
 **Interop with UsdLux.** OpenUSD's own lights (`SphereLight` with `ShapingAPI` cone angle,
-`colorTemperature`; part of OpenUSD 26.08, which Lagrange vendors, TODO(verify) that the vendor
-build includes `usdLux`) are what other USD tools render. Their intensity is not in photometric
-units a datasheet gives (TODO(verify) UsdLux's current unit statement), so Lagrange keeps its own
-values in `lamp:`. The stage writer (`lagrange_import`, the builder) also writes a matching
+`colorTemperature`; part of OpenUSD 26.08, which Lagrange vendors: `pxr/usd/CMakeLists.txt` at
+tag v26.08 builds `usdLux` unconditionally, beside `usdGeom`, and `openusd_vendor` turns off only
+imaging, so the vendor build has it) are what other USD tools render. Corrected: UsdLux's
+intensity is photometric. Its "Quantities and Units" section defines a light of `intensity` 1 and
+white `color` as one of 1 nit (cd/m²) of luminance at its surface. That is not what a datasheet
+gives (luminous flux in lm, or intensity in cd): converting needs the emitting area and the
+ShapingAPI cone, so Lagrange keeps the datasheet's values in `lamp:`. The stage writer (`lagrange_import`, the builder) also writes a matching
 `SphereLight` under the prim for other tools, and the loader reads a bare UsdLux light (no
 `LampAPI_1`) as a lamp with a warning that its intensity is a guess (open question 3).
 
 **URDF and SDFormat.** URDF: `<gazebo reference="L"><lamp name=... kind=spot intensity=...
 beam_angle=... color_temperature=... efficacy=... xyz=... rpy=.../></gazebo>` (a frame on link L).
-SDFormat's `<light>` inside a `<link>` (TODO(verify) the SDFormat version that allows it and the
-meaning of its `<intensity>`) is read as a lamp: `spot` from `<spot><outer_angle>`, colour from
+SDFormat's `<light>` inside a `<link>` (allowed from SDFormat 1.6, whose `link.sdf` is the first to
+include `light.sdf`; `<intensity>`, added in 1.8, is "Scale factor to set the relative power of a
+light", with no unit; from the spec files in `gazebosim/sdformat`) is read as a lamp: `spot` from `<spot><outer_angle>`, colour from
 `<diffuse>`. Its intensity has no photometric unit, so a `lamp:luminousIntensity` must be given
 in an overlay, or the loader warns and uses a stated placeholder. Overlay YAML: a `lamps:` list
 (formats.md §9 applies any schema).
@@ -156,8 +161,12 @@ E = I_out · f(θ) · cos(incidence) / d²          (inverse-square law; d beyon
 ```
 
 The colour of a colour temperature is Planck's law weighted by the CIE 1931 colour-matching
-functions and converted to linear sRGB, tabulated at load (CIE 15:2004; TODO(verify) the table
-source and its licence, or compute it from the published CIE functions). The renderer works
+functions and converted to linear sRGB, tabulated at load. The functions come from CIE's own
+dataset, "CIE 1931 colour-matching functions, 2 degree observer" (DOI 10.25039/CIE.DS.xvudnb9b,
+360–830 nm in 1 nm steps, from CIE 018:2019 Table 6, with CIE 015:2018 *Colorimetry* 4th ed.,
+which replaces the CIE 15:2004 named here before), published under CC BY-SA 4.0. A table derived
+from it carries that licence: it is recorded in `docs/design/dependencies.md` and REUSE before it
+ships, or the loader reads the CSV at build time. The renderer works
 today in units "by eye" (`kSunStrength`, `kExposure`). It gets one calibration: renderer units
 per lux, fixed so that the sun's illuminance is the IES daylight value the `light_sensor`
 already computes (`kExtraterrestrialIlluminance`, `sensors::surfaceIlluminance`). Then the
@@ -188,8 +197,9 @@ tiers). This is the closed form the renderer is checked against (§Validation).
   `start_utc`, `--start-utc YYYY-MM-DDTHH:MM:SSZ`, profile `world.start_utc`) and the geo origin.
   Without both, it stays the authored constant (today's behaviour). The weather also writes
   `env/sky_illuminance` (lx, horizontal), from the same IES daylight model by day and a
-  night-sky value at night (a clear moonless night is of the order of 10⁻³ lx; TODO(verify) a
-  citable value and whether to model the moon's phase).
+  night-sky value at night: 0.8 mlx, the US National Park Service's "natural reference condition
+  for moonless nights ... for horizontal illuminance" (Night Skies Report metrics guide).
+  Whether to model the moon's phase is open question 12.
 - The renderer reads the sun from `env/sun_direction` and `env/sky_illuminance` instead of `kSun`.
   When the weather does not run it keeps `kSun` (today's look), so every existing run looks the
   same. The seasons' tints stay as drawing choices on top.
@@ -232,8 +242,10 @@ if it writes `lamp/<n>/intensity` for every lamp. No ABI change (open question 1
   `hazard_lights_cmd` as reports. With lamps named by convention on a `VehicleAPI_1` robot
   (`indicator_left`, `indicator_right`), it drives their `blink` instead, and reports what the
   lamps do. The sample sedan gets headlights, brake lights (on while braking, from
-  `vehicle/<v>/brake`, TODO(verify) the signal name) and indicators. The indicators' 1.5 Hz is
-  the middle of UN Regulation No. 48's 90 ± 30 flashes per minute (TODO(verify) the clause).
+  `vehicle/<v>/brake`, unit 1, the signal `CarDrive` writes and `VehicleDynamics` reads) and
+  indicators. The indicators' 1.5 Hz is the middle of UN Regulation No. 48's "flashing 90 ± 30
+  times per minute" (paragraph 6.5.9, Revision 6 with the 03 series of amendments, as
+  incorporated by reference in 49 CFR 571.108; later series may renumber it).
 
 ## Validation
 
@@ -278,7 +290,8 @@ if it writes `lamp/<n>/intensity` for every lamp. No ABI change (open question 1
 ## Also worth adding
 
 - **IES LM-63 photometric files** (`lamp:photometry = @file.ies@`) for measured beam patterns of
-  real headlights and floodlights (ANSI/IES LM-63; TODO(verify) the current revision).
+  real headlights and floodlights (ANSI/IES LM-63-19, the fifth revision, files tagged `IES:LM-63-2019`, per ANSI's summary;
+  resellers list a 2025 reaffirmation, not confirmed at IES).
 - **Infrared illuminators** (850/940 nm) for night cameras: a lamp with a band, seen by cameras
   whose band includes it, not by people.
 - **Structured light and laser pointers** for depth cameras: a lamp with a pattern image.
@@ -290,7 +303,8 @@ if it writes `lamp/<n>/intensity` for every lamp. No ABI change (open question 1
 1. *Built in (a `lights` domain plus renderer support), or a plugin as asked?* Built in, for the
    reasons of §1. A plugin is still the way to give a lamp custom behaviour.
 2. *Which axis is the beam?* +X of the lamp's prim (URDF's forward), stated in the schema doc.
-   SDFormat's `<light>` points along −Z (TODO(verify)), so the importer rotates it.
+   SDFormat's `<light>` points along −Z (`<direction>` defaults to `0 0 -1`, "only applicable for
+   spot and directional lights", `light.sdf`), so the importer rotates it.
 3. *Lagrange's own `lamp:` attributes, or UsdLux's?* Own, for photometric units from datasheets.
    Lagrange writes matching UsdLux for other tools and reads bare UsdLux lights with a warning.
 4. *One schema for every lamp kind, or one per kind?* One, with `lamp:kind`. Indicators, LEDs
@@ -305,10 +319,14 @@ if it writes `lamp/<n>/intensity` for every lamp. No ABI change (open question 1
    and the limit is stated.
 9. *Lamp light scattered by fog (a headlight's glare in fog, "veiling luminance")?* Phase 2, with
    the existing per-pixel fog veil: the in-scattered light of each lamp along the pixel's ray in
-   a homogeneous medium has a closed form (single scattering). TODO(verify) the reference to use.
+   a homogeneous medium has a closed form (single scattering). TODO(verify) the reference to use:
+   not searched in this pass.
 10. *Plugin ABI additions (a `world_lamp` getter, tokens)?* None now. A plugin controls lamps
     through signals. A getter would be an ABI MINOR append in its own RFC if a user needs it.
 11. *Pre-approve the gated merges (schema) of steps 2–7 once each passes its tests?* Yes.
+12. *Model the moon's phase in `env/sky_illuminance`?* Not in phase 1: the moonless 0.8 mlx at
+    night, documented. Adding it needs the moon's position and
+    phase beside the NOAA sun, and a cited value for its illuminance.
 
 ## References checked for this draft
 
@@ -322,6 +340,27 @@ if it writes `lamp/<n>/intensity` for every lamp. No ABI change (open question 1
   subscription), `core/plugin_abi/include/lagrange_plugin.h` (ABI 1.1 functions),
   `bridges/autoware/src/AutowareInterface.cpp` (indicator commands echoed), and
   `vendor/openusd_vendor/CMakeLists.txt` (OpenUSD 26.08).
-- ANSI C78.379, CIE 15:2004, UN Regulation No. 48, ANSI/IES LM-63 and UsdLux's documentation
-  were **not** re-read for this draft. Each is marked TODO(verify) where cited and is read before
-  the step that uses it.
+- Checked on 2026-11-17 against the sources below. Still unread and marked TODO(verify): ANSI
+  C78.379 and a fog-glare reference.
+
+## Sources
+
+Read for the 2026-11-17 check:
+
+- OpenUSD, UsdLux overview, "Quantities and Units".
+  https://openusd.org/release/api/usd_lux_page_front.html
+- OpenUSD `pxr/usd/CMakeLists.txt` at tag v26.08.
+  https://github.com/PixarAnimationStudios/OpenUSD/blob/v26.08/pxr/usd/CMakeLists.txt
+- SDFormat specification files `sdf/1.5/link.sdf`, `sdf/1.6/link.sdf`, `sdf/1.7/light.sdf`,
+  `sdf/1.8/light.sdf`, `sdf/1.12/light.sdf`. https://github.com/gazebosim/sdformat/tree/main/sdf
+- CIE, "CIE 1931 colour-matching functions, 2 degree observer", dataset and its metadata
+  (licence). https://cie.co.at/datatable/cie-1931-colour-matching-functions-2-degree-observer
+- UN ECE Regulation No. 48, Revision 6 (E/ECE/TRANS/505/Rev.1/Add.47/Rev.6), paragraph 6.5.9, as
+  incorporated by reference in 49 CFR 571.108.
+  https://law.resource.org/pub/us/cfr/ibr/006/un.ece.uniform.1996.pdf
+- ANSI blog, "Standard File Format for Electronic Transfer of Photometric Data (IES LM-63-19)".
+  https://blog.ansi.org/ansi/standard-file-photometric-data-ies-lm-63-19/ (search summary only)
+- US National Park Service, "Metrics Guide to Night Skies Report".
+  https://www.nps.gov/subjects/nightskies/NSQmetrics.html
+- This repository: `server/src/CarDrive.cpp` and
+  `modules/vehicle_dynamics/src/VehicleDynamics.cpp` (`vehicle/<v>/brake`).

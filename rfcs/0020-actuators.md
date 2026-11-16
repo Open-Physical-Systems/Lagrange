@@ -149,8 +149,13 @@ part drops. The pull is applied only while sealed, so a cup can never pull a par
 air.
 
 **Reference.** `F = Δp·A` is the definition of pressure. The vendor engineering guides add a
-safety factor and a friction term for shear (TODO(verify): cite one, such as Schmalz's or SMC's
-published sizing guide, before step 2). The evacuation time of a sealed volume through a
+safety factor and a friction term for shear: Schmalz's "Theoretical holding force of a suction
+cup" gives `F_TH = m·(g + a)·S` (cup horizontal, force vertical), `m·(g + a/μ)·S` (cup
+horizontal, force horizontal) and `(m/μ)·(g + a)·S` (cup vertical), with S at least 1.5 for
+smooth, dense parts and 2.0 or more for "critical, heterogeneous, porous, rough or oiled"
+ones, and μ to be measured on the part (reference values 0.2–0.3 wet, 0.5 wood, metal, glass,
+stone, 0.6 rough). Lagrange computes the physics without S; the sample sizing in the docs uses
+these forms. The evacuation time of a sealed volume through a
 linear pump curve has a closed form (exponential approach to `p_min`).
 
 **Validation.** (a) A sealed cup holding a hanging mass increased step by step lets go at
@@ -203,8 +208,9 @@ with no current. The force is applied by the same wrench pair as suction, at the
 by one ray per pole.
 
 **Reference.** The Maxwell stress pull `B²A/(2μ0)` per pole face (any electromagnetism text;
-TODO(verify) cite the edition used, for example Furlani, *Permanent Magnet and Electromechanical
-Devices*, Academic Press 2001). Validation: the force against the closed form at 5 gaps within
+Furlani, *Permanent Magnet and Electromechanical Devices*, Academic Press (Elsevier) 2001, has a
+chapter "Electromechanical Devices", DOI 10.1016/B978-012269951-1/50006-1, per Crossref;
+TODO(verify) the equation and its page: the book is not openly readable). Validation: the force against the closed form at 5 gaps within
 1 %, and an electromagnet dropping a part at the gap and current the closed form gives.
 
 **Schema `MagnetGripperAPI_1`:** `act:magnet:kind` (`electro`, `electropermanent`),
@@ -240,11 +246,17 @@ them). Writing them out is how a servo is checked against its datasheet.
 **Model (fidelity `ideal`, without the electrical domain).** `τ = clamp(Kp'·e − Kd'·ω, ±τ_line(ω))`
 with `τ_line(ω) = τ_stall·(1 − |ω|/ω0)`: the datasheet's two numbers and nothing else.
 
-**References.** The DC motor's linear torque–speed line (any machines text; TODO(verify) cite
-Hughes and Drury, *Electric Motors and Drives*, 5th ed., Newnes 2019). The Dynamixel control
-table (ROBOTIS e-Manual, XM430-W350 page: operating modes, `Position P/I/D Gain`,
-`Profile Velocity`, `Profile Acceleration`, `Current Limit`; TODO(verify) every field name and
-unit against the e-Manual before step 4). **Validation:** stall torque and no-load speed against
+**References.** The DC motor's linear torque–speed line (any machines text; Hughes and Drury,
+*Electric Motors and Drives*, Newnes (Elsevier) 2019, ISBN 978-0-08-102615-1, chapter 3 "D.C.
+motors", DOI 10.1016/B978-0-08-102615-1.00003-9, per Crossref; TODO(verify) the section: the
+book is not openly readable). The Dynamixel control table (ROBOTIS e-Manual, XM430-W350 page,
+read 2026-11-17): `Operating Mode` (11; 0 current, 1 velocity, 3 position (default), 4 extended
+position, 5 current-based position, 16 PWM), `Position D/I/P Gain` (80, 82, 84; no unit),
+`Profile Acceleration` (108; 214.577 rev/min² velocity-based, or 1 ms time-based),
+`Profile Velocity` (112; 0.229 rev/min), `Goal Position` (116; 1 pulse, 0.088°, 4096 per
+turn), `Current Limit` (38) and `Present Current` (126), both 2.69 mA; at 12 V a stall torque of
+4.1 N·m at 2.3 A and 46 rev/min no load. The gains' conversion to physical units is on the same
+page and is read before step 4. **Validation:** stall torque and no-load speed against
 the datasheet's two numbers at rated voltage within 2 %. A step response that stops inside the
 deadband (hunting-free). A profile move whose velocity is trapezoidal to 1 %. The ideal and
 electrical fidelities agree on the torque–speed line within 2 %.
@@ -270,8 +282,9 @@ question 6).
 **ROS 2 / ros2_control.** `LagrangeSystem`'s `position` command interface on a joint with
 `ServoAPI_1` goes to `goal_position` rather than through `JointControl`. State interfaces are
 `position`, `velocity`, `effort` (from the current). `/joint_commands`' position does the same.
-A ROS 2 hardware package for real Dynamixels exists (TODO(verify) its name and Lyrical release),
-so a user can swap it for `LagrangeSystem` with the same controllers.
+A ROS 2 hardware package for real Dynamixels exists: ROBOTIS's `dynamixel_hardware_interface`,
+released for Lyrical at 1.5.1 (rosdistro `lyrical/distribution.yaml`, 2026-11-17), so a user
+can swap it for `LagrangeSystem` with the same controllers.
 
 ### 4.4 Lead screw and electric linear actuator (rank 4)
 
@@ -290,11 +303,16 @@ friction limit on the prismatic joint that grows with the load,
 `F_f = |F_axial|·(1 − η_back⁺)` when back-driven. This needs one new optional input to the
 rigid-body contract, `joint/<j>/friction_limit` (N or N·m, this step's Coulomb limit, added to the
 static `JointDynamicsAPI_1` friction). MuJoCo can take it per step as the dof's `frictionloss`
-and Jolt as the constraint's friction (TODO(verify) both on the vendored versions), and the
+and Jolt as the constraint's friction. Checked on the versions in use: MuJoCo 3.12.0's
+`mjModel::dof_frictionloss` (`mjmodel.h`), a real-valued field, which MuJoCo's "Model changes"
+documentation says is safe to change between steps ("real-valued parameters are safe to change,
+while structural integer parameters are not"); Jolt 5.6.0's `HingeConstraint::SetMaxFrictionTorque`
+and `SliderConstraint::SetMaxFrictionForce`. The
 conformance suite checks it. The same input serves worm gears on revolute joints.
 
 **Reference.** The power-screw equations of Shigley's *Mechanical Engineering Design* (Budynas
-and Nisbett, the power screws chapter; TODO(verify) the edition and the section number).
+and Nisbett, 11th ed., McGraw-Hill, chapter 8, section 8–2 "The Mechanics of Power Screws", per
+the publisher's list of what the 11th edition changed; the equations themselves not re-read).
 **Validation:** `η_forward` and `η_back` against the closed form for a 2 mm-lead trapezoidal
 thread and a ball screw. A self-locking actuator holds 100 kg with the motor unpowered (no creep
 over 60 s beyond the engine's contact compliance). A back-drivable ball screw drops the load
@@ -328,12 +346,14 @@ equilibrium. The electrical step must resolve the electrical frequency `N_r·ω/
 
 **Reference.** The standard model above: Acarnley, *Stepping Motors: a guide to theory and
 practice* (IET, 4th ed. 2002), and Kenjo and Sugawara, *Stepping Motors and their
-Microprocessor Controls* (Oxford, 2nd ed. 1994) (TODO(verify) the chapters and the detent term's
-harmonic). **Validation:** the static torque curve `τ(θ)` at rated current against
+Microprocessor Controls* (Oxford, 2nd ed. 1994) (both books found on Crossref: Acarnley, IET,
+DOI 10.1049/PBCE063E; Kenjo and Sugawara, OUP, second edition; TODO(verify) the chapters and the
+detent term's harmonic: neither text is openly readable). **Validation:** the static torque curve `τ(θ)` at rated current against
 `K_m·I·sin(N_r·Δθ)` within 1 %. Holding torque against the datasheet value (the user's motor). The
 pull-out curve against the steady-state phase circuit's closed form,
 `I(ω) = V/√(R² + (N_r·ω·L)²)` under full voltage, within 5 % (TODO(verify) whether a published
-measured pull-out curve with full motor parameters can be found, and add it). A deliberate
+measured pull-out curve with full motor parameters can be found, and add it: not searched in
+this pass). A deliberate
 overload loses whole steps (multiples of 4 full steps), never fractions.
 
 **Schema** (appended to `ElectricalMotorAPI_1`; used when `motorType = stepper`):
@@ -363,7 +383,7 @@ place of a motor, plus a load on the bus. Back-EMF from the moving plunger appea
 current, which is how a real valve driver detects that the plunger has moved.
 
 **Reference.** The co-energy force `½ i² dL/dx` (any electromechanics text; TODO(verify) cite the
-edition). **Validation:** the pull at three strokes against the closed form for a table `L(x)`
+edition: no openly readable text was found in this pass). **Validation:** the pull at three strokes against the closed form for a table `L(x)`
 within 1 %, and the current's dip as the plunger moves.
 
 **Schema `SolenoidAPI_1`:** `act:solenoid:inductanceTable` (pairs of m and H), `resistance`,
@@ -384,10 +404,11 @@ Valves are on/off (a solenoid, §4.6), proportional, or check valves. The supply
 reservoir at a regulated pressure.
 
 **References.** ISO 6358-1:2013 (the sonic conductance `C` and critical pressure ratio `b`;
-TODO(verify) the clause's exact form). Beater, *Pneumatic Drives* (Springer 2007).
+TODO(verify) the clause's exact form: iso.org refused the request and the standard is sold).
+Beater, *Pneumatic Drives* (Springer 2007, DOI 10.1007/978-3-540-69471-7, per Crossref).
 **Validation:** charging time of a closed volume through choked flow against the closed form; a
 cylinder's extension time under a load against a measured case from Beater (TODO(verify) one with
-all parameters).
+all parameters: the book is not openly readable).
 
 ### 4.8 Hydraulic cylinder, pump and servo valve (rank 8, phase 3)
 
@@ -405,7 +426,9 @@ a tank. The stiff chambers (the hydraulic natural frequency
 update.
 
 **References.** Merritt, *Hydraulic Control Systems* (Wiley 1967) and Jelali and Kroll,
-*Hydraulic Servo-systems* (Springer 2003) (TODO(verify) the chapters). **Validation:** `ω_h` of a
+*Hydraulic Servo-systems* (Springer 2003; its chapter 4 is "Physically Based Modelling", DOI
+10.1007/978-1-4471-0099-7_4, per Crossref) (TODO(verify) the chapters' sections and Merritt's
+chapter: neither book is openly readable). **Validation:** `ω_h` of a
 loaded cylinder at mid-stroke against Merritt's closed form within 3 %. Steady speed `Q/A`.
 The relief valve caps the pressure.
 
@@ -422,11 +445,15 @@ largest here (open question 9).
   server so that nothing must be configured.
 - ros2_control: `LagrangeSystem` gains `<gpio>` command and state interfaces bound to actuator
   signals by name (`<gpio name="suction"><command_interface name="vacuum"/>...`). GPIO
-  interfaces are part of ros2_control's hardware description (TODO(verify) that
-  `gpio_controllers`' `GpioCommandController` is released for Lyrical). Joint interfaces stay as
+  interfaces are part of ros2_control's hardware description, and `gpio_controllers`'
+  `GpioCommandController` is released for Lyrical (`ros2_controllers` 6.10.1 in rosdistro, whose
+  `gpio_controllers_plugin.xml` exports `gpio_controllers::GpioCommandController`). Joint interfaces stay as
   they are, routed to a servo's or stepper's own command when the joint has one.
 - MAVLink: ArduPilot's and PX4's servo and gripper outputs map to `act/<s>/pulse_width` and
-  `act/<g>/command` (TODO(verify) the output functions both stacks use for a gripper).
+  `act/<g>/command`. ArduPilot: `SERVOx_FUNCTION` = 28 (Gripper), with `GRIP_TYPE` 1 (servo) and
+  `GRIP_GRAB`, `GRIP_NEUTRAL`, `GRIP_RELEASE` in µs (Copter docs, "Grippers"). PX4: the
+  `Gripper` output function in Actuator Configuration, with `PD_GRIPPER_TYPE` and
+  `PD_GRIPPER_TO`, and the payload deliverer module built in (PX4 user guide, "Gripper").
 
 ## 6. Steps (each a PR)
 
@@ -452,7 +479,10 @@ largest here (open question 9).
 - **Marine thrusters** (hydrodynamics.md lists "thrusters as rotors in water"): a rotor in water
   with the advance-ratio coefficients of the hydrodynamics design.
 - **Conveyor belts** (a surface velocity on a fixed collider), common in warehouse and factory
-  scenes. Engines differ in how they offer it (TODO(verify) MuJoCo and Jolt support).
+  scenes. Engines differ in how they offer it: Jolt 5.6.0 has
+  `ContactSettings::mRelativeLinearSurfaceVelocity` ("can be used to create a conveyor belt
+  effect", `ContactListener.h`) and a `ConveyorBeltTest` sample; TODO(verify) MuJoCo's way, not
+  found in this pass.
 - **Tendon and cable drives** (RFC 0019's transmission extended to coupled joints).
 - **A water or foam nozzle with a tank**, specified in RFC 0022 §8 (its schema `NozzleAPI_1`
   goes in this RFC's `schemas/actuator`): jet reaction on the robot, tank weight, pump on the bus.
@@ -467,7 +497,7 @@ largest here (open question 9).
    running only when its prims exist. `--domain actuators=off` turns them all off.
 3. *Porosity of target surfaces?* Add `sensmat:airPermeability` (optional, fallback 0:
    airtight) to `SensorMaterialAPI_1` (an addition), plus a `cardboard` preset value
-   (TODO(verify) a published value).
+   (TODO(verify) a published value: not searched in this pass).
 4. *`elec:gearBackEfficiency`'s fallback?* −1, meaning "use `gearEfficiency`", so every 1.x file
    behaves as before. A sentinel is ugly, but a fallback must be a constant, and the old
    behaviour is not one.
@@ -482,7 +512,8 @@ largest here (open question 9).
    ros2_control and topics cover the use. A protocol emulator is "also worth adding" if users ask.
 8. *Stepper `lost_steps`, a quantity no real driver reports?* Keep it as a ground-truth signal,
    documented as such. Stall detection as a driver reports it (back-EMF based, as some
-   integrated drivers do) is a later addition (TODO(verify) which drivers publish their method).
+   integrated drivers do) is a later addition (TODO(verify) which drivers publish their method:
+   Trinamic's StallGuard is the first candidate; its product page timed out in this pass).
 9. *Pneumatics and hydraulics in this RFC or their own?* Their own RFC before phase 3. This RFC
    only reserves the names `fluid_power`, `FluidSupplyAPI_1`, `ValveAPI_1` and `CylinderAPI_1`.
 10. *Does the `ideal` servo substitute replace `JointControl`?* No. `JointControl` stays the
@@ -510,6 +541,31 @@ largest here (open question 9).
   directions), `server/include/lagrange/server/JointControl.hpp`,
   `bridges/ros2_control/src/LagrangeSystem.cpp` (no GPIO), `modules/sensors/src/kinds/GripperSensor.cpp`,
   `schemas/sensor_material/schema.usda` (`sensmat:relativePermeability`), rigid_body.md §3 and §8.
-- The textbooks and standards named above were **not** re-read for this draft. Every equation is
-  the standard form as remembered, marked TODO(verify) where a constant, a clause or an edition
-  is cited. Each is to be read from its source before the step that implements it.
+- Checked on 2026-11-17 against the sources below. The textbooks and ISO 6358-1 are not openly
+  readable: their bibliographic records were checked, not their equations, which stay marked
+  TODO(verify) and are read before the step that implements them.
+
+## Sources
+
+Read for the 2026-11-17 check:
+
+- J. Schmalz GmbH, "Theoretical holding force of a suction cup" (vacuum knowledge, system design
+  calculation example). https://www.schmalz.com/en/vacuum-knowledge/the-vacuum-system-and-its-components/system-design-calculation-example/theoretical-holding-force-of-a-suction-cup
+- ROBOTIS e-Manual, XM430-W350 (specifications and control table).
+  https://emanual.robotis.com/docs/en/dxl/x/xm430-w350/
+- ROS rosdistro, `lyrical/distribution.yaml` (`dynamixel_hardware_interface` 1.5.1-3,
+  `ros2_controllers` 6.10.1-1 with `gpio_controllers`).
+  https://github.com/ros/rosdistro/blob/master/lyrical/distribution.yaml
+- `ros2_controllers` 6.10.1, `gpio_controllers/gpio_controllers_plugin.xml`.
+  https://github.com/ros-controls/ros2_controllers/tree/6.10.1/gpio_controllers
+- MuJoCo 3.12.0 `include/mujoco/mjmodel.h`; MuJoCo documentation, Simulation, "Model changes".
+  https://mujoco.readthedocs.io/en/3.2.2/programming/simulation.html
+- Jolt Physics v5.6.0: `HingeConstraint.h`, `SliderConstraint.h`, `ContactListener.h`,
+  `Samples/Tests/General/ConveyorBeltTest.cpp`. https://github.com/jrouwe/JoltPhysics/tree/v5.6.0
+- ArduPilot Copter documentation, "Grippers".
+  https://ardupilot.org/copter/docs/common-gripper-landingpage.html
+- PX4 user guide (main), "Gripper". https://docs.px4.io/main/en/peripherals/gripper.html
+- McGraw-Hill, "Shigley's Mechanical Engineering Design, 11e: what's new".
+  https://www.mheducation.com/unitas/highered/changes/budynas-mech-engineering-design-11e.pdf
+- Crossref records for Furlani (2001), Hughes and Drury (2019), Acarnley (2002), Kenjo and
+  Sugawara, Beater (2007), Jelali and Kroll (2003). https://api.crossref.org/works
