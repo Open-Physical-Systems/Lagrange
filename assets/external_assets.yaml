@@ -17,6 +17,26 @@ assets:
       lexus.jpg:
         path: sample_vehicle_description/mesh/lexus.jpg
         sha256: ae5addb7b0129661cea728ffd6547a0575724bc5b8e54cea3dfc7eceace22df4
+    # lexus.dae is one mesh with the wheels in it: fetch_assets splits it into the body and four
+    # wheels (scripts/wheel_split.py) so that the wheels spin and steer on screen. Cylinders in
+    # base_link: the URDF's wheel centres; a triangle's centroid within 0.40 m and its corners
+    # within 0.45 m of the axle (the tyre radius is 0.383 m, but the mesh's coarse tread
+    # triangles reach past it, most on the rear tyres), and the slab the mesh's tyre spans
+    # (its tread runs 0.30 m inboard of the wheel centre).
+    derive:
+      wheel_split:
+        source: lexus.dae
+        frame: {xyz: [0, 0, -0.383], rpy: [1.5707963, 0, 3.1415927]}
+        radius: 0.40
+        vertex_radius: 0.45
+        outboard: 0.13
+        inboard: 0.30
+        body: lexus_body.dae
+        wheels:
+          lexus_wheel_front_left.dae: [1.395, 0.820, 0]
+          lexus_wheel_front_right.dae: [1.395, -0.820, 0]
+          lexus_wheel_rear_left.dae: [-1.395, 0.820, 0]
+          lexus_wheel_rear_right.dae: [-1.395, -0.820, 0]
   holybro_x500_v2:
     description: Holybro X500 V2 frame, 2216-class motors and 13-inch propellers, PX4's Gazebo model
     license: BSD-3-Clause

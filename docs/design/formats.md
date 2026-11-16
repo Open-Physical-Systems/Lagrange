@@ -1761,7 +1761,13 @@ The attributes are the keys of §9.1's `*lagrange` lines, which the netlist may 
 SHA-256 and licence, and `ros2 run lagrange_assets fetch_assets [ID...]` downloads them into
 `$LAGRANGE_ASSET_DIR` (default `~/.local/share/lagrange/assets/<id>/`) with the licence and a
 NOTICE. Robot files name them `lagrange-asset://<id>/<file>`; an asset that is not fetched is a
-note, and the link shows a magenta box in its place. **Textures** are not drawn: the importer
+note, and the link shows a magenta box in its place. An asset's `derive:` entry makes more files
+from the fetched ones, without the network: `wheel_split` (`assets/scripts/wheel_split.py`) cuts a
+one-piece car mesh into a body and one mesh per wheel, re-centred on its wheel centre, by the
+triangles inside each wheel's cylinder, so that the wheels spin and steer on screen (the Lexus's
+`lexus_body.dae` and `lexus_wheel_*.dae`). The parts are remade, byte for byte the same, whenever
+they are missing or stale: on the next `fetch_assets`, by `fetch_assets --derive`, and by
+`lagrange lexus` before it starts. **Textures** are not drawn: the importer
 bakes a textured part into parts of one colour each (each triangle takes the texture's colour
 under it, PNG or JPEG, embedded or a file next to the mesh; the triangles are grouped into 16
 colours at most by k-means), which keeps the viewer protocol unchanged.
