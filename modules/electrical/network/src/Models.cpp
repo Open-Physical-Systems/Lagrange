@@ -80,6 +80,28 @@ double MotorParams::resistanceAt(double temperature) const {
     return resistance * (1.0 + resistanceTempCoeff * (temperature - referenceTemperature));
 }
 
+double MotorParams::gearFactor(bool motoring) const {
+    if (motoring) {
+        return gearEfficiency;
+    }
+    return screw() ? 1.0 : 1.0 / gearEfficiency;
+}
+
+double screwFrictionLimit(const MotorParams& p, double motorForce, double load, double velocity) {
+    if (!p.screw()) {
+        return 0.0;
+    }
+    // Moving, the direction decides: against the load the motor drives the screw, with it the
+    // load does. About still (an engine's creep is µm/s), the motor drives once it out-pulls the
+    // load; until then the screw holds what it can.
+    constexpr double kStill = 1e-3;  // m/s or rad/s
+    bool lifting = velocity * load < 0.0;
+    if (std::abs(velocity) < kStill) {
+        lifting = motorForce * load < 0.0 && std::abs(motorForce) > std::abs(load);
+    }
+    return lifting ? 0.0 : (1.0 - std::min(p.gearBackEfficiency, 1.0)) * std::abs(load);
+}
+
 void advanceCurrents(const MotorParams& p, MotorState& s, double vd, double vq,
                      double motorVelocity, double resistance, double dt) {
     if (!p.dq) {
@@ -107,7 +129,7 @@ MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& i
     // Torque at the motor for the joint torque asked: the gear loses (1 − η) of the power in
     // whichever direction it flows.
     const bool motoring = in.torqueCommand * in.jointVelocity >= 0.0;
-    const double gear = motoring ? p.gearEfficiency : 1.0 / p.gearEfficiency;
+    const double gear = p.gearFactor(motoring);
     const double motorTorque = in.torqueCommand / (p.gearRatio * gear);
     const double limit = p.maxCurrent * std::clamp(in.derating, 0.0, 1.0);
     const double iqRef = std::clamp(motorTorque / p.torqueConstant, -limit, limit);
@@ -160,9 +182,7 @@ MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& i
         // the direction power flows at the step's start. Reluctance torque is left out here.
         const double n = p.gearRatio;
         const double we = p.dq ? p.polePairs * motorVelocity : 0.0;
-        const double efficiency = p.torqueConstant * s.iq * motorVelocity >= 0.0
-                                      ? p.gearEfficiency
-                                      : 1.0 / p.gearEfficiency;
+        const double efficiency = p.gearFactor(p.torqueConstant * s.iq * motorVelocity >= 0.0);
         if (p.dq) {
             s.id = advanceAxis(s.id, vd + we * p.inductanceQ * s.iq, resistance, p.inductanceD, dt);
         }
@@ -196,8 +216,7 @@ MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& i
         p.dq ? kDqFactor * p.polePairs *
                    (p.fluxLinkage() * s.iq + (p.inductanceD - p.inductanceQ) * s.id * s.iq)
              : p.torqueConstant * s.iq;
-    const double gearOut =
-        out.motorTorque * motorVelocity >= 0.0 ? p.gearEfficiency : 1.0 / p.gearEfficiency;
+    const double gearOut = p.gearFactor(out.motorTorque * motorVelocity >= 0.0);
     out.jointTorque = out.motorTorque * p.gearRatio * gearOut;
     const double power = factor * (vd * id + vq * iq);
     out.busCurrent = power / in.busVoltage;

@@ -1036,6 +1036,131 @@ apply:
         << again.error();
 }
 
+// RFC 0020 §4.4: a power screw's efficiencies against Shigley's power-screw torques (Budynas and
+// Nisbett, ch. 8): raising T_R = F·dm/2·(l + π·f·dm·sec α)/(π·dm − f·l·sec α), lowering
+// T_L = F·dm/2·(π·f·dm·sec α − l)/(π·dm + f·l·sec α); η = F·l/(2π·T_R), η_back = −2π·T_L/(F·l),
+// self-locking when T_L ≥ 0. Exact for a square thread; with a flank angle Shigley takes α where
+// the screw takes the angle in the normal plane, αn = atan(tan α·cos λ), a hair apart.
+TEST(LeadScrew, EfficienciesMatchThePowerScrewTorques) {
+    const auto shigley = [](double l, double dm, double f, double alpha) {
+        const double sec = 1.0 / std::cos(alpha);
+        const double pi = std::numbers::pi;
+        const double raise = dm / 2.0 * (l + pi * f * dm * sec) / (pi * dm - f * l * sec);
+        const double lower = dm / 2.0 * (pi * f * dm * sec - l) / (pi * dm + f * l * sec);
+        return std::array<double, 2>{l / (2.0 * pi * raise), -2.0 * pi * lower / l};
+    };
+    // A ball screw 16×5 (rolling friction 0.005, as a square thread): back-drivable.
+    const auto ball = leadScrewGear({0.005, 0.016, 0.005, 0.0});
+    ASSERT_TRUE(ball) << ball.error();
+    const auto ballRef = shigley(0.005, 0.016, 0.005, 0.0);
+    EXPECT_NEAR(ball->efficiency, ballRef[0], 1e-12);
+    EXPECT_NEAR(ball->backEfficiency, ballRef[1], 1e-12);
+    EXPECT_NEAR(ball->efficiency, 0.9517, 1e-4);
+    EXPECT_NEAR(ball->backEfficiency, 0.9493, 1e-4);
+    EXPECT_NEAR(ball->gearRatio, 2.0 * std::numbers::pi / 0.005, 1e-9);
+    EXPECT_FALSE(ball->selfLocking());
+    // A trapezoidal Tr12×2 (pitch diameter 11 mm, 15° flanks, f = 0.15): self-locking.
+    const auto trapezoidal = leadScrewGear({0.002, 0.011, 0.15, 15.0 * std::numbers::pi / 180.0});
+    ASSERT_TRUE(trapezoidal) << trapezoidal.error();
+    const auto trapRef = shigley(0.002, 0.011, 0.15, 15.0 * std::numbers::pi / 180.0);
+    EXPECT_NEAR(trapezoidal->efficiency, trapRef[0], 1e-4);
+    EXPECT_NEAR(trapezoidal->efficiency, 0.2691, 1e-4);
+    EXPECT_LT(trapRef[1], 0.0) << "Shigley: T_L > 0, it must be driven down";
+    EXPECT_EQ(trapezoidal->backEfficiency, 0.0);
+    EXPECT_TRUE(trapezoidal->selfLocking());
+    EXPECT_GT(trapezoidal->frictionAngle, trapezoidal->leadAngle);
+    // The same thread square: exact.
+    const auto square = leadScrewGear({0.002, 0.011, 0.15, 0.0});
+    ASSERT_TRUE(square);
+    EXPECT_NEAR(square->efficiency, shigley(0.002, 0.011, 0.15, 0.0)[0], 1e-12);
+    // Out of range.
+    EXPECT_FALSE(leadScrewGear({0.0, 0.011, 0.15, 0.0}));
+    EXPECT_FALSE(leadScrewGear({0.002, 0.011, -0.1, 0.0}));
+    EXPECT_FALSE(leadScrewGear({0.002, 0.011, 0.1, 1.6}));
+    EXPECT_FALSE(leadScrewGear({0.002, 0.011, 1e6, 0.0})) << "too much friction to drive";
+}
+
+// The overlay's lead_screw: sets a motor's gear ratio and both efficiencies; beside any of them
+// it is refused, as are unknown keys.
+TEST(LeadScrew, TheOverlaySetsTheMotorsGearFromTheThread) {
+    const char* const lift = R"(#usda 1.0
+(
+    defaultPrim = "lift"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "lift"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "carriage" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 5
+    }
+    def PhysicsPrismaticJoint "slide" ( prepend apiSchemas = ["PhysicsDriveAPI:linear"] )
+    {
+        rel physics:body0 = </lift/base>
+        rel physics:body1 = </lift/carriage>
+        uniform token physics:axis = "Z"
+    }
+}
+)";
+    const auto overlayWith = [](const std::string& name, const std::string& extra) {
+        return writeText(name, R"(schema_version: 1
+apply:
+  - prim: slide
+    create_child: screw_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.5
+        elec:inductance: 0.0005
+        elec:torqueConstant: 0.1
+        elec:maxCurrent: 15
+        elec:motorType: dc_brushed
+        elec:joint: slide
+)" + extra);
+    };
+    auto model = loadStage(writeText("lift.usda", lift).string());
+    ASSERT_TRUE(model) << model.error();
+    const auto applied = applyOverlay(
+        *model, overlayWith("lift.overlay.yaml",
+                            "        lead_screw: {lead: 0.002, diameter: 0.011, friction: 0.15, "
+                            "thread_angle: 0.2618}\n")
+                    .string());
+    ASSERT_TRUE(applied) << applied.error();
+    const SchemaInstance* motor = only(model->world, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    const auto gear = leadScrewGear({0.002, 0.011, 0.15, 0.2618});
+    ASSERT_TRUE(gear);
+    EXPECT_EQ(motor->real("elec:gearRatio"), gear->gearRatio);
+    EXPECT_EQ(motor->real("elec:gearEfficiency"), gear->efficiency);
+    EXPECT_EQ(motor->real("elec:gearBackEfficiency"), 0.0);
+
+    for (const auto& [extra, says] :
+         {std::pair<std::string, std::string>{"        elec:gearRatio: 3000\n        lead_screw: "
+                                              "{lead: 0.002, diameter: 0.011, friction: 0.1}\n",
+                                              "give one or the other"},
+          {"        lead_screw: {lead: 0.002, diameter: 0.011, friction: 0.1, pitch: 2}\n",
+           "pitch is not one of"},
+          {"        lead_screw: {lead: 0.002, friction: 0.1}\n", "is a map of lead"},
+          {"        lead_screw: {lead: -0.002, diameter: 0.011, friction: 0.1}\n",
+           "must be positive"}}) {
+        auto fresh = loadStage(writeText("lift.usda", lift).string());
+        ASSERT_TRUE(fresh);
+        const auto refused =
+            applyOverlay(*fresh, overlayWith("lift_bad.overlay.yaml", extra).string());
+        ASSERT_FALSE(refused) << extra;
+        EXPECT_NE(refused.error().find(says), std::string::npos) << refused.error();
+    }
+    // The loader refuses a back efficiency out of 0..1 other than the fallback −1.
+    EXPECT_FALSE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", -1.0));
+    EXPECT_FALSE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", 0.4));
+    EXPECT_TRUE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", 1.3));
+    EXPECT_TRUE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", -0.5));
+}
+
 // RFC 0011: a tether from a new prim (the ground station, placed by its anchor point) to a link.
 // RFC 0021: a lamp on a prim under a link, placed in its body, with its colour (a color3f).
 TEST(Lamps, ALampPrimIsPlacedInItsBody) {

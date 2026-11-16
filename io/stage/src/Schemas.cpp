@@ -61,6 +61,13 @@ constexpr std::array<Fraction, 10> kFractions{
      {"LampAPI_1", "lamp:heatFraction"},
      {"LampAPI_1", "lamp:blinkDuty"},
      {"LampAPI_1", "lamp:initialCommand"}}};
+// A fraction whose fallback is a sentinel outside 0..1 that means "unset".
+struct FractionOrUnset {
+    std::string_view schema, attribute;
+    double unset;
+};
+constexpr std::array<FractionOrUnset, 1> kFractionsOrUnset{
+    {{"ElectricalMotorAPI_1", "elec:gearBackEfficiency", -1.0}}};
 struct JointTarget {
     std::string_view schema, relationship;
 };
@@ -160,6 +167,13 @@ std::optional<std::string> checkSchemaReal(const std::string& schema, const std:
         if (schema == rule.schema && attribute == rule.attribute &&
             !(value >= 0.0 && value <= 1.0)) {
             return attribute + " is " + std::to_string(value) + "; it must be within 0 to 1";
+        }
+    }
+    for (const FractionOrUnset& rule : kFractionsOrUnset) {
+        if (schema == rule.schema && attribute == rule.attribute && value != rule.unset &&
+            !(value >= 0.0 && value <= 1.0)) {
+            return attribute + " is " + std::to_string(value) + "; it must be within 0 to 1, or " +
+                   std::to_string(rule.unset) + " for unset";
         }
     }
     return std::nullopt;
@@ -321,6 +335,15 @@ void SchemaCollector::check(const UsdPrim& prim, const SchemaInstance& s) {
         if (s.schema == rule.schema && value && !(*value >= 0.0 && *value <= 1.0)) {
             errors_.get().push_back(path + ": " + std::string(rule.attribute) + " is " +
                                     std::to_string(*value) + "; it must be within 0 to 1");
+        }
+    }
+    for (const FractionOrUnset& rule : kFractionsOrUnset) {
+        const std::optional<double> value = s.real(rule.attribute);
+        if (s.schema == rule.schema && value && *value != rule.unset &&
+            !(*value >= 0.0 && *value <= 1.0)) {
+            errors_.get().push_back(path + ": " + std::string(rule.attribute) + " is " +
+                                    std::to_string(*value) + "; it must be within 0 to 1, or " +
+                                    std::to_string(rule.unset) + " for unset");
         }
     }
     for (const JointTarget& rule : kJointTargets) {

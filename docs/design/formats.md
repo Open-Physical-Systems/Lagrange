@@ -126,6 +126,7 @@ points at the driven joint).
 | `elec:rotorInertia` | double | kg·m² | `0.0` | Added to the joint's armature inertia |
 | `elec:gearRatio` | double | 1 | `1.0` | Motor revolutions per joint revolution |
 | `elec:gearEfficiency` | double | 1 | `1.0` | 0…1 |
+| `elec:gearBackEfficiency` | double | 1 | `-1.0` | 0…1 when the load drives the motor (0: self-locking), or −1: as `gearEfficiency`. Set, the back-driven losses are the joint friction `joint/<j>/friction_limit` (RFC 0020 §4.4; added after 1.0) |
 | `elec:maxCurrent` | double | A | — | Drive current limit (peak) |
 | `elec:referenceTemperature` | double | K | `298.15` | |
 | `elec:resistanceTempCoeff` | double | 1/K | `0.00393` | Copper, per kelvin (source: standard value for annealed copper at 20 °C; cite in code) |
@@ -1955,6 +1956,11 @@ pose). These are the catalog's `overlay_only` sensors, which the robot builder w
 Any other sensor type (a camera or a lidar) is refused with a message naming the prim, never
 dropped: it belongs in the robot file's own `<sensor>` or its USD, so lidars on an MJCF robot
 still need USD for now.
+
+`ElectricalMotorAPI_1` also takes `lead_screw: {lead, diameter, friction, thread_angle}` (m, m,
+1, rad; RFC 0020 §4.4), which sets `elec:gearRatio` (2π/lead), `gearEfficiency` and
+`gearBackEfficiency` from the thread, and is refused beside any of them
+(docs/physics/actuators.md "Lead screws").
 
 ### 9.1 A SPICE netlist as an overlay
 

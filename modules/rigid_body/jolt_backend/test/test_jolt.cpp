@@ -6,10 +6,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <numbers>
 #include <span>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -316,6 +319,97 @@ TEST(Jolt, RefusesSubstepsOutOfRange) {
         scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
         EXPECT_FALSE(scheduler.wire(WorldView(world))) << substeps;
     }
+}
+
+// --- friction limit (RFC 0020 §4.4) --------------------------------------------------------
+
+/// Writes a constant to one signal every millisecond.
+class Constant final : public IModule {
+public:
+    Constant(std::string signal, Unit unit, double value)
+        : signal_(std::move(signal)), unit_(unit), value_(value) {}
+    [[nodiscard]] ModuleInfo info() const override { return {"controller", "constant"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = signal_;
+        spec.unit = unit_;
+        id_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(id_, value_);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        bus.write(id_, value_);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    std::string signal_;
+    Unit unit_;
+    double value_;
+    SignalId id_;
+};
+
+constexpr double kG = 9.80665;  // m/s², the world's default
+
+/// A 10 kg carriage on a vertical slide hanging from the world: gravity pulls it at −m g.
+World carriage(double ownFriction = 0.0) {
+    World world;
+    world.robots.push_back("lift");
+    const BodyId body = world.addBody("carriage", kWorldBody, Pose{{0.0, 0.0, 1.0}}, 10.0, {},
+                                      {0.05, 0.05, 0.05, 0, 0, 0});
+    world.bodies.robot[body.index] = 0;
+    world.addJoint("lift", JointType::Prismatic, body, {0.0, 0.0, 1.0}, true);
+    world.joints.friction.back() = ownFriction;
+    return world;
+}
+
+double run(const World& world, double limit, double seconds, const char* signal = "velocity") {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/lift/friction_limit", units::N, limit));
+    auto wired = scheduler.wire(WorldView(world));
+    EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(seconds * 1e9)}).ok());
+    return scheduler.bus().read(scheduler.bus().find(std::string("joint/lift/") + signal));
+}
+
+TEST(Jolt, AFrictionLimitAboveTheWeightHoldsTheSlide) {
+    const World world = carriage();
+    const double crept = run(world, 120.0, 10.0, "position");
+    std::printf("held by 120 N: crept %.3g m in 10 s\n", crept);
+    EXPECT_LT(std::abs(crept), 1e-4) << "holds within 0.1 mm over 10 s";
+    EXPECT_NEAR(run(world, 120.0, 1.0, "constraint_torque"), 10.0 * kG, 0.05 * kG)
+        << "the friction that holds it is the joint's constraint force";
+}
+
+TEST(Jolt, AFrictionLimitBelowTheWeightSlowsItsFall) {
+    EXPECT_NEAR(run(carriage(), 5.0 * kG, 1.0), -0.5 * kG, 0.01 * kG) << "m a = m g − F";
+    EXPECT_NEAR(run(carriage(4.0 * kG), kG, 1.0), -0.5 * kG, 0.01 * kG)
+        << "added to the joint's own friction";
+}
+
+TEST(Jolt, AFrictionLimitOnAHingeHoldsBackItsTorque) {
+    // A worm gear's on a flywheel about a vertical axle: (τ − limit) / I.
+    World world;
+    world.robots.push_back("wheel");
+    const BodyId wheel = world.addBody("flywheel", kWorldBody, Pose{{0.0, 0.0, 0.5}}, 2.0, {},
+                                       {0.01, 0.01, 0.02, 0, 0, 0});
+    world.bodies.robot[wheel.index] = 0;
+    world.addJoint("axle", JointType::Continuous, wheel, {0.0, 0.0, 1.0}, true);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/axle/torque", units::N_m, 0.05));
+    scheduler.add(std::make_unique<Constant>("joint/axle/friction_limit", units::N_m, 0.02));
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_NEAR(scheduler.bus().read(scheduler.bus().find("joint/axle/velocity")),
+                0.03 / 0.02 * 2.0, 0.03);
 }
 
 }  // namespace

@@ -1,0 +1,66 @@
+# The screw lift's power system and screws (RFC 0020 §4.4; docs/physics/actuators.md "Lead
+# screws"): two brushed motors on a 24 V bus, each turning a lead screw given by its thread
+# (lead_screw: lead and pitch diameter in m, friction coefficient, flank half-angle in rad),
+# from which the loader sets elec:gearRatio = 2π/lead and both efficiencies. Applied to
+# screw_lift.urdf by `lagrange_server --overlay`. Parameters are illustrative, not a real
+# product.
+#   - lift_a: Tr12x2 (2 mm lead, 11 mm pitch diameter, 15° flanks, f = 0.15): forward efficiency
+#     0.269, self-locking (back efficiency 0); it holds its 100 kg with the motor shorted or off.
+#     Lifting it takes 981 N / (0.269 × 2π/0.002 × 0.1 N·m/A) = 11.6 A.
+#   - lift_b: ball screw 16x5 (rolling friction 0.005): forward 0.952, back 0.949; with its
+#     motor's terminals shorted (0 V) it sinks at
+#     η_back·m·g·R / ((2π/lead)²·Kt²) = 0.949 × 196 N × 1 Ω / (1257² × 0.05²) = 47 mm/s.
+# Both drives are in voltage mode (elec:controlMode): --joint-control (the default under
+# `lagrange`) holds them at 0 V, the low sides on, until told volts (/joint_commands' effort,
+# or `Server::commandJoint(j, "voltage", V)`).
+schema_version: 1
+apply:
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 8
+        elec:battery:capacity: 36000.0           # C (10 Ah)
+        elec:battery:ocvSoc: [0.0, 0.1, 0.5, 0.9, 1.0]
+        elec:battery:ocvVoltage: [2.80, 3.20, 3.28, 3.33, 3.45]   # V per cell
+        elec:battery:r0: 0.002                   # ohm per cell
+        elec:battery:cutoffVoltage: 22.4         # V, 2.8 V per cell
+        elec:battery:maxChargeCurrent: 10.0      # A
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 25.6    # V
+        elec:port:dc_out:maxCurrent: 40.0        # A
+        elec:port:dc_out:connectedTo: power/dc_24v
+  - create: power/dc_24v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0022             # F
+        elec:bus:undervoltageTrip: 20.0          # V
+        elec:bus:overvoltageTrip: 30.0           # V
+  - prim: lift_a
+    create_child: lift_a_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: dc_brushed
+        elec:controlMode: voltage
+        elec:windingResistance: 0.5              # ohm
+        elec:inductance: 0.0005                  # H
+        elec:torqueConstant: 0.1                 # N·m/A
+        elec:maxCurrent: 15.0                    # A
+        elec:resistanceTempCoeff: 0.0            # 1/K: no thermal model here
+        lead_screw: {lead: 0.002, diameter: 0.011, friction: 0.15, thread_angle: 0.2618}
+        elec:joint: lift_a
+        elec:powerPort: power/dc_24v
+  - prim: lift_b
+    create_child: lift_b_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: dc_brushed
+        elec:controlMode: voltage
+        elec:windingResistance: 1.0              # ohm
+        elec:inductance: 0.001                   # H
+        elec:torqueConstant: 0.05                # N·m/A
+        elec:maxCurrent: 10.0                    # A
+        elec:resistanceTempCoeff: 0.0            # 1/K
+        lead_screw: {lead: 0.005, diameter: 0.016, friction: 0.005}
+        elec:joint: lift_b
+        elec:powerPort: power/dc_24v

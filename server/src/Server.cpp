@@ -8402,6 +8402,9 @@ Status Server::start() {
                   std::to_string(s.controllers->updateRateHz()) + " Hz drives " +
                   std::to_string(s.controlJoints.size()) +
                   " joints through lagrange_ros2_control/LagrangeSystem; spawn its controllers");
+    } else if (s.jointControlled()) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "joint control: every driven joint takes /joint_commands (or holds where it is)");
     } else if (s.robot.actuatedJoints.size() == 2) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "diff drive on " + s.robot.actuatedJoints[0] + " and " + s.robot.actuatedJoints[1] +

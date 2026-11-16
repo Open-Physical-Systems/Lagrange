@@ -107,6 +107,10 @@ private:
         std::uint32_t stepsSince{0};
         bool synced{false};
         SignalId effectiveInertia;
+        // A screw (elec:gearBackEfficiency set): its joint's acceleration and constraint force,
+        // and the friction its gear puts on the joint; the drive's force it wrote last.
+        SignalId acceleration, constraintTorque, frictionLimit;
+        double lastTorque{0.0};
         SignalId command, velocity, temperature, derating;
         SignalId torque, currentD, currentQ, voltageD, voltageQ, busCurrent, loss, fault;
     };

@@ -434,6 +434,103 @@ TEST_P(Conformance, RunsAreDeterministicAndStateRestores) {
     EXPECT_EQ(server.stateHash().value(), straight) << "restored, it runs on the same";
 }
 
+/// The sample screw lift (RFC 0020 §4.4) and its power system, from the installed lagrange_assets.
+std::string screwLift(const std::string& file) {
+    return (ament_index_cpp::get_package_share_path("lagrange_assets") / "robots/screw_lift" / file)
+        .string();
+}
+
+/// A power screw's back efficiency, tan(λ − φ)/tan λ with tan λ = lead/(π·dm), tan φ = μ (a
+/// square thread, as the sample's ball screw).
+double backEfficiency(double lead, double diameter, double friction) {
+    const double lambda = std::atan(lead / (std::numbers::pi * diameter));
+    return std::tan(lambda - std::atan(friction)) / std::tan(lambda);
+}
+
+// joint/<j>/friction_limit (rigid_body.md §8): the sample lift's self-locking screw (Tr12x2,
+// back efficiency 0) holds its 100 kg for 60 s with its motor shorted (0 V, from --joint-control):
+// the electrical domain asks for a friction of the whole load, and the engine holds within its
+// compliance.
+TEST_P(Conformance, ASelfLockingScrewHoldsItsLoadUnpowered) {
+    ServerOptions o = options(screwLift("screw_lift.urdf"), "");
+    o.overlayPath = screwLift("screw_lift.overlay.yaml");
+    o.jointControl = true;  // the voltage drives at 0 V, terminals shorted, until told otherwise
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{100'000'000}).ok());
+    const double start = server.read("joint/lift_a/position").at(0);
+    ASSERT_TRUE(server.stepUntil(SimTime{60'100'000'000}).ok());
+    const double end = server.read("joint/lift_a/position").at(0);
+    std::printf(
+        "self-locking screw, 100 kg, 60 s unpowered: settled %.3g m in the first 0.1 s, "
+        "then moved %.3g m; friction limit %.1f N\n",
+        start, end - start, server.read("joint/lift_a/friction_limit").at(0));
+    EXPECT_LT(std::abs(start), 1e-4) << "it settles on its screw within 0.1 mm";
+    EXPECT_LT(std::abs(end - start), 5e-4) << "no creep beyond 0.5 mm over 60 s";
+    EXPECT_NEAR(server.read("joint/lift_a/friction_limit").at(0), 100.0 * 9.80665, 1.0);
+}
+
+// A back-drivable ball screw (16x5, rolling friction 0.005) under 20 kg, its brushed motor's
+// terminals shorted: it sinks at the speed where the motor's braking force, (2π/lead)²·Kt²/R·v,
+// carries η_back of the weight and the screw's friction the rest. Restored from a checkpoint
+// mid-way, it sinks on bit for bit.
+TEST_P(Conformance, ABackDrivableScrewSinksAtTheSpeedItsMotorBrakes) {
+    ServerOptions o = options(screwLift("screw_lift.urdf"), "");
+    o.overlayPath = screwLift("screw_lift.overlay.yaml");
+    o.jointControl = true;  // the voltage drives at 0 V, terminals shorted, until told otherwise
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    constexpr double kLead = 0.005;  // m
+    constexpr double kMass = 20.0;   // kg
+    constexpr double kKt = 0.05;     // N·m/A
+    constexpr double kOhm = 1.0;     // winding
+    const double n = 2.0 * std::numbers::pi / kLead;
+    const double expected =
+        -backEfficiency(kLead, 0.016, 0.005) * kMass * 9.80665 * kOhm / (n * n * kKt * kKt);
+    ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+    const auto saved = server.saveState();
+    ASSERT_TRUE(saved) << saved.error().message;
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    const double speed = server.read("joint/lift_b/velocity").at(0);
+    const double at = server.read("joint/lift_b/position").at(0);
+    std::printf("ball screw, 20 kg, shorted motor: %.5f m/s (closed form %.5f)\n", speed, expected);
+    EXPECT_NEAR(speed, expected, 0.02 * std::abs(expected)) << "within 2 %";
+    ASSERT_TRUE(server.restoreState(*saved).ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    EXPECT_EQ(server.read("joint/lift_b/position").at(0), at) << "restored, it sinks the same";
+}
+
+// The same self-locking screw lifts its 100 kg when its motor is given 24 V: the motor drives,
+// so the gear loses through its forward efficiency (η = tan λ / tan(λ + φ) = 0.2691 for the
+// Tr12x2) and the friction limit is off. Steady: i = m·g / (η·N·Kt), v = (V − R·i) / (Kt·N).
+TEST_P(Conformance, ASelfLockingScrewLiftsThroughItsForwardEfficiency) {
+    ServerOptions o = options(screwLift("screw_lift.urdf"), "");
+    o.overlayPath = screwLift("screw_lift.overlay.yaml");
+    o.jointControl = true;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.commandJoint("lift_a", "voltage", 24.0));
+    ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
+    const double lambda = std::atan(0.002 / (std::numbers::pi * 0.011));
+    const double normal = std::atan(std::tan(15.0 * std::numbers::pi / 180.0) * std::cos(lambda));
+    const double phi = std::atan(0.15 / std::cos(normal));
+    const double eta = std::tan(lambda) / std::tan(lambda + phi);
+    const double n = 2.0 * std::numbers::pi / 0.002;
+    const double current = 100.0 * 9.80665 / (eta * n * 0.1);
+    const double expected = (24.0 - 0.5 * current) / (0.1 * n);
+    const double speed = server.read("joint/lift_a/velocity").at(0);
+    std::printf(
+        "self-locking screw lifting 100 kg at 24 V: %.5f m/s (closed form %.5f), "
+        "%.2f A (%.2f), friction limit %.1f N\n",
+        speed, expected, server.read("motor/lift_a_motor/current_q").at(0), current,
+        server.read("joint/lift_a/friction_limit").at(0));
+    EXPECT_NEAR(speed, expected, 0.02 * expected) << "within 2 %";
+    EXPECT_EQ(server.read("joint/lift_a/friction_limit").at(0), 0.0);
+}
+
 /// The MCube pushing experiment (Yu, Bauza, Fazeli and Rodriguez, "More than a Million Ways to Be
 /// Pushed", IROS 2016, §VII and Table IV): the stainless-steel square rect1 (0.837 kg, 90 mm a
 /// side, 13 mm thick, 1.13 g·m² about its axis; their Table III) pushed 15 cm at 20 mm/s by a

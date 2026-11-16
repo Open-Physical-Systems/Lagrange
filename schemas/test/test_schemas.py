@@ -171,6 +171,18 @@ def test_lidar_patterns_and_fisheye_lenses_are_additions():
     assert cutoff.GetFallbackValue() is None
 
 
+def test_gear_back_efficiency_is_an_addition():
+    # RFC 0020 §4.4: appended to ElectricalMotorAPI_1 with a fallback of -1, "the same as
+    # gearEfficiency", so every file without it behaves as before; not in frozen_1_0.json.
+    motor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    back = motor.GetAttributeDefinition("elec:gearBackEfficiency")
+    assert back
+    assert back.GetFallbackValue() == -1.0
+    assert back.GetMetadata("lagrangeUnit") == "1"
+    with FROZEN.open() as f:
+        assert "elec:gearBackEfficiency" not in json.load(f)["ElectricalMotorAPI_1"]
+
+
 # RFC 0007: the schemas are frozen at 1.0. Every attribute of every schema at v1.0.0 is listed
 # in frozen_1_0.json with its type, fallback, unit and allowed tokens; within 1.x an attribute
 # may be added, and allowed tokens appended, but nothing listed may change or go.

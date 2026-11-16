@@ -16,6 +16,7 @@ add_library(
     src/Schemas.cpp
     src/Overlay.cpp
     src/Netlist.cpp
+    src/LeadScrew.cpp
 )
 add_library(lagrange::stage ALIAS lagrange_stage)
 target_include_directories(

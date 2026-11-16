@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -559,6 +560,117 @@ TEST(MujocoBackend, SaveRunRestoreRunIsIdentical) {
     ASSERT_TRUE(scheduler.restoreState(reader).ok());
     ASSERT_TRUE(scheduler.stepUntil(SimTime{600'000'000}).ok());
     EXPECT_EQ(read(scheduler, "body/box/pose", 0), x);
+    EXPECT_EQ(scheduler.stateHash().value(), first);
+}
+
+// --- friction limit (RFC 0020 §4.4) --------------------------------------------------------
+
+/// A 10 kg carriage on a vertical slide (z up), its axis along z: gravity pulls it at −m g.
+World carriage() {
+    World world;
+    const BodyId body = world.addBody("carriage", kWorldBody, Pose{{0.0, 0.0, 1.0}}, 10.0, {},
+                                      diagonal(0.05, 0.05, 0.05));
+    world.addJoint("lift", JointType::Prismatic, body, {0.0, 0.0, 1.0}, true);
+    return world;
+}
+
+/// Writes a friction limit that changes every step (a screw's under a changing load).
+class Wobble final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override { return {"electrical", "wobble"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "joint/lift/friction_limit";
+        spec.unit = units::N;
+        id_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(id_, 0.0);
+        return {};
+    }
+    Status step(const StepContext& context, SignalBus& bus) override {
+        // Around the weight (98 N): it holds, slips and holds again.
+        bus.write(id_, 98.0 + 30.0 * std::sin(10.0 * context.t.seconds()));
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    SignalId id_;
+};
+
+TEST(MujocoBackend, AFrictionLimitAboveTheWeightHoldsTheSlide) {
+    const World world = carriage();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/lift/friction_limit", units::N, 120.0));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+    const double start = read(scheduler, "joint/lift/position");
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{10'100'000'000}).ok());
+    const double crept = read(scheduler, "joint/lift/position") - start;
+    std::printf("held by 120 N: crept %.3g m in 10 s\n", crept);
+    EXPECT_LT(std::abs(crept), 1e-4) << "holds within 0.1 mm over 10 s";
+    // What holds it is the joint's constraint force: the weight.
+    EXPECT_NEAR(read(scheduler, "joint/lift/constraint_torque"), 10.0 * kGravity, 0.01);
+}
+
+TEST(MujocoBackend, AFrictionLimitBelowTheWeightSlowsItsFall) {
+    const World world = carriage();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(
+        std::make_unique<Constant>("joint/lift/friction_limit", units::N, 5.0 * kGravity));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    // m a = m g − F: a = g / 2.
+    EXPECT_NEAR(read(scheduler, "joint/lift/velocity"), -0.5 * kGravity, 0.01 * kGravity);
+}
+
+TEST(MujocoBackend, AFrictionLimitAddsToTheJointsOwnFriction) {
+    World world = carriage();
+    world.joints.friction.back() = 4.0 * kGravity;
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/lift/friction_limit", units::N, kGravity));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "joint/lift/velocity"), -0.5 * kGravity, 0.01 * kGravity);
+}
+
+TEST(MujocoBackend, AFrictionLimitOnAHingeHoldsBackItsTorque) {
+    // A worm gear's: τ − limit turns the flywheel.
+    constexpr double kInertia = 0.02;  // kg·m²
+    const World world = flywheel(kInertia);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/axle/torque", units::N_m, 0.05));
+    scheduler.add(std::make_unique<Constant>("joint/axle/friction_limit", units::N_m, 0.02));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "joint/axle/velocity"), 0.03 / kInertia * 2.0, 0.01 * 3.0);
+}
+
+TEST(MujocoBackend, AChangingFrictionLimitRestoresBitForBit) {
+    const World world = carriage();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Wobble>());
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{200'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{900'000'000}).ok());
+    const std::uint64_t first = scheduler.stateHash().value();
+    const double z = read(scheduler, "joint/lift/position");
+    EXPECT_LT(z, -1e-3) << "it slipped where the limit was below the weight";
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{900'000'000}).ok());
+    EXPECT_EQ(read(scheduler, "joint/lift/position"), z);
     EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 
