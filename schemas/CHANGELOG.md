@@ -15,6 +15,13 @@ and `test_schemas.py` checks it.
 - **Light library** (RFC 0021): `LampAPI_1`, a lamp on a prim (spot, point or beacon) with its
   intensity in cd, beam and field angles, colour, efficacy, blinking and dimming. New library,
   nothing to migrate.
+- **Actuator library** (RFC 0020): `SuctionGripperAPI_1` (a suction cup: diameter, volume, the
+  vacuum generator's flow and ultimate pressure, seal tolerances, an open cup's ISO 6358
+  conductance) and `MagnetGripperAPI_1` (an electromagnet or electropermanent magnet: turns, pole
+  area, iron path, saturation, coil). New library, nothing to migrate.
+
+- **Sensor-material library** (RFC 0020): `sensmat:airPermeability` on `SensorMaterialAPI_1` (fallback
+  0, airtight), what a suction cup on the surface leaks. Addition, nothing to migrate.
 
 - **Sensor library** (RFC 0015): `flash` and `rosette` appended to `sensor:lidar:scanPattern`;
   `sensor:lidar:channelElevations` (a channel table) and five `sensor:lidar:rosette:*` (fov,

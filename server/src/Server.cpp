@@ -1,4 +1,5 @@
 #include "Recorder.hpp"
+#include "lagrange/actuators/Grippers.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
@@ -546,7 +547,7 @@ struct DomainRow {
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 17> kDomains{{
+constexpr std::array<DomainRow, 18> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -564,6 +565,7 @@ constexpr std::array<DomainRow, 17> kDomains{{
     {"tether", "zero", "constant"},
     {"fire", "zero", "constant"},
     {"lights", "zero", "constant"},
+    {"actuators", "zero", "constant"},  // never holds; `ideal` too (RFC 0020 §3.3)
 }};
 
 /// Writes a robot given as text to a temporary file the loaders read (defined below).
@@ -1054,6 +1056,30 @@ struct Server::Impl {
                                                                          : lights::Mode::Model));
             }
         }
+        // Grippers (RFC 0020): suction cups and magnets, holding parts by force pairs found by
+        // rays in the run's colliders at the bodies' poses.
+        if (hasGrippers()) {
+            ModuleConfigData grip;
+            if (settings.ambientTemperatureK) {
+                grip.values[actuators::Grippers::kTemperatureKey] = *settings.ambientTemperatureK;
+            }
+            if (const auto site = options.site.find("pressure"); site != options.site.end()) {
+                grip.values[actuators::Grippers::kPressureKey] = site->second;
+            }
+            if (!(off("actuators") && addPluginSubstitute("actuators", grip))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const actuators::Grippers::Mode mode =
+                    !off("actuators") ? actuators::Grippers::Mode::Full
+                    : token != settings.substituteTokens.end() && token->second == "ideal"
+                        ? actuators::Grippers::Mode::Ideal
+                        : actuators::Grippers::Mode::Never;
+                auto scene = std::make_shared<sensors::BodyScene>(robot.world);
+                next->add(std::make_unique<actuators::Grippers>(
+                              mode, [scene](const SignalBus& bus) { return &scene->at(bus); },
+                              actuatorCommands),
+                          ModuleConfig(grip));
+            }
+        }
         // People (RFC 0009): moved like traffic agents, around the robots.
         if (hasHumans()) {
             ModuleConfigData people;
@@ -1524,6 +1550,8 @@ struct Server::Impl {
     // Of the robot itself: a passive car spawned beside an arm takes nothing from the arm.
     bool jointControllable{true};
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
+    /// Gripper commands from the API (Server::commandActuator), outliving rebuilds.
+    std::shared_ptr<actuators::Commands> actuatorCommands = std::make_shared<actuators::Commands>();
     // Stateless modules ("domain/name") left out of the run because the state restored last was
     // saved before a later release added them (Scheduler::addedSince, formats.md §11).
     std::set<std::string> leftOut;
@@ -1819,6 +1847,12 @@ struct Server::Impl {
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
     bool hasFires() const { return !WorldView(robot.world).instancesOf("FireAPI_1").empty(); }
     bool hasLamps() const { return !WorldView(robot.world).instancesOf("LampAPI_1").empty(); }
+    /// Whether the stage has grippers (RFC 0020).
+    bool hasGrippers() const {
+        const WorldView view(robot.world);
+        return !view.instancesOf("SuctionGripperAPI_1").empty() ||
+               !view.instancesOf("MagnetGripperAPI_1").empty();
+    }
     bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
@@ -3478,6 +3512,10 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "lights" && hasLamps()) {
                 yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
                                               : "  lights: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "actuators" && hasGrippers()) {
+                yaml += substituted("actuators")
+                            ? "  actuators: {enabled: false, substitute: zero}\n"
+                            : "  actuators: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -3495,7 +3533,8 @@ struct Server::Impl {
                        std::string_view(row.domain) == "hydrodynamics" ||
                        std::string_view(row.domain) == "tether" ||
                        std::string_view(row.domain) == "fire" ||
-                       std::string_view(row.domain) == "lights") {
+                       std::string_view(row.domain) == "lights" ||
+                       std::string_view(row.domain) == "actuators") {
                 continue;  // not in the profile of a ground robot
             } else {
                 yaml += "  " + std::string(row.domain) +
@@ -3589,7 +3628,9 @@ struct Server::Impl {
             : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
             : domain == "fire"          ? "no fires in the stage (FireAPI_1)"
-                                        : "no module in this build yet; the substitute stands in");
+            : domain == "actuators"
+                ? "no grippers in the stage (SuctionGripperAPI_1, MagnetGripperAPI_1)"
+                : "no module in this build yet; the substitute stands in");
     }
 
     /// Measured CPU per simulated second of each domain (ms), from the last statistics report:
@@ -5767,6 +5808,9 @@ struct Server::Impl {
         if (hasLamps()) {
             context.modules.insert("lights");
         }
+        if (hasGrippers()) {
+            context.modules.insert("actuators");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -5786,6 +5830,9 @@ struct Server::Impl {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
             if (std::string_view(row.domain) == "rigid_body") {
                 context.substitutes[row.domain].insert("replay");  // bench mode
+            }
+            if (std::string_view(row.domain) == "actuators") {
+                context.substitutes[row.domain].insert("ideal");  // holds with no dynamics
             }
         }
         for (const PluginModule& module : plugins) {
@@ -7987,6 +8034,48 @@ Status Server::load() {
         if (settings.signalTopics.lampTopics) {
             addLampTopics(WorldView(s.robot.world), settings.signalTopics);
         }
+        // Every gripper's default topics (RFC 0020 §5), unless the map already uses the topic or
+        // the signal: /<g>/command in, /<g>/state (holding) and /<g>/pressure or /<g>/current out.
+        {
+            std::string problem;
+            ros2::TopicMaps& maps = settings.signalTopics;
+            const auto taken = [&maps](const std::string& topic, const std::string& signal) {
+                for (const auto* list : {&maps.publish, &maps.subscribe}) {
+                    for (const ros2::TopicMap& m : *list) {
+                        if (m.topic == topic || m.signal == signal) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+            const auto add = [&](std::vector<ros2::TopicMap>& list, std::string signal,
+                                 std::string topic, std::string type, std::string frame) {
+                if (taken(topic, signal)) {
+                    return;
+                }
+                ros2::TopicMap m;
+                m.signal = std::move(signal);
+                m.topic = std::move(topic);
+                m.type = std::move(type);
+                m.frame = std::move(frame);
+                list.push_back(std::move(m));
+            };
+            for (const actuators::GripperSpec& g :
+                 actuators::grippersOf(WorldView(s.robot.world), problem)) {
+                const std::string act = "act/" + g.name + "/";
+                const std::string topic = "/" + g.name + "/";
+                add(maps.subscribe, act + "command", topic + "command", "std_msgs/msg/Bool", "");
+                add(maps.publish, act + "held", topic + "state", "std_msgs/msg/Bool", "");
+                if (g.kind == actuators::GripperSpec::Kind::Suction) {
+                    add(maps.publish, act + "pressure", topic + "pressure",
+                        "sensor_msgs/msg/FluidPressure", g.name);
+                } else {
+                    add(maps.publish, act + "current", topic + "current", "std_msgs/msg/Float64",
+                        "");
+                }
+            }
+        }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
@@ -8177,6 +8266,18 @@ Status Server::setSite(const std::string& name, double value) {
         return Status::error(StatusCode::Internal, "setSite() before load()");
     }
     return impl_->setSite(name, value);
+}
+
+bool Server::commandActuator(const std::string& name, double value) {
+    std::string error;
+    for (const actuators::GripperSpec& g :
+         actuators::grippersOf(WorldView(impl_->robot.world), error)) {
+        if (g.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {

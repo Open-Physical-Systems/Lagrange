@@ -288,6 +288,7 @@ physics/tether
 physics/lights
 physics/heat-conduction
 physics/fire
+physics/actuators
 ```
 
 ```{toctree}

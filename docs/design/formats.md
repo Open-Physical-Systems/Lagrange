@@ -554,6 +554,7 @@ class "RadiationAPI_1" (
 | `sensmat:relativePermeability` | double | 1 | `1.0` | Magnetic permeability relative to vacuum |
 | `sensmat:thermalEmissivity` | double | 1 | `0.9` | Long-wave IR emissivity (thermal cameras) |
 | `sensmat:frictionWetScale` | double | 1 | `0.7` | Multiplier on friction when wet (weather coupling) |
+| `sensmat:airPermeability` | double | m/(Pa·s) | `0.0` | Air permeance: what a suction cup on it leaks (RFC 0020; added in 1.x). 0 is airtight |
 
 ```usda
 class "SensorMaterialAPI_1" (
@@ -573,6 +574,7 @@ class "SensorMaterialAPI_1" (
     double sensmat:relativePermeability = 1.0 ( lagrangeUnit = "1" )
     double sensmat:thermalEmissivity = 0.9 ( lagrangeUnit = "1" )
     double sensmat:frictionWetScale = 0.7 ( lagrangeUnit = "1" )
+    double sensmat:airPermeability = 0.0 ( lagrangeUnit = "m/(Pa.s)" )
 }
 ```
 
@@ -1004,6 +1006,74 @@ lamps:
         elec:load:power: 5.0
         elec:powerPort: dc_48v
 ```
+
+### 3.16 `schemas/actuator/schema.usda`
+
+Added in 1.x by RFC 0020 (phase 1: grippers) and simulated by the actuators domain
+(`modules/actuators/`, docs/physics/actuators.md). A gripper holds by an equal and opposite pair
+of forces on its body and the part, never by a weld.
+
+**`SuctionGripperAPI_1`** (single-apply). The prim's origin is the centre of the cup's lip.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:suction:diameter` | double | m | — | Effective diameter. Required |
+| `act:suction:volume` | double | m³ | — | Cup and hose. Required |
+| `act:suction:flow` | double | kg/s | — | The generator's suction at atmospheric pressure. Required |
+| `act:suction:ultimatePressure` | double | Pa | — | The generator's ultimate vacuum, absolute. Required |
+| `act:suction:sealGap` | double | m | `0.002` | A modelling tolerance, not a device value |
+| `act:suction:maxTilt` | double | rad | `0.26` | Same |
+| `act:suction:leakConductance` | double | m³/(s·Pa) | `0` | ISO 6358 `C` of the open cup; 0: an open cup vents at once |
+| `act:suction:axis` | double3 | 1 | `(0, 0, 1)` | Where the cup faces, in the prim's frame |
+
+**`MagnetGripperAPI_1`** (single-apply). The prim's origin is the centre of the pole faces.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:magnet:kind` | token | — | `electro` | `electro` or `electropermanent` (holds unpowered) |
+| `act:magnet:turns` | double | 1 | — | Required |
+| `act:magnet:poleArea` | double | m² | — | Each of two poles. Required |
+| `act:magnet:ironPathLength` | double | m | `0` | Core and part together |
+| `act:magnet:ironPermeability` | double | 1 | — | The core's μr; required with an iron path |
+| `act:magnet:saturation` | double | T | `0` | Most flux the iron carries; 0: no limit |
+| `act:magnet:coilResistance` | double | ohm | — | Required |
+| `act:magnet:coilInductance` | double | H | `0` | |
+| `act:magnet:ratedVoltage` | double | V | — | Required |
+| `act:magnet:axis` | double3 | 1 | `(0, 0, 1)` | Where the poles face |
+
+A part's porosity and iron are its `SensorMaterialAPI_1`'s `sensmat:airPermeability` and
+`sensmat:relativePermeability`, on its link's prim. An overlay applies the grippers like any
+other schema:
+
+```yaml
+apply:
+  - prim: suction_cup
+    schemas:
+      SuctionGripperAPI_1:
+        act:suction:diameter: 0.03
+        act:suction:volume: 1.5e-5
+        act:suction:flow: 6.0e-5
+        act:suction:ultimatePressure: 15000.0
+        act:suction:axis: [0.0, 0.0, 1.0]
+```
+
+In a URDF, on the link (read by the server):
+
+```xml
+<gazebo reference="suction_cup">
+  <suction_cup diameter="0.03" volume="1.5e-5" flow="6.0e-5" ultimate_pressure="15000" axis="0 0 1"/>
+</gazebo>
+<gazebo reference="box">
+  <sensor_material air_permeability="2e-6" relative_permeability="1"/>
+</gazebo>
+```
+
+`<suction_cup>` takes `diameter`, `volume`, `flow`, `ultimate_pressure` (required), `seal_gap`,
+`max_tilt`, `leak_conductance`, `axis`, `name` and `xyz`; `<magnet_gripper>` takes `kind`,
+`turns`, `pole_area`, `iron_path_length`, `iron_permeability`, `saturation`, `coil_resistance`,
+`coil_inductance`, `rated_voltage`, `axis`, `name` and `xyz`. Without `name` and `xyz` the gripper
+is on the link's own prim and is named after the link; with either it is a prim of its own under
+the link, at `xyz` (default its origin), named `name` (default: the element's name).
 
 ## 4. Sample robot: differential-drive AMR
 

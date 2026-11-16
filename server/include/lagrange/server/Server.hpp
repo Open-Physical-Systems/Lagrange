@@ -282,6 +282,10 @@ public:
     /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
     /// "effort" (N·m, N). False for another mode, a joint the run does not have, or a value
     /// that is not finite.
+    /// Commands gripper `name` (RFC 0020, act/<name>/command): 1 on, 0 off. False when the run
+    /// has no gripper of that name. Taken at the actuators domain's next step; a later change on
+    /// the bus (its ROS topic) wins over it in turn.
+    bool commandActuator(const std::string& name, double value);
     bool commandJoint(const std::string& joint, const std::string& mode, double value);
     /// commandJoint's outcome in full: why it was refused, or the value taken, held within the
     /// joint's velocity limit, effort limit or range from the robot file (not the effort limit

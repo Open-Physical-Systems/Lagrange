@@ -1216,6 +1216,63 @@ apply:
     EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
 }
 
+// RFC 0020: a suction cup and a magnet from an overlay, collected with their fallbacks, and a
+// porous surface's sensmat:airPermeability.
+TEST(Overlay, AppliesGrippers) {
+    auto model = loadStage(writeText("gripbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "tool" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 0.5
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("gripbot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: tool
+    schemas:
+      SuctionGripperAPI_1:
+        act:suction:diameter: 0.04
+        act:suction:volume: 2.0e-5
+        act:suction:flow: 1.0e-4
+        act:suction:ultimatePressure: 20000.0
+      MagnetGripperAPI_1:
+        act:magnet:turns: 400
+        act:magnet:poleArea: 4.0e-4
+        act:magnet:coilResistance: 12.0
+        act:magnet:ratedVoltage: 24.0
+        act:magnet:kind: electropermanent
+      SensorMaterialAPI_1:
+        sensmat:airPermeability: 1.0e-6
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World& w = model->world;
+    const SchemaInstance* cup = only(w, "SuctionGripperAPI_1");
+    ASSERT_NE(cup, nullptr);
+    EXPECT_EQ(cup->real("act:suction:diameter"), 0.04);
+    EXPECT_EQ(cup->real("act:suction:ultimatePressure"), 20000.0);
+    EXPECT_EQ(cup->real("act:suction:sealGap"), 0.002);  // the fallbacks
+    EXPECT_EQ(cup->real("act:suction:maxTilt"), 0.26);
+    const auto axis = cup->realArray("act:suction:axis");
+    EXPECT_EQ(std::vector<double>(axis.begin(), axis.end()), (std::vector<double>{0, 0, 1}));
+    const SchemaInstance* magnet = only(w, "MagnetGripperAPI_1");
+    ASSERT_NE(magnet, nullptr);
+    EXPECT_EQ(magnet->token("act:magnet:kind"), "electropermanent");
+    EXPECT_EQ(magnet->real("act:magnet:turns"), 400.0);
+    EXPECT_FALSE(magnet->real("act:magnet:ironPermeability"));  // required only with a path
+    const SchemaInstance* surface = only(w, "SensorMaterialAPI_1");
+    ASSERT_NE(surface, nullptr);
+    EXPECT_EQ(surface->real("sensmat:airPermeability"), 1.0e-6);
+}
+
 // RFC 0022: a fuel item in USD keeps its fire attributes; an overlay names a t² growth class
 // for fire:alpha (NBSIR 85-3167's fast, 46.889 W/s²), and a radiative fraction over 1 is refused.
 TEST(Overlay, AppliesAFire) {

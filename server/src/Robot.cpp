@@ -1063,6 +1063,81 @@ void addLamps(Robot& robot, const tinyxml2::XMLElement& gazebo, std::size_t body
     }
 }
 
+/// A link's <suction_cup> and <magnet_gripper> (RFC 0020) as SuctionGripperAPI_1 and
+/// MagnetGripperAPI_1: on the link's prim (named after the link), or with name= or xyz= on a prim
+/// of their own under it.
+void addGrippers(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId linkPrim, BodyId body) {
+    World& world = robot.world;
+    struct Form {
+        const char* element;
+        const char* schema;
+        const char* prefix;
+        std::vector<std::pair<const char*, const char*>> reals;
+        const char* token;
+    };
+    const std::array<Form, 2> forms{{
+        {"suction_cup",
+         "SuctionGripperAPI_1",
+         "act:suction:",
+         {{"diameter", "diameter"},
+          {"volume", "volume"},
+          {"flow", "flow"},
+          {"ultimate_pressure", "ultimatePressure"},
+          {"seal_gap", "sealGap"},
+          {"max_tilt", "maxTilt"},
+          {"leak_conductance", "leakConductance"}},
+         nullptr},
+        {"magnet_gripper",
+         "MagnetGripperAPI_1",
+         "act:magnet:",
+         {{"turns", "turns"},
+          {"pole_area", "poleArea"},
+          {"iron_path_length", "ironPathLength"},
+          {"iron_permeability", "ironPermeability"},
+          {"saturation", "saturation"},
+          {"coil_resistance", "coilResistance"},
+          {"coil_inductance", "coilInductance"},
+          {"rated_voltage", "ratedVoltage"}},
+         "kind"},
+    }};
+    for (const Form& form : forms) {
+        for (const tinyxml2::XMLElement* e = gazebo.FirstChildElement(form.element); e != nullptr;
+             e = e->NextSiblingElement(form.element)) {
+            SchemaInstance s;
+            s.schema = form.schema;
+            s.prim = linkPrim;
+            const auto xyz = threeNumbers(*e, "xyz");
+            const char* name = e->Attribute("name");
+            const bool named = name != nullptr && *name != '\0';
+            if (xyz || named) {
+                const std::string own = named ? name : form.element;
+                s.prim = world.addPrim(world.prims.paths[linkPrim.index] + "/" + own, own);
+                world.prims.body[s.prim.index] = body;
+                if (xyz) {
+                    world.prims.poseInBody[s.prim.index].position = {(*xyz)[0], (*xyz)[1],
+                                                                     (*xyz)[2]};
+                }
+            }
+            const std::string prefix = form.prefix;
+            for (const auto& [xml, attribute] : form.reals) {
+                double value = 0.0;
+                if (e->QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                    s.reals[prefix + attribute] = value;
+                }
+            }
+            if (form.token != nullptr) {
+                if (const char* kind = e->Attribute(form.token); kind != nullptr) {
+                    s.tokens[prefix + form.token] = kind;
+                }
+            }
+            if (const auto axis = threeNumbers(*e, "axis")) {
+                s.realArrays[prefix + "axis"] = *axis;
+            }
+            world.schemaInstances.push_back(std::move(s));
+        }
+    }
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 /// Why a sensor of the file cannot be read (it refuses the model), or empty.
 std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
@@ -1095,6 +1170,31 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
             material.specular = std::clamp(material.specular, 0.0, 1.0);
             material.transmission = std::clamp(material.transmission, 0.0, 1.0);
             world.surfaceMaterials.push_back(material);
+            // What the actuators read (RFC 0020): a part's air permeance and iron, as
+            // SensorMaterialAPI_1 on the link's prim.
+            double airPermeability = 0.0;
+            double relativePermeability = 1.0;
+            const bool porous = surface->QueryDoubleAttribute(
+                                    "air_permeability", &airPermeability) == tinyxml2::XML_SUCCESS;
+            const bool iron =
+                surface->QueryDoubleAttribute("relative_permeability", &relativePermeability) ==
+                tinyxml2::XML_SUCCESS;
+            if (porous || iron) {
+                for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                    if (world.bodies.names[b] == reference) {
+                        SchemaInstance s;
+                        s.schema = "SensorMaterialAPI_1";
+                        s.prim = world.bodies.prim[b];
+                        if (porous) {
+                            s.reals["sensmat:airPermeability"] = airPermeability;
+                        }
+                        if (iron) {
+                            s.reals["sensmat:relativePermeability"] = relativePermeability;
+                        }
+                        world.schemaInstances.push_back(std::move(s));
+                    }
+                }
+            }
             const auto index = static_cast<std::uint32_t>(world.surfaceMaterials.size() - 1);
             for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
                 const BodyId owner = world.colliders.body[c];
@@ -1152,6 +1252,23 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
                 robot.notes.push_back(std::string("lamp: no link ") + reference);
             } else {
                 addLamps(robot, *gazebo, *body);
+            }
+        }
+        // RFC 0020: <suction_cup diameter= volume= flow= ultimate_pressure= .../> and
+        // <magnet_gripper turns= pole_area= coil_resistance= rated_voltage= .../> on the link.
+        if (reference != nullptr && (gazebo->FirstChildElement("suction_cup") != nullptr ||
+                                     gazebo->FirstChildElement("magnet_gripper") != nullptr)) {
+            bool found = false;
+            for (std::size_t b = firstBody; b < world.bodies.names.size() && !found; ++b) {
+                if (world.bodies.names[b] == reference) {
+                    addGrippers(robot, *gazebo, world.bodies.prim[b],
+                                BodyId{static_cast<std::uint32_t>(b)});
+                    found = true;
+                }
+            }
+            if (!found) {
+                robot.notes.push_back(std::string("suction_cup/magnet_gripper: no link ") +
+                                      reference);
             }
         }
         // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how
