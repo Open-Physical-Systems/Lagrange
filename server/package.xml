@@ -31,6 +31,7 @@
   <depend>lagrange_hydrodynamics</depend>
   <depend>lagrange_tether</depend>
   <depend>lagrange_fire</depend>
+  <depend>lagrange_lights</depend>
   <depend>lagrange_opendrive</depend>
   <depend>lagrange_openscenario</depend>
   <depend>lagrange_mavlink</depend>

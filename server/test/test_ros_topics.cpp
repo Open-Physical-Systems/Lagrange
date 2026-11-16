@@ -14,6 +14,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/range.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 
@@ -141,6 +142,62 @@ TEST(RosTopics, ASignalThatDoesNotFitItsMessageStopsTheStart) {
     const Status unfit = wrong.start();
     ASSERT_FALSE(unfit.ok());
     EXPECT_NE(unfit.message.find("has 7 values"), std::string::npos) << unfit.message;
+}
+
+// RFC 0021 §9: each lamp's default topics, with no --ros-topics file.
+TEST(RosTopics, ALampIsSwitchedAndItsStateIsLatched) {
+    if (!rclcpp::ok()) {
+        rclcpp::init(0, nullptr);
+    }
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_lights_run";
+    std::filesystem::create_directories(dir);
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_AMR_URDF;
+    o.overlayPath = LAGRANGE_TEST_AMR_LIGHTS_OVERLAY;
+    o.worldPath.clear();
+    o.ambientTemperatureK = 293.15;
+    o.demoDrive = false;
+    o.realTimeFactor = 0.0;
+    o.endpoint = proto::Endpoint::unixSocket((dir / "l.sock").string());
+    o.ros = true;
+    Server server(o);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    auto node = std::make_shared<rclcpp::Node>("lights_run_test");
+    std::optional<double> state;
+    auto subscription = node->create_subscription<std_msgs::msg::Float64>(
+        "/lights/headlamp/state", rclcpp::QoS(1).transient_local(),
+        [&state](const std_msgs::msg::Float64& m) { state = m.data; });
+    auto command = node->create_publisher<std_msgs::msg::Float64>("/lights/headlamp/command", 10);
+    auto blink = node->create_publisher<std_msgs::msg::Bool>("/lights/beacon/blink", 10);
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    // Lit at its initialCommand before any message.
+    auto deadline = std::chrono::steady_clock::now() + 60s;
+    while (!state && std::chrono::steady_clock::now() < deadline) {
+        server.runOnce(5);
+        executor.spin_some(10ms);
+    }
+    ASSERT_TRUE(state) << "no state message";
+    EXPECT_DOUBLE_EQ(*state, 1.0);
+    std_msgs::msg::Float64 dim;
+    dim.data = 0.25;
+    std_msgs::msg::Bool on;
+    on.data = true;
+    deadline = std::chrono::steady_clock::now() + 60s;
+    while ((!state || *state != 0.25) && std::chrono::steady_clock::now() < deadline) {
+        server.runOnce(5);
+        if (command->get_subscription_count() > 0) {
+            command->publish(dim);
+            blink->publish(on);
+        }
+        executor.spin_some(10ms);
+    }
+    ASSERT_TRUE(state);
+    EXPECT_DOUBLE_EQ(*state, 0.25);
+    EXPECT_DOUBLE_EQ(server.read("lamp/headlamp/intensity").at(0), 0.25 * 1500.0);
+    EXPECT_EQ(server.read("lamp/beacon/blink").at(0), 1.0);
 }
 
 }  // namespace

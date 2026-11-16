@@ -468,6 +468,37 @@ private:
         for (const SensorDesc& sensor : link.sensors) {
             addSensor(sensor, body, linkPrim, frame);
         }
+        for (const LampDesc& lamp : link.lamps) {
+            addLamp(lamp, body, linkPrim, frame);
+        }
+    }
+
+    /// A lamp's prim on its link, with LampAPI_1 (RFC 0021).
+    void addLamp(const LampDesc& lamp, BodyId body, std::uint32_t linkPrim, const Pose& frame) {
+        const Pose mount = relative(frame, lamp.pose);
+        ScenePrim prim;
+        prim.name = lamp.name;
+        prim.parent = linkPrim;
+        prim.typeName = "Xform";
+        prim.apiSchemas = {"LampAPI_1"};
+        prim.body = body.index;
+        prim.offset = mount;
+        const std::uint32_t scenePrim = addPrim(std::move(prim));
+        SchemaInstance s;
+        s.schema = "LampAPI_1";
+        s.prim = m_.world.addPrim(m_.scene.prims[scenePrim].path, lamp.name);
+        m_.world.prims.body.back() = body;
+        m_.world.prims.poseInBody.back() = mount;
+        for (const auto& [key, value] : lamp.reals) {
+            s.reals.emplace(key, value);
+        }
+        for (const auto& [key, value] : lamp.tokens) {
+            s.tokens.emplace(key, value);
+        }
+        for (const auto& [key, value] : lamp.realArrays) {
+            s.realArrays.emplace(key, value);
+        }
+        m_.world.schemaInstances.push_back(std::move(s));
     }
 
     bool addCollider(const LinkDesc& link, const CollisionDesc& collision, BodyId body,

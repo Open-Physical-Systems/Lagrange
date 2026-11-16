@@ -3,6 +3,7 @@
 #include "Netlist.hpp"
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
 #include <exception>
@@ -17,6 +18,7 @@
 
 #include <pxr/base/gf/vec2d.h>
 #include <pxr/base/gf/vec3d.h>
+#include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
 #include <pxr/usd/sdf/assetPath.h>
@@ -58,20 +60,34 @@ public:
             return Unexpected{std::string("schema_version must be 1")};
         }
         const YAML::Node entries = root["apply"];
-        if (!entries || !entries.IsSequence()) {
+        const YAML::Node lamps = root["lamps"];
+        if (lamps && !lamps.IsSequence()) {
+            return Unexpected{std::string("lamps must be a list")};
+        }
+        if ((!entries && !lamps) || (entries && !entries.IsSequence())) {
             return Unexpected{std::string("apply must be a list")};
         }
         rootPath_ = m_.scene.prims[0].path;
         stage_ = UsdStage::CreateInMemory();
         // First every prim the entries name or create, so relationships may point at prims
         // created further down the file.
+        const std::size_t count = entries ? entries.size() : 0;
         std::vector<std::optional<Target>> owners;
-        for (std::size_t i = 0; i < entries.size(); ++i) {
+        for (std::size_t i = 0; i < count; ++i) {
             owners.push_back(ownerOf(entries[i], i));
         }
-        for (std::size_t i = 0; i < entries.size(); ++i) {
+        std::vector<std::optional<Target>> lampOwners;
+        for (std::size_t i = 0; lamps && i < lamps.size(); ++i) {
+            lampOwners.push_back(lampOf(lamps[i], i));
+        }
+        for (std::size_t i = 0; i < count; ++i) {
             if (owners[i]) {
                 applySchemas(entries[i], *owners[i]);
+            }
+        }
+        for (std::size_t i = 0; i < lampOwners.size(); ++i) {
+            if (lampOwners[i]) {
+                applySchemas(lamps[i], *lampOwners[i]);
             }
         }
         if (errors_.empty()) {
@@ -112,6 +128,75 @@ private:
             return child(*target, entry["create_child"].as<std::string>());
         }
         return target;
+    }
+
+    /// A `lamps:` entry (RFC 0021): a new prim `name` on link `link`, placed by `xyz` (m) and `rpy`
+    /// (rad, URDF's fixed axes), whose `schemas` hold its LampAPI_1 (and, for its power, an
+    /// ElectricalLoadAPI_1 of model signal). Overlay prims have no pose otherwise.
+    std::optional<Target> lampOf(const YAML::Node& entry, std::size_t index) {
+        const std::string where = "lamps[" + std::to_string(index) + "]";
+        if (!entry.IsMap() || !entry["name"] || !entry["link"]) {
+            errors_.push_back(where + ": a lamp is a map with name, link, xyz, rpy and schemas");
+            return std::nullopt;
+        }
+        if (!entry["schemas"] || !entry["schemas"].IsMap() || !entry["schemas"]["LampAPI_1"]) {
+            errors_.push_back(where + ": schemas must hold LampAPI_1");
+            return std::nullopt;
+        }
+        std::optional<Target> link;
+        try {
+            link = resolve(entry["link"].as<std::string>(), where);
+        } catch (const YAML::Exception& e) {
+            errors_.push_back(where + ": " + e.what());
+            return std::nullopt;
+        }
+        if (!link) {
+            return std::nullopt;
+        }
+        const ScenePrim& up = m_.scene.prims[link->scenePrim];
+        if (link->joint || up.body == kNoIndex) {
+            errors_.push_back(where + ": " + entry["link"].as<std::string>() + " is not a link");
+            return std::nullopt;
+        }
+        Pose pose;
+        try {
+            for (const auto& [key, out] : {std::pair{"xyz", 0}, std::pair{"rpy", 1}}) {
+                if (!entry[key]) {
+                    continue;
+                }
+                const auto v = entry[key].as<std::vector<double>>();
+                if (v.size() != 3 || !std::isfinite(v[0] + v[1] + v[2])) {
+                    errors_.push_back(where + ": " + key + " takes 3 numbers");
+                    return std::nullopt;
+                }
+                if (out == 0) {
+                    pose.position = {v[0], v[1], v[2]};
+                } else {
+                    pose.orientation = fromRpy(v[0], v[1], v[2]);
+                }
+            }
+        } catch (const YAML::Exception& e) {
+            errors_.push_back(where + ": " + e.what());
+            return std::nullopt;
+        }
+        const std::uint32_t body = up.body;
+        const Pose offset = compose(up.offset, pose);
+        Target lamp = child(*link, entry["name"].as<std::string>());
+        m_.scene.prims[lamp.scenePrim].offset = offset;
+        const PrimId id = worldPrim_.at(lamp.usdPath);
+        m_.world.prims.body.at(id.index) = BodyId{body};
+        m_.world.prims.poseInBody.at(id.index) = offset;
+        return lamp;
+    }
+
+    /// URDF's roll, pitch and yaw about the fixed x, y and z axes, as a quaternion (w, x, y, z).
+    static std::array<double, 4> fromRpy(double roll, double pitch, double yaw) {
+        const auto about = [](int axis, double angle) {
+            std::array<double, 4> q{std::cos(angle / 2.0), 0.0, 0.0, 0.0};
+            q.at(static_cast<std::size_t>(axis) + 1) = std::sin(angle / 2.0);
+            return q;
+        };
+        return multiply(about(2, yaw), multiply(about(1, pitch), about(0, roll)));
     }
 
     /// A link, joint or sensor by name, or an existing prim by its path under the top prim.
@@ -307,6 +392,14 @@ private:
                     return;
                 }
                 attribute.Set(GfVec2d(v[0], v[1]));
+            } else if (type == SdfValueTypeNames->Color3f) {
+                const auto v = value.as<std::vector<double>>();
+                if (v.size() != 3) {
+                    errors_.push_back(where + " takes 3 values");
+                    return;
+                }
+                attribute.Set(GfVec3f(static_cast<float>(v[0]), static_cast<float>(v[1]),
+                                      static_cast<float>(v[2])));
             } else if (type == SdfValueTypeNames->Double3) {
                 const auto v = value.as<std::vector<double>>();
                 if (v.size() != 3) {

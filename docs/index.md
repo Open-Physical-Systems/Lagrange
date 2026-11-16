@@ -285,6 +285,7 @@ physics/emi-and-radio
 physics/traffic
 physics/humans
 physics/tether
+physics/lights
 physics/heat-conduction
 physics/fire
 ```

@@ -11,6 +11,7 @@
 #include "lagrange/humans/Humans.hpp"
 #include "lagrange/hydrodynamics/Water.hpp"
 #include "lagrange/importers/Importers.hpp"
+#include "lagrange/lights/Lights.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
 #include "lagrange/meshes/MeshImport.hpp"
@@ -489,13 +490,63 @@ struct Session {
     }
 };
 
+/// Each lamp's ROS topics (RFC 0021 §9) beside a --ros-topics map: /lights/<n>/command
+/// (Float64, 0-1, its initialCommand until the first message), /lights/<n>/blink (Bool) and
+/// /lights/<n>/state (Float64, the output as a share of full, latched, sent on change). A lamp
+/// whose signal or topic the map already uses keeps the map's.
+void addLampTopics(const WorldView& world, ros2::TopicMaps& maps) {
+    const auto taken = [&maps](const std::string& signal, const std::string& topic) {
+        for (const auto* list : {&maps.publish, &maps.subscribe}) {
+            for (const ros2::TopicMap& map : *list) {
+                if (map.signal == signal || map.topic == topic) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    for (const SchemaInstance* s : world.instancesOf("LampAPI_1")) {
+        const std::string name(world.signalInstanceName(s->prim));
+        if (name.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") !=
+            std::string::npos) {
+            continue;  // not a ROS topic name
+        }
+        const std::string signal = "lamp/" + name + "/";
+        const std::string topic = "/lights/" + name + "/";
+        if (!taken(signal + "command", topic + "command")) {
+            ros2::TopicMap command;
+            command.signal = signal + "command";
+            command.topic = topic + "command";
+            command.type = "std_msgs/msg/Float64";
+            command.initial = std::clamp(s->real("lamp:initialCommand").value_or(0.0), 0.0, 1.0);
+            maps.subscribe.push_back(std::move(command));
+        }
+        if (!taken(signal + "blink", topic + "blink")) {
+            ros2::TopicMap blink;
+            blink.signal = signal + "blink";
+            blink.topic = topic + "blink";
+            blink.type = "std_msgs/msg/Bool";
+            maps.subscribe.push_back(std::move(blink));
+        }
+        if (!taken(signal + "level", topic + "state")) {
+            ros2::TopicMap state;
+            state.signal = signal + "level";
+            state.topic = topic + "state";
+            state.type = "std_msgs/msg/Float64";
+            state.latched = true;
+            maps.publish.push_back(std::move(state));
+        }
+    }
+}
+
 /// The domains a profile names, in the order of profiles/schema.json and the mock server.
 struct DomainRow {
     const char* domain;
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 16> kDomains{{
+constexpr std::array<DomainRow, 17> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -512,6 +563,7 @@ constexpr std::array<DomainRow, 16> kDomains{{
     {"hydrodynamics", "zero", "constant"},
     {"tether", "zero", "constant"},
     {"fire", "zero", "constant"},
+    {"lights", "zero", "constant"},
 }};
 
 /// Writes a robot given as text to a temporary file the loaders read (defined below).
@@ -984,6 +1036,22 @@ struct Server::Impl {
             }
             if (!(off("tether") && addPluginSubstitute("tether", cables))) {
                 next->add(std::make_unique<tether::Tethers>(off("tether")), ModuleConfig(cables));
+            }
+        }
+        // Lamps (RFC 0021): switched, dimmed and blinked; power from their bus, heat into their
+        // thermal node. Off: the profile's substitute, zero (dark) by default, or constant.
+        if (hasLamps()) {
+            const auto token = settings.substituteTokens.find("lights");
+            const std::string asked =
+                token == settings.substituteTokens.end() ? std::string() : token->second;
+            if (!(off("lights") && addPluginSubstitute("lights"))) {
+                const std::optional<lights::Mode> substitute = lights::Lights::substitute(asked);
+                if (off("lights") && !substitute) {
+                    return Unexpected{"lights: no substitute " + asked +
+                                      "; zero, constant or a plugin's"};
+                }
+                next->add(std::make_unique<lights::Lights>(off("lights") ? *substitute
+                                                                         : lights::Mode::Model));
             }
         }
         // People (RFC 0009): moved like traffic agents, around the robots.
@@ -1750,6 +1818,7 @@ struct Server::Impl {
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
     bool hasFires() const { return !WorldView(robot.world).instancesOf("FireAPI_1").empty(); }
+    bool hasLamps() const { return !WorldView(robot.world).instancesOf("LampAPI_1").empty(); }
     bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
@@ -3406,6 +3475,9 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "tether" && hasTethers()) {
                 yaml += substituted("tether") ? "  tether: {enabled: false, substitute: zero}\n"
                                               : "  tether: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "lights" && hasLamps()) {
+                yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
+                                              : "  lights: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -3422,7 +3494,8 @@ struct Server::Impl {
                        std::string_view(row.domain) == "rotor_aero" ||
                        std::string_view(row.domain) == "hydrodynamics" ||
                        std::string_view(row.domain) == "tether" ||
-                       std::string_view(row.domain) == "fire") {
+                       std::string_view(row.domain) == "fire" ||
+                       std::string_view(row.domain) == "lights") {
                 continue;  // not in the profile of a ground robot
             } else {
                 yaml += "  " + std::string(row.domain) +
@@ -5691,6 +5764,9 @@ struct Server::Impl {
         if (hasFires()) {
             context.modules.insert("fire");
         }
+        if (hasLamps()) {
+            context.modules.insert("lights");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -7907,6 +7983,9 @@ Status Server::load() {
                 return Status::error(StatusCode::InvalidConfig, maps.error());
             }
             settings.signalTopics = std::move(*maps);
+        }
+        if (settings.signalTopics.lampTopics) {
+            addLampTopics(WorldView(s.robot.world), settings.signalTopics);
         }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();

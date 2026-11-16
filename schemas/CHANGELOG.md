@@ -12,6 +12,9 @@ and `test_schemas.py` checks it.
   (t², pool, or a measured `hrrCurve`), fuel mass and heat of combustion, radiative fraction, soot
   yield, ignition (time, temperature), blow-off speed, critical water rate, oxygen limit, decay
   fraction and foam blanket thickness. New library, nothing to migrate.
+- **Light library** (RFC 0021): `LampAPI_1`, a lamp on a prim (spot, point or beacon) with its
+  intensity in cd, beam and field angles, colour, efficacy, blinking and dimming. New library,
+  nothing to migrate.
 
 - **Sensor library** (RFC 0015): `flash` and `rosette` appended to `sensor:lidar:scanPattern`;
   `sensor:lidar:channelElevations` (a channel table) and five `sensor:lidar:rosette:*` (fov,

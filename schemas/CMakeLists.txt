@@ -25,6 +25,7 @@ set(LAGRANGE_SCHEMA_LIBRARIES
     world
     tether
     fire
+    light
 )
 set(usd_env
     "PXR_PLUGINPATH_NAME=${CMAKE_CURRENT_SOURCE_DIR}/metadata"

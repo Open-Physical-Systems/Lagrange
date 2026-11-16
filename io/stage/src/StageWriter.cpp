@@ -866,6 +866,10 @@ private:
                     set(key, VtValue(GfVec2d(value[0], value[1])));
                 } else if (type == SdfValueTypeNames->Double3 && value.size() == 3) {
                     set(key, VtValue(GfVec3d(value[0], value[1], value[2])));
+                } else if (type == SdfValueTypeNames->Color3f && value.size() == 3) {
+                    set(key,
+                        VtValue(GfVec3f(static_cast<float>(value[0]), static_cast<float>(value[1]),
+                                        static_cast<float>(value[2]))));
                 } else {
                     set(key, VtValue(VtDoubleArray(value.begin(), value.end())));
                 }

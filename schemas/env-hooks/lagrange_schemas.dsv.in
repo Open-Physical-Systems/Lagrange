@@ -15,3 +15,4 @@ prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/joint
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/world
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/tether
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/fire
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/light

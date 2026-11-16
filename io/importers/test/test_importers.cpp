@@ -298,6 +298,53 @@ TEST(ImportSdf, AnOffsetJointMovesTheBodyFrameToTheAnchor) {
     EXPECT_EQ(world.joints.names.size(), 1U);
 }
 
+// RFC 0021: a <light> in a <link> is a lamp. A spot pointing down (SDFormat's default
+// direction 0 0 -1) has its lamp +X turned onto the link's -Z.
+TEST(ImportSdf, ALinksLightIsALamp) {
+    const auto path = writeText("lamp.sdf", R"(<?xml version="1.0"?>
+<sdf version="1.11">
+  <model name="pole">
+    <static>true</static>
+    <link name="mast">
+      <light name="street_light" type="spot">
+        <pose>0 0 4 0 0 0</pose>
+        <intensity>2</intensity>
+        <diffuse>1 0.8 0.6 1</diffuse>
+        <spot><inner_angle>0.6</inner_angle><outer_angle>1.2</outer_angle><falloff>1</falloff></spot>
+      </light>
+      <light name="glow" type="point"><pose>0 0 1 0 0 0</pose></light>
+      <light name="sun" type="directional"/>
+    </link>
+  </model>
+</sdf>)");
+    auto model = importSdf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World& world = model->world;
+    std::vector<const SchemaInstance*> lamps;
+    for (const SchemaInstance& s : world.schemaInstances) {
+        if (s.schema == "LampAPI_1") {
+            lamps.push_back(&s);
+        }
+    }
+    ASSERT_EQ(lamps.size(), 2U);  // the directional light is skipped with a note
+    const SchemaInstance& spot = *lamps[0];
+    EXPECT_EQ(world.prims.instanceNames[spot.prim.index], "street_light");
+    EXPECT_EQ(spot.token("lamp:kind"), "spot");
+    EXPECT_DOUBLE_EQ(*spot.real("lamp:luminousIntensity"), 200.0);  // the stated placeholder
+    EXPECT_DOUBLE_EQ(*spot.real("lamp:beamAngle"), 0.6);
+    EXPECT_DOUBLE_EQ(*spot.real("lamp:fieldAngle"), 1.2);
+    EXPECT_DOUBLE_EQ(*spot.real("lamp:initialCommand"), 1.0);
+    EXPECT_NEAR(spot.realArray("lamp:color")[1], 0.8, 1e-6);
+    const Pose& at = world.prims.poseInBody[spot.prim.index];
+    EXPECT_NEAR(at.position[2], 4.0, 1e-9);
+    const std::array<double, 3> beam = rotate(at.orientation, {1.0, 0.0, 0.0});
+    EXPECT_NEAR(beam[2], -1.0, 1e-9);
+    EXPECT_EQ(lamps[1]->token("lamp:kind"), "point");
+    EXPECT_TRUE(std::ranges::any_of(model->notes, [](const std::string& n) {
+        return n.find("directional") != std::string::npos;
+    }));
+}
+
 TEST(ImportSdf, AWorldGivesOnePrimPerModelAndUsesItsGroundPlane) {
     const auto path = writeText("world.sdf", R"(<?xml version="1.0"?>
 <sdf version="1.11">

@@ -1,0 +1,137 @@
+# The sample AMR with lamps (RFC 0021): its power system and thermal nodes as in
+# amr_diffdrive.overlay.yaml, plus a white LED headlamp at the front of the chassis and an amber
+# rotating beacon on the lidar mast, both loads on the 48 V bus; the headlamp heats a small
+# thermal node of its own. Lamp numbers are illustrative, not a real product: a 1500 cd LED spot
+# with a 20° beam at 100 lm/W, and a 90 rpm beacon of 200 cd. Run it with
+#   lagrange_server --robot amr_diffdrive.urdf --overlay amr_diffdrive_lights.overlay.yaml
+#     --ambient-temperature 293.15
+# and switch the lamps with /lights/<name>/command, /lights/<name>/blink (docs/physics/lights.md).
+schema_version: 1
+apply:
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 16
+        elec:battery:capacity: 72000.0           # C (20 Ah)
+        elec:battery:ocvSoc: [0.0, 0.1, 0.5, 0.9, 1.0]
+        elec:battery:ocvVoltage: [2.80, 3.20, 3.28, 3.33, 3.45]   # V per cell
+        elec:battery:r0: 0.0015                  # ohm per cell
+        elec:battery:r1: 0.0008                  # ohm per cell
+        elec:battery:c1: 12000.0                 # F per cell
+        elec:battery:cutoffVoltage: 44.8         # V, 2.8 V per cell
+        elec:battery:maxChargeCurrent: 10.0      # A
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 51.2    # V
+        elec:port:dc_out:maxCurrent: 40.0        # A
+        elec:port:dc_out:connectedTo: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 8000.0             # J/K
+        thermal:convectionArea: 0.1              # m²
+        thermal:deratingStart: 318.15            # K (45 °C)
+        thermal:maxTemperature: 333.15           # K (60 °C)
+      ThermalLinkAPI_1:to_chassis:
+        thermal:link:to_chassis:conductance: 2.0 # W/K
+        thermal:link:to_chassis:target: base_link
+  - create: power/dc_48v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0047             # F
+        elec:bus:undervoltageTrip: 42.0          # V
+        elec:bus:overvoltageTrip: 60.0           # V
+  - create: power/computer
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:model: constant_power
+        elec:load:power: 45.0                    # W
+        elec:load:minVoltage: 36.0               # V
+        elec:powerPort: power/dc_48v
+  - prim: left_wheel_joint
+    create_child: left_drive_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.12             # ohm at 25 °C
+        elec:inductance: 0.00031                 # H
+        elec:torqueConstant: 0.085               # N·m/A
+        elec:polePairs: 4
+        elec:rotorInertia: 0.00012               # kg·m²
+        elec:gearRatio: 20.0
+        elec:gearEfficiency: 0.92
+        elec:maxCurrent: 8.0                     # A
+        elec:joint: left_wheel_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 225.0              # J/K
+        thermal:convectionArea: 0.02             # m²
+        thermal:deratingStart: 393.15            # K (120 °C)
+        thermal:maxTemperature: 428.15           # K (155 °C)
+      ThermalLinkAPI_1:to_chassis:
+        thermal:link:to_chassis:conductance: 0.5 # W/K
+        thermal:link:to_chassis:target: base_link
+  - prim: right_wheel_joint
+    create_child: right_drive_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.12
+        elec:inductance: 0.00031
+        elec:torqueConstant: 0.085
+        elec:polePairs: 4
+        elec:rotorInertia: 0.00012
+        elec:gearRatio: 20.0
+        elec:gearEfficiency: 0.92
+        elec:maxCurrent: 8.0
+        elec:joint: right_wheel_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 225.0              # J/K
+        thermal:convectionArea: 0.02             # m²
+        thermal:deratingStart: 393.15            # K (120 °C)
+        thermal:maxTemperature: 428.15           # K (155 °C)
+      ThermalLinkAPI_1:to_chassis:
+        thermal:link:to_chassis:conductance: 0.5 # W/K
+        thermal:link:to_chassis:target: base_link
+  - prim: base_link
+    schemas:
+      ThermalAPI_1:
+        thermal:heatCapacity: 9000.0             # J/K
+        thermal:convectionArea: 0.9              # m²
+lamps:
+  - name: headlamp
+    link: base_link
+    xyz: [0.31, 0.0, 0.08]                       # m: the chassis front face
+    rpy: [0.0, 0.1, 0.0]                         # rad: tipped down a little
+    schemas:
+      LampAPI_1:
+        lamp:kind: spot
+        lamp:luminousIntensity: 1500.0           # cd
+        lamp:beamAngle: 0.35                     # rad (20°)
+        lamp:fieldAngle: 0.70                    # rad
+        lamp:colorTemperature: 5700.0            # K
+        lamp:luminousEfficacy: 100.0             # lm/W
+        lamp:heatFraction: 0.85
+        lamp:initialCommand: 1.0
+      ElectricalLoadAPI_1:
+        elec:load:model: signal
+        elec:load:power: 6.0                     # W, what the bus draws without the domain
+        elec:load:minVoltage: 36.0               # V
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 2.0                # J/K: the LED board and its small heat sink
+        thermal:convectionArea: 0.02             # m²
+  - name: beacon
+    link: top_lidar_link
+    xyz: [0.0, 0.0, 0.06]
+    schemas:
+      LampAPI_1:
+        lamp:kind: beacon
+        lamp:luminousIntensity: 200.0            # cd
+        lamp:beamAngle: 0.35                     # rad
+        lamp:color: [1.0, 0.45, 0.0]             # amber, linear sRGB
+        lamp:luminousEfficacy: 60.0              # lm/W
+        lamp:rotationSpeed: 9.42                 # rad/s (90 rpm)
+        lamp:initialCommand: 1.0
+      ElectricalLoadAPI_1:
+        elec:load:model: signal
+        elec:load:power: 1.0                     # W
+        elec:load:minVoltage: 36.0               # V
+        elec:powerPort: power/dc_48v

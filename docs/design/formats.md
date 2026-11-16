@@ -947,6 +947,64 @@ In a URDF, on the link (snake case; `hrr_curve` is `"t Q t Q ..."`):
 
 The numbers above show the form only; a fuel's own values come from its data with their source.
 
+### 3.15 `schemas/light/schema.usda`
+
+Added in 1.x by RFC 0021 and run by the lights domain (`modules/lights/`, docs/physics/lights.md).
+
+**`LampAPI_1`** (single-apply). The prim's frame places the lamp; its light leaves along +X, the
+forward axis of URDF links (SDFormat's `<light>` points along −Z and is turned on import). It
+moves with its body.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `lamp:kind` | token | — | `spot` | `spot` (a cone), `point` (all round), `beacon` (a spot turning about +Z) |
+| `lamp:luminousIntensity` | double | cd | `0` | On the axis at full command. Required, over 0 |
+| `lamp:beamAngle` | double | rad | `0` | Full angle to 50 % of the axis value. Required for `spot` and `beacon` |
+| `lamp:fieldAngle` | double | rad | `0` | Full angle to 10 %, dark beyond; `0` is twice `beamAngle` |
+| `lamp:colorTemperature` | double | K | `0` | CCT; `0`: `lamp:color` instead |
+| `lamp:color` | color3f | 1 | `(1, 1, 1)` | Linear sRGB chromaticity of a coloured lamp |
+| `lamp:luminousEfficacy` | double | lm/W | `0` | Lumens per watt. Required (over 0) when the lamp is a load |
+| `lamp:heatFraction` | double | 1 | `1` | Share of the power that heats the lamp's thermal node |
+| `lamp:riseTime` | double | s | `0` | First-order lag of the output |
+| `lamp:blinkFrequency` | double | Hz | `0` | While blinking; `0` is steady |
+| `lamp:blinkDuty` | double | 1 | `0.5` | Share of each blink period it is on |
+| `lamp:rotationSpeed` | double | rad/s | `0` | A beacon's turning speed |
+| `lamp:voltageExponent` | double | 1 | `0` | Output ∝ (V/V₀)ⁿ below V₀, the bus voltage at the start |
+| `lamp:initialCommand` | double | 1 | `0` | Brightness 0–1 at t = 0, held until a command |
+
+Power: `ElectricalLoadAPI_1` with `elec:load:model = signal` on the same prim (its
+`elec:load:power` is what the bus draws when the lights domain is off). Heat: a `ThermalAPI_1`
+node on the same prim, which takes `lamp/<n>/loss_power` by name.
+
+In a URDF, `<gazebo reference="L"><lamp name= kind= intensity= beam_angle= field_angle=
+color_temperature= color="r g b" efficacy= heat_fraction= rise_time= blink_frequency= blink_duty=
+rotation_speed= voltage_exponent= initial= xyz= rpy=/></gazebo>` adds a prim `name` on link `L`.
+SDFormat's `<light>` inside a `<link>` is read as a lamp: `point` or `spot` (inner and outer angle
+as beam and field angle), colour from `<diffuse>`, `<light_on>` as the initial command. Its
+`<intensity>` has no unit, so the lamp gets a stated placeholder of 100 cd per unit, with a note;
+put the datasheet value in the USD that `lagrange_import` writes. A directional light is skipped.
+
+An overlay places lamps with a `lamps:` list, since an overlay's new prims have no pose
+otherwise:
+
+```yaml
+lamps:
+  - name: headlamp
+    link: base_link
+    xyz: [0.32, 0.0, 0.18]     # m, in the link
+    rpy: [0.0, 0.1, 0.0]       # rad, URDF's fixed axes
+    schemas:
+      LampAPI_1:
+        lamp:luminousIntensity: 1500.0
+        lamp:beamAngle: 0.35
+        lamp:colorTemperature: 5700.0
+        lamp:luminousEfficacy: 100.0
+      ElectricalLoadAPI_1:
+        elec:load:model: signal
+        elec:load:power: 5.0
+        elec:powerPort: dc_48v
+```
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file

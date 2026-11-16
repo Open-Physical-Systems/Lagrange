@@ -1001,6 +1001,68 @@ void addFireElement(Robot& robot, const tinyxml2::XMLElement& fire, PrimId prim)
     robot.world.schemaInstances.push_back(std::move(s));
 }
 
+/// A link's <lamp>s (RFC 0021): a prim each on link `body`, placed by xyz and rpy, with
+/// LampAPI_1. Its power and heat are added like any load's and node's (an overlay).
+void addLamps(Robot& robot, const tinyxml2::XMLElement& gazebo, std::size_t body) {
+    World& world = robot.world;
+    for (const tinyxml2::XMLElement* l = gazebo.FirstChildElement("lamp"); l != nullptr;
+         l = l->NextSiblingElement("lamp")) {
+        const char* name = l->Attribute("name");
+        if (name == nullptr || *name == '\0') {
+            robot.notes.push_back("lamp without a name: skipped");
+            continue;
+        }
+        Pose mount;
+        if (const auto xyz = threeNumbers(*l, "xyz")) {
+            mount.position = {(*xyz)[0], (*xyz)[1], (*xyz)[2]};
+        }
+        if (const auto rpy = threeNumbers(*l, "rpy")) {
+            mount.orientation = fromRpy((*rpy)[0], (*rpy)[1], (*rpy)[2]);
+        }
+        ScenePrim prim;
+        prim.name = name;
+        prim.parent = robot.bodyPrim[body];
+        prim.path = robot.scene.prims[prim.parent].path + "/" + name;
+        prim.typeName = "Xform";
+        prim.apiSchemas = {"LampAPI_1"};
+        prim.body = static_cast<std::uint32_t>(body);
+        prim.offset = mount;
+        SchemaInstance s;
+        s.schema = "LampAPI_1";
+        s.prim = world.addPrim(prim.path, name);
+        world.prims.body.back() = BodyId{static_cast<std::uint32_t>(body)};
+        world.prims.poseInBody.back() = mount;
+        robot.scene.prims.push_back(std::move(prim));
+        if (const char* kind = l->Attribute("kind"); kind != nullptr) {
+            s.tokens["lamp:kind"] = kind;
+        }
+        constexpr std::array<std::pair<const char*, const char*>, 12> kReals{{
+            {"intensity", "lamp:luminousIntensity"},
+            {"beam_angle", "lamp:beamAngle"},
+            {"field_angle", "lamp:fieldAngle"},
+            {"color_temperature", "lamp:colorTemperature"},
+            {"efficacy", "lamp:luminousEfficacy"},
+            {"heat_fraction", "lamp:heatFraction"},
+            {"rise_time", "lamp:riseTime"},
+            {"blink_frequency", "lamp:blinkFrequency"},
+            {"blink_duty", "lamp:blinkDuty"},
+            {"rotation_speed", "lamp:rotationSpeed"},
+            {"voltage_exponent", "lamp:voltageExponent"},
+            {"initial", "lamp:initialCommand"},
+        }};
+        for (const auto& [xml, attribute] : kReals) {
+            double value = 0.0;
+            if (l->QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                s.reals[attribute] = value;
+            }
+        }
+        if (const auto color = threeNumbers(*l, "color")) {
+            s.realArrays["lamp:color"] = *color;
+        }
+        world.schemaInstances.push_back(std::move(s));
+    }
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 /// Why a sensor of the file cannot be read (it refuses the model), or empty.
 std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
@@ -1074,6 +1136,22 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
                 robot.notes.push_back(std::string("fire: no link ") + reference);
             } else {
                 addFireElement(robot, *fire, *prim);
+            }
+        }
+        // RFC 0021: <lamp name= kind= intensity= beam_angle= field_angle= color_temperature=
+        // color="r g b" efficacy= heat_fraction= rise_time= blink_frequency= blink_duty=
+        // rotation_speed= voltage_exponent= initial= xyz= rpy=/>, a LampAPI_1 prim on the link.
+        if (reference != nullptr && gazebo->FirstChildElement("lamp") != nullptr) {
+            std::optional<std::size_t> body;
+            for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.names[b] == reference) {
+                    body = b;
+                }
+            }
+            if (!body) {
+                robot.notes.push_back(std::string("lamp: no link ") + reference);
+            } else {
+                addLamps(robot, *gazebo, *body);
             }
         }
         // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how

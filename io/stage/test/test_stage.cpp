@@ -1037,6 +1037,136 @@ apply:
 }
 
 // RFC 0011: a tether from a new prim (the ground station, placed by its anchor point) to a link.
+// RFC 0021: a lamp on a prim under a link, placed in its body, with its colour (a color3f).
+TEST(Lamps, ALampPrimIsPlacedInItsBody) {
+    auto model = loadStage(writeText("lampbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+        double3 xformOp:translate = (0, 0, 0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Xform "beacon" ( prepend apiSchemas = ["LampAPI_1"] )
+        {
+            uniform token lamp:kind = "beacon"
+            double lamp:luminousIntensity = 250
+            double lamp:beamAngle = 0.3
+            color3f lamp:color = (1, 0.5, 0)
+            double lamp:rotationSpeed = 6.283
+            double3 xformOp:translate = (0.1, 0, 0.3)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const World& w = model->world;
+    const SchemaInstance* lamp = only(w, "LampAPI_1");
+    ASSERT_NE(lamp, nullptr);
+    const WorldView view(w);
+    EXPECT_EQ(view.primPath(lamp->prim), "/bot/base/beacon");
+    EXPECT_EQ(lamp->token("lamp:kind"), "beacon");
+    EXPECT_EQ(lamp->real("lamp:luminousIntensity"), 250.0);
+    EXPECT_EQ(lamp->real("lamp:blinkDuty"), 0.5);  // the fallback
+    const auto color = lamp->realArray("lamp:color");
+    EXPECT_EQ(std::vector<double>(color.begin(), color.end()),
+              (std::vector<double>{1.0, 0.5, 0.0}));
+    EXPECT_EQ(w.bodies.names[w.prims.body[lamp->prim.index].index], "base");
+    const Pose& at = w.prims.poseInBody[lamp->prim.index];
+    EXPECT_NEAR(at.position[0], 0.1, 1e-12);
+    EXPECT_NEAR(at.position[2], 0.3, 1e-12);
+}
+
+TEST(Lamps, AFractionOutsideZeroToOneIsRefused) {
+    auto model = loadStage(writeText("lampbad.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+        def Xform "led" ( prepend apiSchemas = ["LampAPI_1"] )
+        {
+            uniform token lamp:kind = "point"
+            double lamp:luminousIntensity = 1
+            double lamp:blinkDuty = 1.5
+        }
+    }
+}
+)")
+                               .string());
+    ASSERT_FALSE(model);
+    EXPECT_NE(model.error().find("lamp:blinkDuty"), std::string::npos) << model.error();
+}
+
+// RFC 0021: an overlay's lamps: list places a new prim on a link and applies its schemas.
+TEST(Overlay, PlacesALampOnALink) {
+    auto model = loadStage(writeText("lampover.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("lampover.overlay.yaml", R"(schema_version: 1
+lamps:
+  - name: headlamp
+    link: base
+    xyz: [0.3, 0.0, 0.2]
+    rpy: [0.0, 0.2, 0.0]
+    schemas:
+      LampAPI_1:
+        lamp:luminousIntensity: 1200.0
+        lamp:beamAngle: 0.5
+        lamp:colorTemperature: 5000.0
+        lamp:color: [1.0, 0.9, 0.8]
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World& w = model->world;
+    const SchemaInstance* lamp = only(w, "LampAPI_1");
+    ASSERT_NE(lamp, nullptr);
+    EXPECT_EQ(WorldView(w).primPath(lamp->prim), "/bot/base/headlamp");
+    EXPECT_EQ(lamp->real("lamp:luminousIntensity"), 1200.0);
+    EXPECT_EQ(lamp->token("lamp:kind"), "spot");  // the fallback
+    EXPECT_EQ(lamp->realArray("lamp:color").size(), 3U);
+    EXPECT_EQ(w.bodies.names[w.prims.body[lamp->prim.index].index], "base");
+    const Pose& at = w.prims.poseInBody[lamp->prim.index];
+    EXPECT_NEAR(at.position[0], 0.3, 1e-12);
+    EXPECT_NEAR(at.position[2], 0.2, 1e-12);
+    EXPECT_NEAR(at.orientation[0], std::cos(0.1), 1e-12);  // pitch 0.2 about y
+    EXPECT_NEAR(at.orientation[2], std::sin(0.1), 1e-12);
+
+    const std::filesystem::path bad = writeText("lampbad.overlay.yaml", R"(schema_version: 1
+lamps:
+  - {name: x, link: nowhere, schemas: {LampAPI_1: {lamp:luminousIntensity: 1.0}}}
+)");
+    auto again = loadStage(scratch("lampover.usda").string());
+    ASSERT_TRUE(again) << again.error();
+    const auto refused = applyOverlay(*again, bad.string());
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().find("nowhere"), std::string::npos) << refused.error();
+}
+
 TEST(Overlay, AppliesATether) {
     auto model = loadStage(writeText("tetherbot.usda", R"(#usda 1.0
 (

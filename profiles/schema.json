@@ -39,6 +39,7 @@
         "hydrodynamics":    { "$ref": "#/$defs/generic_domain" },
         "tether":           { "$ref": "#/$defs/generic_domain" },
         "fire":             { "$ref": "#/$defs/generic_domain" },
+        "lights":           { "$ref": "#/$defs/generic_domain" },
         "traffic":          { "$ref": "#/$defs/traffic" },
         "comms":            { "$ref": "#/$defs/generic_domain" },
         "humans":           { "$ref": "#/$defs/generic_domain" }

@@ -58,6 +58,8 @@ std::string whyNotRunnable(const std::string& domain) {
          "the stage has no tethers (TetherAPI_1, --tether); disable tether and name a "
          "substitute (zero)"},
         {"fire", "the stage has no fires (FireAPI_1); disable fire and name a substitute (zero)"},
+        {"lights",
+         "the stage has no lamps (LampAPI_1); disable lights and name a substitute (zero)"},
     };
     if (const auto found = kNeeds.find(domain); found != kNeeds.end()) {
         return domain + " cannot run here: " + found->second;
