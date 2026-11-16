@@ -18,7 +18,9 @@ drives the joint in the simulator, and Back. Made by `tools/videos/make_videos.p
 ## Opening it
 
 ```bash
-lagrange viewer --workspace builder                     # a new robot
+lagrange build                                          # a new robot
+lagrange build my_robot.urdf                            # or my_robot.xacro
+lagrange viewer --workspace builder                     # the same, with the viewer's options
 lagrange viewer --workspace builder --builder-open my_robot.urdf
 ```
 

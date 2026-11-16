@@ -470,7 +470,9 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 
 ```bash
 source install/setup.bash          # or /opt/ros/lyrical/setup.bash with the debs installed
-lagrange                           # the server and the viewer: the sample AMR in the warehouse
+lagrange                           # the viewer on its launcher: start a simulator from there
+lagrange amr                       # the server and the viewer: the sample AMR in the warehouse
+lagrange build robot.urdf          # the robot builder, with your URDF open
 lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve, people
 lagrange robot.urdf                # your own robot on an empty ground, still until you command it
 lagrange robot.usda world.sdf      # and a world (URDF, SDFormat, MJCF or USD)
