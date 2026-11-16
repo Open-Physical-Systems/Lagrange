@@ -347,7 +347,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (19)</summary>
+<details><summary>Design proposals (RFCs) (22)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -368,6 +368,9 @@ recorded to MCAP and replayed.
 - [RFC 0017: MuJoCo 4.x for the MuJoCo backend](rfcs/0017-mujoco-4.md)
 - [RFC 0018: The radiation domain (ionizing radiation)](rfcs/0018-radiation.md)
 - [RFC 0019: Legged robots as a supported robot class](rfcs/0019-legged-robots.md)
+- [RFC 0020: Actuators: what Lagrange has, and which to add](rfcs/0020-actuators.md)
+- [RFC 0021: Lights on robots and in scenes](rfcs/0021-lights.md)
+- [RFC 0022: Fire, smoke and putting fires out](rfcs/0022-fire.md)
 
 </details>
 
