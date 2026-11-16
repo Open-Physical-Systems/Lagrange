@@ -1,0 +1,126 @@
+#usda 1.0
+(
+    """Lagrange actuator schemas (RFC 0020). Codeless. Actuators that are not an electrical
+    motor's torque: grippers that hold by suction or by a magnet (phase 1). They hold by equal and
+    opposite forces on the gripper's body and the part, never by a weld: the physics engine's
+    contact carries the reaction and the friction."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeActuator"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "SuctionGripperAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A suction cup (vacuum gripper, RFC 0020 section 4.1) on this prim: its origin is the
+    centre of the cup's lip, and act:suction:axis points from it toward what it picks. The cup
+    and its hose are a volume of air that a vacuum generator evacuates while act/<name>/command
+    is on. It seals when its rim touches one body all round, and then pulls that body toward the
+    cup with (p_atm - p) times the cup's area. The required numbers come from the datasheet; no
+    fallback is a device value."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:suction:diameter (
+        lagrangeUnit = "m"
+        doc = "Effective diameter of the cup. Required."
+    )
+    double act:suction:volume (
+        lagrangeUnit = "m3"
+        doc = "Volume of air evacuated: the cup and its hose. Required."
+    )
+    double act:suction:flow (
+        lagrangeUnit = "kg/s"
+        doc = """Suction flow of the vacuum generator at atmospheric pressure; it falls linearly
+        to zero at ultimatePressure. Required."""
+    )
+    double act:suction:ultimatePressure (
+        lagrangeUnit = "Pa"
+        doc = "The generator's ultimate vacuum, absolute. Required."
+    )
+    double act:suction:sealGap = 0.002 (
+        lagrangeUnit = "m"
+        doc = """How far from the lip the surface may be for the cup to seal (a modelling
+        tolerance, not a device value)."""
+    )
+    double act:suction:maxTilt = 0.26 (
+        lagrangeUnit = "rad"
+        doc = """Most the surface's normal may lean from the cup's axis for it to seal (a modelling
+        tolerance, not a device value)."""
+    )
+    double act:suction:leakConductance = 0 (
+        lagrangeUnit = "m3/(s.Pa)"
+        doc = """ISO 6358 sonic conductance C of the open cup, through which air comes back in
+        when it does not seal. 0: an open cup is at atmospheric pressure at once."""
+    )
+    double3 act:suction:axis = (0, 0, 1) (
+        lagrangeUnit = "1"
+        doc = "The direction the cup faces, in this prim's frame."
+    )
+}
+
+class "MagnetGripperAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A magnetic gripper (RFC 0020 section 4.2) on this prim: an electromagnet whose two
+    poles face along act:magnet:axis from this prim's origin. Its coil is an R-L circuit driven at
+    ratedVoltage while act/<name>/command is on; the pull on a ferromagnetic part (its
+    sensmat:relativePermeability over 1) across the air gap g is B^2 A_pole / mu0 for both poles,
+    with B = mu0 N i / (2 g + l_iron / mu_r) and B at most saturation. An electropermanent magnet
+    latches: it holds as at its rated current, drawing none, until commanded off."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token act:magnet:kind = "electro" (
+        allowedTokens = ["electro", "electropermanent"]
+        doc = "electro: holds while powered; electropermanent: switched on and off, holds unpowered."
+    )
+    double act:magnet:turns (
+        lagrangeUnit = "1"
+        doc = "Turns of the coil. Required."
+    )
+    double act:magnet:poleArea (
+        lagrangeUnit = "m2"
+        doc = "Area of one pole face. Required."
+    )
+    double act:magnet:ironPathLength = 0 (
+        lagrangeUnit = "m"
+        doc = "Length of the flux path in iron: the magnet's core and the part together."
+    )
+    double act:magnet:ironPermeability (
+        lagrangeUnit = "1"
+        doc = """Relative permeability of the magnet's core, which is taken as half the iron path
+        (the part, with its sensmat:relativePermeability, the other half). Required when
+        ironPathLength is over 0."""
+    )
+    double act:magnet:saturation = 0 (
+        lagrangeUnit = "T"
+        doc = "Most flux density the iron carries (the thinner of core and part). 0: no limit."
+    )
+    double act:magnet:coilResistance (
+        lagrangeUnit = "ohm"
+        doc = "Resistance of the coil. Required."
+    )
+    double act:magnet:coilInductance = 0 (
+        lagrangeUnit = "H"
+        doc = "Inductance of the coil. 0: the current follows the voltage at once."
+    )
+    double act:magnet:ratedVoltage (
+        lagrangeUnit = "V"
+        doc = "Voltage across the coil while on. Required."
+    )
+    double3 act:magnet:axis = (0, 0, 1) (
+        lagrangeUnit = "1"
+        doc = "The direction the pole faces look, in this prim's frame."
+    )
+}

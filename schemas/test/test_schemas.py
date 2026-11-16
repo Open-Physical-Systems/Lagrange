@@ -46,6 +46,7 @@ EXPECTED = {
     "tether": ["TetherAPI_1"],
     "fire": ["FireAPI_1"],
     "light": ["LampAPI_1"],
+    "actuator": ["SuctionGripperAPI_1", "MagnetGripperAPI_1"],
 }
 
 

@@ -60,6 +60,9 @@ std::string whyNotRunnable(const std::string& domain) {
         {"fire", "the stage has no fires (FireAPI_1); disable fire and name a substitute (zero)"},
         {"lights",
          "the stage has no lamps (LampAPI_1); disable lights and name a substitute (zero)"},
+        {"actuators",
+         "the stage has no grippers (SuctionGripperAPI_1, MagnetGripperAPI_1); disable "
+         "actuators and name a substitute (zero, constant or ideal)"},
     };
     if (const auto found = kNeeds.find(domain); found != kNeeds.end()) {
         return domain + " cannot run here: " + found->second;

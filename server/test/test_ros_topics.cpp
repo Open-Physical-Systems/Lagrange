@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -85,6 +86,52 @@ subscribe:
     EXPECT_GT(received->range, 0.1F) << "the ground, ahead and below";
     EXPECT_LT(received->range, 1.0F);
     EXPECT_EQ(server.read("acme/valve/command").at(0), 2.5) << "the topic wrote the signal";
+}
+
+// RFC 0020 §5: a gripper's default topics with no --ros-topics map: /suction_cup/command turns
+// the cup on, /suction_cup/pressure and /suction_cup/state come out.
+TEST(RosTopics, AGrippersDefaultTopics) {
+    if (!rclcpp::ok()) {
+        rclcpp::init(0, nullptr);
+    }
+    ServerOptions options;
+    options.endpoint = proto::Endpoint::unixSocket((directory() / "grip.sock").string());
+    options.robotPath = LAGRANGE_TEST_ARM6_SUCTION_URDF;
+    options.worldPath = LAGRANGE_TEST_WORKCELL_SUCTION_SDF;
+    options.ros = true;
+    options.realTimeFactor = 0.0;
+    Server server(options);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+
+    auto node = std::make_shared<rclcpp::Node>("gripper_topics_test");
+    std::optional<sensor_msgs::msg::FluidPressure> pressure;
+    std::optional<bool> state;
+    auto pressures = node->create_subscription<sensor_msgs::msg::FluidPressure>(
+        "/suction_cup/pressure", 10,
+        [&pressure](const sensor_msgs::msg::FluidPressure& m) { pressure = m; });
+    auto states = node->create_subscription<std_msgs::msg::Bool>(
+        "/suction_cup/state", 10, [&state](const std_msgs::msg::Bool& m) { state = m.data; });
+    auto command = node->create_publisher<std_msgs::msg::Bool>("/suction_cup/command", 10);
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    std_msgs::msg::Bool on;
+    on.data = true;
+    const auto deadline = std::chrono::steady_clock::now() + 60s;
+    while ((!pressure || !state || server.read("act/suction_cup/command").at(0) != 1.0) &&
+           std::chrono::steady_clock::now() < deadline) {
+        server.runOnce(5);
+        if (command->get_subscription_count() > 0) {
+            command->publish(on);
+        }
+        executor.spin_some(10ms);
+    }
+    ASSERT_TRUE(pressure) << "no FluidPressure message";
+    EXPECT_EQ(pressure->header.frame_id, "suction_cup");
+    EXPECT_NEAR(pressure->fluid_pressure, 101'325.0, 1.0) << "open, in the air: atmospheric";
+    ASSERT_TRUE(state);
+    EXPECT_FALSE(*state) << "holding nothing";
+    EXPECT_EQ(server.read("act/suction_cup/command").at(0), 1.0) << "the topic turned it on";
 }
 
 // RFC 0009 §6: a person's goal over ROS: x, y, active, through --ros-topics.

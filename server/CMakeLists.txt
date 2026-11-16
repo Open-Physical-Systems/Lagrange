@@ -24,6 +24,7 @@ find_package(lagrange_hydrodynamics REQUIRED)
 find_package(lagrange_tether REQUIRED)
 find_package(lagrange_fire REQUIRED)
 find_package(lagrange_lights REQUIRED)
+find_package(lagrange_actuators REQUIRED)
 find_package(lagrange_opendrive REQUIRED)
 find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
@@ -106,6 +107,7 @@ target_link_libraries(
         lagrange_tether::lagrange_tether
         lagrange_fire::lagrange_fire
         lagrange_lights::lagrange_lights
+        lagrange_actuators::lagrange_actuators
         lagrange_opendrive::lagrange_opendrive
         lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
@@ -262,7 +264,7 @@ if(BUILD_TESTING)
         test/test_downwash_pair.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
         # About 110 s alone on a 20-core laptop; a loaded machine (parallel builds) needs more.
         TIMEOUT 400
     )
@@ -400,7 +402,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
         TIMEOUT 180
     )
     target_link_libraries(
@@ -418,6 +420,22 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
     lagrange_target_defaults(test_arm)
+    # RFC 0020's grippers in whole runs: pull-off at Δp·A, sliding at μ·Δp·A, the arm's pick.
+    ament_add_gtest(
+        test_grippers_run
+        test/test_grippers_run.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
+        TIMEOUT 300
+    )
+    target_link_libraries(test_grippers_run lagrange_server)
+    target_compile_definitions(
+        test_grippers_run
+        PRIVATE
+            LAGRANGE_TEST_ARM6_SUCTION_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6_suction.urdf"
+            LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
+            LAGRANGE_TEST_WORKCELL_SUCTION_SDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_suction.sdf"
+    )
+    lagrange_target_defaults(test_grippers_run)
     # The rigid-body conformance suite (RFC 0008 §5), also installed for third-party backends.
     ament_add_gtest(
         lagrange_physics_conformance
@@ -455,6 +473,8 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
             LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
             LAGRANGE_TEST_AMR_LIGHTS_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_lights.overlay.yaml"
+            LAGRANGE_TEST_ARM6_SUCTION_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6_suction.urdf"
+            LAGRANGE_TEST_WORKCELL_SUCTION_SDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_suction.sdf"
     )
     lagrange_target_defaults(test_ros_topics)
     # simulation_interfaces' /spawn_entity names a robot given as text by its <robot name>.
