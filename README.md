@@ -196,7 +196,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (19)</summary>
+<details><summary>Physics reference (20)</summary>
 
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
@@ -207,6 +207,7 @@ recorded to MCAP and replayed.
 - [Heat conduction in solids](docs/physics/heat-conduction.md)
 - [Humans: people who walk](docs/physics/humans.md)
 - [Physics reference](docs/physics/index.md)
+- [Lights](docs/physics/lights.md)
 - [Motors](docs/physics/motors.md)
 - [Rigid body](docs/physics/rigid-body.md)
 - [Rotors](docs/physics/rotors.md)

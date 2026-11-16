@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,11 @@ struct TopicMap {
     std::map<std::string, double, std::less<>> params;
     std::string unit{"1"};  // subscribe: the signal's unit, as the unit grammar writes it
     std::uint32_t size{1};  // subscribe Float64MultiArray: how many values
+    /// subscribe: the signal's value until the first message (`initial`); none: 0.
+    std::optional<double> initial;
+    /// publish: a latched topic (transient local, depth 1), sent only when the value changes
+    /// (`latched: true`), as a lamp's state (RFC 0021 §9).
+    bool latched{false};
 };
 
 struct TopicMaps {
@@ -37,6 +43,9 @@ struct TopicMaps {
     /// The custom sensors' default topics (KindTopics.hpp) beside the map; `kind_topics: false`
     /// in the file turns them off. A default whose topic or signal the map publishes gives way.
     bool kindTopics{true};
+    /// Each lamp's default topics (RFC 0021 §9: /lights/<n>/command, blink and state) beside the
+    /// map; `lamp_topics: false` turns them off, as when a plugin writes the lamps' commands.
+    bool lampTopics{true};
 };
 
 /// Reads a topic map file:
@@ -45,8 +54,10 @@ struct TopicMaps {
 ///       - {signal: sensor/front_tof/range, topic: /front_tof/range,
 ///          type: sensor_msgs/msg/Range, frame: front_tof, params: {max_range: 4.0}}
 ///     subscribe:
-///       - {topic: /acme/valve, type: std_msgs/msg/Float64, signal: acme/valve/command}
+///       - {topic: /acme/valve, type: std_msgs/msg/Float64, signal: acme/valve/command,
+///          initial: 0.5}
 ///     kind_topics: true   # false: no default topics for custom sensors
+///     lamp_topics: true   # false: no default topics for lamps
 ///
 /// Fails, naming the entry, for a missing key or a message type this bridge does not map.
 [[nodiscard]] Expected<TopicMaps, std::string> readTopicMaps(const std::string& path);

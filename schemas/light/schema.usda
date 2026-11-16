@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    """Lagrange light schemas (RFC 0021). Codeless. LampAPI_1 makes a prim a lamp: a headlight,
+    an indicator, a status LED, a spotlight, a beacon, a street or traffic light. Its values are
+    the datasheet's, in photometric units; the lights domain switches, dims and blinks it, draws
+    its power from a bus and heats its thermal node."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeLight"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "LampAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A lamp on this prim (RFC 0021). Its light leaves along the prim's +X axis (the
+    forward axis of URDF links and camera bodies); it moves with its body. Power: add
+    ElectricalLoadAPI_1 with elec:load:model = signal on the same prim. Heat: a ThermalAPI_1 node
+    of the same name, or a HeatSourceAPI_1 whose power_signal is lamp/<name>/loss_power."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token lamp:kind = "spot" (
+        allowedTokens = ["spot", "point", "beacon"]
+        doc = """spot: a cone about +X; point: the same intensity all round; beacon: a spot
+        turning about the prim's +Z at rotationSpeed."""
+    )
+    double lamp:luminousIntensity = 0 (
+        lagrangeUnit = "cd"
+        doc = "On the axis, at full command. Required (over 0)."
+    )
+    double lamp:beamAngle = 0 (
+        lagrangeUnit = "rad"
+        doc = """Full angle where the intensity falls to 50 % of the axis value. Required for spot
+        and beacon."""
+    )
+    double lamp:fieldAngle = 0 (
+        lagrangeUnit = "rad"
+        doc = "Full angle where it falls to 10 %; dark beyond. 0: twice beamAngle."
+    )
+    double lamp:colorTemperature = 0 (
+        lagrangeUnit = "K"
+        doc = "Correlated colour temperature. 0: the light has lamp:color instead."
+    )
+    color3f lamp:color = (1, 1, 1) (
+        lagrangeUnit = "1"
+        doc = """Linear sRGB chromaticity of a coloured lamp (LED indicators, traffic lights),
+        normalised to its luminance."""
+    )
+    double lamp:luminousEfficacy = 0 (
+        lagrangeUnit = "lm/W"
+        doc = "Luminous flux per watt drawn. Required when the lamp is powered (over 0)."
+    )
+    double lamp:heatFraction = 1 (
+        lagrangeUnit = "1"
+        doc = "Share of the electrical power that heats the lamp's own thermal node."
+    )
+    double lamp:riseTime = 0 (
+        lagrangeUnit = "s"
+        doc = "First-order lag of the light output (a filament's warm-up; LEDs about 0)."
+    )
+    double lamp:blinkFrequency = 0 (
+        lagrangeUnit = "Hz"
+        doc = "While blinking: the square wave's frequency. 0: blink is steady on."
+    )
+    double lamp:blinkDuty = 0.5 (
+        lagrangeUnit = "1"
+        doc = "While blinking: the share of each period it is on."
+    )
+    double lamp:rotationSpeed = 0 (
+        lagrangeUnit = "rad/s"
+        doc = "A beacon's turning speed about the prim's +Z."
+    )
+    double lamp:voltageExponent = 0 (
+        lagrangeUnit = "1"
+        doc = """Output scales as (V/V_nom)^n below the nominal voltage, the bus voltage at the
+        start; 0: a constant-current LED driver."""
+    )
+    double lamp:initialCommand = 0 (
+        lagrangeUnit = "1"
+        doc = "Brightness from 0 to 1 at t = 0, held until a command."
+    )
+}

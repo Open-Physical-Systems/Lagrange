@@ -12,6 +12,7 @@
 
 #include <pxr/base/gf/vec2d.h>
 #include <pxr/base/gf/vec3d.h>
+#include <pxr/base/gf/vec3f.h>
 #include <pxr/base/plug/plugin.h>
 #include <pxr/base/plug/registry.h>
 #include <pxr/base/vt/array.h>
@@ -35,10 +36,10 @@ namespace {
 
 // Property namespaces of the project's schema libraries (RFC 0002 convention 2): an applied
 // schema whose properties live in one of them is collected into World::schemaInstances.
-constexpr std::array<std::string_view, 19> kSchemaNamespaces{
+constexpr std::array<std::string_view, 20> kSchemaNamespaces{
     "elec:",   "thermal:", "aero:",  "weather:", "emi:",     "rad:",   "sensmat:",
     "sensor:", "world:",   "comms:", "can:",     "vehicle:", "wheel:", "lane:",
-    "human:",  "water:",   "joint:", "tether:",  "fire:"};
+    "human:",  "water:",   "joint:", "tether:",  "fire:",    "lamp:"};
 
 // Loader checks of RFC 0002 ("Loading") that the schema definitions cannot express.
 struct PairedArrays {
@@ -49,14 +50,17 @@ constexpr std::array<PairedArrays, 1> kPairedArrays{
 struct Fraction {
     std::string_view schema, attribute;
 };
-constexpr std::array<Fraction, 7> kFractions{
+constexpr std::array<Fraction, 10> kFractions{
     {{"BatteryAPI_1", "elec:battery:initialSoc"},
      {"ElectricalMotorAPI_1", "elec:gearEfficiency"},
      {"ElectricalConverterAPI_1", "elec:conv:efficiency"},
      {"ThermalMaterialAPI_1", "thermal:material:emissivity"},
      {"FireAPI_1", "fire:radiativeFraction"},
      {"FireAPI_1", "fire:decayFraction"},
-     {"FireAPI_1", "fire:oxygenLimit"}}};
+     {"FireAPI_1", "fire:oxygenLimit"},
+     {"LampAPI_1", "lamp:heatFraction"},
+     {"LampAPI_1", "lamp:blinkDuty"},
+     {"LampAPI_1", "lamp:initialCommand"}}};
 struct JointTarget {
     std::string_view schema, relationship;
 };
@@ -291,6 +295,9 @@ void SchemaCollector::readProperty(const UsdPrim& prim, const UsdPrimDefinition&
         s.realArrays.emplace(key, std::vector<double>{v[0], v[1]});
     } else if (value.IsHolding<GfVec3d>()) {
         const GfVec3d& v = value.UncheckedGet<GfVec3d>();
+        s.realArrays.emplace(key, std::vector<double>{v[0], v[1], v[2]});
+    } else if (value.IsHolding<GfVec3f>()) {  // color3f (lamp:color)
+        const GfVec3f& v = value.UncheckedGet<GfVec3f>();
         s.realArrays.emplace(key, std::vector<double>{v[0], v[1], v[2]});
     } else {
         note_(where + ": values of type " + attribute.GetTypeName().GetAsToken().GetString() +

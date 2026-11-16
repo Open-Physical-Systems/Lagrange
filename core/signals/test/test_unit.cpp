@@ -94,6 +94,10 @@ TEST(ParseUnit, EverySchemaUnitString) {
         {"s-1", Unit{{.time = -1}}},
         {"Wb", Unit{{.length = 2, .mass = 1, .time = -2, .current = -1}}},
         {"sr", Unit{{.angle = 2}}},
+        {"cd", units::cd},
+        {"lm", units::lm},
+        {"lx", units::lx},
+        {"lm/W", units::lm_per_W},
     };
     for (const auto& [text, expected] : cases) {
         const UnitParse parsed = parseUnit(text);
@@ -101,6 +105,20 @@ TEST(ParseUnit, EverySchemaUnitString) {
         EXPECT_EQ(*parsed.unit, expected) << text << " gave " << to_string(*parsed.unit);
         EXPECT_TRUE(parsed.error.empty());
     }
+}
+
+// RFC 0021: photometry as SI defines it, with the steradian tracked as angle².
+TEST(ParseUnit, PhotometricUnitsAreCandelaAndSteradian) {
+    const UnitParse lux = parseUnit("cd.sr/m2");
+    ASSERT_TRUE(lux.unit);
+    EXPECT_EQ(lux.unit->dim, units::lx.dim);
+    const UnitParse lumen = parseUnit("lx.m2");
+    ASSERT_TRUE(lumen.unit);
+    EXPECT_EQ(lumen.unit->dim, units::lm.dim);
+    EXPECT_EQ(to_string(units::cd), "cd (LuminousIntensity)");
+    EXPECT_EQ(to_string(units::lx), "lx (Illuminance)");
+    EXPECT_EQ(label(units::lm_per_W), "lm/W");
+    EXPECT_EQ(to_string(QuantityKind::LuminousEfficacy), "LuminousEfficacy");
 }
 
 TEST(ParseUnit, BaseUnitsGiveTheSameDimensionAsNamedOnes) {

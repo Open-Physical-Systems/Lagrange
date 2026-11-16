@@ -45,6 +45,7 @@ EXPECTED = {
     "world": ["WorldTileAPI_1"],
     "tether": ["TetherAPI_1"],
     "fire": ["FireAPI_1"],
+    "light": ["LampAPI_1"],
 }
 
 

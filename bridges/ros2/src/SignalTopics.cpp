@@ -130,6 +130,13 @@ Expected<TopicMaps, std::string> readTopicMaps(const std::string& path) {
             return Unexpected{path + ": kind_topics is true or false: " + e.what()};
         }
     }
+    if (const YAML::Node defaults = root["lamp_topics"]) {
+        try {
+            maps.lampTopics = defaults.as<bool>();
+        } catch (const YAML::Exception& e) {
+            return Unexpected{path + ": lamp_topics is true or false: " + e.what()};
+        }
+    }
     for (const char* direction : {"publish", "subscribe"}) {
         const YAML::Node list = root[direction];
         if (!list) {
@@ -171,6 +178,12 @@ Expected<TopicMaps, std::string> readTopicMaps(const std::string& path) {
                 if (entry["size"]) {
                     map.size = entry["size"].as<std::uint32_t>();
                 }
+                if (entry["initial"]) {
+                    map.initial = entry["initial"].as<double>();
+                }
+                if (entry["latched"]) {
+                    map.latched = entry["latched"].as<bool>();
+                }
                 if (const YAML::Node params = entry["params"]; params && params.IsMap()) {
                     for (const auto& item : params) {
                         map.params[item.first.as<std::string>()] = item.second.as<double>();
@@ -190,6 +203,7 @@ struct SignalTopics::Impl {
         TopicMap map;
         SignalId id;
         SimTime sent{-1};
+        std::vector<double> last;  // a latched topic's last value sent
         std::function<void(std::span<const double>, SimTime)> send;
     };
     struct In {
@@ -212,7 +226,8 @@ struct SignalTopics::Impl {
     template <class Message, class Build>
     std::function<void(std::span<const double>, SimTime)> publisher(const TopicMap& map,
                                                                     Build build) {
-        auto pub = node.create_publisher<Message>(map.topic, 10);
+        auto pub = node.create_publisher<Message>(
+            map.topic, map.latched ? rclcpp::QoS(1).transient_local() : rclcpp::QoS(10));
         return [pub, build, map](std::span<const double> v, SimTime now) {
             Message message;
             build(message, v, now, map);
@@ -467,6 +482,9 @@ SignalTopics::SignalTopics(rclcpp::Node& node, TopicMaps maps)
     impl_->latest->values.resize(maps.subscribe.size());
     for (std::size_t i = 0; i < maps.subscribe.size(); ++i) {
         const TopicMap& map = maps.subscribe[i];
+        if (map.initial) {
+            impl_->latest->values[i].assign(map.size, *map.initial);
+        }
         using namespace std_msgs::msg;
         try {
             if (map.type == "std_msgs/msg/Float64") {
@@ -497,6 +515,7 @@ std::vector<std::string> SignalTopics::attach(const SignalBus& bus) {
     for (Impl::Out& out : impl_->outs) {
         out.id = bus.find(out.map.signal);
         out.sent = SimTime{-1};
+        out.last.clear();
         if (!out.id.valid() || out.id.isInput()) {
             problems.push_back(out.map.topic + ": no signal " + out.map.signal + " in this run");
             continue;
@@ -537,7 +556,14 @@ void SignalTopics::publish(const SignalBus& bus, SimTime now) {
             continue;
         }
         out.sent = stamp;
-        out.send(bus.readN(out.id), now);
+        const std::span<const double> values = bus.readN(out.id);
+        if (out.map.latched) {
+            if (std::ranges::equal(values, out.last)) {
+                continue;
+            }
+            out.last.assign(values.begin(), values.end());
+        }
+        out.send(values, now);
     }
 }
 
