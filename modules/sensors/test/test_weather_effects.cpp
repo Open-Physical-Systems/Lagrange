@@ -79,6 +79,18 @@ TEST(LidarWeather, AFogFieldsDepthCountsAlongTheBeam) {
     EXPECT_EQ(weatherRange(10.0, 0.1, 30.0, {}, c, 0.99, 0.99, 0.5, 0.5), 10.0);
 }
 
+// Smoke (RFC 0022 §4): the field's σ is at 633 nm; soot extinguishes as 1/λ (Zhu et al. 2002),
+// so a 905 nm lidar sees 633/905 of it and a 1550 nm one 633/1550; visibility C/σ, C = 3 and 8.
+TEST(SmokeOptics, BandScaleAndVisibility) {
+    EXPECT_DOUBLE_EQ(smokeBandScale(633e-9), 1.0);
+    EXPECT_NEAR(smokeBandScale(905e-9), 633.0 / 905.0, 1e-12);
+    EXPECT_NEAR(smokeBandScale(1550e-9), 633.0 / 1550.0, 1e-12);
+    EXPECT_DOUBLE_EQ(smokeBandScale(0.0), 1.0);
+    EXPECT_DOUBLE_EQ(smokeVisibility(0.5, kVisibilityReflecting), 6.0);
+    EXPECT_DOUBLE_EQ(smokeVisibility(0.5, kVisibilityEmitting), 16.0);
+    EXPECT_TRUE(std::isinf(smokeVisibility(0.0, kVisibilityReflecting)));
+}
+
 TEST(CameraWeather, TheVeilIsKoschmieders) {
     // A black target at the visibility shows 2 % of the contrast it has against the air light.
     const double sigma = 3.912 / 100.0;

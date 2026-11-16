@@ -2,6 +2,8 @@
 // with WMO's 5 % threshold, against the weather's visibility at 2 %, and its averaging lag.
 #include "kinds_test_util.hpp"
 #include "lagrange/sensors/EnvironmentSensors.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
+#include "smoke_box.hpp"
 
 #include <cmath>
 
@@ -63,6 +65,56 @@ TEST(VisibilitySensor, NoWeather) {
     ASSERT_TRUE(r.scheduler->stepUntil(SimTime{1'500'000'000}).ok());
     EXPECT_EQ(r.read("sensor/pwd/valid"), 0.0);
     EXPECT_TRUE(std::isnan(r.read("sensor/pwd/visibility")));
+}
+
+// In the fires' smoke (RFC 0022 §4, §Validation "a uniform smoke box: visibility_sensor reads
+// 3/σ"): σ at the sensor, added to the weather's; with no weather, smoke alone. The sign
+// visibilities are C/σ, C = 3 (reflecting) and 8 (emitting), 1 %.
+TEST(VisibilitySensor, ReadsTheSmokeAtItsPlace) {
+    for (const bool weather : {false, true}) {
+        KindRun r;
+        rig(r.world, "pwd", "visibility_sensor", Pose{{0.0, 0.0, 1.0}}, 1.0);
+        const double smoke = 0.4;   // 1/m
+        const double haze = 0.002;  // 1/m from the weather
+        std::vector<Feed> feeds = bodyFeeds(Pose{}, {});
+        if (weather) {
+            feeds.push_back(fog([haze](double) { return haze; }).front());
+        }
+        r.scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+        r.scheduler->add(std::make_unique<Source>(std::move(feeds)));
+        r.scheduler->add(std::make_unique<SmokeBox>(
+            fields::DenseBox{{-2.0, -2.0, -1.0}, 0.25, {17, 17, 17}}, smoke));
+        auto module = createBuiltinKind(r.world, 0, true, nullptr, nullptr);
+        ASSERT_TRUE(module);
+        r.scheduler->add(std::move(module), smokeConfig());
+        auto wired = r.scheduler->wire(WorldView(r.world));
+        ASSERT_TRUE(wired) << to_string(wired.error().front());
+        ASSERT_TRUE(r.scheduler->stepUntil(SimTime{1'500'000'000}).ok());
+        const double sigma = smoke + (weather ? haze : 0.0);
+        EXPECT_NEAR(r.read("sensor/pwd/extinction"), sigma, 1e-6 * sigma);
+        EXPECT_EQ(r.read("sensor/pwd/valid"), 1.0);
+        EXPECT_NEAR(r.read("sensor/pwd/visibility"), std::log(20.0) / sigma, 0.01 / sigma);
+        EXPECT_NEAR(r.read("sensor/pwd/sign_visibility"), 3.0 / sigma, 0.01 * 3.0 / sigma);
+        EXPECT_NEAR(r.read("sensor/pwd/light_visibility"), 8.0 / sigma, 0.01 * 8.0 / sigma);
+    }
+}
+
+// Dense smoke under its 10 m floor: the MOR is held there, the signs' visibility is not (a real
+// meter, no noise, no lag): 3/σ and 8/σ at σ = 1/m.
+TEST(VisibilitySensor, SignsInDenseSmokeAreBelowItsRange) {
+    KindRun r;
+    rig(r.world, "pwd", "visibility_sensor", Pose{{0.0, 0.0, 1.0}}, 1.0,
+        {{"noise/fraction", 0.0}, {"time_constant", 0.0}});
+    r.scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+    r.scheduler->add(std::make_unique<Source>(bodyFeeds(Pose{}, {})));
+    r.scheduler->add(
+        std::make_unique<SmokeBox>(fields::DenseBox{{-2.0, -2.0, -1.0}, 0.25, {17, 17, 17}}, 1.0));
+    r.scheduler->add(createBuiltinKind(r.world, 0, false, nullptr, nullptr), smokeConfig());
+    ASSERT_TRUE(r.scheduler->wire(WorldView(r.world)));
+    ASSERT_TRUE(r.scheduler->stepUntil(SimTime{1'500'000'000}).ok());
+    EXPECT_EQ(r.read("sensor/pwd/visibility"), 10.0);
+    EXPECT_NEAR(r.read("sensor/pwd/sign_visibility"), 3.0, 0.01 * 3.0);
+    EXPECT_NEAR(r.read("sensor/pwd/light_visibility"), 8.0, 0.01 * 8.0);
 }
 
 }  // namespace

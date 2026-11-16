@@ -2,8 +2,10 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/world/Model.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "smoke_box.hpp"
 
 #include <cmath>
 #include <memory>
@@ -227,6 +229,50 @@ TEST(Lidar, RingsOfA3dLidarHitTheFloorAndTheWalls) {
     // Top ring: the same walls, further along the slanted beam.
     EXPECT_NEAR(r[8], 2.0 / cos30, 1e-12);
     EXPECT_NEAR(r[9], 1.5 / cos30, 1e-12);
+}
+
+// Smoke (RFC 0022 §4, §Validation "a lidar's range drops to the lidarDetectionRange closed
+// form"): the room filled with a uniform smoke of σ at 633 nm; the 905 nm lidar sees σ·633/905
+// along each beam, and keeps a wall only within r·e^(σr) ≤ R. σ is chosen for a reach of 2.25 m:
+// the walls at 1.5, 2 and 2.12 m stay, those at 2.5 m and beyond are lost.
+TEST(Lidar, SmokeShortensItsRangeToTheLidarEquation) {
+    const World world = room(7, 0.0);
+    const double reach = 2.25;
+    const double lidarSigma = std::log(10.0 / reach) / reach;  // r·e^(σr) = R at r = reach
+    const double sigma = lidarSigma / smokeBandScale(905e-9);
+    EXPECT_NEAR(lidarDetectionRange(10.0, lidarSigma, 0.0), reach, 1e-9);
+    // The smoke's clutter (fog's model at the sensor's σ) is rare at this density (1.1e-4 per
+    // beam), and the run's draws are fixed: none of the seven beams meets it.
+    ASSERT_LT(fogClutter(LidarClutter{}, 10.0, lidarSigma, 0.0, 0.1).probability, 1e-3);
+    const auto scan = [&](bool smoke) {
+        Scheduler scheduler;
+        if (smoke) {
+            scheduler.add(std::make_unique<test::SmokeBox>(
+                fields::DenseBox{{-4.0, -3.0, -1.0}, 0.25, {33, 25, 13}}, sigma));
+        }
+        for (auto& module : createSensorModules(world)) {
+            scheduler.add(std::move(module), test::smokeConfig());
+        }
+        auto wired = scheduler.wire(WorldView(world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        EXPECT_TRUE(scheduler.stepTick().ok());
+        const std::span<const double> r =
+            scheduler.bus().readN(scheduler.bus().find("sensor/scanner/ranges"));
+        return std::vector<double>(r.begin(), r.end());
+    };
+    const std::vector<double> clear = scan(false);
+    const std::vector<double> smoky = scan(true);
+    ASSERT_EQ(smoky.size(), 7U);
+    int kept = 0;
+    for (std::size_t i = 0; i < clear.size(); ++i) {
+        if (clear[i] <= reach) {
+            EXPECT_EQ(smoky[i], clear[i]) << i;
+            ++kept;
+        } else {
+            EXPECT_TRUE(std::isinf(smoky[i])) << i << " at " << clear[i] << " m";
+        }
+    }
+    EXPECT_EQ(kept, 3);
 }
 
 TEST(Substitute, GroundTruthSensorsRenderNothingAndHaveNoNoise) {

@@ -5,6 +5,8 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
+#include "smoke_box.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -132,6 +134,45 @@ TEST(Camera, WithoutADeviceItRefusesToStartAndSaysWhatToDo) {
     auto wired = scheduler.wire(WorldView(model.world));
     ASSERT_FALSE(wired);
     EXPECT_NE(to_string(wired.error().front()).find("ground_truth"), std::string::npos);
+}
+
+// Smoke (RFC 0022 §6): the veil through a uniform smoke of σ (visible) over the 2.5 m to the
+// cube's face is Koschmieder's, L = L0·e^(−σd) + L_air·(1 − e^(−σd)), ±1 code.
+TEST(Camera, SmokeVeilsTheSceneByItsOpticalDepth) {
+    const Model model = scene();
+    std::string error;
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    const std::shared_ptr<CameraScene> cameras =
+        createCameraScene(model, gpu != nullptr ? gpu : "", error);
+    if (!cameras) {
+        GTEST_SKIP() << "no Vulkan device: " << error;
+    }
+    const double sigma = 0.3;  // 1/m
+    const auto shoot = [&](bool smoke) {
+        Rig run;
+        if (smoke) {
+            run.scheduler.add(std::make_unique<test::SmokeBox>(
+                fields::DenseBox{{-1.0, -3.0, -1.0}, 0.25, {21, 25, 17}}, sigma));
+        }
+        auto modules = createSensorModules(model.world, nullptr, cameras);
+        run.scheduler.add(std::move(modules[0]), test::smokeConfig());
+        auto wired = run.scheduler.wire(WorldView(model.world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        run.step();
+        return run.image;
+    };
+    const std::shared_ptr<const Buffer> clear = shoot(false);
+    const std::shared_ptr<const Buffer> smoky = shoot(true);
+    ASSERT_TRUE(clear && smoky);
+    const double t = std::exp(-sigma * 2.5);
+    using Rgba = std::array<std::uint8_t, 4>;
+    const Rgba before = pixel<Rgba>(*clear, kWidth / 2, kHeight / 2);
+    const Rgba after = pixel<Rgba>(*smoky, kWidth / 2, kHeight / 2);
+    for (std::size_t k = 0; k < 3; ++k) {
+        const double expected = before[k] * t + kAirLight[k] * (1.0 - t);
+        const double seen = after[k];
+        EXPECT_NEAR(seen, expected, 1.0) << k;
+    }
 }
 
 // The camera model on the GPU (gpu/kernels/camera/camera_model.slang) against the CPU

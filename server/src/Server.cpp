@@ -113,6 +113,7 @@ constexpr std::int64_t kSceneUpdatePeriodNs = 8'000'000;
 constexpr const char* kFogField = "weather/fog_density";
 constexpr const char* kWindField = "weather/wind";
 constexpr const char* kFluxField = "emi/flux_density";
+constexpr const char* kSmokeField = "fire/smoke_extinction";  // env/smoke/extinction (RFC 0022)
 // The air's speed: wind, gusts and the rotors' downwash and outwash (rotor_aero.md §5).
 constexpr const char* kAirField = "aero/wind_speed";
 // RFC 0012: the cells of every link with a thermal material, as FieldVolumes in its frame.
@@ -777,7 +778,7 @@ struct Server::Impl {
     Clock::time_point lastVolumes{Clock::now()};
     Clock::time_point lastEmit{Clock::now()};  // the last emit() to viewers
     std::uint64_t thermalVolumeTick{0};        // volume periods, for kThermalVolumeEvery
-    mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal;
+    mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal, smokeFieldSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
     SimTime statsSimTime{};
@@ -1433,6 +1434,7 @@ struct Server::Impl {
         };
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
+        sensing.values["smoke"] = hasFires();  // the fires' smoke field (RFC 0022 §4)
         if (siteTemperature) {
             sensing.values["ambient_temperature"] = *siteTemperature;
         }
@@ -6241,6 +6243,8 @@ struct Server::Impl {
               conduction != nullptr,
               "no link has a thermal material (ThermalMaterialAPI_1), or the site's ambient "
               "temperature is not given");
+        field(kSmokeField, "smoke extinction", "fire", units::per_m, 1, hasFires(),
+              "the stage has no fires (FireAPI_1)");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -6625,24 +6629,31 @@ struct Server::Impl {
         if (name == kAirField) {
             return airSlice(height, orientation);
         }
-        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField) {
-            return std::nullopt;  // only the air and |B| have vertical slices
+        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField &&
+            name != kSmokeField) {
+            return std::nullopt;  // only the air, |B| and smoke have vertical slices
         }
-        if (scheduler == nullptr ||
-            (name != kFogField && name != kWindField && name != kFluxField)) {
+        if (scheduler == nullptr || (name != kFogField && name != kWindField &&
+                                     name != kFluxField && name != kSmokeField)) {
             return std::nullopt;
         }
         if (name == kFluxField && !emiRuns()) {
             return std::nullopt;
         }
-        const bool fog = name == kFogField;
+        const bool smoke = name == kSmokeField;
+        const bool fog = name == kFogField || smoke;  // both scalar extinctions
         const bool flux = name == kFluxField;
         const SignalBus& bus = scheduler->bus();
-        const SignalId gridId = bus.find(fog ? "env/extinction/field" : "env/wind/velocity_field");
-        const std::shared_ptr<const fields::Field> grid =
-            gridId.valid() ? (fog ? fogFieldSignal : windFieldSignal).read(bus, gridId) : nullptr;
+        const SignalId gridId = bus.find(smoke ? "env/smoke/extinction"
+                                         : fog ? "env/extinction/field"
+                                               : "env/wind/velocity_field");
+        const std::shared_ptr<const fields::Field> grid = gridId.valid() ? (smoke ? smokeFieldSignal
+                                                                            : fog ? fogFieldSignal
+                                                                                  : windFieldSignal)
+                                                                               .read(bus, gridId)
+                                                                         : nullptr;
         const std::optional<aerodynamics::Wind> wind = runWind();
-        if (fog && !bus.find("env/extinction/visible").valid()) {
+        if (smoke ? !gridId.valid() : fog && !bus.find("env/extinction/visible").valid()) {
             return std::nullopt;
         }
         if (!fog && !flux && !grid && !wind) {
@@ -6692,7 +6703,7 @@ struct Server::Impl {
         slice.set_cell_m(cellM);
         std::vector<float> values;
         values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight * components);
-        const double uniform = fog ? bus.read(bus.find("env/extinction/visible")) : 0.0;
+        const double uniform = fog && !smoke ? bus.read(bus.find("env/extinction/visible")) : 0.0;
         double lo = std::numeric_limits<double>::infinity();
         double hi = 0.0;
         for (std::uint32_t j = 0; j < kSliceHeight; ++j) {

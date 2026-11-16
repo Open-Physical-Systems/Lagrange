@@ -228,6 +228,43 @@ std::shared_ptr<const Field> vectorField(const std::string& name, const DenseBox
     return Field::fromBytes(std::move(bytes));
 }
 
+std::shared_ptr<const Field> scalarField(const std::string& name, const DenseBox& box,
+                                         std::span<const float> values) {
+    if (box.size <= 0.0 || box.count[0] < 1 || box.count[1] < 1 || box.count[2] < 1) {
+        return nullptr;
+    }
+    const auto nx = static_cast<std::size_t>(box.count[0]);
+    const auto ny = static_cast<std::size_t>(box.count[1]);
+    const auto nz = static_cast<std::size_t>(box.count[2]);
+    if (values.size() != nx * ny * nz) {
+        return nullptr;
+    }
+    nanovdb::GridBuilder<float> builder(0.0F);
+    auto accessor = builder.getAccessor();
+    bool any = false;
+    for (std::size_t i = 0; i < nx; ++i) {
+        for (std::size_t j = 0; j < ny; ++j) {
+            for (std::size_t k = 0; k < nz; ++k) {
+                const float v = values[((i * ny) + j) * nz + k];
+                if (v != 0.0F) {
+                    accessor.setValue(nanovdb::Coord(static_cast<int>(i), static_cast<int>(j),
+                                                     static_cast<int>(k)),
+                                      v);
+                    any = true;
+                }
+            }
+        }
+    }
+    if (!any) {
+        return nullptr;
+    }
+    const auto handle = builder.getHandle(
+        box.size, nanovdb::Vec3d(box.origin[0], box.origin[1], box.origin[2]), name);
+    std::vector<std::byte> bytes(handle.size());
+    std::memcpy(bytes.data(), handle.data(), handle.size());
+    return Field::fromBytes(std::move(bytes));
+}
+
 Expected<void, std::string> writeScalarField(const std::string& path, const std::string& name,
                                              const DenseBox& box,
                                              const std::function<double(const Vec3&)>& value) {

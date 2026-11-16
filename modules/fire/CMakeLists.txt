@@ -4,8 +4,9 @@ project(lagrange_fire VERSION 0.0.0 LANGUAGES CXX)
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
+find_package(lagrange_fields REQUIRED)
 
-add_library(lagrange_fire src/Correlations.cpp src/Fires.cpp)
+add_library(lagrange_fire src/Correlations.cpp src/Fires.cpp src/Smoke.cpp)
 lagrange_target_defaults(lagrange_fire)
 target_include_directories(
     lagrange_fire
@@ -13,7 +14,10 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
-target_link_libraries(lagrange_fire PUBLIC lagrange_core::lagrange_core)
+target_link_libraries(
+    lagrange_fire
+    PUBLIC lagrange_core::lagrange_core lagrange_fields::lagrange_fields
+)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 install(
@@ -37,8 +41,11 @@ if(BUILD_TESTING)
         lagrange_thermal::lagrange_thermal
     )
     lagrange_target_defaults(test_fires)
+    ament_add_gtest(test_smoke test/test_smoke.cpp TIMEOUT 300)
+    target_link_libraries(test_smoke lagrange_fire)
+    lagrange_target_defaults(test_smoke)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core)
+ament_export_dependencies(lagrange_core lagrange_fields)
 ament_package()

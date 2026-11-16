@@ -1,6 +1,7 @@
 // RFC 0022 in a whole run: the sample's pallet fire grows as a fast t² fire and the sprinkler's
 // rate from --fire-water decays it by Evans' law; a URDF's <fire> burns on its link; with
-// `--domain fire=off` nothing burns.
+// `--domain fire=off` nothing burns; its smoke rises to the sample's roof, holds the soot it made
+// and reaches the visibility meter there.
 #include "lagrange/server/Server.hpp"
 
 #include <cmath>
@@ -52,6 +53,26 @@ TEST(FireRun, TheSamplePalletGrowsAndTheSprinklerDecaysIt) {
                 0.01 * atWater * std::exp(-100.0 / tau));
     EXPECT_EQ(server.read("fire/pallet/state").at(0), 3.0);
     EXPECT_EQ(server.read("fire/pallet/water_rate").at(0), 0.133);
+}
+
+// The smoke (RFC 0022 §4): until the water, Q = α·t², so the soot made is y_s·α·t³/(3·ΔH_c);
+// under the roof none of it leaves the box (2 %, the steps' sum against the integral). The meter
+// near the roof reads it: S = 3/σ and 8/σ of the same σ.
+TEST(FireRun, TheSmokeFillsUnderTheRoofAndTheMeterSeesIt) {
+    ServerOptions o = burning();
+    o.ambientTemperatureK = 293.15;
+    o.airDensityKgM3 = 1.2;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{60'000'000'000}).ok());
+    const double made = 0.015 * kFast * std::pow(60.0, 3) / (3.0 * 1.2e7);
+    EXPECT_NEAR(server.read("env/smoke/mass").at(0), made, 0.02 * made);
+    const double sign = server.read("sensor/smoke_meter/sign_visibility").at(0);
+    const double light = server.read("sensor/smoke_meter/light_visibility").at(0);
+    EXPECT_GT(sign, 0.0);
+    EXPECT_LT(sign, 1000.0) << "smoke at the meter";
+    EXPECT_NEAR(light / sign, 8.0 / 3.0, 1e-9) << "the same measured σ";
 }
 
 TEST(FireRun, OffNothingBurns) {

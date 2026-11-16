@@ -106,6 +106,15 @@ double weatherRange(double range, double minRange, double maxRange, const Sensor
     return out;
 }
 
+double smokeBandScale(double wavelength) {
+    return wavelength > 0.0 ? std::pow(kSmokeFieldWavelength / wavelength, kSootWavelengthExponent)
+                            : 1.0;
+}
+
+double smokeVisibility(double extinction, double factor) {
+    return extinction > 0.0 ? factor / extinction : std::numeric_limits<double>::infinity();
+}
+
 void applyCameraWeather(std::span<std::uint8_t> rgba, std::span<const float> depth,
                         double extinction, double contamination,
                         std::span<const float> fieldDepth) {

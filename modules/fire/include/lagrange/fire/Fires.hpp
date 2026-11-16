@@ -8,12 +8,15 @@
 // loss_power, which the thermal network adds to that node: robots near it heat, and fuel near
 // it ignites. Water at or above the fuel's critical rate stops its growth and decays it (Evans,
 // NISTIR 5254), except on burning liquids; foam smothers it; a wind over its blow-off speed blows
-// a small one out. Step 100 ms, deterministic, no random numbers.
+// a small one out. Its soot rises and drifts as puffs (Smoke.hpp, RFC 0022 §4), rasterised at
+// 2 Hz into env/smoke/extinction, the field the cameras, lidars and visibility sensors see.
+// Step 100 ms, deterministic, no random numbers.
 //
 // Substitutes: zero (no fires: hrr 0, nothing heated) and constant (every fire at its full
 // involvement from the start, unaffected by water, foam and wind: a steady fire for tests).
 
 #include "lagrange/fire/Correlations.hpp"
+#include "lagrange/fire/Smoke.hpp"
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/services/SceneQuery.hpp"
 
@@ -157,6 +160,7 @@ public:
 
     [[nodiscard]] std::span<const FireSpec> fires() const { return specs_; }
     [[nodiscard]] std::span<const Burner> burners() const { return burners_; }
+    [[nodiscard]] const Smoke& smoke() const { return smoke_; }
 
 private:
     struct Out {
@@ -189,6 +193,8 @@ private:
     [[nodiscard]] Pose bodyPose(BodyId body, const SignalBus& bus) const;
     [[nodiscard]] bool blocked(const Vec3& from, const Vec3& to, const FireSpec& fire,
                                const Target& target) const;
+    void stepSmoke(double t, double dt, const Vec3& wind, double density, double temperature,
+                   double gravity, SignalBus& bus);
     void writeOutputs(std::size_t k, const Vec3& base, const Vec3& axis, double height,
                       SignalBus& bus) const;
 
@@ -206,6 +212,13 @@ private:
     std::vector<Flame> flames_;
     std::vector<std::vector<bool>> warned_;  // per fire and target: the near-field warning given
     SignalId wind_{}, airDensity_{}, airTemperature_{}, rain_{};
+    // Smoke (RFC 0022 §4): the puffs, and their field at kSmokePeriod.
+    Smoke smoke_;
+    bool smokeOn_{false};
+    bool smokeWarned_{false};
+    SignalId smokeField_{}, smokeMass_{};
+    std::vector<PlumeSource> plumes_;
+    double smokePeriod_{0.5};  // s
     Vec3 gravity_{};
     double extinguishFraction_{0.01};
     double siteDensity_{0.0}, siteTemperature_{0.0};

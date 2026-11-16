@@ -1,7 +1,11 @@
 // Kind "visibility_sensor" (sensors.md §9): a forward-scatter visibility sensor (Vaisala PWD22)
-// reporting the meteorological optical range from the air's extinction.
+// reporting the meteorological optical range from the air's extinction: the weather's, plus the
+// fires' smoke where the sensor is (RFC 0022 §4, §6), with the visibility of a light-reflecting
+// and a light-emitting sign through that smoke, S = C/σ.
 #include "EnvCommon.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/sensors/EnvironmentSensors.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -27,7 +31,7 @@ public:
     VisibilitySensor(const World& world, std::uint32_t sensor, bool groundTruth)
         : KindModule(world, sensor, groundTruth) {}
 
-    Status declare(const WorldView& view, const ModuleConfig&, SignalDeclarer& d) override {
+    Status declare(const WorldView& view, const ModuleConfig& config, SignalDeclarer& d) override {
         const World& w = view.raw();
         minRange_ = kindSetting(w, sensor_, "range/min", kMinRange);
         maxRange_ = kindSetting(w, sensor_, "range/max", kMaxRange);
@@ -44,6 +48,22 @@ public:
         mor_ = d.output(kindSpec(base() + "/visibility", SignalType::Scalar, units::m));
         extinction_ = d.output(kindSpec(base() + "/extinction", SignalType::Scalar, units::per_m));
         valid_ = d.output(kindSpec(base() + "/valid", SignalType::Bool, units::one));
+        // The fires' smoke (config "smoke"): σ at the sensor, read at its own rate.
+        smoke_ = config.get<bool>("smoke").value_or(false);
+        if (smoke_) {
+            SignalSpec field = kindSpec("env/smoke/extinction", SignalType::Field3D, units::per_m);
+            field.optional = true;
+            field.feedback = true;
+            smokeIn_ = d.input(field);
+            onWorld_ = body_ == kWorldBody.index;  // a fixed meter in the scenery
+            if (!onWorld_) {
+                motion_.declare(w, body_, d, false);
+            }
+            reflecting_ =
+                d.output(kindSpec(base() + "/sign_visibility", SignalType::Scalar, units::m));
+            emitting_ =
+                d.output(kindSpec(base() + "/light_visibility", SignalType::Scalar, units::m));
+        }
         return {};
     }
 
@@ -54,7 +74,17 @@ public:
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
-        const double sigma = bus.read(extinctionIn_);
+        double sigma = bus.read(extinctionIn_);
+        if (smoke_) {
+            const std::shared_ptr<const fields::Field> field = smokeField_.read(bus, smokeIn_);
+            const double local =
+                field
+                    ? std::max(field->sampleScalar(
+                                   compose(onWorld_ ? Pose{} : motion_.pose(bus), mount_).position),
+                               0.0)
+                    : 0.0;
+            sigma = (std::isfinite(sigma) ? sigma : 0.0) + local;
+        }
         if (!std::isfinite(sigma)) {
             write(bus, kNaN, kNaN, false);  // the weather is off
             return {};
@@ -67,9 +97,11 @@ public:
         random::Stream rng(context.seed, context.stepIndex, 0);
         const double trueMor = meteorologicalOpticalRange(sigma_);
         const double fraction = trueMor > kFar ? farNoise_ : noise_;
-        const double mor =
-            std::clamp(trueMor * (1.0 + fraction * rng.normal()), minRange_, maxRange_);
-        write(bus, mor, -std::log(kMorContrast) / mor, true);
+        const double measured = trueMor * (1.0 + fraction * rng.normal());
+        const double mor = std::clamp(measured, minRange_, maxRange_);
+        // The signs' visibility from what it measured, before its MOR is held to its range.
+        write(bus, mor, -std::log(kMorContrast) / mor, true,
+              -std::log(kMorContrast) / std::max(measured, 0.0));
         return {};
     }
 
@@ -84,16 +116,32 @@ public:
     }
 
 private:
-    void write(SignalBus& bus, double mor, double sigma, bool valid) {
+    /// `signSigma`: the σ the sign visibilities come from (NaN: `sigma`).
+    void write(SignalBus& bus, double mor, double sigma, bool valid, double signSigma = kNaN) {
         bus.write(mor_, mor);
         bus.write(extinction_, sigma);
         bus.write(valid_, valid ? 1.0 : 0.0);
+        if (smoke_) {  // S = C/σ of what it measured, up to its range (smoke is metres)
+            const auto sign = [&](double factor) {
+                return valid ? std::min(smokeVisibility(std::isnan(signSigma) ? sigma : signSigma,
+                                                        factor),
+                                        maxRange_)
+                             : kNaN;
+            };
+            bus.write(reflecting_, sign(kVisibilityReflecting));
+            bus.write(emitting_, sign(kVisibilityEmitting));
+        }
     }
 
     double minRange_{kMinRange}, maxRange_{kMaxRange}, noise_{kNoiseFraction}, tau_{kTau};
     double farNoise_{kFarRatio * kNoiseFraction};
     double sigma_{kNaN};
     SignalId extinctionIn_, mor_, extinction_, valid_;
+    bool smoke_{false};
+    SignalId smokeIn_, reflecting_, emitting_;
+    fields::FieldSignal smokeField_;
+    BodyMotion motion_;
+    bool onWorld_{false};
 };
 
 }  // namespace
