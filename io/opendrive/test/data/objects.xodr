@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test roads for objects and signals (test_opendrive.cpp):
+     road 1: flat and straight along x from (10, 5), 50 m, with a pole, a row of bollards, a
+     guard rail, two buildings by their outlines (a square and an L), a crosswalk, a parking
+     space, a sign and a traffic light;
+     road 2: straight along y from the origin, 2 m up, a constant 0.1 rad bank: a box on it. -->
+<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="objects" version="1"/>
+  <road id="1" length="50" junction="-1">
+    <planView>
+      <geometry s="0" x="10" y="5" hdg="0" length="50"><line/></geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0">
+        <left><lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></left>
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+    <objects>
+      <object id="pole1" type="pole" s="10" t="-4" zOffset="0" hdg="0.3" length="0.2" width="0.3" height="3"/>
+      <object id="bollards" type="obstacle" s="20" t="-5" zOffset="0" radius="0.1" height="1">
+        <repeat s="20" length="10" distance="2.5" tStart="-5" tEnd="-6" heightStart="1" heightEnd="1.4" zOffsetStart="0" zOffsetEnd="0"/>
+      </object>
+      <object id="rail" type="barrier" s="0" t="5" zOffset="0" width="0.3" height="0.8">
+        <repeat s="0" length="20" distance="0" tStart="5" tEnd="5" heightStart="0.8" heightEnd="0.8" zOffsetStart="0" zOffsetEnd="0"/>
+      </object>
+      <object id="house" type="building" s="40" t="12" zOffset="0" hdg="0" length="6" width="6" height="5">
+        <outlines>
+          <outline id="0" closed="true">
+            <cornerLocal u="-3" v="-3" z="0" height="5"/>
+            <cornerLocal u="3" v="-3" z="0" height="5"/>
+            <cornerLocal u="3" v="3" z="0" height="5"/>
+            <cornerLocal u="-3" v="3" z="0" height="5"/>
+          </outline>
+        </outlines>
+      </object>
+      <object id="ell" type="building" s="0" t="0" zOffset="0">
+        <outline id="0" closed="true">
+          <cornerRoad s="0" t="-10" dz="0" height="4"/>
+          <cornerRoad s="8" t="-10" dz="0" height="4"/>
+          <cornerRoad s="8" t="-14" dz="0" height="4"/>
+          <cornerRoad s="4" t="-14" dz="0" height="4"/>
+          <cornerRoad s="4" t="-18" dz="0" height="4"/>
+          <cornerRoad s="0" t="-18" dz="0" height="4"/>
+        </outline>
+      </object>
+      <object id="zebra" type="crosswalk" s="35" t="0" zOffset="0" length="3" width="7" height="0"/>
+      <object id="bay" type="parkingSpace" s="45" t="-6" zOffset="0" hdg="1.5707963267948966" length="5" width="2.5" height="0"/>
+    </objects>
+    <signals>
+      <signal id="stop" s="30" t="-5" zOffset="2" orientation="+" dynamic="no" country="DE" type="206" subtype="-1" height="0.6" width="0.6"/>
+      <signal id="light" s="48" t="5" zOffset="3" hOffset="0.2" orientation="-" dynamic="yes" country="DE" type="1000001" subtype="-1" height="0.9" width="0.3"/>
+    </signals>
+  </road>
+  <road id="2" length="20" junction="-1">
+    <planView>
+      <geometry s="0" x="0" y="0" hdg="1.5707963267948966" length="20"><line/></geometry>
+    </planView>
+    <elevationProfile><elevation s="0" a="2" b="0" c="0" d="0"/></elevationProfile>
+    <lateralProfile><superelevation s="0" a="0.1" b="0" c="0" d="0"/></lateralProfile>
+    <lanes>
+      <laneSection s="0">
+        <right><lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+    <objects>
+      <object id="crate" type="obstacle" s="5" t="-3" zOffset="0.5" hdg="0.25" pitch="0.05" roll="-0.1" length="1" width="0.8" height="0.6"/>
+    </objects>
+  </road>
+</OpenDRIVE>

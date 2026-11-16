@@ -13,6 +13,7 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ### Features
 
+- **OpenDRIVE objects and signals**: `lagrange_opendrive_import` reads a road's `<objects>` and `<signals>` (ASAM OpenDRIVE 1.8 §13, §14). Objects stand at s, t on the road surface (elevation and superelevation included), zOffset up, turned by hdg, pitch and roll: boxes and cylinders, `<repeat>` rows (bollards) and continuous repeats (guard rails, walls), `<outline>`/`<outlines>` prisms; standing ones are fixed scenery colliders that lidars, physics and the downwash see, flat ones (crosswalks, parking spaces, road marks) are paint. Signals are a sign board or a dark traffic-light head on a pole, facing the traffic they apply to. A file without objects or signals imports byte for byte as before
 - **`lagrange build [ROBOT.urdf|ROBOT.xacro]`** opens the viewer straight in the robot builder (`--workspace builder`, with `--builder-open` for a named file); no server is needed
 
 ## [1.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.3.0...v1.4.0) (2026-11-15)

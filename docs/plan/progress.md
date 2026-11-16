@@ -325,7 +325,10 @@ fallback documented if Autoware is not available for Lyrical.
    meet end to start. Superelevation, lane heights and `@level`, and driving on raised roads
    (convex slabs per lane, traffic pitched and rolled with their lanes) **done** 2026-11-15:
    formats.md §3.11, `assets/worlds/banked_ring`, `test_opendrive` Banked, `test_traffic`
-   BankedRoad, `test_server` BankedRing. Owed: objects and signals)
+   BankedRoad, `test_server` BankedRing. Objects and signals **done** 2026-11-17: `<object>` with
+   `<repeat>` and outlines as fixed scenery (boxes, cylinders, hulls; marks painted), `<signal>`
+   as boards and dark traffic-light heads on poles, formats.md §3.11, `test_opendrive` Objects.
+   Owed: signals do not drive the traffic module's lights, which stay at the lane ends)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
    traffic lights, as kinematic bodies (**done** 2026-10-25: `lagrange_traffic`, traffic.md §8;
    kinematic bodies in MuJoCo and Jolt; `--traffic`; the city block runs 8 vehicles and 6

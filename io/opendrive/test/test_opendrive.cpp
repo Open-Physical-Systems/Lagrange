@@ -2,10 +2,12 @@
 // and an independent clothoid integral, lane borders, and the sample city block's lanes, which
 // must meet their successors end to start.
 #include "lagrange/opendrive/OpenDrive.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
 #include <map>
 #include <numbers>
+#include <stdexcept>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -327,6 +329,216 @@ TEST_F(Banked, RaisedRoadsCollideFlatOnesDoNot) {
     }
     EXPECT_NEAR(top, 2.0 + 3.5 * std::sin(kBank) + options.surfaceHeight, 1e-5);
     EXPECT_NEAR(bottom, 2.0 + options.surfaceHeight - options.colliderDepth, 1e-5);
+}
+
+// Objects and signals (ASAM OpenDRIVE 1.8 §13, §14) on test/data/objects.xodr.
+class Objects : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto n = read(LAGRANGE_TEST_OBJECTS_XODR);
+        ASSERT_TRUE(n) << n.error();
+        network_ = std::move(*n);
+    }
+    const Road& road(int id) const { return *network_.road(id); }
+    const Object& object(int r, const std::string& id) const {
+        for (const Object& o : road(r).objects) {
+            if (o.id == id) {
+                return o;
+            }
+        }
+        throw std::runtime_error("no object " + id);
+    }
+    /// The unit x and z axes of a pose.
+    static std::array<double, 3> axis(const Pose& p, int k) {
+        std::array<double, 3> v{};
+        v[static_cast<std::size_t>(k)] = 1.0;
+        return rotate(p.orientation, v);
+    }
+    static const TriMesh* mesh(const Model& m, const std::string& name) {
+        for (const ScenePrim& p : m.scene.prims) {
+            if (p.name == name && p.mesh != kNoIndex) {
+                return &m.scene.meshes.at(p.mesh);
+            }
+        }
+        return nullptr;
+    }
+    Network network_;
+};
+
+TEST_F(Objects, AreReadWithTheirRepeatsOutlinesAndSignals) {
+    EXPECT_EQ(road(1).objects.size(), 7U);
+    EXPECT_EQ(road(1).signals.size(), 2U);
+    EXPECT_EQ(road(2).objects.size(), 1U);
+    const Object& rail = object(1, "rail");
+    ASSERT_EQ(rail.repeats.size(), 1U);
+    EXPECT_EQ(rail.repeats[0].distance, 0.0);
+    EXPECT_EQ(object(1, "house").outlines.size(), 1U);  // under <outlines>
+    EXPECT_TRUE(object(1, "house").outlines[0].local);
+    EXPECT_EQ(object(1, "ell").outlines.size(), 1U);  // 1.4's single <outline>
+    EXPECT_EQ(object(1, "ell").outlines[0].corners.size(), 6U);
+    EXPECT_TRUE(road(1).signals[1].dynamic);
+    EXPECT_EQ(road(1).signals[0].orientation, "+");
+}
+
+TEST_F(Objects, APoleStandsAtItsSAndTTurnedByItsHeading) {
+    const auto p = placements(road(1), object(1, "pole1"));
+    ASSERT_EQ(p.size(), 1U);
+    EXPECT_NEAR(p[0].pose.position[0], 20.0, 1e-12);  // x = 10 + s
+    EXPECT_NEAR(p[0].pose.position[1], 1.0, 1e-12);   // y = 5 + t
+    EXPECT_NEAR(p[0].pose.position[2], 0.0, 1e-12);
+    const auto x = axis(p[0].pose, 0);
+    EXPECT_NEAR(std::atan2(x[1], x[0]), 0.3, 1e-12);
+    EXPECT_EQ(p[0].height, 3.0);
+}
+
+TEST_F(Objects, OnABankedRoadTheOriginIsOnTheSurface) {
+    // Road 2 runs along +y, 2 m up, banked 0.1 rad (falling to the right, +x): t = -3 lies
+    // 3·cos 0.1 to the right and 3·sin 0.1 down, zOffset 0.5 above; heading from the road's.
+    constexpr double kTilt = 0.1;
+    const Object& crate = object(2, "crate");
+    const auto p = placements(road(2), crate);
+    ASSERT_EQ(p.size(), 1U);
+    const Pose& pose = p[0].pose;
+    EXPECT_NEAR(pose.position[0], 3.0 * std::cos(kTilt), 1e-9);
+    EXPECT_NEAR(pose.position[1], 5.0, 1e-9);
+    EXPECT_NEAR(pose.position[2], 2.0 - 3.0 * std::sin(kTilt) + 0.5, 1e-9);
+    // z-y'-x'': yaw ψ = π/2 + 0.25, pitch θ = 0.05, roll φ = −0.1 (closed forms of R's columns).
+    const double psi = kPi / 2.0 + 0.25;
+    const double th = 0.05;
+    const double ph = -0.1;
+    const auto x = axis(pose, 0);
+    EXPECT_NEAR(x[0], std::cos(psi) * std::cos(th), 1e-12);
+    EXPECT_NEAR(x[1], std::sin(psi) * std::cos(th), 1e-12);
+    EXPECT_NEAR(x[2], -std::sin(th), 1e-12);
+    const auto z = axis(pose, 2);
+    EXPECT_NEAR(z[0], std::cos(psi) * std::sin(th) * std::cos(ph) + std::sin(psi) * std::sin(ph),
+                1e-12);
+    EXPECT_NEAR(z[1], std::sin(psi) * std::sin(th) * std::cos(ph) - std::cos(psi) * std::sin(ph),
+                1e-12);
+    EXPECT_NEAR(z[2], std::cos(th) * std::cos(ph), 1e-12);
+    // Its collider: a box of half its size, centred half its height up its own z.
+    const auto m = toModel(network_);
+    ASSERT_TRUE(m) << m.error();
+    const World::Colliders& c = m->world.colliders;
+    const std::size_t last = c.body.size() - 1;
+    EXPECT_EQ(c.shape[last], ShapeType::Box);
+    EXPECT_NEAR(c.size[last][0], 0.5, 1e-12);
+    EXPECT_NEAR(c.size[last][1], 0.4, 1e-12);
+    EXPECT_NEAR(c.size[last][2], 0.3, 1e-12);
+    for (std::size_t k = 0; k < 3; ++k) {
+        EXPECT_NEAR(c.poseInBody[last].position[k], pose.position[k] + 0.3 * z[k], 1e-9);
+    }
+}
+
+TEST_F(Objects, ARepeatPlacesACopyEveryDistanceWithItsValuesLinear) {
+    const auto p = placements(road(1), object(1, "bollards"));
+    ASSERT_EQ(p.size(), 5U);  // s = 20, 22.5, …, 30
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const double f = static_cast<double>(i) / 4.0;
+        EXPECT_NEAR(p[i].pose.position[0], 30.0 + 2.5 * static_cast<double>(i), 1e-12);
+        EXPECT_NEAR(p[i].pose.position[1], 5.0 - 5.0 - f, 1e-12);  // t from -5 to -6
+        EXPECT_NEAR(p[i].height, 1.0 + 0.4 * f, 1e-12);
+        EXPECT_EQ(p[i].radius, 0.1);
+    }
+    // A continuous repeat (distance 0) places no copies: it is one object along its path.
+    EXPECT_TRUE(placements(road(1), object(1, "rail")).empty());
+}
+
+TEST_F(Objects, SignalsFaceTheTrafficTheyApplyTo) {
+    // "+": for traffic along s, so its face looks back against s.
+    const Pose stop = signalPose(road(1), road(1).signals[0]);
+    EXPECT_NEAR(stop.position[0], 40.0, 1e-12);
+    EXPECT_NEAR(stop.position[1], 0.0, 1e-12);
+    EXPECT_NEAR(stop.position[2], 2.0, 1e-12);
+    const auto face = axis(stop, 0);
+    EXPECT_NEAR(face[0], -1.0, 1e-12);
+    EXPECT_NEAR(face[1], 0.0, 1e-12);
+    // "-": for traffic against s, facing along s, turned counter-clockwise by hOffset.
+    const Pose light = signalPose(road(1), road(1).signals[1]);
+    EXPECT_NEAR(light.position[0], 58.0, 1e-12);
+    EXPECT_NEAR(light.position[1], 10.0, 1e-12);
+    EXPECT_NEAR(light.position[2], 3.0, 1e-12);
+    const auto lf = axis(light, 0);
+    EXPECT_NEAR(std::atan2(lf[1], lf[0]), 0.2, 1e-12);
+}
+
+TEST_F(Objects, StandingObjectsCollideAndMarksDoNot) {
+    ConvertOptions options;
+    const auto m = toModel(network_, options);
+    ASSERT_TRUE(m) << m.error();
+    const World::Colliders& c = m->world.colliders;
+    // Road 1 (flat, no slabs): pole 1 box, 5 bollard cylinders, the rail's 20 m in 2 m hulls
+    // (10), the square house 1 hull, the L 4 (a hull per triangle of its footprint), the sign
+    // and the light a box and a pole each; crosswalk and parking space none. Road 2: its lane's
+    // 10 slabs, then the crate's box.
+    ASSERT_EQ(c.body.size(), 1U + 5U + 10U + 1U + 4U + 4U + 10U + 1U);
+    std::map<ShapeType, int> shapes;
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        EXPECT_EQ(c.body[i], kWorldBody);
+        ++shapes[c.shape[i]];
+    }
+    EXPECT_EQ(shapes[ShapeType::Box], 1 + 2 + 1);
+    EXPECT_EQ(shapes[ShapeType::Cylinder], 5 + 2);
+    EXPECT_EQ(shapes[ShapeType::ConvexHull], 10 + 1 + 4 + 10);
+    // The house's hull: its footprint at (50 ± 3, 17 ± 3), 5 m tall.
+    const std::size_t house = 1 + 5 + 10;
+    ASSERT_EQ(c.shape[house], ShapeType::ConvexHull);
+    const ConvexHull& hull = m->world.hulls.at(c.hull[house]);
+    const auto& at = c.poseInBody[house].position;
+    std::array<double, 3> lo{INFINITY, INFINITY, INFINITY};
+    std::array<double, 3> hi{-INFINITY, -INFINITY, -INFINITY};
+    for (const auto& p : hull.points) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            lo[k] = std::min(lo[k], p[k] + at[k]);
+            hi[k] = std::max(hi[k], p[k] + at[k]);
+        }
+    }
+    EXPECT_NEAR(lo[0], 47.0, 1e-5);
+    EXPECT_NEAR(hi[0], 53.0, 1e-5);
+    EXPECT_NEAR(lo[1], 14.0, 1e-5);
+    EXPECT_NEAR(hi[1], 20.0, 1e-5);
+    EXPECT_NEAR(lo[2], 0.0, 1e-5);
+    EXPECT_NEAR(hi[2], 5.0, 1e-5);
+    // The L's four hulls cover its 48 m² footprint, not its 64 m² bounding box.
+    double area = 0.0;
+    for (std::size_t i = house + 1; i < house + 5; ++i) {
+        const ConvexHull& h = m->world.hulls.at(c.hull[i]);
+        double xs[3];
+        double ys[3];
+        std::size_t n = 0;
+        for (const auto& p : h.points) {
+            if (p[2] + c.poseInBody[i].position[2] < 1.0 && n < 3) {
+                xs[n] = p[0];
+                ys[n] = p[1];
+                ++n;
+            }
+        }
+        ASSERT_EQ(n, 3U);
+        area +=
+            0.5 * std::abs((xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0]));
+    }
+    EXPECT_NEAR(area, 48.0, 1e-4);
+    // Drawn: meshes per material under the road; the crosswalk's stripes and the parking
+    // space's border are paint just above the road surface.
+    const TriMesh* paint = mesh(*m, "road_1_objects_mark_white");
+    ASSERT_NE(paint, nullptr);
+    for (std::size_t i = 2; i < paint->positions.size(); i += 3) {
+        EXPECT_NEAR(paint->positions[i], options.surfaceHeight + 0.003, 1e-6);
+    }
+    EXPECT_NE(mesh(*m, "road_1_objects_object_building_concrete"), nullptr);
+    EXPECT_NE(mesh(*m, "road_1_objects_signal_head_housing"), nullptr);
+    EXPECT_NE(mesh(*m, "road_1_objects_sign_board"), nullptr);
+    EXPECT_NE(mesh(*m, "road_2_objects_object_concrete"), nullptr);
+}
+
+TEST(ObjectsNone, ARoadWithoutObjectsGainsNothing) {
+    const auto n = read(LAGRANGE_TEST_BANKED_XODR);
+    ASSERT_TRUE(n) << n.error();
+    const auto m = toModel(*n);
+    ASSERT_TRUE(m) << m.error();
+    for (const ScenePrim& p : m->scene.prims) {
+        EXPECT_EQ(p.name.find("_objects_"), std::string::npos) << p.name;
+    }
 }
 
 TEST(Parse, NamesWhatIsWrong) {
