@@ -183,3 +183,43 @@ def test_heat_gives_the_steady_temperatures_in_seconds() -> None:
     assert "led_left" in result.stdout and "sink" in result.stdout
     assert "3.000 W in, 3.000 W out" in result.stdout
     assert run("heat", "--robot", robot, "--world", "none").returncode != 0  # no ambient
+
+
+def fake_viewer(tmp_path: Path) -> dict[str, str]:
+    """An ament prefix whose lagrange_viewer prints the arguments it was started with."""
+    prefix = tmp_path / "prefix"
+    index = prefix / "share" / "ament_index" / "resource_index" / "packages"
+    index.mkdir(parents=True)
+    (index / "lagrange_viewer").touch()
+    viewer = prefix / "lib" / "lagrange_viewer" / "lagrange_viewer"
+    viewer.parent.mkdir(parents=True)
+    viewer.write_text('#!/bin/sh\necho "viewer:$*"\n')
+    viewer.chmod(0o755)
+    path = os.environ.get("AMENT_PREFIX_PATH", "")
+    return {**os.environ, "AMENT_PREFIX_PATH": f"{prefix}:{path}" if path else str(prefix)}
+
+
+def test_nothing_named_opens_the_launcher(tmp_path: Path) -> None:
+    # Bare `lagrange` starts from zero: the viewer alone, on its launcher, no server.
+    result = subprocess.run(
+        [CLI], capture_output=True, text=True, timeout=60, env=fake_viewer(tmp_path)
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "viewer:", result.stdout
+
+
+def test_build_opens_the_builder(tmp_path: Path) -> None:
+    env = fake_viewer(tmp_path)
+
+    def cli(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([CLI, *args], capture_output=True, text=True, timeout=60, env=env)
+
+    assert cli("build").stdout.strip() == "viewer:--workspace builder"
+    robot = tmp_path / "arm.urdf"
+    robot.write_text("<robot name='arm'/>")
+    opened = cli("build", str(robot), "--theme", "light").stdout.strip()
+    assert opened == f"viewer:--workspace builder --builder-open {robot} --theme light", opened
+    assert "no file" in cli("build", str(tmp_path / "none.urdf")).stderr
+    mesh = tmp_path / "arm.stl"
+    mesh.touch()
+    assert "not a .urdf or .xacro" in cli("build", str(mesh)).stderr

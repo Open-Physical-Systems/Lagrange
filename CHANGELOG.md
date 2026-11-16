@@ -5,6 +5,16 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Breaking or behaviour changes
+
+- **`lagrange` with nothing after it** opens the viewer on its launcher (as `lagrange viewer`), from zero: Start local simulator, connect, open a recording or build a robot. It used to start the sample AMR in the warehouse; that is `lagrange amr`. `lagrange` with options only (`lagrange --no-ros`, `lagrange --server-only`) still runs the server's default, the sample AMR
+
+### Features
+
+- **`lagrange build [ROBOT.urdf|ROBOT.xacro]`** opens the viewer straight in the robot builder (`--workspace builder`, with `--builder-open` for a named file); no server is needed
+
 ## [1.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.3.0...v1.4.0) (2026-11-15)
 
 The robot builder and everything merged into `dev` after 1.3.0 (#332–#423).
