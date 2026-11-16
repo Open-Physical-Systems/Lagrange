@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (for the owner to accept or reject) |
+| Status | Accepted (2026-11-17, by the owner: every open question as proposed) |
 | Created | 2026-11-17 |
 | Affects | `schemas/` (one new library `schemas/light`), `modules/lights/` (new, small), `modules/sensors/` (cameras and `light_sensor` see lamps; the renderer's sun from the site), `gpu/kernels/camera/realistic.slang` and `gpu/raster/` (lamps, night), `modules/weather/` (sun position from date and place), `viewer/render/` (drawing), `bridges/ros2/` (topics), `bridges/autoware/` (indicators), `io/importers/` (URDF/SDFormat forms), `profiles/schema.json` (additions), `docs/` |
 | Not affected | `proto/` (§7: the scene snapshot, `GetAttributes` and signal subscription already carry everything), `core/plugin_abi/` (§8) |

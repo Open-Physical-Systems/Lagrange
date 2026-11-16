@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (for the owner to accept or reject) |
+| Status | Accepted (2026-11-17, by the owner: every open question as proposed) |
 | Created | 2026-11-17 |
 | Affects | `schemas/electrical` (appended tokens and optional attributes), `schemas/actuator` (one new library), `modules/electrical/` (a stepper model, a position mode, screw back-drive), `modules/actuators/` (new: servo electronics, grippers, solenoids, later fluid power), `modules/rigid_body/` (one optional input per joint), `server/` (JointControl, ROS topics), `bridges/ros2_control/` (GPIO interfaces), `io/importers/` (URDF `<gazebo>` forms), `profiles/schema.json` (additions), `docs/` |
 | Not affected | `proto/` (the viewer reads the new signals through the existing signal subscription), `core/plugin_abi/` (open question 12) |
