@@ -9,6 +9,7 @@
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 #include <limits>
 #include <numbers>
+#include <vector>
 
 #include <yaml-cpp/yaml.h>
 
@@ -161,9 +162,35 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
 
     if (!schemaJson.empty()) {
         try {
-            const auto schema = jsonschema::make_json_schema(jsoncons::json::parse(schemaJson));
+            const jsoncons::json schemaDocument = jsoncons::json::parse(schemaJson);
+            const auto schema = jsonschema::make_json_schema(schemaDocument);
+            // A domain this server runs that the installed schema does not know: the schema
+            // (package lagrange_profiles) is older than the server, as in an overlay that rebuilt
+            // lagrange_server alone. Say that, once per domain, instead of the schema's
+            // "additional property"; the rest of the profile is still checked.
+            jsoncons::json checked = profile;
+            if (checked.contains("domains") && checked["domains"].is_object() &&
+                schemaDocument.contains("properties") &&
+                schemaDocument["properties"].contains("domains") &&
+                schemaDocument["properties"]["domains"].contains("properties")) {
+                const jsoncons::json& known = schemaDocument["properties"]["domains"]["properties"];
+                std::vector<std::string> unknown;
+                for (const auto& member : checked["domains"].object_range()) {
+                    const std::string name(member.key());
+                    if (!known.contains(name) && context.substitutes.contains(name)) {
+                        unknown.push_back(name);
+                    }
+                }
+                for (const std::string& name : unknown) {
+                    error(check, "/domains/" + name,
+                          "the profile schema (package lagrange_profiles) is older than this "
+                          "server and does not know the domain '" +
+                              name + "'; build and source lagrange_profiles with lagrange_server");
+                    checked["domains"].erase(name);
+                }
+            }
             schema.validate(
-                profile,
+                checked,
                 [&check](const jsonschema::validation_message& message) -> jsonschema::walk_result {
                     std::string text = message.message();
                     if (text.size() > 200) {
