@@ -5,8 +5,9 @@ spotlights and rotating beacons. `lagrange_lights` runs every 10 ms. It switches
 each lamp, turns a beacon, lets a lamp's light rise with its time constant, dims it with its
 bus's voltage, and draws its power from the bus and puts its heat into its thermal node.
 
-What a lamp lights is the next step: the `light_sensor` and the cameras (RFC 0021 steps 4–6). This
-page covers the lamp itself.
+A light sensor measures the lamps, and cameras and the viewer's realistic view are lit by them
+(RFC 0021 steps 4 and 5). The sun from the site's date and time is the next step (6): until then
+a run is dark only when it is given a sky (below).
 
 ```mermaid
 flowchart LR
@@ -96,9 +97,49 @@ P_heat = heatFraction · P_elec
 - The power is drawn at the commanded flux even while the light ramps up: a filament's inrush
   current is not modelled.
 
-What a lamp gives a surface (used from RFC 0021 step 4 by the light sensor and the renderer):
-`E = I_out · f(θ) · cos(incidence) / d²` lux, the inverse-square law, unshadowed
+What a lamp gives a surface: `E = I_out · f(θ) · cos(incidence) / d²` lux, the inverse-square law
 (`lights::illuminance`).
+
+## What a light sensor measures
+
+A `light_sensor` (sensors.md §9) adds each lamp's `E` at its face to the daylight, with one ray
+from the sensor to the lamp through every collider: a box between them leaves that lamp out (the
+sensor's own body and the lamp's are passed through). A run without a sun (no place and date, no
+weather) and with lamps reads the lamps alone. Deterministic, on the CPU, on every tier.
+
+## What cameras and the viewer see
+
+The realistic look of `gpu::RealisticRenderer`, the same code for camera sensors and the viewer's
+viewport (invariant 13), adds each lamp's `E` through the same surface model as the sun, in the
+lamp's colour: Planck's law at its colour temperature through the CIE 1931 colour-matching
+functions (the analytic fit of Wyman, Sloan and Shirley, JCGT 2(2), 2013) to linear sRGB, or its
+`lamp:color`. Up to 64 lamps a frame, the brightest at the eye. The renderer's units are tied to
+lux: the drawn sun stands for the light sensor's clear-sky beam at its elevation, so a grey
+surface of albedo ρ under `E` lux is drawn ρ·E/π in those units.
+
+The sky's horizontal illuminance, the signal `env/sky_illuminance` (lx), dims the drawn sun and
+sky to its share of the drawn day (about 91 klx), and the picture brightens as an eye or a camera
+adapts, up to 1024 times. A camera with an exposure (`CameraSensorAPI_1`) takes that gain out
+again, so at night its auto exposure runs long and its frame is dark and noisy, with the lamps'
+pools where they fall. Until the weather writes `env/sky_illuminance` from the sun (RFC 0021
+step 6), give it with `--ros-topics`:
+
+```yaml
+# night.yaml: a moonless night (0.8 mlx, RFC 0021 §6), for cameras and the viewer
+subscribe:
+  - {signal: env/sky_illuminance, topic: /sky_illuminance, type: std_msgs/msg/Float64, unit: lx,
+     initial: 0.0008}
+```
+
+```bash
+lagrange_server --robot assets/robots/amr_diffdrive/amr_diffdrive.urdf \
+  --overlay assets/robots/amr_diffdrive/amr_diffdrive_lights.overlay.yaml \
+  --world assets/worlds/warehouse_small/warehouse_small.usda --ros-topics night.yaml
+```
+
+The viewer finds the lamps as `LampAPI_1` prims of the scene, reads their attributes and follows
+their `lamp/<n>/intensity`: no protocol change. On a software device (Tier 0) cameras keep the
+simple look, which draws neither lamps nor night.
 
 ## Signals
 
@@ -130,6 +171,13 @@ recording replays the lamps with the rest of the run (`--replay`).
 - In a whole run (`test_lights_run`): the power the bus delivers to each lamp, `V·I`, equals
   what the lamp asks within 0.5 %; the headlamp's node settles at `T_amb + P_heat/(h·A)` within
   1 %; the same run twice gives the same state hash.
-- Not modelled: shadows, light bouncing between surfaces, light scattered by fog, filament
-  inrush, a lamp's output falling with its temperature, colour rendering beyond a colour
-  temperature or an RGB colour.
+- The light sensor (`test_kinds_light_sensor`): a spot on its axis and 0.15, 0.3 and 0.45 rad
+  off it, at 0.5, 2 and 7 m, within 0.1 % of the inverse-square law; 0 lx beyond its field and
+  behind a box.
+- The renderer (`test_raster`, on a GPU): a grey plane under one spot at night, its linear pixel
+  values against ρ·E/π at 5 points within 2 %; illuminant A's chromaticity from 2856 K within
+  0.003; the renderer's sun equal to the light sensor's daylight (`test_kinds_light_sensor`).
+- Not modelled: shadows from lamps (light passes through walls into the next aisle on camera,
+  though the light sensor's ray stops at them), light bouncing between surfaces, light scattered
+  by fog, the lamp's own emitter drawn as a bright disc, filament inrush, a lamp's output falling
+  with its temperature, colour rendering beyond a colour temperature or an RGB colour.

@@ -110,6 +110,7 @@ private:
 /// deterministic on every tier). Declares the pose inputs of the moving bodies it needs.
 class ColliderScene {
 public:
+    static constexpr std::uint32_t kNoBody = 0xFFFF'FFFFU;  // skips nothing
     void declare(const World& world, SignalDeclarer& d) {
         const std::vector<bool> moving = movingBodies(world);
         rest_ = restPoses(world);
@@ -161,8 +162,10 @@ public:
         placed_ = true;
     }
     /// Distance (m) to the first collider along unit `dir` from `origin`, skipping the colliders
-    /// of body `skip` (the sensor's own: a ray from inside one leaves it first), or +inf.
-    [[nodiscard]] double cast(const Vec3& origin, const Vec3& dir, std::uint32_t skip) const {
+    /// of body `skip` (the sensor's own: a ray from inside one leaves it first) and of body
+    /// `skipToo` (a lamp's own housing), or +inf.
+    [[nodiscard]] double cast(const Vec3& origin, const Vec3& dir, std::uint32_t skip,
+                              std::uint32_t skipToo = kNoBody) const {
         if (!placed_) {
             return std::numeric_limits<double>::infinity();
         }
@@ -175,7 +178,9 @@ public:
             if (!hit.hit()) {
                 return std::numeric_limits<double>::infinity();
             }
-            if (owner_[hit.shape] != static_cast<int>(skip)) {
+            const int owner = owner_[hit.shape];
+            const auto body = static_cast<std::uint32_t>(owner);
+            if (owner < 0 || (body != skip && body != skipToo)) {
                 return travelled + hit.distance;
             }
             const double step = hit.distance + kNudge;

@@ -1,9 +1,12 @@
 // Kind "light_sensor" (sensors.md §9): an ambient light sensor (ROHM BH1750FVI) facing the sensor's
-// +x, lit by the sun and the sky.
+// +x, lit by the sun, the sky and the run's lamps (RFC 0021 §5).
 #include "SunCommon.hpp"
+#include "lagrange/lights/Lamp.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <vector>
 
 namespace lagrange::sensors::kinds {
 
@@ -22,6 +25,18 @@ constexpr double kMaxCounts = 65535.0;               // 16 bits
 
 /// Illuminance has no unit in lagrange::units (cd·sr/m², sr dimensionless): a local one.
 constexpr Unit kLux{{.length = -2, .luminous = 1}, 1.0, QuantityKind::Unspecified};
+
+/// m: a lamp's light counts as blocked by a collider this much short of the lamp, so the lamp's
+/// own lens, flush with a surface it is not modelled apart from, does not shade it.
+constexpr double kOcclusionMargin = 1e-3;
+
+/// A lamp of the run (LampAPI_1) as the sensor sees it: its model, its body's pose and its output.
+struct SeenLamp {
+    lights::LampSpec spec;
+    BodyMotion motion;  // its body's; unused for a lamp on the world
+    bool onWorld{false};
+    SignalId intensity;  // lamp/<n>/intensity, cd; NaN (dark) without the lights domain
+};
 
 class LightSensor final : public KindModule {
 public:
@@ -45,6 +60,22 @@ public:
         }
         motion_.declare(w, body_, d, false);
         scene_.declare(w, d);
+        std::string error;
+        std::vector<lights::LampSpec> specs = lights::lampsOf(view, error);
+        if (!error.empty()) {
+            return Status::error(StatusCode::InvalidConfig, "light_sensor " + name_ + ": " + error);
+        }
+        lamps_.clear();
+        for (lights::LampSpec& spec : specs) {
+            SeenLamp& lamp = lamps_.emplace_back();
+            lamp.onWorld = spec.body == kWorldBody;
+            if (!lamp.onWorld) {
+                lamp.motion.declare(w, spec.body.index, d, false);
+            }
+            lamp.intensity = d.input(
+                optionalNaN("lamp/" + spec.name + "/intensity", SignalType::Scalar, units::cd));
+            lamp.spec = std::move(spec);
+        }
         illuminance_ = d.output(kindSpec(base() + "/illuminance", SignalType::Scalar, kLux));
         valid_ = d.output(kindSpec(base() + "/valid", SignalType::Bool, units::one));
         return {};
@@ -59,22 +90,34 @@ public:
 
     Status step(const StepContext& context, SignalBus& bus) override {
         const Pose pose = compose(motion_.pose(bus), mount_);
+        const Vec3 normal = rotate(pose.orientation, {1.0, 0.0, 0.0});
         const Vec3 sun = sun_.direction(bus, context.t, pose.position);
-        if (!finite(sun)) {
+        // Without a sun (no place and date, no weather) the lamps alone light a sensor that has
+        // any; with neither it reads nothing.
+        if (!finite(sun) && lamps_.empty()) {
             bus.write(illuminance_, kNaN);
             bus.write(valid_, 0.0);
             return {};
         }
-        double transmission = 1.0;
-        const Daylight light = sun_.daylight(bus, sun, transmission);
-        const Vec3 normal = rotate(pose.orientation, {1.0, 0.0, 0.0});
-        bool blocked = false;
-        if (light.directNormal > 0.0 && dot(sun, normal) > 0.0) {
-            scene_.update(bus);
-            blocked = std::isfinite(scene_.cast(pose.position, sun, body_));
+        bool placed = false;
+        const auto place = [&] {
+            if (!placed) {
+                scene_.update(bus);
+                placed = true;
+            }
+        };
+        double lux = 0.0;
+        if (finite(sun)) {
+            double transmission = 1.0;
+            const Daylight light = sun_.daylight(bus, sun, transmission);
+            bool blocked = false;
+            if (light.directNormal > 0.0 && dot(sun, normal) > 0.0) {
+                place();
+                blocked = std::isfinite(scene_.cast(pose.position, sun, body_));
+            }
+            lux = surfaceIlluminance(light, sun, normal, blocked, transmission, groundReflectance_);
         }
-        double lux =
-            surfaceIlluminance(light, sun, normal, blocked, transmission, groundReflectance_);
+        lux += lampIlluminance(context, bus, pose.position, normal, place);
         if (!groundTruth_) {
             random::Stream rng(context.seed, context.stepIndex, 0);
             lux = gain_ * lux * (1.0 + noise_ * rng.normal());
@@ -86,10 +129,46 @@ public:
     }
 
 private:
+    /// Σ E = I·f(θ)·cos(incidence)/d² over the lamps (RFC 0021 §5), each with one occlusion ray
+    /// from the sensor to the lamp through every collider but the sensor's and the lamp's own.
+    template <class Place>
+    double lampIlluminance(const StepContext& context, const SignalBus& bus, const Vec3& at,
+                           const Vec3& normal, Place& place) {
+        double sum = 0.0;
+        const double t = context.t.seconds();
+        for (const SeenLamp& lamp : lamps_) {
+            const double intensity = bus.read(lamp.intensity);
+            if (!(intensity > 0.0)) {
+                continue;
+            }
+            const Pose lampPose = lamp.onWorld
+                                      ? lamp.spec.poseInBody
+                                      : compose(lamp.motion.pose(bus), lamp.spec.poseInBody);
+            const double e = lights::illuminance(lamp.spec, intensity, lampPose, at, normal, t);
+            if (!(e > 0.0)) {
+                continue;
+            }
+            const Vec3 to = sub(lampPose.position, at);
+            const double d = norm(to);
+            if (d > kOcclusionMargin) {
+                place();
+                const Vec3 dir{to[0] / d, to[1] / d, to[2] / d};
+                const std::uint32_t own =
+                    lamp.onWorld ? ColliderScene::kNoBody : lamp.spec.body.index;
+                if (scene_.cast(at, dir, body_, own) < d - kOcclusionMargin) {
+                    continue;
+                }
+            }
+            sum += e;
+        }
+        return sum;
+    }
+
     double resolution_{kResolution}, gain_{1.0}, noise_{0.0}, maximum_{kMaxCounts};
     double groundReflectance_{0.0};
     SunSource sun_;
     BodyMotion motion_;
+    std::vector<SeenLamp> lamps_;
     ColliderScene scene_;
     SignalId illuminance_, valid_;
 };

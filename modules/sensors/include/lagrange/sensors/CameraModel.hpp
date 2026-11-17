@@ -106,6 +106,11 @@ public:
     [[nodiscard]] double exposureTime() const { return exposureTime_; }
     void setExposureTime(double time) { exposureTime_ = time; }
 
+    /// How much brighter the renderer drew this frame than the scene's light (RFC 0021 §4:
+    /// gpu::realisticAdaptation at night; 1 by day). With an exposure, the electrons are counted
+    /// from the scene's light, so a night frame is dark and noisy as a real camera's.
+    void setRenderGain(double gain) { renderGain_ = gain > 0.0 ? gain : 1.0; }
+
 private:
     void autoExpose(double signal, std::uint64_t count);
     CameraModelConfig config_;
@@ -116,6 +121,7 @@ private:
     std::array<float, 256> decode_{};         // display value → linear
     std::vector<std::uint8_t> encoded_;       // converter code → display value (with an exposure)
     double exposureTime_{0.0};
+    double renderGain_{1.0};
 };
 
 }  // namespace lagrange::sensors

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numbers>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -45,8 +46,18 @@ struct Frame {
     std::array<float, 4> screen;
     std::array<float, 4> mode;
     std::array<float, 4> weather;  // rain mm/h, snow mm/h, wind x, y m/s
+    std::array<float, 4> light;    // daylight share, lamps, linear output, unused
 };
-static_assert(sizeof(Frame) == 336);
+static_assert(sizeof(Frame) == 352);
+
+// Must match Lamp in realistic.slang.
+struct GpuLamp {
+    std::array<float, 4> position;  // relative to the eye; w: intensity · units per lux
+    std::array<float, 4> axis;      // w: 1 for a point lamp
+    std::array<float, 4> cone;      // half beam, half field (rad), near limit (m)
+    std::array<float, 4> color;
+};
+static_assert(sizeof(GpuLamp) == 64);
 
 struct Push {
     std::array<float, 12> model;
@@ -64,9 +75,42 @@ constexpr std::array<float, 3> kSunColor{1.0F, 0.95F, 0.87F};
 constexpr float kSunStrength = 4.2F;
 constexpr float kExposure = 0.72F;
 
+// The light_sensor's clear-sky daylight (modules/sensors EnvironmentSensors.cpp, iesDaylight and
+// airMass; sensors.md §9), for the calibration of RFC 0021 §4. A sensors test checks that these
+// give its numbers.
+constexpr double kExtraterrestrialLux = 127.5e3;  // lx, IES (1984)
+constexpr double kEccentricity = 0.033;           // of the extraterrestrial illuminance
+constexpr double kClearSkyExtinction = 0.21;      // per air mass, IES clear sky
+constexpr int kEquinoxDay = 80;                   // the light_sensor's day without a date
+constexpr double kDaysPerYear = 365.0;
+// The darkest a picture is brightened for (realisticAdaptation): 2^10, a drawing choice, enough
+// for a lamp's pool of a few hundred lux to read at night while the 0.8 mlx night sky stays black.
+constexpr double kMaxAdaptation = 1024.0;
+constexpr double kLampNear = 0.02;  // m: lamp light is not made stronger nearer than this
+
 // The bare ground's colour: weathered concrete, not the flat design colour of the Lit view.
 constexpr std::array<float, 4> kGroundColor{0.24F, 0.235F, 0.225F, 1.0F};
 constexpr float kGroundReach = 40.0F;  // the ground runs on to the haze, as drawn only
+
+/// Kasten and Young's (1989) relative air mass at zenith angle `zenith` (rad).
+double airMass(double zenith) {
+    constexpr double kDeg = std::numbers::pi / 180.0;
+    const double z = std::min(zenith / kDeg, 90.0);
+    return 1.0 / (std::cos(z * kDeg) + 0.50572 * std::pow(96.07995 - z, -1.6364));
+}
+
+/// Analytic CIE 1931 2° colour-matching functions: Wyman, Sloan and Shirley, "Simple Analytic
+/// Approximations to the CIE XYZ Color Matching Functions", JCGT 2(2), 2013, the multi-lobe fit.
+std::array<double, 3> cieXyz(double nm) {
+    const auto g = [nm](double mu, double below, double above) {
+        const double t = (nm - mu) / (nm < mu ? below : above);
+        return std::exp(-0.5 * t * t);
+    };
+    return {
+        1.056 * g(599.8, 37.9, 31.0) + 0.362 * g(442.0, 16.0, 26.7) - 0.065 * g(501.1, 20.4, 26.2),
+        0.821 * g(568.8, 46.9, 40.5) + 0.286 * g(530.9, 16.3, 31.1),
+        1.217 * g(437.0, 11.8, 36.0) + 0.681 * g(459.0, 26.0, 13.8)};
+}
 
 std::array<float, 12> rows(const RealisticDraw& t, const std::array<double, 3>& eye) {
     const float w = t.rotation[0];
@@ -149,6 +193,68 @@ Cascade cascade(const std::array<double, 3>& center, const std::array<double, 3>
 
 }  // namespace
 
+std::array<double, 3> realisticSunDirection() {
+    const double n = std::sqrt(kSun[0] * kSun[0] + kSun[1] * kSun[1] + kSun[2] * kSun[2]);
+    return {kSun[0] / n, kSun[1] / n, kSun[2] / n};
+}
+
+double realisticSunIlluminance() {
+    const double elevation = std::asin(realisticSunDirection()[2]);
+    const double extraterrestrial =
+        kExtraterrestrialLux *
+        (1.0 + kEccentricity * std::cos(2.0 * std::numbers::pi * kEquinoxDay / kDaysPerYear));
+    return extraterrestrial *
+           std::exp(-kClearSkyExtinction * airMass(std::numbers::pi / 2.0 - elevation));
+}
+
+double realisticDaylight() {
+    const double up = realisticSunDirection()[2];
+    // The IES (1984) clear sky's diffuse horizontal illuminance, (0.8 + 15.5 √sin α) klx.
+    const double diffuse = (0.8 + 15.5 * std::sqrt(up)) * 1e3;
+    return realisticSunIlluminance() * up + diffuse;
+}
+
+double realisticUnitsPerLux() {
+    return kSunStrength / realisticSunIlluminance();
+}
+
+double realisticAdaptation(double skyIlluminance) {
+    if (!std::isfinite(skyIlluminance)) {
+        return 1.0;
+    }
+    const double share = std::max(skyIlluminance, 0.0) / realisticDaylight();
+    return std::clamp(1.0 / std::max(share, 1.0 / kMaxAdaptation), 1.0, kMaxAdaptation);
+}
+
+std::array<float, 3> colorOfTemperature(double kelvin) {
+    // Planck's spectral radiance (relative), summed over 360-830 nm in 1 nm steps.
+    constexpr double kC2 = 1.438776877e-2;  // m·K, the second radiation constant (CODATA 2018)
+    std::array<double, 3> xyz{};
+    for (int nm = 360; nm <= 830; ++nm) {
+        const double lambda = nm * 1e-9;
+        const double planck = 1.0 / (std::pow(lambda, 5) * std::expm1(kC2 / (lambda * kelvin)));
+        const std::array<double, 3> cmf = cieXyz(nm);
+        for (std::size_t k = 0; k < 3; ++k) {
+            xyz.at(k) += planck * cmf.at(k);
+        }
+    }
+    if (!(xyz[1] > 0.0)) {
+        return {1.0F, 1.0F, 1.0F};
+    }
+    const double x = xyz[0] / xyz[1];
+    const double z = xyz[2] / xyz[1];
+    // IEC 61966-2-1 (sRGB), XYZ (D65) to linear RGB.
+    std::array<double, 3> rgb{3.2406 * x - 1.5372 - 0.4986 * z, -0.9689 * x + 1.8758 + 0.0415 * z,
+                              0.0557 * x - 0.2040 + 1.0570 * z};
+    for (double& c : rgb) {
+        c = std::max(c, 0.0);
+    }
+    // Back to luminance 1 after the clip (Rec. 709 luminance weights, as sRGB's Y row).
+    const double y = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    return {static_cast<float>(rgb[0] / y), static_cast<float>(rgb[1] / y),
+            static_cast<float>(rgb[2] / y)};
+}
+
 float surfacePatternOf(std::string_view name) {
     static constexpr std::array<std::pair<std::string_view, float>, 11> kWords{
         {{"brick", 1.0F},
@@ -217,12 +323,13 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
-        bindings.at(b).descriptorType =
-            b == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings.at(b).descriptorType = b == 0   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                        : b == 7 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                                 : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings.at(b).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -230,8 +337,10 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     layout.pBindings = bindings.data();
     vkCreateDescriptorSetLayout(d, &layout, nullptr, &setLayout_);
 
-    const std::array<VkDescriptorPoolSize, 2> sizes{
-        {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18}}};
+    const std::array<VkDescriptorPoolSize, 3> sizes{
+        {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
+         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -249,6 +358,8 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     compositeSet_ = sets[2];
 
     frames_ = createBuffer(device_, 2 * kFrameStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+    lamps_ = createBuffer(device_, kMaxRealisticLamps * sizeof(GpuLamp),
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -270,6 +381,7 @@ RealisticRenderer::~RealisticRenderer() {
     vkDestroySampler(d, linear_, nullptr);
     vkDestroySampler(d, nearest_, nullptr);
     destroy(device_, frames_);
+    destroy(device_, lamps_);
     destroy(device_, shadow_);
     destroy(device_, hdr_);
     destroy(device_, hdrCopy_);
@@ -353,6 +465,7 @@ void RealisticRenderer::resize(VkExtent2D extent, const Image& depth) {
 void RealisticRenderer::descriptors(const Image& depth) {
     const auto write = [&](VkDescriptorSet set, VkDeviceSize offset, const Image& scene) {
         const VkDescriptorBufferInfo uniform{frames_.buffer, offset, sizeof(Frame)};
+        const VkDescriptorBufferInfo lampData{lamps_.buffer, 0, VK_WHOLE_SIZE};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
         const std::array<VkDescriptorImageInfo, 6> images{{
@@ -363,7 +476,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
             {repeat_, textures_->albedo_.view, read},
             {repeat_, textures_->normal_.view, read},
         }};
-        std::array<VkWriteDescriptorSet, 7> writes{};
+        std::array<VkWriteDescriptorSet, 8> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -373,6 +486,9 @@ void RealisticRenderer::descriptors(const Image& depth) {
             if (b == 0) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 w.pBufferInfo = &uniform;
+            } else if (b == 7) {
+                w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w.pBufferInfo = &lampData;
             } else {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &images.at(b - 1);
@@ -443,6 +559,44 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         default:
             break;
     }
+    // Night (RFC 0021 §6): the sun and the sky at the sky's share of the drawn day, and the
+    // picture brightened as an eye or a camera adapts.
+    const bool night = std::isfinite(settings.skyIlluminance);
+    const double daylight =
+        night ? std::max(settings.skyIlluminance, 0.0) / realisticDaylight() : 1.0;
+    main.sunDirection[3] *= f(daylight);
+    main.sunColor[3] *= f(realisticAdaptation(settings.skyIlluminance));
+    // The lamps (RFC 0021 §4): the brightest at the eye, by I/d², up to the buffer's size.
+    lampOrder_.clear();
+    for (std::size_t i = 0; i < settings.lamps.size(); ++i) {
+        const RealisticLamp& lamp = settings.lamps[i];
+        if (!(lamp.intensity > 0.0)) {
+            continue;
+        }
+        const std::array<double, 3> d{lamp.position[0] - eye[0], lamp.position[1] - eye[1],
+                                      lamp.position[2] - eye[2]};
+        const double d2 = std::max(d[0] * d[0] + d[1] * d[1] + d[2] * d[2], kLampNear * kLampNear);
+        lampOrder_.emplace_back(-lamp.intensity / d2, i);
+    }
+    const std::size_t lampCount = std::min(lampOrder_.size(), kMaxRealisticLamps);
+    std::partial_sort(lampOrder_.begin(),
+                      lampOrder_.begin() + static_cast<std::ptrdiff_t>(lampCount),
+                      lampOrder_.end());
+    auto* lampData = static_cast<GpuLamp*>(lamps_.mapped);
+    const double unitsPerLux = realisticUnitsPerLux();
+    for (std::size_t k = 0; k < lampCount; ++k) {
+        const RealisticLamp& lamp = settings.lamps[lampOrder_[k].second];
+        GpuLamp& g = lampData[k];
+        g.position = {f(lamp.position[0] - eye[0]), f(lamp.position[1] - eye[1]),
+                      f(lamp.position[2] - eye[2]), f(lamp.intensity * unitsPerLux)};
+        g.axis = {f(lamp.axis[0]), f(lamp.axis[1]), f(lamp.axis[2]), lamp.point ? 1.0F : 0.0F};
+        g.cone = {f(lamp.beamAngle / 2.0), f(lamp.fieldAngle / 2.0), f(kLampNear), 0.0F};
+        g.color = {lamp.color[0], lamp.color[1], lamp.color[2], 0.0F};
+    }
+    if (lampCount != 0) {
+        flush(device_, lamps_);
+    }
+    main.light = {f(daylight), static_cast<float>(lampCount), settings.linear ? 1.0F : 0.0F, 0.0F};
     main.mode[2] = season;
     main.mode[3] = textures_->complete() ? 1.0F : 0.0F;
     main.weather = {settings.rainMmPerH, settings.snowMmPerH, settings.wind[0], settings.wind[1]};

@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -42,6 +43,39 @@ struct RealisticDraw {
     std::array<float, 6> box{};  // water only: the mesh's bounds, min then max
 };
 
+/// A lamp as the renderer draws it (RFC 0021 §4): what LampAPI_1 and lamp/<n>/intensity give.
+struct RealisticLamp {
+    std::array<double, 3> position{};              // world
+    std::array<double, 3> axis{1.0, 0.0, 0.0};     // world, unit: where the beam points
+    double intensity{0.0};                         // cd on the axis, now
+    double beamAngle{0.0};                         // rad, full angle to 50 % (spot)
+    double fieldAngle{0.0};                        // rad, full angle to 10 %, dark beyond (spot)
+    bool point{false};                             // the same all round
+    std::array<float, 3> color{1.0F, 1.0F, 1.0F};  // linear sRGB of luminance 1
+};
+
+/// Lamps drawn per frame at most (RFC 0021 open question 5): the brightest at the eye, by I/d².
+inline constexpr std::size_t kMaxRealisticLamps = 64;
+
+/// The renderer's units per lux (RFC 0021 §4): the drawn sun, kSunStrength, is the IES clear-sky
+/// direct normal illuminance of the light_sensor (sensors.md §9) at the drawn sun's elevation on
+/// the March equinox, so a Lambertian surface of albedo ρ under E lx is drawn ρ·E/π times this.
+[[nodiscard]] double realisticUnitsPerLux();
+/// The drawn sun's direct normal illuminance (lx), and the day's horizontal illuminance (lx,
+/// direct on a level surface plus the clear sky's diffuse): what the drawn day stands for.
+[[nodiscard]] double realisticSunIlluminance();
+[[nodiscard]] double realisticDaylight();
+/// The unit vector towards the drawn sun (world, z up).
+[[nodiscard]] std::array<double, 3> realisticSunDirection();
+/// How much the picture is brightened for a sky of `skyIlluminance` lx (horizontal): 1 by day,
+/// up to kMaxAdaptation in the dark, as eyes and cameras adapt (a drawing choice). A camera
+/// sensor divides its own exposure by it (CameraModel), so its electrons stay physical.
+[[nodiscard]] double realisticAdaptation(double skyIlluminance);
+/// Linear sRGB of luminance 1 of a black body at `kelvin`: Planck's law weighted by the CIE 1931
+/// 2° colour-matching functions in the analytic fit of Wyman, Sloan and Shirley (JCGT 2(2), 2013),
+/// then IEC 61966-2-1's XYZ to linear sRGB; negative components clipped.
+[[nodiscard]] std::array<float, 3> colorOfTemperature(double kelvin);
+
 /// Where it is seen from. Screen y runs down; depth is reversed with no far plane.
 struct RealisticView {
     std::array<float, 16> viewProjection{};  // relative to the eye
@@ -63,6 +97,14 @@ struct RealisticSettings {
     float rainMmPerH{0.0F};
     float snowMmPerH{0.0F};
     std::array<float, 2> wind{};
+    /// Lamps (RFC 0021 §4), any number: the kMaxRealisticLamps brightest at the eye are drawn.
+    std::span<const RealisticLamp> lamps;
+    /// The sky's horizontal illuminance (lx): the sun and the sky are drawn at its share of
+    /// realisticDaylight(), and the picture adapts (realisticAdaptation). NaN: the drawn day.
+    double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
+    /// The final image is the scene's linear HDR value, clamped to 1, with no exposure, tone
+    /// mapping, bloom or occlusion: for calibration tests.
+    bool linear{false};
 };
 
 /// The photographs of surfaces, shared by the renderers on a device.
@@ -118,6 +160,7 @@ private:
     Image mirror_;
     Image mirrorDepth_;
     Buffer frames_;  // host-visible: the main Frame, then the mirror pass's
+    Buffer lamps_;   // host-visible: up to kMaxRealisticLamps lamps (realistic.slang's Lamp)
     VkSampler linear_{VK_NULL_HANDLE};
     VkSampler nearest_{VK_NULL_HANDLE};
     VkSampler repeat_{VK_NULL_HANDLE};
@@ -142,6 +185,8 @@ private:
     // Per frame: each item's bounding ball relative to the eye (x, y, z, radius); radius < 0
     // for an item that is never culled.
     std::vector<std::array<float, 4>> balls_;
+    // Per frame: the lamps by brightness at the eye (−I/d², index), kept to reuse its capacity.
+    std::vector<std::pair<double, std::size_t>> lampOrder_;
     Pipeline sky_;
     Pipeline waterPipe_;
     Pipeline composite_;

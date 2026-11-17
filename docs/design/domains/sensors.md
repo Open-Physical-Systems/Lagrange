@@ -1410,11 +1410,17 @@ Lawrence Berkeley Laboratory, 1984: 0.21, 0.32 and 0.53 for rural, urban and ind
 cos of incidence, zero when one ray toward the sun meets a collider (its own body skipped), plus
 the sky by the isotropic model (1 + n_z)/2 and the ground's ρ_g·E_gh·(1 − n_z)/2. The weather:
 rain or snow (`env/rain_rate`, `env/snow_rate`) make the sky overcast; fog (`env/extinction/visible`)
-dims the beam by exp(−σ·fog_depth·m). Night is zero (no twilight, moon or lamps; cloud cover is
-not a weather signal yet). The cosine and spectral response are ideal. Full sun saturates the
+dims the beam by exp(−σ·fog_depth·m). Night is zero (no twilight or moon; cloud cover is not a
+weather signal yet). The run's lamps (`LampAPI_1`, RFC 0021 §5) add E = I·f(θ)·cos(incidence)/d²
+each, I the lamp's `lamp/<n>/intensity` and f its beam's taper (`lights::illuminance`), with one
+ray from the sensor to the lamp: a collider between them (not the sensor's own body or the
+lamp's) leaves that lamp out. Without a sun (no place and date, no weather) a sensor in a run with
+lamps reads the lamps alone. The cosine and spectral response are ideal. Full sun saturates the
 BH1750 (65535 counts, 54 612 lx); set `max_illuminance` for another part. Check: `test_kinds_light_sensor`
 (Meeus' Julian day example, the NREL SPA example within 0.02°, Kasten–Young at the horizon, the IES
-closed forms, shade and overcast).
+closed forms, shade and overcast; a spot lamp on its axis and 0.15, 0.3 and 0.45 rad off it at
+0.5, 2 and 7 m within 0.1 % of the inverse-square law, dark beyond its field, a box between lamp
+and sensor giving 0 lx, lamp and sun adding).
 
 ### sun_sensor
 

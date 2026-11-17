@@ -2,6 +2,7 @@
 #include "kinds/KindModule.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/gpu/Realistic.hpp"
+#include "lagrange/lights/Lamp.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
@@ -1259,6 +1260,41 @@ public:
                 }
                 hinges_.push_back(id);
             }
+            // The run's lamps and the sky (RFC 0021 §4, §6): what lights the realistic look.
+            std::string error;
+            std::vector<lights::LampSpec> lamps = lights::lampsOf(world, error);
+            if (!error.empty()) {
+                return Status::error(StatusCode::InvalidConfig, "camera " + name_ + ": " + error);
+            }
+            lamps_.clear();
+            for (lights::LampSpec& lamp : lamps) {
+                SeenLamp& seen = lamps_.emplace_back();
+                if (lamp.body != kWorldBody) {
+                    watch(lamp.body.index);
+                }
+                SignalSpec intensity =
+                    spec("lamp/" + lamp.name + "/intensity", SignalType::Scalar, units::cd);
+                intensity.feedback = true;  // last step's light: no ordering asked of the lamps
+                intensity.optional = true;
+                intensity.defaultValue = 0.0;
+                seen.intensity = d.input(intensity);
+                if (lamp.colorTemperature > 0.0) {
+                    seen.color = gpu::colorOfTemperature(lamp.colorTemperature);
+                } else {
+                    // lamp:color, normalised to luminance 1 (Rec. 709 weights, sRGB's Y row).
+                    const std::array<double, 3>& c = lamp.color;
+                    const double y = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        seen.color.at(k) = y > 0.0 ? static_cast<float>(c.at(k) / y) : 0.0F;
+                    }
+                }
+                seen.spec = std::move(lamp);
+            }
+            SignalSpec sky = spec("env/sky_illuminance", SignalType::Scalar, units::lx);
+            sky.feedback = true;
+            sky.optional = true;
+            sky.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            skyIlluminance_ = d.input(sky);
         }
         const auto image = [&](const char* what, Unit unit) {
             SignalSpec out =
@@ -1397,6 +1433,7 @@ public:
         }
         sensorPose_ = sensor;
         frameContext_ = context;
+        light(bus, context.t.seconds());
         if (fisheye_) {
             // Each face of the cube from the camera's place, turned to look through it.
             for (std::size_t f = 0; f < faceRenderers_.size(); ++f) {
@@ -1751,6 +1788,42 @@ private:
         });
     }
 
+    /// The lamps and the sky of this frame, to every renderer of the camera (RFC 0021 §4, §6).
+    void light(const SignalBus& bus, double t) {
+        drawnLamps_.clear();
+        for (const SeenLamp& seen : lamps_) {
+            const double intensity = bus.read(seen.intensity);
+            if (!(intensity > 0.0)) {
+                continue;
+            }
+            const lights::LampSpec& spec = seen.spec;
+            const Pose pose = spec.body == kWorldBody
+                                  ? spec.poseInBody
+                                  : compose(bodyPose(bus, spec.body.index), spec.poseInBody);
+            gpu::RealisticLamp& lamp = drawnLamps_.emplace_back();
+            lamp.position = pose.position;
+            lamp.axis = rotate(pose.orientation, lights::beamAxis(spec, t));
+            lamp.intensity = intensity;
+            lamp.beamAngle = spec.beamAngle;
+            lamp.fieldAngle = spec.fieldAngle;
+            lamp.point = spec.kind == lights::LampKind::Point;
+            lamp.color = seen.color;
+        }
+        const double sky = skyIlluminance_.valid() ? bus.read(skyIlluminance_)
+                                                   : std::numeric_limits<double>::quiet_NaN();
+        if (renderer_) {
+            renderer_->setLighting(drawnLamps_, sky);
+        }
+        for (const auto& face : faceRenderers_) {
+            face->setLighting(drawnLamps_, sky);
+        }
+        // The render is brightened as the dark asks (gpu::realisticAdaptation): the sensor
+        // model takes it out again, so its electrons stay those of the scene's light.
+        if (model_ && renderer_ && scene_->raster->realistic()) {
+            model_->setRenderGain(gpu::realisticAdaptation(sky));
+        }
+    }
+
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
         if (b >= poses_.size() || !poses_[b].valid()) {
             return b < rest_.size() ? rest_[b] : Pose{};
@@ -1778,10 +1851,19 @@ public:
 
 private:
     std::shared_ptr<const CameraScene> scene_;
-    std::vector<SignalId> hinges_;           // per drawable; invalid: rigid
-    gpu::PinholeCamera camera_;              // the output's pinhole (before the sensor model)
-    std::unique_ptr<CameraModel> model_;     // null when no part of the sensor model is on
-    std::unique_ptr<FisheyeRemap> fisheye_;  // a fisheye's cube faces and remap; else null
+    std::vector<SignalId> hinges_;  // per drawable; invalid: rigid
+    /// A lamp of the run as the camera draws it (RFC 0021 §4).
+    struct SeenLamp {
+        lights::LampSpec spec;
+        SignalId intensity;  // lamp/<n>/intensity, cd
+        std::array<float, 3> color{1.0F, 1.0F, 1.0F};
+    };
+    std::vector<SeenLamp> lamps_;
+    std::vector<gpu::RealisticLamp> drawnLamps_;  // this frame's
+    SignalId skyIlluminance_;                     // env/sky_illuminance, lx; NaN: the drawn day
+    gpu::PinholeCamera camera_;                   // the output's pinhole (before the sensor model)
+    std::unique_ptr<CameraModel> model_;          // null when no part of the sensor model is on
+    std::unique_ptr<FisheyeRemap> fisheye_;       // a fisheye's cube faces and remap; else null
     std::vector<std::unique_ptr<gpu::RasterCamera>> faceRenderers_;
     std::vector<gpu::RasterImages> faceImages_;
     gpu::RasterImages rendered_;  // the render the sensor model remaps

@@ -78,6 +78,27 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     settings.snowMmPerH = options.snowMmPerH;
     settings.wind = options.wind;
     settings.seconds = frame != nullptr ? static_cast<double>(frame->simTimeNs) * 1e-9 : 0.0;
+    lamps_.clear();
+    for (const RenderOptions::Lamp& from : options.lamps) {
+        gpu::RealisticLamp& lamp = lamps_.emplace_back();
+        lamp.position = from.position;
+        lamp.axis = from.axis;
+        lamp.intensity = from.intensity;
+        lamp.beamAngle = from.beamAngle;
+        lamp.fieldAngle = from.fieldAngle;
+        lamp.point = from.point;
+        if (from.colorTemperature > 0.0) {
+            lamp.color = gpu::colorOfTemperature(from.colorTemperature);
+        } else {
+            // lamp:color, normalised to luminance 1 (Rec. 709 weights, sRGB's Y row).
+            const std::array<float, 3>& c = from.color;
+            const float y = 0.2126F * c[0] + 0.7152F * c[1] + 0.0722F * c[2];
+            lamp.color = y > 0.0F ? std::array<float, 3>{c[0] / y, c[1] / y, c[2] / y}
+                                  : std::array<float, 3>{0.0F, 0.0F, 0.0F};
+        }
+    }
+    settings.lamps = lamps_;
+    settings.skyIlluminance = options.skyIlluminance;
     return renderer_.record(commands, draws_, view, settings, meshes, color, depth);
 }
 
