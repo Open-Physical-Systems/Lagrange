@@ -31,21 +31,32 @@ const Fonts& loadFonts(const std::string& directory) {
         float size;
         const char* fallback;  // merged in for glyphs `file` lacks; nullptr for none
         float scale;           // the glyphs' scale over Dear ImGui's line (faceConfig)
+        const char* units;     // unit glyphs no Plex face has (U+207B), merged in last
     };
     // The code face: pushed at kCodeLine, its em is kCodeSize (Fonts::code).
     constexpr float kCodeScale = kPlexLineHeightEm * kCodeSize / kCodeLine;
     // IBM Plex Mono has no Greek letters; IBM Plex Sans does. Symbols such as tau and omega
-    // appear in mono text (signal symbols, units), so the mono faces fall back to Sans.
+    // appear in mono text (signal symbols, units), so the mono faces fall back to Sans. No Plex
+    // face has the superscript minus of units such as kg·s⁻¹ (lagrange::symbol): the
+    // LagrangeUnitGlyphs fonts (tools/fonts/make_unit_glyphs.py) give it, a Sans or Mono cell wide.
+    constexpr const char* kSansUnits = "LagrangeUnitGlyphs-SansRegular.ttf";
+    constexpr const char* kSansMediumUnits = "LagrangeUnitGlyphs-SansMedium.ttf";
+    constexpr const char* kMonoUnits = "LagrangeUnitGlyphs-MonoRegular.ttf";
+    constexpr const char* kMonoMediumUnits = "LagrangeUnitGlyphs-MonoMedium.ttf";
     static constexpr std::array<Face, 6> kFaces{{
         // first: the default
-        {"IBMPlexSans-Regular.ttf", &Fonts::sans, kBodySize, nullptr, kPlexLineHeightEm},
-        {"IBMPlexSans-Medium.ttf", &Fonts::sansMedium, kLabelSize, nullptr, kPlexLineHeightEm},
-        {"IBMPlexSans-SemiBold.ttf", &Fonts::sansSemiBold, kBodySize, nullptr, kPlexLineHeightEm},
+        {"IBMPlexSans-Regular.ttf", &Fonts::sans, kBodySize, nullptr, kPlexLineHeightEm,
+         kSansUnits},
+        {"IBMPlexSans-Medium.ttf", &Fonts::sansMedium, kLabelSize, nullptr, kPlexLineHeightEm,
+         kSansMediumUnits},
+        {"IBMPlexSans-SemiBold.ttf", &Fonts::sansSemiBold, kBodySize, nullptr, kPlexLineHeightEm,
+         kSansMediumUnits},
         {"IBMPlexMono-Regular.ttf", &Fonts::mono, kMonoSize, "IBMPlexSans-Regular.ttf",
-         kPlexLineHeightEm},
+         kPlexLineHeightEm, kMonoUnits},
         {"IBMPlexMono-Medium.ttf", &Fonts::monoMedium, kMonoSize, "IBMPlexSans-Medium.ttf",
-         kPlexLineHeightEm},
-        {"IBMPlexMono-Regular.ttf", &Fonts::code, kCodeLine, "IBMPlexSans-Regular.ttf", kCodeScale},
+         kPlexLineHeightEm, kMonoMediumUnits},
+        {"IBMPlexMono-Regular.ttf", &Fonts::code, kCodeLine, "IBMPlexSans-Regular.ttf", kCodeScale,
+         kMonoUnits},
     }};
 
     ImFontAtlas* atlas = ImGui::GetIO().Fonts;
@@ -65,6 +76,12 @@ const Fonts& loadFonts(const std::string& directory) {
             if (face.fallback != nullptr && gFonts.*face.slot != nullptr) {
                 const ImFontConfig merge = faceConfig(true, face.scale);
                 atlas->AddFontFromFileTTF((base / face.fallback).c_str(), face.size, &merge);
+            }
+            std::error_code ec;
+            if (gFonts.*face.slot != nullptr &&
+                std::filesystem::is_regular_file(base / face.units, ec)) {
+                const ImFontConfig merge = faceConfig(true, face.scale);
+                atlas->AddFontFromFileTTF((base / face.units).c_str(), face.size, &merge);
             }
             complete = complete && gFonts.*face.slot != nullptr;
         }

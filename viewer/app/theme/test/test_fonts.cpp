@@ -3,17 +3,21 @@
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <imgui_internal.h>  // ImTextCharFromUtf8
 #include <iterator>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 #include <imgui.h>
+
+#include <lagrange/signals/Unit.hpp>
 
 namespace lagrange::theme {
 namespace {
@@ -145,6 +149,76 @@ TEST_F(FontsInImGui, ParagraphsHaveTheDesignsLineHeight) {
     ImGui::PopFont();
     ImGui::End();
     ImGui::EndFrame();
+}
+
+/// Every character of every unit text the core can write (lagrange::symbol, label, to_string:
+/// superscript digits and minus, the middle dot, Omega) and the symbols the panels write
+/// themselves is drawn by every face: none falls back to Dear ImGui's missing-glyph box, as the
+/// superscript minus of "kg·s⁻¹" did before the LagrangeUnitGlyphs fonts.
+TEST_F(FontsInImGui, EveryUnitsTextHasItsGlyphs) {
+    ASSERT_TRUE(fonts_->bundled);
+    std::vector<std::string> texts;
+    const auto add = [&texts](const Unit& unit) {
+        texts.push_back(symbol(unit));
+        texts.push_back(label(unit));
+        texts.push_back(to_string(unit));
+    };
+    // Each base dimension at every exponent a schema writes ("s-1", "m2"; two digits at most).
+    for (int exponent = -19; exponent <= 19; ++exponent) {
+        const auto e = static_cast<std::int8_t>(exponent);
+        for (Dimension d :
+             {Dimension{.length = e}, Dimension{.mass = e}, Dimension{.time = e},
+              Dimension{.current = e}, Dimension{.temperature = e}, Dimension{.amount = e},
+              Dimension{.luminous = e}, Dimension{.angle = e}}) {
+            add(Unit{d, 1.0, QuantityKind::Unspecified});
+        }
+    }
+    // The units the fire, actuators and lights domains name, and every quantity kind's name.
+    for (const char* text : {"kg/s", "kg.m-2.s-1", "kg/m2/s", "W/m2", "ohm", "N.m", "kg.m2", "lm/W",
+                             "1/m", "m3/s", "Pa.s"}) {
+        if (const UnitParse parsed = parseUnit(text); parsed.unit) {
+            add(*parsed.unit);
+        }
+    }
+    for (int kind = 0; kind <= static_cast<int>(QuantityKind::LuminousEfficacy); ++kind) {
+        add(Unit{{.length = -2, .mass = 1, .time = -1}, 1.0, static_cast<QuantityKind>(kind)});
+    }
+    // Written by the panels: degrees, micro, plus-minus, Greek symbols, arrows, relations.
+    texts.emplace_back("° ± ² ³ µ · × ÷ Δ Ω σ τ – — … ↑ → ↓ ↔ − ∞ ≠ ≤ ≥ §");
+    ASSERT_NE(std::ranges::find(texts, "kg·m⁻²·s⁻¹"), texts.end());
+
+    for (ImFont* font : {fonts_->sans, fonts_->sansMedium, fonts_->sansSemiBold, fonts_->mono,
+                         fonts_->monoMedium, fonts_->code}) {
+        for (const std::string& text : texts) {
+            const char* at = text.c_str();
+            const char* const end = at + text.size();
+            while (at < end) {
+                unsigned int c = 0;
+                at += ImTextCharFromUtf8(&c, at, end);
+                EXPECT_TRUE(font->IsGlyphInFont(static_cast<ImWchar>(c)))
+                    << "U+" << std::hex << c << " of \"" << text << "\" in "
+                    << font->GetDebugName();
+            }
+        }
+    }
+}
+
+// The superscript minus sits on the superscript figures' middle, a Mono cell wide in Mono.
+TEST_F(FontsInImGui, TheSuperscriptMinusSitsWithTheFigures) {
+    ASSERT_TRUE(fonts_->bundled);
+    for (ImFont* font : {fonts_->sans, fonts_->mono}) {
+        const float size = font == fonts_->mono ? kMonoSize : kBodySize;
+        ImFontBaked* baked = font->GetFontBaked(size);
+        const ImFontGlyph* minus = baked->FindGlyphNoFallback(0x207B);
+        const ImFontGlyph* one = baked->FindGlyphNoFallback(0x00B9);
+        ASSERT_NE(minus, nullptr) << font->GetDebugName();
+        ASSERT_NE(one, nullptr);
+        EXPECT_NEAR((minus->Y0 + minus->Y1) / 2.0F, (one->Y0 + one->Y1) / 2.0F, 1.0F);
+        EXPECT_GT(minus->X1 - minus->X0, 0.15F * size);
+        if (font == fonts_->mono) {
+            EXPECT_NEAR(minus->AdvanceX, 0.6F * kMonoSize, 0.01F);
+        }
+    }
 }
 
 }  // namespace
