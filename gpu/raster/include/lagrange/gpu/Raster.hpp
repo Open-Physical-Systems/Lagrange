@@ -14,6 +14,7 @@
 namespace lagrange::gpu {
 
 class Device;
+struct RealisticLamp;
 
 // --- the mesh pipeline shared by the viewer's viewport and the camera sensor ----------------
 // (invariant 13: one shader, gpu/kernels/camera/mesh.slang, draws both)
@@ -230,6 +231,13 @@ public:
     /// `seconds` is the sim time: what moves in the realistic look (water, clouds).
     void render(std::span<const RasterInstance> instances, const PinholeCamera& camera,
                 RasterImages& out, double seconds = 0.0);
+
+    /// The light of the realistic look from now on (RFC 0021 §4, §6): the run's lamps and the
+    /// sky's horizontal illuminance in lx (NaN: the drawn day, as without a call). `linear`: the
+    /// colour is the scene's linear value, for calibration tests (RealisticSettings::linear).
+    /// The simple look draws neither (sensors.md §2, Tier 0).
+    void setLighting(std::span<const RealisticLamp> lamps, double skyIlluminance,
+                     bool linear = false);
 
     /// Whether colour is drawn (the default). Without, render() draws only depth and instance
     /// ids, and the colour reads back as zeros: for a camera that needs no colour, as a thermal

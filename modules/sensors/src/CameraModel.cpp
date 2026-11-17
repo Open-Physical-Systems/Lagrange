@@ -208,8 +208,8 @@ void CameraModel::apply(const gpu::RasterImages& rendered, const std::array<doub
     out.instance.assign(static_cast<std::size_t>(w) * h, gpu::kNoInstance);
     const std::optional<Exposure>& exposure = config_.exposure;
     const double fullScale = exposure ? std::ldexp(1.0, exposure->bitDepth) - 1.0 : 255.0;
-    const double electronsPerUnit =
-        exposure ? exposure->electronRate * exposureTime_ : 0.0;  // e⁻ at linear 1
+    const double electronsPerUnit =  // e⁻ at linear 1
+        exposure ? exposure->electronRate * exposureTime_ / renderGain_ : 0.0;
     std::vector<double> rowSignal(h, 0.0);
     std::vector<std::uint32_t> rowCount(h, 0);
     const auto encode = [](double linear) {
@@ -352,7 +352,7 @@ gpu::CameraEffectsFrame CameraModel::gpuFrame(const std::array<double, 3>& omega
     frame.omega = omega;
     frame.rollingShutterTime = config_.rollingShutterTime;
     if (config_.exposure) {
-        frame.electronsPerUnit = config_.exposure->electronRate * exposureTime_;
+        frame.electronsPerUnit = config_.exposure->electronRate * exposureTime_ / renderGain_;
         frame.gain = config_.exposure->gain;
         frame.fullWell = config_.exposure->fullWell;
         frame.readNoise = config_.exposure->readNoise;

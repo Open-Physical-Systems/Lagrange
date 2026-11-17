@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -72,6 +73,22 @@ struct RenderOptions {
     /// server's aero/wind_speed volume around the robot and drawn as streaks coloured by speed.
     bool airflow{false};
     float airflowMax{0.0F};  ///< m/s, the speed the colour map tops out at (set by the app).
+    /// Lamps (RFC 0021 §4), lighting the realistic view: from the scene's LampAPI_1 prims, their
+    /// attributes and their lamp/<n>/intensity signals (RFC 0021 §7).
+    struct Lamp {
+        std::array<double, 3> position{};           ///< region frame, m
+        std::array<double, 3> axis{1.0, 0.0, 0.0};  ///< where the beam points, unit
+        double intensity{0.0};                      ///< cd on the axis, now
+        double beamAngle{0.0};                      ///< rad, full angle to 50 %
+        double fieldAngle{0.0};                     ///< rad, full angle to 10 %
+        bool point{false};                          ///< the same all round
+        double colorTemperature{0.0};               ///< K; 0: color
+        std::array<float, 3> color{1.0F, 1.0F, 1.0F};
+        bool operator==(const Lamp&) const = default;
+    };
+    std::vector<Lamp> lamps;
+    /// The sky's horizontal illuminance (lx, env/sky_illuminance); NaN: the drawn day.
+    double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
 };
 
 /// The year the realistic view draws: the one picked, or with Summer (the default), the weather's:

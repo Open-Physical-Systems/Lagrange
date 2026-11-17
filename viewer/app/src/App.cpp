@@ -926,6 +926,7 @@ public:
         buildAirflow();
         buildCables();
         followWeather();
+        followLamps();
         // The 3D view is drawn again only when something it shows changed: a new frame of the
         // scene, the camera, the size, the options or an overlay. The display may run at 144 Hz
         // while the scene changes at 50 Hz, or not at all when paused; the GPU it would spend
@@ -1023,7 +1024,9 @@ public:
                    a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
                    a.airflow == b.airflow && a.airflowMax == b.airflowMax &&
                    sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
-                   a.heatCovered == b.heatCovered;
+                   a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
+                   (a.skyIlluminance == b.skyIlluminance ||
+                    (std::isnan(a.skyIlluminance) && std::isnan(b.skyIlluminance)));
         }
         // NaN (no value) equals NaN here, unlike with ==.
         static bool sameValues(const std::vector<float>& a, const std::vector<float>& b) {
@@ -1131,6 +1134,112 @@ public:
         constexpr float kMmPerHourPerMps = 3.6e6F;
         renderOptions_.snowMmPerH = fresh(snowRate_) * kMmPerHourPerMps;
         renderOptions_.snowCover = fresh(snowCover_);
+    }
+
+    /// The lamps and the sky the realistic view is lit by (RFC 0021 §4, §7): every prim with
+    /// LampAPI_1, its lamp: attributes (GetAttributes) and its lamp/<name>/intensity signal, and
+    /// env/sky_illuminance when the run has it. Only through the protocol (invariant 14).
+    void followLamps() {
+        renderOptions_.lamps.clear();
+        const auto frame = scene_;
+        if (!frame || !frame->statics) {
+            renderOptions_.skyIlluminance = std::numeric_limits<double>::quiet_NaN();
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        if (statics.generation != lampGeneration_) {
+            lampGeneration_ = statics.generation;
+            lamps_.clear();
+            std::vector<std::uint32_t> prims;
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const PrimData& prim = statics.prims[i];
+                if (std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(), "LampAPI_1") ==
+                    prim.apiSchemas.end()) {
+                    continue;
+                }
+                SceneLamp& lamp = lamps_.emplace_back();
+                lamp.prim = static_cast<std::uint32_t>(i);
+                lamp.intensity = client_.subscribe("lamp/" + prim.name + "/intensity");
+                prims.push_back(lamp.prim);
+            }
+            if (!prims.empty()) {
+                client_.requestAttributesOf(prims);
+            }
+            lampAttributes_.reset();
+        }
+        const auto attributes = client_.attributesOf();
+        if (attributes != lampAttributes_) {
+            lampAttributes_ = attributes;
+            for (SceneLamp& lamp : lamps_) {
+                const auto it = attributes->find(lamp.prim);
+                if (it == attributes->end()) {
+                    continue;
+                }
+                const auto number = [&](const char* name, double fallback) {
+                    for (const AttributeInfo& a : it->second.attributes) {
+                        if (a.name == name && !a.numbers.empty()) {
+                            return a.numbers.front();
+                        }
+                    }
+                    return fallback;
+                };
+                for (const AttributeInfo& a : it->second.attributes) {
+                    if (a.name == "lamp:kind") {
+                        lamp.point = a.value == "point";
+                        lamp.beacon = a.value == "beacon";
+                    } else if (a.name == "lamp:color" && a.numbers.size() == 3) {
+                        lamp.look.color = {static_cast<float>(a.numbers[0]),
+                                           static_cast<float>(a.numbers[1]),
+                                           static_cast<float>(a.numbers[2])};
+                    }
+                }
+                lamp.look.beamAngle = number("lamp:beamAngle", 0.0);
+                lamp.look.fieldAngle = number("lamp:fieldAngle", 2.0 * lamp.look.beamAngle);
+                lamp.look.colorTemperature = number("lamp:colorTemperature", 0.0);
+                lamp.rotationSpeed = number("lamp:rotationSpeed", 0.0);
+                lamp.look.point = lamp.point;
+                lamp.known = true;
+            }
+        }
+        const double seconds = static_cast<double>(frame->simTimeNs) * 1e-9;
+        for (const SceneLamp& lamp : lamps_) {
+            if (!lamp.known || !lamp.intensity || lamp.prim >= frame->transforms.size()) {
+                continue;
+            }
+            const double intensity = lamp.intensity->latest();
+            if (!(intensity > 0.0)) {
+                continue;
+            }
+            const Transform& at = frame->transforms[lamp.prim];
+            RenderOptions::Lamp drawn = lamp.look;
+            drawn.position = at.position;
+            drawn.intensity = intensity;
+            // The beam leaves along the prim's +X; a beacon's turns about its +Z (RFC 0021 §2).
+            const double turn = lamp.beacon ? lamp.rotationSpeed * seconds : 0.0;
+            drawn.axis = rotated(at.rotation, {std::cos(turn), std::sin(turn), 0.0});
+            renderOptions_.lamps.push_back(drawn);
+        }
+        const auto catalog = client_.catalog();
+        if (catalog != skyCatalog_) {
+            skyCatalog_ = catalog;
+            if (catalog && !skyIlluminance_ && catalog->find("env/sky_illuminance") != nullptr) {
+                skyIlluminance_ = client_.subscribe("env/sky_illuminance");
+            }
+        }
+        renderOptions_.skyIlluminance =
+            skyIlluminance_ ? skyIlluminance_->latest() : std::numeric_limits<double>::quiet_NaN();
+    }
+
+    /// `v` turned by the unit quaternion `q` (w, x, y, z).
+    static std::array<double, 3> rotated(const std::array<float, 4>& q,
+                                         const std::array<double, 3>& v) {
+        const double w = q[0], x = q[1], y = q[2], z = q[3];
+        return {(1 - 2 * (y * y + z * z)) * v[0] + 2 * (x * y - w * z) * v[1] +
+                    2 * (x * z + w * y) * v[2],
+                2 * (x * y + w * z) * v[0] + (1 - 2 * (x * x + z * z)) * v[1] +
+                    2 * (y * z - w * x) * v[2],
+                2 * (x * z - w * y) * v[0] + 2 * (y * z + w * x) * v[1] +
+                    (1 - 2 * (x * x + y * y)) * v[2]};
     }
 
     /// Airflow particles (rotor_aero.md §5): kAirParticles points moved through the server's
@@ -2119,6 +2228,18 @@ private:
     std::vector<OverlayLines> cableOverlays_;  // the scene's cables (RFC 0011)
     std::shared_ptr<const SignalCatalog> snowCatalog_;
     std::shared_ptr<ScopeBuffer> snowRate_, snowCover_;
+    struct SceneLamp {  // per LampAPI_1 prim (RFC 0021 §7)
+        std::uint32_t prim{0};
+        std::shared_ptr<ScopeBuffer> intensity;  // lamp/<name>/intensity
+        RenderOptions::Lamp look;                // its attributes; pose and output per frame
+        bool point{false}, beacon{false}, known{false};
+        double rotationSpeed{0.0};  // rad/s, a beacon's
+    };
+    std::vector<SceneLamp> lamps_;
+    std::uint64_t lampGeneration_{0};
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> lampAttributes_;
+    std::shared_ptr<const SignalCatalog> skyCatalog_;
+    std::shared_ptr<ScopeBuffer> skyIlluminance_;  // env/sky_illuminance, lx
     static constexpr const char* kAirField = "aero/wind_speed";
     struct Particle {
         std::array<double, 3> at{};  // region frame, m

@@ -105,6 +105,18 @@ flowchart LR
   no wake; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
+  Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
+  I/d²) in a storage buffer, each adding E = I·f(θ)·cos/d² through the same GGX as the sun, its
+  colour from its colour temperature (Planck through the CIE 1931 functions,
+  `gpu::colorOfTemperature`) or `lamp:color`, unshadowed. One calibration ties the renderer's
+  units to lux: the drawn sun is the light_sensor's clear-sky beam at its elevation
+  (`gpu::realisticUnitsPerLux`). The sky's horizontal illuminance (`env/sky_illuminance`, lx; NaN
+  or absent: the drawn day) scales the sun and the sky, and the picture adapts by up to 1024×
+  (`gpu::realisticAdaptation`, a drawing choice); a camera's sensor model divides its exposure by
+  that gain, so a night frame has the scene's electrons. The viewer finds lamps as prims with
+  `LampAPI_1` in the snapshot, reads their `lamp:` attributes over `GetAttributes` and their
+  `lamp/<n>/intensity` over the signal subscription (no protocol change). The simple look
+  (`mesh.slang`, Tier 0) draws neither lamps nor night.
   Rain and snow (`falling`, `fallingKind` in the shader): the run's rain from EnvironmentState and
   its snow from the signals `env/snow_rate` and `env/snow_cover` (the environment message has no
   snow; no protocol change) fall through the world as drops on a lattice that moves with the wind

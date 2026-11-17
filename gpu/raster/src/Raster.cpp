@@ -393,6 +393,9 @@ struct RasterCamera::Impl {
     Image realisticDepth;  // with the realistic look: sampled by it
     std::unique_ptr<RealisticRenderer> realistic;
     std::vector<RealisticDraw> draws;
+    std::vector<RealisticLamp> lamps;  // setLighting
+    double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
+    bool linear{false};
     bool colour{true};  // false: only depth and ids are drawn (setColour)
     // The sensor model on the GPU (setEffects): its kernel, inputs and output.
     ComputeKernel effects;
@@ -520,6 +523,13 @@ RasterCamera::~RasterCamera() {
     }
     destroy(device, impl_->thermalTemperature);
     destroy(device, impl_->thermalPalette);
+}
+
+void RasterCamera::setLighting(std::span<const RealisticLamp> lamps, double skyIlluminance,
+                               bool linear) {
+    impl_->lamps.assign(lamps.begin(), lamps.end());
+    impl_->skyIlluminance = skyIlluminance;
+    impl_->linear = linear;
 }
 
 void RasterCamera::setColour(bool drawn) {
@@ -849,6 +859,9 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
             RealisticSettings settings;
             settings.season = scene.season;
             settings.seconds = seconds;
+            settings.lamps = impl_->lamps;
+            settings.skyIlluminance = impl_->skyIlluminance;
+            settings.linear = impl_->linear;
             transitionImage(commands, impl_->realisticDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
             impl_->realistic->record(commands, impl_->draws, view, settings, *scene.meshes,

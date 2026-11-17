@@ -25,6 +25,9 @@ struct Frame
     float4 mode;              // x: 1 in the mirror pass (y: the plane's relative height there);
                               // z: the season; w: 1 with surfaceAlbedo's photographs
     float4 weather;           // x: rain, mm/h; y: snow, mm/h of water; zw: the wind, m/s, world
+    float4 light;             // x: the daylight's share (1: the drawn day; the sky and the sun's
+                              // light scale by it); y: lamps; z: 1 to write the linear HDR value
+                              // (calibration tests); w: unused
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -34,6 +37,18 @@ struct Frame
 [[vk::binding(4)]] Sampler2D mirrorColor; // what the water reflects; alpha 0 where only sky
 [[vk::binding(5)]] Sampler2DArray surfaceAlbedo;  // photographs of surfaces, one layer per kind
 [[vk::binding(6)]] Sampler2DArray surfaceNormal;  // their bumps, OpenGL convention
+
+// A lamp (RFC 0021 §4). Its illuminance on a surface at distance d, θ off its axis, is
+// E = I·f(θ)·cos(incidence)/d², in renderer units: `position.w` is I times the units per lux.
+struct Lamp
+{
+    float4 position; // xyz relative to the eye; w: axis intensity, renderer units · m²
+    float4 axis;     // xyz unit, where the beam points; w: 1 for a point lamp (all round)
+    float4 cone;     // x: half the beam angle (50 %), y: half the field angle (10 %), rad;
+                     // z: the near limit of d, m
+    float4 color;    // linear RGB of luminance 1
+};
+[[vk::binding(7)]] StructuredBuffer<Lamp> lamps;
 
 struct Push
 {
@@ -132,7 +147,12 @@ float cloudAmount(float3 dir)
 
 // What comes from direction `dir`; `sharp` 1 with sun and clouds in detail, 0 for reflections off
 // rough surfaces, where only the broad colour matters.
+float3 skyByDay(float3 dir, float sharp);
 float3 sky(float3 dir, float sharp)
+{
+    return skyByDay(dir, sharp) * frame.light.x;
+}
+float3 skyByDay(float3 dir, float sharp)
 {
     float3 horizonGround = float3(0.56, 0.68, 0.82) * 0.92;
     float3 clear = clearSky(float3(dir.xy, max(dir.z, 0.02)));
@@ -205,6 +225,77 @@ float sunLight(float3 relative, float3 normal)
 
 // --- surfaces -------------------------------------------------------------------------------
 
+// Light from direction L (unit) by GGX: the reflected radiance per unit of illuminance on a
+// surface facing L, times cos(incidence). A Lambertian surface gives albedo/π·NL.
+float3 direct(float3 N, float3 V, float3 L, float NV, float3 diffuseColor, float3 F0, float roughness)
+{
+    float NL = saturate(dot(N, L));
+    if (NL <= 0.0)
+        return float3(0.0, 0.0, 0.0);
+    float3 H = normalize(V + L);
+    float NH = saturate(dot(N, H));
+    float VH = saturate(dot(V, H));
+    float a = max(roughness * roughness, 0.002);
+    float a2 = a * a;
+    float d = NH * NH * (a2 - 1.0) + 1.0;
+    float D = a2 / (PI * d * d);
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float G = 1.0 / ((NV * (1.0 - k) + k) * (NL * (1.0 - k) + k) * 4.0);
+    float3 F = F0 + (1.0 - F0) * pow(1.0 - VH, 5.0);
+    float3 specular = min(D * G, 40.0) * F;
+    return (diffuseColor / PI + specular) * NL;
+}
+
+// A lamp beam's relative intensity θ off its axis: lights::taper (modules/lights/src/Lamp.cpp),
+// 1 on the axis, 0.5 at half the beam angle, 0.1 at half the field angle, cosine-squared between,
+// 0 beyond.
+float taper(Lamp lamp, float cosTheta)
+{
+    if (lamp.axis.w > 0.5)
+        return 1.0;
+    float theta = acos(clamp(cosTheta, -1.0, 1.0));
+    float beam = lamp.cone.x;
+    float field = lamp.cone.y;
+    if (theta <= beam)
+    {
+        float c = cos(0.5 * PI * theta / beam);
+        return 0.5 + 0.5 * c * c;
+    }
+    if (theta <= field)
+    {
+        float c = cos(0.5 * PI * (theta - beam) / max(field - beam, 1e-6));
+        return 0.1 + 0.4 * c * c;
+    }
+    return 0.0;
+}
+
+// The lamps' light on a surface at `relative`, unshadowed (RFC 0021 §4: shadows are phase 2).
+float3 lampLight(float3 relative, float3 N, float3 V, float NV, float3 diffuseColor, float3 F0, float roughness)
+{
+    float3 sum = float3(0.0, 0.0, 0.0);
+    int count = int(frame.light.y + 0.5);
+    if (count == 0)
+        return sum;
+    if (frame.mode.x > 0.5)
+    {
+        relative.z = 2.0 * frame.mode.y - relative.z;  // the mirrored point's real place
+        N.z = -N.z;
+        V.z = -V.z;
+    }
+    for (int i = 0; i < count; ++i)
+    {
+        Lamp lamp = lamps[i];
+        float3 toLamp = lamp.position.xyz - relative;
+        float d = max(length(toLamp), lamp.cone.z);
+        float3 L = toLamp / d;
+        float f = taper(lamp, dot(-L, lamp.axis.xyz));
+        if (f <= 0.0)
+            continue;
+        sum += direct(N, V, L, NV, diffuseColor, F0, roughness) * lamp.color.rgb * (lamp.position.w * f / (d * d));
+    }
+    return sum;
+}
+
 float3 shadeSurface(float3 relative, float3 N, float3 albedo, float metallic, float roughness, float3 glow)
 {
     float3 V = normalize(-relative);
@@ -214,28 +305,15 @@ float3 shadeSurface(float3 relative, float3 N, float3 albedo, float metallic, fl
     float3 diffuseColor = albedo * (1.0 - metallic);
 
     // The sun, by GGX.
-    float NL = saturate(dot(N, L));
     float3 color = float3(0.0, 0.0, 0.0);
-    if (NL > 0.0)
-    {
-        float3 H = normalize(V + L);
-        float NH = saturate(dot(N, H));
-        float VH = saturate(dot(V, H));
-        float a = max(roughness * roughness, 0.002);
-        float a2 = a * a;
-        float d = NH * NH * (a2 - 1.0) + 1.0;
-        float D = a2 / (PI * d * d);
-        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-        float G = 1.0 / ((NV * (1.0 - k) + k) * (NL * (1.0 - k) + k) * 4.0);
-        float3 F = F0 + (1.0 - F0) * pow(1.0 - VH, 5.0);
-        float3 specular = min(D * G, 40.0) * F;
-        color = (diffuseColor / PI + specular) * frame.sunColor.rgb * frame.sunDirection.w * NL *
+    if (frame.sunDirection.w > 0.0 && dot(N, L) > 0.0)
+        color = direct(N, V, L, NV, diffuseColor, F0, roughness) * frame.sunColor.rgb * frame.sunDirection.w *
                 sunLight(relative, N);
-    }
+    color += lampLight(relative, N, V, NV, diffuseColor, F0, roughness);
 
     // The sky: broad light from above and the ground's bounce, and its reflection, blurred with
     // roughness (Lazarov's analytic split-sum).
-    float3 irradiance = lerp(float3(0.12, 0.115, 0.105), float3(0.38, 0.46, 0.60), N.z * 0.5 + 0.5);
+    float3 irradiance = lerp(float3(0.12, 0.115, 0.105), float3(0.38, 0.46, 0.60), N.z * 0.5 + 0.5) * frame.light.x;
     float3 R = reflect(-V, N);
     float3 sharpSky = sky(R, roughness < 0.25 ? 1.0 - roughness * 4.0 : 0.0);
     float3 envSpec = lerp(sharpSky, irradiance, saturate(roughness * 1.3));
@@ -633,7 +711,7 @@ float4 fsSky(ScreenOutput input) : SV_Target
     float3 color = sky(dir, 1.0);
     float cosSun = dot(dir, frame.sunDirection.xyz);
     float disc = smoothstep(0.99994, 0.99998, cosSun);
-    float seen = 1.0 - overcast();
+    float seen = (1.0 - overcast()) * frame.light.x;
     color += frame.sunColor.rgb * disc * 60.0 * smoothstep(0.0, 0.03, dir.z) * (1.0 - cloudAmount(dir)) * seen;
     color += frame.sunColor.rgb * pow(saturate(cosSun), 900.0) * 0.5 * seen;  // the glow round it
     return float4(color, 1.0);
@@ -829,6 +907,8 @@ float3 falling(float2 uv, float depth)
 float4 fsComposite(ScreenOutput input) : SV_Target
 {
     float2 uv = input.uv;
+    if (frame.light.z > 0.5)
+        return float4(sceneColor.SampleLevel(uv, 0.0).rgb, 1.0);  // linear, as calibrated
     float2 px = frame.screen.zw;
     float depth = sceneDepth.SampleLevel(uv, 0.0).r;
     float ao = occlusion(uv, depth);
@@ -1061,12 +1141,12 @@ float4 fsWater(WaterOutput input) : SV_Target
     below *= 1.0 + lightOnBottom;
     // Light scattered back by the water itself: its own colour.
     float sunUp = saturate(frame.sunDirection.z);
-    float3 deep = float3(0.004, 0.045, 0.075) * (0.45 + 1.2 * sunUp);
+    float3 deep = float3(0.004, 0.045, 0.075) * (0.45 + 1.2 * sunUp) * frame.light.x;
     float3 water = below * transmitted + deep * (1.0 - transmitted);
 
     // Light through wave crests, turned green.
     float crest = saturate((input.relative.z - frame.water.x) / max(waveScale(), 0.01) * 0.8);
-    water += float3(0.015, 0.09, 0.075) * crest * crest * sunUp * pow(1.0 - NV, 2.0) * 2.0;
+    water += float3(0.015, 0.09, 0.075) * crest * crest * sunUp * pow(1.0 - NV, 2.0) * 2.0 * frame.light.x;
 
     float3 color = lerp(water, reflection, fresnel);
 
@@ -1088,7 +1168,7 @@ float4 fsWater(WaterOutput input) : SV_Target
     float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * t, t * 0.4), 2);
     float foam = saturate(smoothstep(0.42, 0.62, cell * (0.6 + streak)) * saturate(shore * 1.5 + tearing));
     if (input.side < 0.5)
-        color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp), foam * 0.85);
+        color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp) * frame.light.x, foam * 0.85);
 
     return float4(fogged(color, input.relative), 1.0);
 }

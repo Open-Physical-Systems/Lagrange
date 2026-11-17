@@ -2,11 +2,14 @@
 // known poses are found with OpenCV; the corners lie where the pinhole model puts them, and a
 // calibration from the images recovers the intrinsics. Reprojection error < 0.1 px.
 #include "lagrange/gpu/Raster.hpp"
+#include "lagrange/gpu/Realistic.hpp"
 
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <numbers>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <string>
@@ -315,6 +318,190 @@ TEST(RasterLook, RealisticChangesColourOnly) {
     const std::uint8_t* ground = pixel(160, 220);
     EXPECT_GT(sky[2], sky[0]);                          // blue overhead
     EXPECT_GT(sky[2] - sky[0], ground[2] - ground[0]);  // and bluer than the grey floor
+}
+
+// --- lamps (RFC 0021 §4) ----------------------------------------------------------------------
+
+// The colour of a colour temperature: Planck's law through the CIE 1931 functions lands on CIE
+// illuminant A's chromaticity at its 2856 K (CIE 15:2004 Table T.3 gives x = 0.44757,
+// y = 0.40745), within the analytic fit's error.
+TEST(RealisticLight, ColourTemperatureOfIlluminantA) {
+    const std::array<float, 3> rgb = colorOfTemperature(2856.0);
+    // Linear sRGB back to XYZ (IEC 61966-2-1).
+    const double x = 0.4124 * rgb[0] + 0.3576 * rgb[1] + 0.1805 * rgb[2];
+    const double y = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    const double z = 0.0193 * rgb[0] + 0.1192 * rgb[1] + 0.9505 * rgb[2];
+    EXPECT_NEAR(y, 1.0, 1e-4);  // luminance 1
+    EXPECT_NEAR(x / (x + y + z), 0.44757, 0.003);
+    EXPECT_NEAR(y / (x + y + z), 0.40745, 0.003);
+    // Warm below the white point, cool above it.
+    EXPECT_GT(rgb[0], rgb[2]);
+    const std::array<float, 3> cool = colorOfTemperature(10000.0);
+    EXPECT_GT(cool[2], cool[0]);
+}
+
+// The calibration: the drawn sun stands for the light_sensor's clear-sky beam (checked against
+// iesDaylight in modules/sensors), and the adaptation runs from 1 by day to its limit at night.
+TEST(RealisticLight, CalibrationAndAdaptation) {
+    EXPECT_GT(realisticSunIlluminance(), 80e3);  // a clear afternoon: about 100 klx
+    EXPECT_LT(realisticSunIlluminance(), 120e3);
+    EXPECT_GT(realisticDaylight(), realisticSunIlluminance() * realisticSunDirection()[2]);
+    EXPECT_EQ(realisticAdaptation(std::numeric_limits<double>::quiet_NaN()), 1.0);
+    EXPECT_EQ(realisticAdaptation(realisticDaylight()), 1.0);
+    EXPECT_NEAR(realisticAdaptation(realisticDaylight() / 10.0), 10.0, 1e-9);
+    EXPECT_EQ(realisticAdaptation(0.8e-3), 1024.0);
+}
+
+// RFC 0021 §Validation, the renderer's calibration: a grey Lambertian plane under one spot at
+// night, its linear pixel values (before tone mapping) against ρ·E/π at 5 points, within 2 %.
+// The plane is drawn grey and black: their difference is the diffuse part alone (the specular
+// part, the same on both, cancels).
+TEST(RealisticLight, ALitPlaneReadsRhoEOverPi) {
+    const std::vector<float> positions{-50, -50, 0, 50, -50, 0, 50, 50, 0, -50, 50, 0};
+    const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::vector<std::uint32_t> indices{0, 1, 2, 0, 2, 3};
+    const std::vector<MeshSource> meshes{{positions, normals, indices}};
+    std::string error;
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    auto scene = RasterScene::create(gpu != nullptr ? gpu : "", meshes, error, {.realistic = true});
+    ASSERT_TRUE(scene) << error;
+    if (!scene->realistic()) {
+        GTEST_SKIP() << "a software device keeps the simple shading";
+    }
+    constexpr double kEyeHeight = 3.0;    // m, looking straight down
+    constexpr double kLampHeight = 1.5;   // m, beam straight down
+    constexpr double kIntensity = 1.2e5;  // cd: about 0.6 of full scale on the axis
+    constexpr double kRho = 0.8;
+    PinholeCamera camera;
+    camera.width = 320;
+    camera.height = 320;
+    camera.fx = camera.fy = 200.0;
+    camera.cx = camera.cy = 159.5;
+    camera.position = {0.0, 0.0, kEyeHeight};
+    camera.orientation = {0.0, 1.0, 0.0, 0.0};  // optical z down, x along world x, y along −y
+    RealisticLamp lamp;
+    lamp.position = {0.0, 0.0, kLampHeight};
+    lamp.axis = {0.0, 0.0, -1.0};
+    lamp.intensity = kIntensity;
+    lamp.beamAngle = 1.2;
+    lamp.fieldAngle = 2.0;
+    const std::vector<RealisticLamp> lamps{lamp};
+    RasterCamera renderer(scene, camera.width, camera.height);
+    renderer.setLighting(lamps, 0.0, true);  // no sky: the lamp alone
+    const auto shoot = [&](float albedo) {
+        RasterInstance plane;
+        plane.color = {albedo, albedo, albedo, 1.0F};
+        plane.roughness = 0.45F;  // no surface grain (surfaceDetail)
+        RasterImages out;
+        const std::vector<RasterInstance> instances{plane};
+        renderer.render(instances, camera, out, 0.0);
+        return out;
+    };
+    const RasterImages grey = shoot(static_cast<float>(kRho));
+    const RasterImages black = shoot(0.0F);
+    const double k = realisticUnitsPerLux();
+    // The taper of lights::taper (RFC 0021 §2).
+    const auto taper = [&](double theta) {
+        const double beam = lamp.beamAngle / 2.0;
+        const double field = lamp.fieldAngle / 2.0;
+        if (theta <= beam) {
+            const double c = std::cos(0.5 * std::numbers::pi * theta / beam);
+            return 0.5 + 0.5 * c * c;
+        }
+        const double c = std::cos(0.5 * std::numbers::pi * (theta - beam) / (field - beam));
+        return 0.1 + 0.4 * c * c;
+    };
+    std::ofstream log;
+    if (const char* dir = std::getenv("LAGRANGE_TEST_OUT")) {
+        log.open(std::string(dir) + "/lit_plane.csv");
+        log << "theta_rad,lux,expected,measured,ratio\n";
+    }
+    for (const double theta : {0.0, 0.2, 0.35, 0.5, 0.65}) {  // rad off the beam's axis
+        const double x = kLampHeight * std::tan(theta);
+        const double d = kLampHeight / std::cos(theta);
+        const double lux = kIntensity * taper(theta) * std::cos(theta) / (d * d);
+        // The summer haze over the eye's distance (realistic.slang's fogged, 0.0009 per m).
+        const double eye = std::hypot(x, kEyeHeight);
+        const double expected = kRho * lux * k / std::numbers::pi * std::exp(-eye * 0.0009);
+        // A 3x3 patch about the point's pixel, to average the 8-bit steps.
+        const double u = camera.cx + camera.fx * x / kEyeHeight;
+        double sum = 0.0;
+        for (int dv = -1; dv <= 1; ++dv) {
+            for (int du = -1; du <= 1; ++du) {
+                const std::size_t i =
+                    4 * ((static_cast<std::size_t>(camera.cy) + dv) * camera.width +
+                         static_cast<std::size_t>(std::lround(u)) + du);
+                sum += (grey.rgba[i + 1] - black.rgba[i + 1]) / 255.0;  // green
+            }
+        }
+        const double measured = sum / 9.0;
+        EXPECT_NEAR(measured / expected, 1.0, 0.02) << theta << " rad, " << lux << " lx";
+        if (log) {
+            log << theta << ',' << lux << ',' << expected << ',' << measured << ','
+                << measured / expected << '\n';
+        }
+    }
+}
+
+// At night with no lamp the picture is black, and a lamp lights a pool on the plane.
+TEST(RealisticLight, NightIsDarkButForTheLamp) {
+    const std::vector<float> positions{-50, -50, 0, 50, -50, 0, 50, 50, 0, -50, 50, 0};
+    const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::vector<std::uint32_t> indices{0, 1, 2, 0, 2, 3};
+    const std::vector<MeshSource> meshes{{positions, normals, indices}};
+    std::string error;
+    auto scene = RasterScene::create("", meshes, error, {.realistic = true});
+    ASSERT_TRUE(scene) << error;
+    if (!scene->realistic()) {
+        GTEST_SKIP() << "a software device keeps the simple shading";
+    }
+    PinholeCamera camera;
+    camera.width = 320;
+    camera.height = 240;
+    camera.fx = camera.fy = 200.0;
+    camera.cx = 159.5;
+    camera.cy = 119.5;
+    camera.position = {0.0, 0.0, 2.0};
+    camera.orientation = {0.5, -0.5, 0.5, -0.5};  // looking along +x
+    RasterInstance floor;
+    floor.roughness = 0.8F;
+    const std::vector<RasterInstance> instances{floor};
+    RasterCamera renderer(scene, camera.width, camera.height);
+    const auto mean = [&](const RasterImages& image) {
+        double sum = 0.0;
+        for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+            sum += image.rgba[i] + image.rgba[i + 1] + image.rgba[i + 2];
+        }
+        return sum / (3.0 * static_cast<double>(image.rgba.size() / 4));
+    };
+    constexpr double kMoonless = 0.8e-3;  // lx, RFC 0021 §6
+    RasterImages day, night, lit;
+    renderer.render(instances, camera, day, 1.0);
+    renderer.setLighting({}, kMoonless);
+    renderer.render(instances, camera, night, 1.0);
+    RealisticLamp lamp;  // a 1500 cd headlamp 0.5 m up, tilted down onto the floor ahead
+    lamp.position = {0.5, 0.0, 0.5};
+    lamp.axis = {std::cos(0.3), 0.0, -std::sin(0.3)};
+    lamp.intensity = 1500.0;
+    lamp.beamAngle = 0.35;
+    lamp.fieldAngle = 0.7;
+    lamp.color = colorOfTemperature(5700.0);
+    const std::vector<RealisticLamp> lamps{lamp};
+    renderer.setLighting(lamps, kMoonless);
+    renderer.render(instances, camera, lit, 1.0);
+    EXPECT_GT(mean(day), 60.0);
+    EXPECT_LT(mean(night), 2.0);
+    EXPECT_GT(mean(lit), mean(night) + 2.0);
+    if (const char* dir = std::getenv("LAGRANGE_TEST_OUT")) {
+        for (const auto& [name, image] :
+             {std::pair{"day", &day}, std::pair{"night", &night}, std::pair{"lit", &lit}}) {
+            std::ofstream ppm(std::string(dir) + "/camera_" + name + ".ppm", std::ios::binary);
+            ppm << "P6\n" << camera.width << ' ' << camera.height << "\n255\n";
+            for (std::size_t i = 0; i < image->rgba.size(); i += 4) {
+                ppm.write(reinterpret_cast<const char*>(&image->rgba[i]), 3);
+            }
+        }
+    }
 }
 
 }  // namespace
