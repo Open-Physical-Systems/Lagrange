@@ -1368,12 +1368,27 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
             char detail[96];
             widgets::ChipState state;
         };
-        std::array<Chip, 16> chips{};
+        // The design's physics domains first, always; then every other domain this run has
+        // (format::isRunDomain: fire, lights, actuators, tether, ...). The rest, which nothing
+        // in the stage uses, stay in the Domains workspace's Additional modules.
+        std::array<Chip, 32> chips{};
         std::size_t count = 0;
-        for (const DomainView& view : session.domains()) {
-            if (!format::isPhysicsDomain(view.name) || count == chips.size()) {
-                continue;  // additional modules are listed in the Domains workspace
+        const std::shared_ptr<const ProfileInfo>& reported = session.profile();
+        std::array<const DomainView*, 32> shown{};  // no allocation in the frame
+        std::size_t shownCount = 0;
+        for (const bool physics : {true, false}) {
+            for (const DomainView& view : session.domains()) {
+                const bool listed =
+                    physics
+                        ? format::isPhysicsDomain(view.name)
+                        : format::isRunDomain(view, reported ? reported->find(view.name) : nullptr);
+                if (listed && shownCount < shown.size()) {
+                    shown.at(shownCount++) = &view;
+                }
             }
+        }
+        for (std::size_t s = 0; s < shownCount; ++s) {
+            const DomainView& view = *shown.at(s);
             Chip& chip = chips.at(count++);
             chip.view = &view;
             format::domainDetail(view, chip.detail, sizeof(chip.detail));
