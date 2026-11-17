@@ -50,7 +50,8 @@ class JointControl final : public IModule {
 public:
     /// `driveModes`: joints whose motor follows a velocity or a voltage (electrical::driveModes)
     /// are told that, not a torque. A velocity motor takes position and velocity targets; a voltage
-    /// motor takes volts, as a voltage target or in /joint_commands' effort field.
+    /// motor takes volts, as a voltage target or in /joint_commands' effort field. A joint whose
+    /// mode is "servo" (RFC 0020 §4.3) is left to its servo.
     explicit JointControl(std::shared_ptr<JointTargets> targets,
                           std::map<std::string, std::string> driveModes = {},
                           double bandwidthHz = 8.0);

@@ -217,7 +217,11 @@ inertia (`elec:velocityLoopBandwidth`, illustrative), held by the current limit;
 limit. Those two commands are required: `--joint-control` writes them (`Server::commandJoint`, and
 `/joint_commands`, whose `effort` field carries volts for a voltage motor), a plugin or `--ros-topics`
 can too, and the built-in drive controllers and ros2_control, which write torques, stop the start with
-`MissingInput`. On a prismatic joint the drive is linear: `elec:gearRatio` is motor radians per metre
+`MissingInput`. `position` (RFC 0020 §4.3, a smart servo whose loop runs on its own drive; brushed
+motors only) follows `joint/<j>/position_command` with the gains, dead zone and sensing step of the
+joint's `ServoAPI_1` (`servoDuty`), its duty times the bus voltage on the winding and the armature
+current held to `elec:maxCurrent` (`currentLimitedDuty`); the servo module writes the set point, NaN
+for torque off (the winding open); docs/physics/actuators.md "Servos". On a prismatic joint the drive is linear: `elec:gearRatio` is motor radians per metre
 (2π over a screw's lead), and torque, speed and inertia at the joint are force, m/s and mass.
 A screw's two efficiencies (RFC 0020 §4.4): with `elec:gearBackEfficiency` set, the gear's
 back-driven losses become the joint friction `joint/<j>/friction_limit` = (1 − η_back)·|load|

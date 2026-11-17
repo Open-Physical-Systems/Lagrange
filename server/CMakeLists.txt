@@ -465,6 +465,21 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
     )
     lagrange_target_defaults(test_fire_downwash)
+    # RFC 0020's servos in whole runs: the pan-tilt's step and hold, a smart servo on its drive.
+    ament_add_gtest(
+        test_servos_run
+        test/test_servos_run.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
+        TIMEOUT 300
+    )
+    target_link_libraries(test_servos_run lagrange_server)
+    target_compile_definitions(
+        test_servos_run
+        PRIVATE
+            LAGRANGE_TEST_PAN_TILT_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/pan_tilt/pan_tilt.urdf"
+            LAGRANGE_TEST_PAN_TILT_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/pan_tilt/pan_tilt.overlay.yaml"
+    )
+    lagrange_target_defaults(test_servos_run)
     # The rigid-body conformance suite (RFC 0008 §5), also installed for third-party backends.
     ament_add_gtest(
         lagrange_physics_conformance

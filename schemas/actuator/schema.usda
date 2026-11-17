@@ -3,7 +3,8 @@
     """Lagrange actuator schemas (RFC 0020). Codeless. Actuators that are not an electrical
     motor's torque: grippers that hold by suction or by a magnet (phase 1). They hold by equal and
     opposite forces on the gripper's body and the part, never by a weld: the physics engine's
-    contact carries the reaction and the friction."""
+    contact carries the reaction and the friction. Servos (phase 2): a hobby PWM servo's or a smart
+    servo's board, closing a position loop on the joint's own motor."""
     subLayers = [ @usd/schema.usda@ ]
 )
 
@@ -205,5 +206,102 @@ class "TankAPI_1" (
         lagrangeUnit = "kg/m3"
         doc = """The agent's density; the fallback is liquid water at 20 degrees C (998.2 kg/m3,
         NIST Chemistry WebBook, saturated water)."""
+    )
+}
+
+class "ServoAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A servo (RFC 0020 section 4.3) on this joint: the board of a hobby PWM servo or of a
+    smart (Dynamixel-class) servo. It turns its command (act/<joint>/pulse_width through the
+    pulse map, or act/<joint>/goal_position) into a duty cycle on the joint's motor:
+    u = clamp(kp e + ki integral(e) + kd de/dt, -1, 1) with e the error outside the deadband,
+    applied as u times the bus voltage to an ElectricalMotorAPI_1 (dc_brushed) on this joint in
+    voltage mode, or run by that motor's own drive in position mode. Without the electrical
+    domain (or without a motor) the torque is stallTorque (u - w/noLoadSpeed): the datasheet's
+    line between its two numbers, a DC motor's."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token act:servo:kind = "pwm" (
+        allowedTokens = ["pwm", "smart"]
+        doc = """pwm: a hobby servo, commanded by a pulse width or an angle, position only.
+        smart: a Dynamixel-class servo with operating modes, profiles and overload shutdown."""
+    )
+    uniform token act:servo:operatingMode = "position" (
+        allowedTokens = ["position", "velocity", "current"]
+        doc = """What a smart servo follows: act/<joint>/goal_position, goal_velocity (rad/s) or
+        goal_current (A; with a motor and the electrical domain only)."""
+    )
+    double act:servo:pulseMin (
+        lagrangeUnit = "s"
+        doc = "Pulse width that maps to angleMin. Required for pwm."
+    )
+    double act:servo:pulseMax (
+        lagrangeUnit = "s"
+        doc = "Pulse width that maps to angleMax. Required for pwm."
+    )
+    double act:servo:angleMin (
+        lagrangeUnit = "rad"
+        doc = "Joint position at pulseMin. Required for pwm."
+    )
+    double act:servo:angleMax (
+        lagrangeUnit = "rad"
+        doc = "Joint position at pulseMax. Required for pwm."
+    )
+    double act:servo:deadband = 0 (
+        lagrangeUnit = "rad"
+        doc = "Position error the board does not act on."
+    )
+    double act:servo:kp (
+        lagrangeUnit = "1/rad"
+        doc = "Duty cycle per radian of position error. Required."
+    )
+    double act:servo:ki = 0 (
+        lagrangeUnit = "1/(rad.s)"
+        doc = "Duty cycle per radian-second of integrated error."
+    )
+    double act:servo:kd = 0 (
+        lagrangeUnit = "s/rad"
+        doc = "Duty cycle per radian per second of error rate (on the measured velocity)."
+    )
+    double act:servo:velocityKp = 0 (
+        lagrangeUnit = "s/rad"
+        doc = "Velocity mode: duty cycle per rad/s of velocity error. Required for that mode."
+    )
+    double act:servo:velocityKi = 0 (
+        lagrangeUnit = "1/rad"
+        doc = "Velocity mode: duty cycle per radian of integrated velocity error."
+    )
+    double act:servo:profileVelocity = 0 (
+        lagrangeUnit = "rad/s"
+        doc = "Most speed of the set point on its way to the goal. 0: none (a step)."
+    )
+    double act:servo:profileAcceleration = 0 (
+        lagrangeUnit = "rad/s2"
+        doc = "Most acceleration of the set point. 0: none."
+    )
+    double act:servo:resolution = 0 (
+        lagrangeUnit = "rad"
+        doc = "Step of the position sensing (potentiometer or encoder). 0: exact."
+    )
+    double act:servo:stallTorque (
+        lagrangeUnit = "N.m"
+        doc = "Torque at full duty and standstill, at the joint. Required without a motor."
+    )
+    double act:servo:noLoadSpeed (
+        lagrangeUnit = "rad/s"
+        doc = "Speed at full duty and no load, at the joint. Required without a motor."
+    )
+    double act:servo:overloadTime = 0 (
+        lagrangeUnit = "s"
+        doc = """Smart servo: how long the output may stay saturated (full duty or the current
+        limit) before the overload shutdown turns the torque off. 0: never."""
+    )
+    double act:servo:maxTemperature = 0 (
+        lagrangeUnit = "K"
+        doc = """Smart servo: winding temperature (thermal/<motor>/temperature) at which the
+        overheating shutdown turns the torque off. 0: never."""
     )
 }

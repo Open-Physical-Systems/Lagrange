@@ -327,9 +327,39 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             }
         }
         const std::string_view control = s->token("elec:controlMode").value_or("torque");
-        motor.mode = control == "velocity"  ? Motor::Mode::Velocity
-                     : control == "voltage" ? Motor::Mode::Voltage
-                                            : Motor::Mode::Torque;
+        motor.mode = control == "velocity"   ? Motor::Mode::Velocity
+                     : control == "voltage"  ? Motor::Mode::Voltage
+                     : control == "position" ? Motor::Mode::Position
+                                             : Motor::Mode::Torque;
+        if (motor.mode == Motor::Mode::Position) {
+            // A smart servo's loop on its own drive (RFC 0020 §4.3): its gains are the joint's
+            // ServoAPI_1, on a brushed motor whose winding the duty drives directly.
+            const SchemaInstance* servo = nullptr;
+            for (const SchemaInstance* candidate : world.instancesOf("ServoAPI_1")) {
+                if (joint.size() == 1 && candidate->prim == joint[0]) {
+                    servo = candidate;
+                }
+            }
+            const auto kp = servo != nullptr ? servo->real("act:servo:kp") : std::nullopt;
+            if (p.dq || servo == nullptr || !kp || !(*kp > 0.0)) {
+                problems.add(where,
+                             "elec:controlMode position needs a dc_brushed motor and ServoAPI_1 "
+                             "with act:servo:kp > 0 on its joint");
+                continue;
+            }
+            motor.servo.kp = *kp;
+            motor.servo.ki = servo->real("act:servo:ki").value_or(0.0);
+            motor.servo.kd = servo->real("act:servo:kd").value_or(0.0);
+            motor.servo.deadband = servo->real("act:servo:deadband").value_or(0.0);
+            motor.servo.resolution = servo->real("act:servo:resolution").value_or(0.0);
+            if (motor.servo.ki < 0.0 || motor.servo.kd < 0.0 || motor.servo.deadband < 0.0 ||
+                motor.servo.resolution < 0.0) {
+                problems.add(where,
+                             "the joint's ServoAPI_1 gains, deadband and resolution must "
+                             "not be negative");
+                continue;
+            }
+        }
         motor.velocityBandwidth = s->real("elec:velocityLoopBandwidth").value_or(kVelocityLoopRadS);
         if (motor.velocityBandwidth <= 0.0) {
             problems.add(where, "elec:velocityLoopBandwidth must be positive");
@@ -487,6 +517,13 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             m.velocityCommand = d.input(scalar(joint + "velocity_command", speed));
         } else if (m.mode == Motor::Mode::Voltage) {
             m.voltageCommand = d.input(scalar(joint + "voltage_command", units::V));
+        } else if (m.mode == Motor::Mode::Position) {
+            const Unit length = m.slide ? units::m : units::rad;
+            m.positionCommand = d.input(scalar(joint + "position_command", length));
+            SignalSpec position = scalar(joint + "position", length);
+            position.hold = Hold::LinearExtrapolate;
+            position.feedback = true;
+            m.position = d.input(position);
         } else {
             // A drive nothing commands makes no torque (a robot without a controller).
             SignalSpec command = scalar(joint + "torque_command", effort);
@@ -1064,12 +1101,33 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         } else if (m.mode == Motor::Mode::Voltage) {
             asked = bus.read(m.voltageCommand);
         }
+        bool servoOff = false;
+        if (m.mode == Motor::Mode::Position) {
+            // The servo's loop (RFC 0020 §4.3): a duty on the bus voltage, the armature current
+            // held to the drive's limit; NaN: torque off, the winding open.
+            const double target = bus.read(m.positionCommand);
+            servoOff = !std::isfinite(target);
+            double u = 0.0;
+            if (!servoOff) {
+                double uMin = -1.0;
+                double uMax = 1.0;
+                currentLimitedDuty(m.params, m.params.resistanceAt(bus.read(m.temperature)),
+                                   node.voltage, in.jointVelocity,
+                                   m.params.maxCurrent * std::clamp(bus.read(m.derating), 0.0, 1.0),
+                                   uMin, uMax);
+                u = servoDuty(m.servo, m.servoIntegral, target, bus.read(m.position),
+                              in.jointVelocity, dt, uMin, uMax);
+            } else {
+                m.servoIntegral = 0.0;
+            }
+            asked = u * node.voltage;
+        }
         if (node.brownout) {
             m.tripped = true;
         } else if (m.tripped && std::abs(asked) < kResetTorqueNm) {
             m.tripped = false;
         }
-        if (m.mode == Motor::Mode::Voltage) {
+        if (m.mode == Motor::Mode::Voltage || m.mode == Motor::Mode::Position) {
             in.voltageMode = true;
             in.voltageCommand = asked;
         } else if (m.mode == Motor::Mode::Velocity) {
@@ -1092,7 +1150,7 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
             in.torqueCommand = std::clamp(wanted, -limit, limit);
         }
         const bool overvoltageOff = node.overvoltageTripped && node.brakeResistance <= 0.0;
-        const bool off = m.tripped || overvoltageOff;
+        const bool off = m.tripped || overvoltageOff || servoOff;
         in.busVoltage = node.voltage;
         in.temperature = bus.read(m.temperature);
         in.derating = bus.read(m.derating);
@@ -1247,6 +1305,9 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
         if (m.params.screw()) {
             writer.put(m.lastTorque);
         }
+        if (m.mode == Motor::Mode::Position) {
+            writer.put(m.servoIntegral);
+        }
     }
     for (const Battery& b : batteries_) {
         writer.put(b.state.soc);
@@ -1279,6 +1340,9 @@ Status ElectricalNetwork::restoreState(StateReader& reader) {
              reader.get(m.torqueSum) && reader.get(m.stepsSince) && reader.get(m.synced);
         if (m.params.screw()) {
             ok = ok && reader.get(m.lastTorque);
+        }
+        if (m.mode == Motor::Mode::Position) {
+            ok = ok && reader.get(m.servoIntegral);
         }
     }
     for (Battery& b : batteries_) {

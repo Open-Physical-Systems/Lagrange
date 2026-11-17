@@ -1,6 +1,7 @@
 #include "Recorder.hpp"
 #include "lagrange/actuators/Grippers.hpp"
 #include "lagrange/actuators/Nozzles.hpp"
+#include "lagrange/actuators/Servos.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
@@ -914,16 +915,20 @@ struct Server::Impl {
             }
         }
         if (jointControlled()) {
-            // Off, nothing simulates the motors: every joint takes a torque.
-            next->add(std::make_unique<JointControl>(
-                jointTargets,
+            // Off, nothing simulates the motors: every joint takes a torque. A joint with a servo
+            // (RFC 0020 §4.3) follows its servo instead: joint control leaves it out.
+            std::map<std::string, std::string> modes =
                 off("electrical") ? std::map<std::string, std::string>{}
-                                  : electrical::driveModes(WorldView(robot.world)),
-                options.jointLoopHz));
+                                  : electrical::driveModes(WorldView(robot.world));
+            for (const std::string& joint : servoJoints()) {
+                modes[joint] = "servo";
+            }
+            next->add(std::make_unique<JointControl>(jointTargets, std::move(modes),
+                                                     options.jointLoopHz));
         } else if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
             next->add(ros2_control::createControlModule(*controllers, controlJoints));
-        } else if (robot.actuatedJoints.size() == 2) {
+        } else if (robot.actuatedJoints.size() == 2 && servoJoints().empty()) {
             std::function<std::optional<VelocityCommand>()> external;
             if (bridge) {
                 external = [this]() -> std::optional<VelocityCommand> {
@@ -1099,6 +1104,27 @@ struct Server::Impl {
                               [scene](const SignalBus& bus) { return &scene->at(bus); },
                               actuatorCommands),
                           ModuleConfig(spray));
+            }
+        }
+        // Servos (RFC 0020 §4.3): each servo joint's board, on its motor when the electrical
+        // domain runs, else on the datasheet's torque line. Before the electrical substitute,
+        // which passes on the torque commands declared above it.
+        if (hasServos()) {
+            ModuleConfigData board;
+            board.values[actuators::Servos::kElectricalKey] =
+                hasPowerSystem() && !off("electrical") ? 1.0 : 0.0;
+            if (!(off("actuators") && !hasGrippers() && !hasNozzles() &&
+                  addPluginSubstitute("actuators", board))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const std::string preset =
+                    token != settings.substituteTokens.end() ? token->second : "zero";
+                const actuators::Servos::Mode mode =
+                    !off("actuators")      ? actuators::Servos::Mode::Full
+                    : preset == "ideal"    ? actuators::Servos::Mode::Ideal
+                    : preset == "constant" ? actuators::Servos::Mode::Hold
+                                           : actuators::Servos::Mode::Off;
+                next->add(std::make_unique<actuators::Servos>(mode, servoCommands),
+                          ModuleConfig(board));
             }
         }
         // People (RFC 0009): moved like traffic agents, around the robots.
@@ -1585,6 +1611,8 @@ struct Server::Impl {
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
     /// Gripper commands from the API (Server::commandActuator), outliving rebuilds.
     std::shared_ptr<actuators::Commands> actuatorCommands = std::make_shared<actuators::Commands>();
+    /// Servo commands from the API (Server::commandJoint on a servo joint), outliving rebuilds.
+    std::shared_ptr<actuators::Commands> servoCommands = std::make_shared<actuators::Commands>();
     // Stateless modules ("domain/name") left out of the run because the state restored last was
     // saved before a later release added them (Scheduler::addedSince, formats.md §11).
     std::set<std::string> leftOut;
@@ -1888,6 +1916,20 @@ struct Server::Impl {
     }
     /// Whether the stage has nozzles (RFC 0022 §8).
     bool hasNozzles() const { return !WorldView(robot.world).instancesOf("NozzleAPI_1").empty(); }
+    /// Whether the stage has servos (RFC 0020 §4.3), and the joints they turn.
+    bool hasServos() const { return !WorldView(robot.world).instancesOf("ServoAPI_1").empty(); }
+    std::vector<std::string> servoJoints() const {
+        std::vector<std::string> out;
+        const WorldView view(robot.world);
+        const World::Joints& joints = robot.world.joints;
+        for (const SchemaInstance* s : view.instancesOf("ServoAPI_1")) {
+            const auto j = std::find(joints.prim.begin(), joints.prim.end(), s->prim);
+            if (j != joints.prim.end()) {
+                out.push_back(joints.names[static_cast<std::size_t>(j - joints.prim.begin())]);
+            }
+        }
+        return out;
+    }
     bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
@@ -3576,7 +3618,7 @@ struct Server::Impl {
                 yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
                                               : "  lights: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "actuators" &&
-                       (hasGrippers() || hasNozzles())) {
+                       (hasGrippers() || hasNozzles() || hasServos())) {
                 yaml += substituted("actuators")
                             ? "  actuators: {enabled: false, substitute: zero}\n"
                             : "  actuators: {enabled: true}\n";
@@ -3693,8 +3735,8 @@ struct Server::Impl {
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
             : domain == "fire"          ? "no fires in the stage (FireAPI_1)"
             : domain == "actuators"
-                ? "no grippers or nozzles in the stage (SuctionGripperAPI_1, MagnetGripperAPI_1, "
-                  "NozzleAPI_1)"
+                ? "no grippers, nozzles or servos in the stage (SuctionGripperAPI_1, "
+                  "MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1)"
                 : "no module in this build yet; the substitute stands in");
     }
 
@@ -5517,6 +5559,42 @@ struct Server::Impl {
         if (joints.mimic[index] != kNoMimic) {
             return joint + " copies another joint (mimic): command that one";
         }
+        // A servo's joint (RFC 0020 §4.3) follows its servo: the command is the servo's goal,
+        // with or without joint control.
+        {
+            std::string problem;
+            const bool powered = hasPowerSystem() && !options.substituted.contains("electrical");
+            for (const actuators::ServoSpec& servo :
+                 actuators::servosOf(WorldView(robot.world), powered, problem)) {
+                if (servo.joint != joint) {
+                    continue;
+                }
+                using OperatingMode = actuators::ServoParams::OperatingMode;
+                const OperatingMode follows = servo.params.mode;
+                const bool fits = (follows == OperatingMode::Position && mode == "position") ||
+                                  (follows == OperatingMode::Velocity && mode == "velocity");
+                if (!fits) {
+                    return joint + " is turned by a servo in " +
+                           (follows == OperatingMode::Position   ? "position"
+                            : follows == OperatingMode::Velocity ? "velocity"
+                                                                 : "current") +
+                           " mode: it takes " +
+                           (follows == OperatingMode::Position   ? "position"
+                            : follows == OperatingMode::Velocity ? "velocity"
+                                                                 : "act/<servo>/goal_current") +
+                           " commands";
+                }
+                if (mode == "position" && servo.lower < servo.upper &&
+                    (value < servo.lower || value > servo.upper)) {
+                    value = std::clamp(value, servo.lower, servo.upper);
+                    if (limit != nullptr) {
+                        *limit = "its range";
+                    }
+                }
+                servoCommands->set(servo.name + "/" + mode, value);
+                return {};
+            }
+        }
         if (!options.jointControl) {
             return "joint control is off in this run: nothing takes joint commands "
                    "(Simulation(..., joint_control=True), lagrange_server --joint-control)";
@@ -5873,7 +5951,7 @@ struct Server::Impl {
         if (hasLamps()) {
             context.modules.insert("lights");
         }
-        if (hasGrippers() || hasNozzles()) {
+        if (hasGrippers() || hasNozzles() || hasServos()) {
             context.modules.insert("actuators");
         }
         for (const auto& [key, value] : options.weather) {
@@ -5897,7 +5975,8 @@ struct Server::Impl {
                 context.substitutes[row.domain].insert("replay");  // bench mode
             }
             if (std::string_view(row.domain) == "actuators") {
-                context.substitutes[row.domain].insert("ideal");  // holds with no dynamics
+                context.substitutes[row.domain].insert("ideal");     // holds with no dynamics
+                context.substitutes[row.domain].insert("constant");  // never holds; servos stay
             }
         }
         for (const PluginModule& module : plugins) {
@@ -8170,6 +8249,55 @@ Status Server::load() {
                 add(maps.publish, act + "flow", topic + "flow", "std_msgs/msg/Float64", "");
                 add(maps.publish, act + "impact", topic + "impact",
                     "geometry_msgs/msg/Vector3Stamped", "world");
+            }
+            // Every servo's (RFC 0020 §4.3): /<s>/goal_position (rad), /<s>/pulse_width (s) and
+            // /<s>/torque_enable in, /<s>/present_position, present_load and overload out. With
+            // ros2_control the controllers own the goals. Goals start as NaN (none yet: the servo
+            // holds where it is) and torque enabled.
+            const auto input = [&](const std::string& signal, const std::string& topic,
+                                   const char* type, const char* unit, double initial) {
+                if (taken(topic, signal)) {
+                    return;
+                }
+                ros2::TopicMap m;
+                m.signal = signal;
+                m.topic = topic;
+                m.type = type;
+                m.unit = unit;
+                m.initial = initial;
+                maps.subscribe.push_back(std::move(m));
+            };
+            constexpr double kNone = std::numeric_limits<double>::quiet_NaN();
+            const bool powered =
+                s.hasPowerSystem() && !s.options.substituted.contains("electrical");
+            for (const actuators::ServoSpec& servo :
+                 actuators::servosOf(WorldView(s.robot.world), powered, problem)) {
+                const std::string act = "act/" + servo.name + "/";
+                const std::string topic = "/" + servo.name + "/";
+                using OperatingMode = actuators::ServoParams::OperatingMode;
+                if (s.options.ros2ControlParams.empty()) {
+                    if (servo.params.mode == OperatingMode::Velocity) {
+                        input(act + "goal_velocity", topic + "goal_velocity",
+                              "std_msgs/msg/Float64", "rad/s", kNone);
+                    } else if (servo.params.mode == OperatingMode::Current) {
+                        input(act + "goal_current", topic + "goal_current", "std_msgs/msg/Float64",
+                              "A", kNone);
+                    } else {
+                        input(act + "goal_position", topic + "goal_position",
+                              "std_msgs/msg/Float64", "rad", kNone);
+                    }
+                    if (servo.params.kind == actuators::ServoParams::Kind::Pwm) {
+                        input(act + "pulse_width", topic + "pulse_width", "std_msgs/msg/Float64",
+                              "s", kNone);
+                    }
+                }
+                input(act + "torque_enable", topic + "torque_enable", "std_msgs/msg/Bool", "1",
+                      1.0);
+                add(maps.publish, act + "present_position", topic + "present_position",
+                    "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "present_load", topic + "present_load",
+                    "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "overload", topic + "overload", "std_msgs/msg/Bool", "");
             }
         }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();

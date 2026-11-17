@@ -24,6 +24,15 @@ and `test_schemas.py` checks it.
   axis, the tank it draws from) and `TankAPI_1` (capacity, how full it starts, the agent's
   density). Additions, nothing to migrate.
 
+- **Actuator library** (RFC 0020 §4.3): `ServoAPI_1` on a joint, a hobby PWM servo's or a smart
+  servo's board (pulse map, deadband, P/I/D duty gains, profile limits, sensing resolution, stall
+  torque and no-load speed for the motor-less model, overload and overheating shutdown). New
+  class, nothing to migrate.
+
+- **Electrical library** (RFC 0020 §4.3): `position` appended to `elec:controlMode`'s tokens: the
+  drive runs the joint's `ServoAPI_1` position loop itself on `joint/<j>/position_command`.
+  Addition, nothing to migrate.
+
 - **Electrical library** (RFC 0020 §4.4): `elec:gearBackEfficiency` on `ElectricalMotorAPI_1`
   (fallback −1: the same as `elec:gearEfficiency`, today's behaviour), a gear's efficiency when
   the load drives it; 0 is self-locking. Addition, nothing to migrate.

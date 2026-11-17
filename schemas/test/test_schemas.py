@@ -51,6 +51,7 @@ EXPECTED = {
         "MagnetGripperAPI_1",
         "NozzleAPI_1",
         "TankAPI_1",
+        "ServoAPI_1",
     ],
 }
 
@@ -186,6 +187,21 @@ def test_gear_back_efficiency_is_an_addition():
     assert back.GetMetadata("lagrangeUnit") == "1"
     with FROZEN.open() as f:
         assert "elec:gearBackEfficiency" not in json.load(f)["ElectricalMotorAPI_1"]
+
+
+def test_servo_and_position_mode_are_additions():
+    # RFC 0020 §4.3: ServoAPI_1 is a new class, and elec:controlMode's `position` token is
+    # appended after the frozen ones, so every 1.x file reads as before.
+    motor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    tokens = list(motor.GetAttributeDefinition("elec:controlMode").GetMetadata("allowedTokens"))
+    assert tokens == ["torque", "velocity", "voltage", "position"]
+    servo = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ServoAPI_1")
+    assert servo
+    assert servo.GetAttributeDefinition("act:servo:kind").GetFallbackValue() == "pwm"
+    assert servo.GetAttributeDefinition("act:servo:kp").GetFallbackValue() is None
+    assert servo.GetAttributeDefinition("act:servo:deadband").GetMetadata("lagrangeUnit") == "rad"
+    with FROZEN.open() as f:
+        assert "ServoAPI_1" not in json.load(f)
 
 
 # RFC 0007: the schemas are frozen at 1.0. Every attribute of every schema at v1.0.0 is listed

@@ -118,6 +118,36 @@ void advanceCurrents(const MotorParams& p, MotorState& s, double vd, double vq,
     s.iq = advanceAxis(s.iq, uq, resistance, p.inductanceQ, dt);
 }
 
+double servoDuty(const ServoLoop& loop, double& integral, double target, double position,
+                 double velocity, double dt, double uMin, double uMax) {
+    const double measured =
+        loop.resolution > 0.0 ? std::round(position / loop.resolution) * loop.resolution : position;
+    double error = target - measured;
+    if (std::abs(error) <= loop.deadband) {
+        return 0.0;
+    }
+    error -= error > 0.0 ? loop.deadband : -loop.deadband;  // a continuous dead zone
+    const double wanted = loop.kp * error + loop.ki * integral - loop.kd * velocity;
+    const double u = std::clamp(wanted, uMin, uMax);
+    if (u == wanted) {
+        integral += error * dt;
+    }
+    return u;
+}
+
+void currentLimitedDuty(const MotorParams& p, double resistance, double busVoltage,
+                        double jointVelocity, double maxCurrent, double& uMin, double& uMax) {
+    uMin = -1.0;
+    uMax = 1.0;
+    if (!(busVoltage > 0.0) || !(maxCurrent > 0.0)) {
+        return;
+    }
+    const double emf = p.backEmfConstant() * p.gearRatio * jointVelocity;
+    const double span = maxCurrent * resistance;
+    uMin = std::clamp((emf - span) / busVoltage, -1.0, 1.0);
+    uMax = std::clamp((emf + span) / busVoltage, -1.0, 1.0);
+}
+
 MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& in, double dt) {
     MotorOutputs out;
     if (!in.enabled || in.busVoltage <= 0.0) {

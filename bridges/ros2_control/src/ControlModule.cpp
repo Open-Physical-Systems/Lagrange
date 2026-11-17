@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -71,10 +72,28 @@ public:
                                      units::one);
             glitch.optional = true;
             joint.glitch = d.input(glitch);
+            // A joint with a servo (RFC 0020 §4.3, §5): the position command is the servo's goal
+            // (its board closes the loop), and the effort state is its present load.
+            for (const SchemaInstance* servo : world.instancesOf("ServoAPI_1")) {
+                if (servo->prim != table.prim[j]) {
+                    continue;
+                }
+                const std::string act =
+                    "act/" + std::string(world.signalInstanceName(table.prim[j])) + "/";
+                joint.servoVelocity =
+                    servo->token("act:servo:operatingMode").value_or("position") == "velocity";
+                joint.servo = true;
+                joint.torque = joint.servoVelocity
+                                   ? d.output(spec(act + "goal_velocity", units::rad_per_s))
+                                   : d.output(spec(act + "goal_position", units::rad));
+                joint.load = d.input(feedback(act + "present_load", units::N_m));
+            }
             // The command: the electrical domain (or its ideal substitute) turns it into the
             // torque.
-            joint.torque =
-                d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
+            if (!joint.servo) {
+                joint.torque =
+                    d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
+            }
             signals_.push_back(joint);
         }
         return {};
@@ -85,7 +104,8 @@ public:
         periodNs_ = std::max<std::int64_t>(1'000'000'000 / rate, 1'000'000);
         lastCycleNs_ = -periodNs_;
         for (const Joint& joint : signals_) {
-            bus.write(joint.torque, 0.0);
+            // A servo keeps its goal until a controller gives one (NaN: no command).
+            bus.write(joint.torque, joint.servo ? std::numeric_limits<double>::quiet_NaN() : 0.0);
         }
         return {};
     }
@@ -101,7 +121,7 @@ public:
                 JointSlot& slot = table[joint.slot];
                 slot.position = bus.read(joint.position);
                 slot.velocity = bus.read(joint.velocity);
-                slot.effort = joint.applied;
+                slot.effort = joint.servo ? bus.read(joint.load) : joint.applied;
                 slot.glitchProbability = bus.read(joint.glitch);
             }
         }
@@ -119,6 +139,18 @@ public:
         const std::lock_guard<std::mutex> lock(table.mutex());
         for (Joint& joint : signals_) {
             const JointSlot& slot = table[joint.slot];
+            if (joint.servo) {
+                // Position (or, for a servo in velocity mode, velocity) commands are its goal;
+                // others it cannot follow, and it keeps its last goal.
+                double goal = std::numeric_limits<double>::quiet_NaN();
+                if (!joint.servoVelocity && slot.mode == CommandMode::Position) {
+                    goal = slot.commandPosition;
+                } else if (joint.servoVelocity && slot.mode == CommandMode::Velocity) {
+                    goal = slot.commandVelocity;
+                }
+                bus.write(joint.torque, goal);
+                continue;
+            }
             double torque = 0.0;
             if (slot.mode != joint.mode) {
                 joint.integral = 0.0;  // a new controller starts from rest
@@ -175,6 +207,10 @@ private:
         ServoGains gains;
         double effortLimit{INFINITY};
         SignalId position, velocity, torque, glitch;
+        // A servo's joint: `torque` is then its act/<s>/goal_position (or goal_velocity), and
+        // `load` its present load.
+        bool servo{false}, servoVelocity{false};
+        SignalId load;
         CommandMode mode{CommandMode::None};
         double integral{0.0};
         double applied{0.0};

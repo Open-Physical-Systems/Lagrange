@@ -11,6 +11,8 @@ add_library(
     src/Grippers.cpp
     src/Nozzle.cpp
     src/Nozzles.cpp
+    src/Servo.cpp
+    src/Servos.cpp
 )
 lagrange_target_defaults(lagrange_actuators)
 target_include_directories(
@@ -38,6 +40,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_nozzle test/test_nozzle.cpp TIMEOUT 120)
     target_link_libraries(test_nozzle lagrange_actuators)
     lagrange_target_defaults(test_nozzle)
+    ament_add_gtest(test_servo test/test_servo.cpp TIMEOUT 120)
+    target_link_libraries(test_servo lagrange_actuators)
+    lagrange_target_defaults(test_servo)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
