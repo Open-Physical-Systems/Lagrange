@@ -68,6 +68,28 @@ struct MotorInputs {
     double loadTorque{0.0};
 };
 
+/// A smart servo's position loop run by the drive (elec:controlMode = position, RFC 0020 §4.3),
+/// with the gains of the joint's ServoAPI_1: duty per rad of error (kp), per rad·s (ki), per rad/s
+/// of joint speed (kd, on the measurement), a deadband and the sensing step, rad.
+struct ServoLoop {
+    double kp{0.0}, ki{0.0}, kd{0.0};
+    double deadband{0.0};
+    double resolution{0.0};
+};
+
+/// The duty (−1…1) for a set point and the measured position and speed: the error after the
+/// sensing step and the dead zone (0 inside ±deadband, the drive off; less the band outside),
+/// u = kp·e + ki·∫e − kd·ω, held to
+/// [uMin, uMax]; the integral (rad·s) grows only while u is not held and outside the deadband.
+[[nodiscard]] double servoDuty(const ServoLoop& loop, double& integral, double target,
+                               double position, double velocity, double dt, double uMin,
+                               double uMax);
+
+/// The duty range in which a brushed motor's armature current (u·V − Ke·N·ω)/R stays within
+/// ±maxCurrent at joint speed ω, bus voltage V, held to −1…1: a current limit on a bare H-bridge.
+void currentLimitedDuty(const MotorParams& p, double resistance, double busVoltage,
+                        double jointVelocity, double maxCurrent, double& uMin, double& uMax);
+
 struct MotorOutputs {
     double jointTorque{0.0};    // N·m
     double vd{0.0}, vq{0.0};    // V, applied

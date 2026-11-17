@@ -1010,7 +1010,7 @@ lamps:
 
 ### 3.16 `schemas/actuator/schema.usda`
 
-Added in 1.x by RFC 0020 (phase 1: grippers) and simulated by the actuators domain
+Added in 1.x by RFC 0020 (phase 1: grippers; phase 2: servos) and simulated by the actuators domain
 (`modules/actuators/`, docs/physics/actuators.md). A gripper holds by an equal and opposite pair
 of forces on its body and the part, never by a weld.
 
@@ -1026,6 +1026,29 @@ of forces on its body and the part, never by a weld.
 | `act:suction:maxTilt` | double | rad | `0.26` | Same |
 | `act:suction:leakConductance` | double | m³/(s·Pa) | `0` | ISO 6358 `C` of the open cup; 0: an open cup vents at once |
 | `act:suction:axis` | double3 | 1 | `(0, 0, 1)` | Where the cup faces, in the prim's frame |
+
+**`ServoAPI_1`** (single-apply, on a revolute or continuous joint; RFC 0020 §4.3). A hobby PWM
+servo's or smart servo's board; its motor is the joint's `ElectricalMotorAPI_1` (`dc_brushed`,
+`elec:controlMode` `voltage` or `position`), or none (the ideal fidelity).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:servo:kind` | token | — | `pwm` | `pwm` or `smart` |
+| `act:servo:operatingMode` | token | — | `position` | `position`, `velocity` or `current` (smart only) |
+| `act:servo:pulseMin`, `pulseMax` | double | s | — | Pulse widths of the map's ends. Required for `pwm` |
+| `act:servo:angleMin`, `angleMax` | double | rad | — | Joint positions they map to. Required for `pwm` |
+| `act:servo:deadband` | double | rad | `0` | Dead zone of the error |
+| `act:servo:kp` | double | 1/rad | — | Duty per rad of error. Required |
+| `act:servo:ki`, `kd` | double | 1/(rad·s), s/rad | `0` | |
+| `act:servo:velocityKp`, `velocityKi` | double | s/rad, 1/rad | `0` | Velocity mode's PI; `velocityKp` required for it |
+| `act:servo:profileVelocity`, `profileAcceleration` | double | rad/s, rad/s² | `0` | 0: none |
+| `act:servo:resolution` | double | rad | `0` | Position sensing step |
+| `act:servo:stallTorque`, `noLoadSpeed` | double | N·m, rad/s | — | Required for the ideal fidelity (no motor, or electrical off) |
+| `act:servo:overloadTime` | double | s | `0` | Smart: saturated this long, torque off; 0: never |
+| `act:servo:maxTemperature` | double | K | `0` | Smart: winding temperature for the overheating shutdown; 0: never |
+
+`elec:controlMode`'s token `position` (appended) makes the motor's drive run this loop itself on
+`joint/<j>/position_command`.
 
 **`MagnetGripperAPI_1`** (single-apply). The prim's origin is the centre of the pole faces.
 

@@ -341,5 +341,49 @@ TEST(BatteryModel, AnEmptyPackCutsOut) {
     EXPECT_TRUE(s.cut);
 }
 
+// RFC 0020 §4.3: the position loop a drive in elec:controlMode position runs for a smart servo.
+TEST(ServoLoop, DutyFollowsTheGainsDeadZoneAndSensingStep) {
+    ServoLoop loop;
+    loop.kp = 20.0;
+    loop.ki = 4.0;
+    loop.kd = 0.5;
+    loop.deadband = 0.01;
+    double integral = 0.0;
+    // Inside the dead zone: off, the integral held.
+    EXPECT_EQ(servoDuty(loop, integral, 0.005, 0.0, 0.0, 1e-3, -1.0, 1.0), 0.0);
+    EXPECT_EQ(integral, 0.0);
+    // Outside: Kp (e − band) − Kd ω, then the integral grows by (e − band) dt.
+    EXPECT_NEAR(servoDuty(loop, integral, 0.03, 0.0, 0.1, 1e-3, -1.0, 1.0), 20.0 * 0.02 - 0.05,
+                1e-12);
+    EXPECT_NEAR(integral, 0.02e-3, 1e-15);
+    // Held at the limit: no integration (anti-windup).
+    const double before = integral;
+    EXPECT_EQ(servoDuty(loop, integral, 1.0, 0.0, 0.0, 1e-3, -0.3, 0.3), 0.3);
+    EXPECT_EQ(integral, before);
+    // The sensing step rounds the measured position first.
+    ServoLoop coarse;
+    coarse.kp = 1.0;
+    coarse.resolution = 0.1;
+    double none = 0.0;
+    EXPECT_NEAR(servoDuty(coarse, none, 0.5, 0.26, 0.0, 1e-3, -1.0, 1.0), 0.2, 1e-12);
+}
+
+TEST(ServoLoop, CurrentLimitBoundsTheArmatureCurrent) {
+    MotorParams p;
+    p.dq = false;
+    p.torqueConstant = 0.01;
+    p.gearRatio = 100.0;
+    const double resistance = 2.0;
+    double uMin = 0.0;
+    double uMax = 0.0;
+    currentLimitedDuty(p, resistance, 12.0, 3.0, 1.5, uMin, uMax);
+    // i = (u V − Kt N ω)/R at the window's ends is ±1.5 A.
+    EXPECT_NEAR((uMax * 12.0 - 0.01 * 100.0 * 3.0) / resistance, 1.5, 1e-12);
+    EXPECT_NEAR((uMin * 12.0 - 0.01 * 100.0 * 3.0) / resistance, -1.5, 1e-12);
+    currentLimitedDuty(p, resistance, 12.0, 3.0, 0.0, uMin, uMax);  // no limit
+    EXPECT_EQ(uMin, -1.0);
+    EXPECT_EQ(uMax, 1.0);
+}
+
 }  // namespace
 }  // namespace lagrange::electrical

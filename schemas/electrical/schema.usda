@@ -205,8 +205,8 @@ class "ElectricalMotorAPI_1" (
         doc = "Fractional change of resistance per kelvin; the default is annealed copper at 20 C."
     )
     uniform token elec:controlMode = "torque" (
-        allowedTokens = ["torque", "velocity", "voltage"]
-        doc = "Which command the drive follows: joint/<j>/torque_command, velocity_command or voltage_command."
+        allowedTokens = ["torque", "velocity", "voltage", "position"]
+        doc = "Which command the drive follows: joint/<j>/torque_command, velocity_command, voltage_command or position_command (a smart servo's loop on the drive, with the gains of the joint's ServoAPI_1)."
     )
     double elec:velocityLoopBandwidth = 62.83 (
         lagrangeUnit = "rad/s"

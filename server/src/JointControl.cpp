@@ -71,6 +71,10 @@ Status JointControl::declare(const WorldView& world, const ModuleConfig&, Signal
         if (!joints.actuated[j]) {
             continue;
         }
+        if (const auto drive = driveModes_.find(joints.names[j]);
+            drive != driveModes_.end() && drive->second == "servo") {
+            continue;  // turned by its servo (RFC 0020 §4.3), which takes its commands
+        }
         const bool slide = joints.type[j] == JointType::Prismatic;
         const std::string base = "joint/" + std::string(world.signalInstanceName(joints.prim[j]));
         Joint out;

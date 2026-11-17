@@ -1,4 +1,4 @@
-# Actuators: grippers, lead screws, nozzles and tanks
+# Actuators: grippers, lead screws, nozzles, tanks and servos
 
 Grippers that hold a part without fingers (RFC 0020, phase 1): a suction cup
 (`SuctionGripperAPI_1`) and an electromagnet or electropermanent magnet (`MagnetGripperAPI_1`).
@@ -321,6 +321,137 @@ against the closed form at 0°, 15°, 30°, 45° and 60° from 0.5 m (worst 2.4e
 weight, empty at `m0/ṁ`; the shut substitute; the same run twice. `server/test/test_nozzle_run.cpp`
 runs the firefighting AMR (docs/guide/tutorial-fire.md).
 
+## Servos
+
+A servo is a motor, a gear and a board that closes a position loop (RFC 0020 §4.3). A hobby PWM
+servo's board compares the angle a pulse asks for with its potentiometer and drives its brushed
+motor with a duty in proportion to the error; a smart (Dynamixel-class) servo's board adds an
+encoder, integral and derivative gains, velocity and acceleration profiles, a current limit,
+other operating modes and an overload shutdown. `ServoAPI_1` on a joint is that board; the motor
+is the joint's ordinary `ElectricalMotorAPI_1`, `dc_brushed`, so current, back-EMF, bus load and
+heat stay the electrical domain's.
+
+```mermaid
+flowchart LR
+    CMD["act/s/pulse_width (s) or goal_position (rad)<br/>(ROS /s/..., commandJoint, /joint_commands,<br/>ros2_control position)"] --> MAP["pulse map, joint range"]
+    MAP --> PROF["profile: velocity and<br/>acceleration limits"]
+    PROF --> LOOP["e = deadzone(θ* − θ)<br/>u = clamp(Kp e + Ki ∫e + Kd (ω* − ω))"]
+    LOOP -->|voltage mode| V["joint/j/voltage_command = u·V_bus"]
+    PROF -->|position mode| P["joint/j/position_command<br/>(the drive runs the loop at 100 µs)"]
+    LOOP -->|no motor, or electrical off| T["joint/j/torque_command<br/>= τs (u − ω/ω0)"]
+```
+
+Each step (1 ms) the servo module (`actuators/servos`, in `lagrange_actuators`):
+
+```
+θ*  = angleMin + (pulse − pulseMin)/(pulseMax − pulseMin)·(angleMax − angleMin)   (a pulse)
+      or goal_position; held to the joint's range; through the profile when one is set
+e   = deadzone(θ* − quantise(θ, resolution), deadband)     0 inside ±band, e ∓ band outside
+u   = clamp(Kp·e + Ki·∫e + Kd·(ω* − ω), u_min, u_max)        u in −1…1, the duty cycle
+```
+
+and drives the joint one of three ways:
+
+- **Voltage mode** (`elec:controlMode = voltage`, electrical domain on): `joint/<j>/voltage_command
+  = u·V_bus`, `V_bus` from `bus/<b>/voltage`. The motor model then gives the servo's datasheet
+  curves: stall torque `τs = η·N·Kt·V/R`, no-load speed `ω0 = V/(N·Ke)` (`Ke = Kt` for a brushed
+  motor) and the straight line between them, all varying with the supply voltage. A smart servo's
+  duty is also held where the armature current `(u·V − N·Ke·ω)/R` stays within `elec:maxCurrent`;
+  a hobby board's bare H-bridge has no limit.
+- **Position mode** (`elec:controlMode = position`, appended by RFC 0020): the drive runs the same
+  loop itself, at its own step (100 µs), on `joint/<j>/position_command`, with the gains of the
+  joint's `ServoAPI_1` and its current held to `elec:maxCurrent`: a smart servo's loop on its own
+  motor drive. The module writes the profiled set point; a NaN set point turns the torque off
+  (the winding open).
+- **Ideal** (no motor, or the electrical domain off): `joint/<j>/torque_command = τs·(u − ω/ω0)`
+  from `act:servo:stallTorque` and `noLoadSpeed`, the datasheet's two numbers. This is the same
+  line as the motor's at full duty; back-driven against its duty it brakes harder than `τs`, as a
+  DC motor does.
+
+Smart servos also follow `act/<s>/goal_velocity` (`operatingMode = velocity`, a PI loop with
+`velocityKp`, `velocityKi`) or `act/<s>/goal_current` (`current`, the duty `(R·i + N·Ke·ω)/V`
+that drives that current, voltage mode only). The overload shutdown (open question 6) turns the
+torque off when the output stays saturated (full duty from the proportional term, or the current
+at its limit) for `overloadTime`, or the winding (`thermal/<motor>/temperature`) reaches
+`maxTemperature`; it stays off until `act/<s>/torque_enable` goes to 0 and back to 1. A pulse
+width of 0 lets a hobby servo go, as losing its signal does. Torque off in voltage mode is 0 V
+across the winding (the H-bridge's low sides on, so the motor brakes); in position mode and
+in the ideal fidelity the joint is free.
+
+### Using it
+
+The sample is a pan-tilt head on two hobby servos, `assets/robots/pan_tilt`: brushed motors behind
+200:1 gears in voltage mode on a 2S battery (6.56 V), boards mapping 1.0–2.0 ms to ±45° with
+`Kp = 20` per rad and a dead zone of 0.01 rad:
+
+```bash
+lagrange assets/robots/pan_tilt/pan_tilt.urdf --world none \
+    --overlay assets/robots/pan_tilt/pan_tilt.overlay.yaml
+ros2 topic pub --once /pan/pulse_width std_msgs/msg/Float64 '{data: 0.0018}'   # +27°
+ros2 topic pub --once /tilt/goal_position std_msgs/msg/Float64 '{data: -0.4}'
+```
+
+The servo on a joint, in an overlay (formats.md §3.16):
+
+```yaml
+  - prim: pan
+    schemas:
+      ServoAPI_1:
+        act:servo:kind: pwm
+        act:servo:pulseMin: 0.001       # s
+        act:servo:pulseMax: 0.002       # s
+        act:servo:angleMin: -0.7854     # rad
+        act:servo:angleMax: 0.7854      # rad
+        act:servo:kp: 20.0              # duty per rad
+        act:servo:deadband: 0.01        # rad
+```
+
+Commands: `act/<s>/pulse_width` (s), `goal_position` (rad), `goal_velocity`, `goal_current`,
+`torque_enable` (ROS `/<s>/pulse_width`, `/<s>/goal_position` (or `goal_velocity`,
+`goal_current`), `/<s>/torque_enable` by default); `Server::commandJoint(s, "position", rad)`
+and `/joint_commands`' position go to the servo, not to joint control, which leaves servo joints
+out. Under ros2_control, `LagrangeSystem`'s `position` command interface on a servo joint is its
+goal (a servo in velocity mode takes `velocity`), and its `effort` state is the servo's present
+load. Out: `act/<s>/present_position` (quantised by `resolution`), `present_velocity`,
+`present_load` (N·m), `goal` (the set point), `overload`, and with a motor `present_current` and
+`temperature`; ROS `/<s>/present_position`, `/<s>/present_load`, `/<s>/overload`.
+
+A Dynamixel's control table gives `Position P Gain` as `KPP = KPP(TBL)/128` (likewise
+`KPD = KPD(TBL)/16`, `KPI = KPI(TBL)/65536`; ROBOTIS e-Manual, XM430-W350) with no unit; the
+e-Manual does not state the units of the error and of the output. Read as an error in encoder
+pulses (4096 a turn) and an output in PWM counts (885 is 100 %), `act:servo:kp =
+KPP·(4096/2π)/885`: the default 800 gives 4.6 per rad. TODO(verify): that reading, and the
+loop's period for `KPI` and `KPD`, against ROBOTIS before relying on it.
+
+Substitutes (`--domain actuators=off`, profile `domains.actuators`): `zero` turns every servo's
+torque off, `constant` holds the start position and ignores commands, `ideal` runs a perfect
+board (no dead zone, no sensing step, no profile, no shutdown).
+
+### Checked
+
+`test_servo` (the board's equations) and `test_servos_run` (whole runs on MuJoCo):
+
+| Check | Reference | Result |
+|---|---|---|
+| Stall torque and no-load speed of a smart servo fitted to the XM430-W350's 12 V row (R from 2.3 A, N·Kt from 46 rev/min, η from 4.1 N·m) | the same table at 11.1 V and 14.8 V | 3.79 N·m and 42.6 rev/min against 3.8 and 43 at 11.1 V; 56.9 rev/min against 57 at 14.8 V; the stall torque at 14.8 V is 5.06 N·m against 4.8 (5 % over: the table's 2.7 A is under the linear motor's 2.84 A) |
+| Ideal line against the motor's line at full duty, 0–95 % of ω0 | `τ = N·Kt·η·(V − N·Ke·ω)/R` | within 2 % (exact, with no other losses) |
+| 60° step of a hobby servo, saturated until 1/Kp from the goal | `θ = ω0 (t − τm (1 − e^(−t/τm)))`, `τm = J ω0/τs` | within 1 %; 0.12 s for 60° (the "s/60°" figure) within 5 % |
+| The pan-tilt's 60° pan step at the run's 6.56 V (electrical) | the same closed form | 0.1060 s against 0.1062 s |
+| The same step with the electrical domain off (ideal, from the overlay's stall torque and no-load speed) | the same | 0.1060 s against 0.1062 s: the fidelities agree |
+| Holding: stiffness under a load below stall; back-driven past stall | `e = τ/(Kp τs)`; `ω = −ω0 (τ/τs − 1)` | within 1 % |
+| The tilt holding its camera block (0.0294 N·m) | between `band + η²·τ_g/(Kp τs)` and `band + τ_g/(Kp τs)`: the gear's losses side with the motor or against it | 0.01298 rad, between 0.01222 and 0.01452; still to 0.1 mrad over 0.5 s, the drive pushing the same way throughout |
+| Dead zone | a step inside it; a 20° step | nothing moves; it stops in the band with the duty never changing sign (a deliberately over-tuned loop without a dead zone hunts, > 10 sign changes) |
+| Profile | trapezoid `d/v + v/a`; triangle `2√(d/a)`, peak `√(a d)` | within 1 % and 2 %; the smart servo's joint cruises at 1.9999 rad/s for a 2 rad/s profile |
+| Smart servo in position mode, unloaded | `46 rev/min × V/12 V` at the run's 13.12 V | 5.2667 rad/s against 5.2667 |
+| Overload | 6 kg 0.1 m out, past what its current lifts, `overloadTime` 0.5 s | `overload` set, torque off (0 A), the arm falls |
+| The same run twice; the domain off | | state hashes equal; off, the pan does not turn and the tilt sinks |
+
+What it leaves out: the pulse's period and jitter (a pulse width is taken as it is written),
+the potentiometer's nonlinearity, the gear's backlash and compliance, the Dynamixel serial
+protocol and error-status bits (open question 7), the motor's cogging and brush drop, and the
+board's own current draw. A hobby servo's board here samples every 1 ms; a real analog board is
+continuous.
+
 ## References
 
 - J. Schmalz GmbH, "Theoretical holding force of a suction cup" (vacuum knowledge, system design
@@ -334,4 +465,8 @@ runs the firefighting AMR (docs/guide/tutorial-fire.md).
 - R. G. Budynas and J. K. Nisbett, *Shigley's Mechanical Engineering Design*, 11th ed.,
   McGraw-Hill, chapter 8, "The Mechanics of Power Screws" (TODO(verify) the page and equation
   numbers, as RFC 0020 notes; the equations used are the standard raising and lowering torques).
+- Hughes and Drury, *Electric Motors and Drives*, Newnes (Elsevier), 2019, chapter 3, "D.C.
+  motors" (the linear torque–speed line; TODO(verify) the section, as RFC 0020 notes).
+- ROBOTIS e-Manual, XM430-W350 (specifications and control table, read 2026-11-17):
+  https://emanual.robotis.com/docs/en/dxl/x/xm430-w350/
 - The design: [RFC 0020](https://github.com/Open-Physical-Systems/Lagrange/blob/main/rfcs/0020-actuators.md).

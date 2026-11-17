@@ -54,7 +54,11 @@ namespace lagrange::electrical {
 /// elec:controlMode: `torque` reads joint/<j>/torque_command; `velocity` reads
 /// joint/<j>/velocity_command through the drive's own PI speed loop, critically damped at
 /// elec:velocityLoopBandwidth on the joint's inertia, over the current loops; `voltage` reads
-/// joint/<j>/voltage_command straight to the winding. Those two commands are required inputs: a
+/// joint/<j>/voltage_command straight to the winding; `position` (RFC 0020 §4.3, a smart servo
+/// whose loop runs on its own drive) reads joint/<j>/position_command and closes the joint's
+/// ServoAPI_1 loop on it at the drive's step (servoDuty), its duty times the bus voltage on the
+/// winding, the current held to elec:maxCurrent; a NaN command turns the drive off (torque off,
+/// the winding open). Those three commands are required inputs: a
 /// controller writing only torque commands stops the start with MissingInput. On a prismatic
 /// joint everything at the joint is linear (MotorParams::gearRatio).
 ///
@@ -97,10 +101,14 @@ private:
         std::size_t bus{0};
         bool tripped{false};  // undervoltage fault, latched
         bool slide{false};    // on a prismatic joint: force, m/s, kg at the joint
-        enum class Mode : std::uint8_t { Torque, Velocity, Voltage } mode{Mode::Torque};
+        enum class Mode : std::uint8_t { Torque, Velocity, Voltage, Position } mode{Mode::Torque};
         double velocityBandwidth{0.0};  // rad/s
         double velocityIntegral{0.0};   // N·m or N, the speed loop's
         SignalId velocityCommand, voltageCommand;
+        // Position mode (RFC 0020 §4.3): the joint's ServoAPI_1 loop, run by the drive.
+        ServoLoop servo;
+        double servoIntegral{0.0};  // rad·s
+        SignalId positionCommand, position;
         double worldInertia{0.0};  // kg·m², the joint's at rest, from the world
         // Speed prediction between physics updates.
         double predicted{0.0}, loadEstimate{0.0}, lastSample{0.0}, torqueSum{0.0};

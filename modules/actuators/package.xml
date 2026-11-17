@@ -3,7 +3,7 @@
 <package format="3">
   <name>lagrange_actuators</name>
   <version>1.4.0</version>
-  <description>Actuators (RFC 0020): suction and magnetic grippers that hold parts by equal and opposite forces, with their substitutes.</description>
+  <description>Actuators (RFC 0020): suction and magnetic grippers that hold parts by equal and opposite forces, hobby and smart servos, with their substitutes.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
 
