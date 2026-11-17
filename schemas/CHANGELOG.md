@@ -29,6 +29,11 @@ and `test_schemas.py` checks it.
   torque and no-load speed for the motor-less model, overload and overheating shutdown). New
   class, nothing to migrate.
 
+- **Electrical library** (RFC 0020 §4.5): `stepper` appended to `elec:motorType`'s tokens, and
+  `elec:stepper:rotorTeeth` (50), `elec:stepper:detentTorque` (0 N·m), `elec:stepper:holdCurrent`
+  (no fallback: `maxCurrent`) and `elec:stepper:microsteps` (1) on `ElectricalMotorAPI_1`, used
+  only by steppers. Additions, nothing to migrate.
+
 - **Electrical library** (RFC 0020 §4.3): `position` appended to `elec:controlMode`'s tokens: the
   drive runs the joint's `ServoAPI_1` position loop itself on `joint/<j>/position_command`.
   Addition, nothing to migrate.

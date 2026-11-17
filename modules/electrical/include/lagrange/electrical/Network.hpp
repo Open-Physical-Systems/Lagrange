@@ -2,6 +2,7 @@
 
 #include "lagrange/electrical/FmuHost.hpp"
 #include "lagrange/electrical/Models.hpp"
+#include "lagrange/electrical/Stepper.hpp"
 #include "lagrange/module/IModule.hpp"
 
 #include <cstdint>
@@ -62,8 +63,22 @@ namespace lagrange::electrical {
 /// controller writing only torque commands stops the start with MissingInput. On a prismatic
 /// joint everything at the joint is linear (MotorParams::gearRatio).
 ///
+/// elec:motorType = stepper (RFC 0020 §4.5): a two-phase hybrid stepper on a chopper driver
+/// (Stepper.hpp). Its step count comes from joint/<j>/position_command (rad or m from where the
+/// joint started, read between the controller's updates by linear extrapolation), else
+/// joint/<j>/step_target (microsteps from the start), else joint/<j>/step_rate (microsteps/s,
+/// signed); all optional, so a stepper nothing commands holds where it started.
+/// joint/<j>/stepper_enable (Bool, default on) is the driver's enable pin. Between physics
+/// updates the driver integrates the rotor itself (on the joint's effective inertia, with the
+/// load estimated from the last window) so the stiff torque-angle curve is resolved at the
+/// electrical step; at each update it takes the physics position and speed. Out:
+/// joint/<j>/torque, motor/<m>/current_a|current_b|voltage_a|voltage_b|bus_current|loss_power|
+/// fault, motor/<m>/steps (the count, Int) and motor/<m>/lost_steps (Int, full steps the rotor is
+/// behind the count: ground truth, which a real driver does not know).
+///
 /// Not yet: battery FMUs. Default step 100 µs.
-/// The joints whose motor is not in torque mode, with its mode: "velocity" or "voltage".
+/// The joints whose motor is not in torque mode, with its mode: "velocity", "voltage",
+/// "position" or "stepper" (joint/<j>/position_command).
 [[nodiscard]] std::map<std::string, std::string> driveModes(const WorldView& world);
 
 class ElectricalNetwork final : public IModule {
@@ -121,6 +136,23 @@ private:
         double lastTorque{0.0};
         SignalId command, velocity, temperature, derating;
         SignalId torque, currentD, currentQ, voltageD, voltageQ, busCurrent, loss, fault;
+    };
+    struct Stepper {  // elec:motorType = stepper (RFC 0020 §4.5)
+        std::string name, joint;
+        StepperParams params;
+        StepperState state;
+        std::size_t bus{0};
+        bool slide{false};
+        double worldInertia{0.0};
+        double rateFraction{0.0};  // microsteps of step_rate not yet whole
+        double loadEstimate{0.0}, lastSample{0.0}, torqueSum{0.0};
+        std::uint32_t stepsSince{0};
+        bool synced{false};
+        bool warned{false};  // the step is too coarse for its electrical frequency
+        SignalId positionCommand, stepTarget, stepRate, enable;
+        SignalId position, velocity, effectiveInertia, temperature, derating;
+        SignalId torque, currentA, currentB, voltageA, voltageB, busCurrent, loss, fault, steps,
+            lost;
     };
     struct Battery {
         std::string name;
@@ -181,6 +213,7 @@ private:
         SignalId command, torque;
     };
 
+    void stepSteppers(double dt, SignalBus& bus);
     void solveBus(std::size_t b, double dt, std::vector<double>& temperatures);
     /// The buses that branches join, as one linear system with a few passes for what switches
     /// state: diodes, batteries at their charge limit, converters regulating or at their limit.
@@ -189,6 +222,7 @@ private:
     void startThroughBranches();
 
     std::vector<Motor> motors_;
+    std::vector<Stepper> steppers_;
     std::vector<Battery> batteries_;
     std::vector<Bus> buses_;
     std::vector<Load> loads_;
