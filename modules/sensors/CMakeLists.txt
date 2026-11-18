@@ -19,6 +19,7 @@ add_library(
     src/Faults.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
+    src/MovingWater.cpp
     src/BodyScene.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
@@ -186,6 +187,15 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_lidar_tiers lagrange_sensors)
     lagrange_target_defaults(test_lidar_tiers)
+    ament_add_gtest(
+        test_moving_water
+        test/test_moving_water.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_moving_water lagrange_sensors)
+    lagrange_target_defaults(test_moving_water)
     ament_add_gtest(
         test_lidar_patterns
         test/test_lidar_patterns.cpp

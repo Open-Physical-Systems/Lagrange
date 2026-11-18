@@ -145,6 +145,7 @@ $1/(1 + m_a/m)$; with this gain a steady push settles in one step on the exact $
 | BlueROV2 Heavy at full thrust (Fossen) | top speeds 0.729 / 0.626 / 0.713 m/s (surge, sway, heave) against the published model's 0.72 / 0.63 / 0.71; start acceleration within 3 % of $F/(m + m_a)$ | `Water.TheBlueRov2ReachesItsTopSpeedsWithFossensModel` |
 | Against a real vehicle in a pool | through the published model only: it is within about 10 % of their pool runs | — |
 | The dimple under a steady jet | $\rho_{air}U^2/(2\rho_w g)$ within 2 % for 5.7 to 16.6 m/s (2 to 17 mm), and within 0.5 % for the sample quadcopter at 0.5, 1 and 2 m; **no measurement of a rotor's dimple** | `SurfacePatch.TheDimpleUnderASteadyJetIsHydrostatic`, `DownwashOnWater.TheSampleQuadsDimpleIsItsJetsStagnationPressure` |
+| Lidars and cameras on the moving surface | a vertical ray hits the level plus $\eta$ within 1e-9 m; a slanted ray's hit is its first crossing within a hundredth of a cell (0.3 mm); a lidar over a 25 mm dimple reads it within 1e-9 m on the CPU reference (bit for bit run to run) and within 1 mm on the GPU path | `MovingWater.*` (test_moving_water) |
 | Ripples | group velocity within 3 % of $d\omega/dk$ for gravity waves (λ 0.63 m, $c_g = c/2$), the slowest ripple (λ 1.7 cm, 0.23 m/s) and capillary waves (λ 2 mm, $c_g = 3c/2$); viscous decay $e^{-2\nu k^2 t}$ within 5 % | `SurfacePatch.Ripples*`, `SurfacePatch.ViscosityDamps*` |
 
 The BlueROV2 check shows the model is implemented as published; it is as close to the real
@@ -155,13 +156,17 @@ Not modelled at the surface under a rotor: anything non-linear (the dimple is mi
 linear theory holds; a jet that would dig a cavity, or breaking waves, are out of it); the
 jet's turbulence, which makes a real dimple flicker (the load is the mean flow's); the waves'
 own push back on the air; the surface's cells under 3 cm (capillary ripples are only partly
-resolved); the moved surface for the lidars and cameras (they see the still level, as the dimple
-is far under their range noise); the viewer's water draws it (viewer.md).
+resolved). Lidars and cameras see the moved surface: their casts meet the water's box at the
+still level, and each hit is then moved onto $\eta$ (or onto a crest in front of what it hit),
+in double, on every tier (`sensors::rayOntoWater`); a lidar's return takes the surface's slope as
+its normal. The camera's realistic colour draws it too; its depth is moved on the undistorted
+pinhole ray (a distorted lens's depth is off by its distortion there). The viewer's realistic
+water is lifted and shaded by it (viewer.md).
 
 Not modelled: added mass for shapes other than a sphere, and added inertia in rotation, without
 coefficients; off-diagonal added mass and damping; wave radiation and diffraction (the waves pass
 through bodies); thrusters as rotors in water; friction on what drives through water. Water has
-no collider, and the viewer and the lidars see a flat surface (lidars as a mirror, with no
-return at a slant or from the bottom).
+no collider; away from the moving patch the viewer and the lidars see a flat surface (lidars as
+a mirror, with no return at a slant or from the bottom).
 
 The full model is in [hydrodynamics.md](../design/domains/hydrodynamics.md) §9.
