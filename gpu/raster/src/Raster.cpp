@@ -395,7 +395,7 @@ struct RasterCamera::Impl {
     std::vector<RealisticDraw> draws;
     std::vector<RealisticLamp> lamps;  // setLighting
     RealisticWaterSurface water;       // setWaterSurface, its spans into these:
-    std::vector<float> waterHeights, waterFoam;
+    std::vector<float> waterHeights, waterFoam, waterFriction;
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
     bool linear{false};
     bool colour{true};  // false: only depth and ids are drawn (setColour)
@@ -537,9 +537,11 @@ void RasterCamera::setLighting(std::span<const RealisticLamp> lamps, double skyI
 void RasterCamera::setWaterSurface(const RealisticWaterSurface& surface) {
     impl_->waterHeights.assign(surface.heights.begin(), surface.heights.end());
     impl_->waterFoam.assign(surface.foam.begin(), surface.foam.end());
+    impl_->waterFriction.assign(surface.friction.begin(), surface.friction.end());
     impl_->water = surface;
     impl_->water.heights = impl_->waterHeights;
     impl_->water.foam = impl_->waterFoam;
+    impl_->water.friction = impl_->waterFriction;
 }
 
 void RasterCamera::setColour(bool drawn) {

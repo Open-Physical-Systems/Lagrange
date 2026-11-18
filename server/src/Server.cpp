@@ -125,6 +125,9 @@ constexpr const char* kThermalCellsField = "thermal/cells";
 // first body of water's patch, and the spray off it (downwash.md §5b), its water per cell.
 constexpr const char* kWaterSurfaceField = "water/surface";
 constexpr const char* kSprayField = "aero/spray";
+/// The air's friction velocity on the water (u* = τ/√(ρ·|τ|), m/s, x and y per cell of the
+/// moving surface's patch): what raises the ripples the realistic look draws (water.md).
+constexpr const char* kWaterFrictionField = "water/friction_velocity";
 // The surface's grid, the same for the water, aerodynamics and rotor domains.
 constexpr std::int64_t kSurfaceCells = 128;
 constexpr double kSurfaceCell = 0.03;  // m
@@ -6452,6 +6455,9 @@ struct Server::Impl {
               waterSurfaceSignal().valid(),
               "the water's surface does not move: it needs water, rotors with their downwash "
               "and the site's air density");
+        field(kWaterFrictionField, "friction velocity on the water", "aerodynamics", units::m_per_s,
+              2, waterSurfaceSignal().valid() && waterStressSignal().valid(),
+              "the air does not rub the water: it needs the water's moving surface");
         field(kSprayField, "spray", "aerodynamics", units::kg_per_m3, 1,
               scheduler != nullptr && scheduler->bus().find("aero/spray_drops").valid(),
               "no spray: it needs the water's moving surface and aerodynamics.downwash_spray");
@@ -6853,6 +6859,64 @@ struct Server::Impl {
         return envelope;
     }
 
+    /// The air's stress on the first body of water with a moving surface (water/<w>/air_stress,
+    /// Pa, x for every cell then y), or none.
+    SignalId waterStressSignal() const {
+        std::string water;
+        if (!waterSurfaceSignal(&water).valid()) {
+            return {};
+        }
+        return scheduler->bus().find("water/" + water + "/air_stress");
+    }
+
+    /// The air's friction velocity on the water (kWaterFrictionField): u* = τ/√(ρ·|τ|) from
+    /// the aerodynamics domain's stress on the moving surface's cells, in the same grid as
+    /// waterSurfaceVolume, two components (x, y). ρ is the weather's air density when it runs,
+    /// else the site's.
+    std::optional<v1::Envelope> waterFrictionVolume() const {
+        const SignalId stressId = waterStressSignal();
+        if (!stressId.valid()) {
+            return std::nullopt;
+        }
+        std::optional<v1::Envelope> envelope = waterSurfaceVolume();
+        if (!envelope) {
+            return std::nullopt;
+        }
+        const std::span<const double> stress = scheduler->bus().readN(stressId);
+        v1::FieldVolume& volume = *envelope->mutable_field_volume();
+        const std::size_t n = static_cast<std::size_t>(volume.nx()) * volume.ny();
+        if (stress.size() != 2 * n) {
+            return std::nullopt;
+        }
+        double rho = appliedAirDensity ? *appliedAirDensity : options.airDensityKgM3.value_or(0.0);
+        if (const SignalId air = scheduler->bus().find("env/air_density"); air.valid()) {
+            const double v = scheduler->bus().read(air);
+            rho = std::isfinite(v) && v > 0.0 ? v : rho;
+        }
+        if (!(rho > 0.0)) {
+            return std::nullopt;
+        }
+        volume.set_field(kWaterFrictionField);
+        volume.set_components(2);
+        std::vector<float> values(2 * n);  // x, y per cell, interleaved
+        float hi = 0.0F;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double tx = stress[i];
+            const double ty = stress[n + i];
+            const double t = std::hypot(tx, ty);
+            const double scale = t > 0.0 && std::isfinite(t) ? 1.0 / std::sqrt(rho * t) : 0.0;
+            values[2 * i] = static_cast<float>(tx * scale);
+            values[2 * i + 1] = static_cast<float>(ty * scale);
+            hi = std::max(hi, static_cast<float>(t * scale));
+        }
+        volume.set_value_max(hi);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
     /// The spray off water (kSprayField): its drops' water per cell (kg/m³) in a box round
     /// them, from aero/spray_drops and aero/spray_mass.
     std::optional<v1::Envelope> sprayVolume() const {
@@ -6924,6 +6988,9 @@ struct Server::Impl {
         if (name == kSprayField) {
             return sprayVolume();
         }
+        if (name == kWaterFrictionField) {
+            return waterFrictionVolume();
+        }
         if (name != kAirField || !aeroRuns()) {
             return std::nullopt;
         }
@@ -6974,13 +7041,15 @@ struct Server::Impl {
         if (name == kAirField) {
             return airSlice(height, orientation);
         }
-        if (name == kWaterSurfaceField || name == kSprayField) {
+        if (name == kWaterSurfaceField || name == kSprayField || name == kWaterFrictionField) {
             // A layer of their volume: the water's one, or the spray's nearest `height`.
             if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL) {
                 return std::nullopt;
             }
-            const std::optional<v1::Envelope> box =
-                name == kWaterSurfaceField ? waterSurfaceVolume() : sprayVolume();
+            const std::optional<v1::Envelope> box = name == kWaterSurfaceField
+                                                        ? waterSurfaceVolume()
+                                                    : name == kSprayField ? sprayVolume()
+                                                                          : waterFrictionVolume();
             if (!box) {
                 return std::nullopt;
             }
@@ -6990,12 +7059,28 @@ struct Server::Impl {
                            static_cast<long>(volume.nz()) - 1));
             const std::size_t cells = static_cast<std::size_t>(volume.nx()) * volume.ny();
             const std::string& all = volume.values().inline_();
-            if (all.size() < (layer + 1) * cells * sizeof(float)) {
+            const std::size_t components = std::max<std::size_t>(volume.components(), 1);
+            if (all.size() < (layer + 1) * cells * components * sizeof(float)) {
                 return std::nullopt;
             }
             std::vector<float> values(cells);
-            std::memcpy(values.data(), all.data() + layer * cells * sizeof(float),
-                        cells * sizeof(float));
+            if (components == 1) {
+                std::memcpy(values.data(), all.data() + layer * cells * sizeof(float),
+                            cells * sizeof(float));
+            } else {
+                // A vector's slice is its magnitude.
+                std::vector<float> vectors(cells * components);
+                std::memcpy(vectors.data(), all.data() + layer * cells * components * sizeof(float),
+                            vectors.size() * sizeof(float));
+                for (std::size_t i = 0; i < cells; ++i) {
+                    double sum = 0.0;
+                    for (std::size_t c = 0; c < components; ++c) {
+                        sum += static_cast<double>(vectors[i * components + c]) *
+                               vectors[i * components + c];
+                    }
+                    values[i] = static_cast<float>(std::sqrt(sum));
+                }
+            }
             v1::Envelope envelope;
             v1::FieldSlice& slice = *envelope.mutable_field_slice();
             slice.set_field(name);

@@ -84,6 +84,10 @@ struct RealisticWaterSurface {
     std::array<double, 2> first{};   ///< world x and y of the first cell's centre
     std::span<const float> heights;  ///< m over the still level, cells² in row order (y rows of x)
     std::span<const float> foam;     ///< 0-1 per cell, or empty
+    /// The air's friction velocity on the water (m/s, u* = τ/√(ρ·|τ|): x for every cell, then
+    /// y), or empty: the ripples below the grid that it raises (water_optics, Cox and Munk)
+    /// roughen the water where it lies. The settings' wind adds its own everywhere.
+    std::span<const float> friction;
     /// How much the heights and slopes are scaled when drawn: 1 as the physics has them; more
     /// exaggerates sub-millimetre ripples so that they can be seen (a drawing choice).
     float relief{1.0F};
@@ -122,7 +126,7 @@ struct RealisticView {
 /// What does not come from the scene.
 struct RealisticSettings {
     int season{0};          // 0 summer, 1 fall, 2 winter, 3 rainy
-    float windSpeed{0.0F};  // m/s: how rough water is drawn
+    float windSpeed{0.0F};  // m/s at 10 m: how rough water is drawn (from `wind`'s direction)
     double seconds{0.0};    // sim time
     // What falls, drawn in the world: rain in mm/h, snow in mm/h of water, carried by the wind
     // (m/s, world x and y, where it blows to).

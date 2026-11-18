@@ -105,6 +105,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         settings.waterSurface.first = moving->first;
         settings.waterSurface.heights = moving->heights;
         settings.waterSurface.foam = moving->foam;
+        settings.waterSurface.friction = moving->friction;
         settings.waterSurface.relief = options.waterRelief;
     }
     if (const auto& spray = options.spray3d) {

@@ -126,6 +126,52 @@ bodies see it, and the rotors measure their ground effect to it ([rotors.md](rot
 | 1 m | 10.2 m/s (merging) | 6.4 mm | 6.4 mm |
 | 2 m | 6.5 m/s (merged) | 2.6 mm | 2.6 mm |
 
+## How the water looks
+
+The viewer's realistic view and the cameras' realistic colour shade the water from its physics
+(`gpu/kernels/camera/realistic.slang`, `fsWater`; `gpu::water_optics`). Three scales of slope
+make the surface: the drawn swell and the moving surface $\eta$ above, which the mesh and its
+3 cm cells hold; and the capillary ripples below the grid, which the air raises.
+
+**The ripples' slope variance.** Cox and Munk (1954) measured the total mean square slope of a
+clean sea as $\sigma^2 = 0.003 + 5.12\cdot10^{-3}\,U$ and of one under an oil slick as
+$0.008 + 1.56\cdot10^{-3}\,U$ ($U$ in m/s at 12.5 m). A slick damps the short capillary-gravity
+waves and leaves the long ones, so the difference,
+$\sigma^2_r = \max(3.56\cdot10^{-3}\,U - 0.005,\ 0)$, is taken as the short ripples' share. It
+starts at $U = 1.4$ m/s, where Kahma and Donelan (1988) put the onset of ripples on clean water
+($u_* \approx 5$ cm/s in theory, measured up to twice that). $U$ comes from the air's friction
+velocity on the water by the neutral log law, $U(z) = (u_*/\kappa)\ln(z/z_0)$ with
+$z_0 = 0.011\,u_*^2/g + 0.11\,\nu_{air}/u_*$ (Charnock; Smith 1988). The friction velocity is the
+downwash's on each cell of the moving patch (`water/<w>/air_stress`, served as
+`water/friction_velocity`) with the site's wind's added as a stress ($u_*$ from its speed at
+10 m by the same law). **Assumed:** that the ripples are in equilibrium with the local $u_*$
+whatever makes it, so a sea's slope statistics apply on a patch of metres. Centimetre ripples come
+to equilibrium within tens of centimetres and a second; longer wind waves do not, which is why
+only the short waves' share is taken, and why the outwash's ring roughens while the stagnant
+centre under the jet stays a mirror. The slope is taken isotropic (Cox and Munk's upwind and
+crosswind differ by 3.16 to 1.92).
+
+**What a pixel resolves.** The ripples are four octaves (4.8 to 0.8 cm, as much slope variance
+in each, as in the capillary saturation range), each of four capillary-gravity waves running
+within ±63° of the stress, $\omega^2 = gk + \sigma k^3/\rho_w$, in packets. The octaves wider
+than two pixels are drawn as waves (glitter breaks into sparkles); the rest are the facets'
+spread in a Beckmann distribution of the same variance, so the total slope variance is kept
+whatever the distance.
+
+**Light.** Reflection is the exact unpolarised Fresnel of water, $n = 1.333$ (0.020 at normal
+incidence, 1 at grazing), per facet: eight Beckmann facets per pixel each reflect the scene (the
+mirror pass's image, found where the reflected ray meets what it reflects, at the distance the
+mirror pass's depth gives) or the sky. Tilted facets see higher, darker sky at a lower Fresnel, so
+the rough ring is darker and duller than still water, and the drone's and the sky's reflections
+blur there. The sun's glitter is $F\,D/(4\,\mathbf n\cdot\mathbf v)\,E_{sun}$ with $D$ the
+Beckmann distribution of the unresolved facets widened by the sun's 0.53° disc; on still water it
+is the sun's own image. Under the surface, light is absorbed by pure water (Pope and Fry 1997:
+0.27, 0.0565, 0.0102 /m at 620, 550, 465 nm) along the sun's refracted path down and the view's
+refracted path (Snell's law to the bottom), so the bottom shows through clear shallow water and
+goes blue-green with depth; the water's own light is a deep column's reflectance
+$R_\infty = 0.33\,b_b/(a + b_b)$ (Gordon et al. 1975; Morel and Prieur 1977) with pure water's
+backscatter (Morel 1974), and what leaves the surface is divided by $n^2$.
+
 ## Solving it
 
 Added mass makes the force depend on the body's own acceleration, which an explicit exchange
@@ -146,6 +192,8 @@ $1/(1 + m_a/m)$; with this gain a steady push settles in one step on the exact $
 | Against a real vehicle in a pool | through the published model only: it is within about 10 % of their pool runs | — |
 | The dimple under a steady jet | $\rho_{air}U^2/(2\rho_w g)$ within 2 % for 5.7 to 16.6 m/s (2 to 17 mm), and within 0.5 % for the sample quadcopter at 0.5, 1 and 2 m; **no measurement of a rotor's dimple** | `SurfacePatch.TheDimpleUnderASteadyJetIsHydrostatic`, `DownwashOnWater.TheSampleQuadsDimpleIsItsJetsStagnationPressure` |
 | Lidars and cameras on the moving surface | a vertical ray hits the level plus $\eta$ within 1e-9 m; a slanted ray's hit is its first crossing within a hundredth of a cell (0.3 mm); a lidar over a 25 mm dimple reads it within 1e-9 m on the CPU reference (bit for bit run to run) and within 1 mm on the GPU path | `MovingWater.*` (test_moving_water) |
+| How the water looks: Fresnel | the exact unpolarised reflectance, $(n-1)^2/(n+1)^2 = 0.020$ at normal incidence, 0.060 at 60°, to 1 at grazing | `WaterOptics.FresnelOfWater` |
+| How the water looks: ripples | none below the onset (Cox and Munk's clean and slick fits meet at $U_{12.5} = 1.40$ m/s, $u_*$ 4.5 cm/s; Kahma and Donelan: ~5 cm/s), rising with $u_*$; at a 10 m/s wind ($u_*$ 0.36 m/s, Charnock) under the whole clean sea's 0.055; a dimple changes the picture only where it lies; **no photograph or measurement of the water under a rotor compared** | `WaterOptics.RippleSlopeVarianceFollowsTheWind`, `RealisticWater.TheMovingSurfaceShadesTheWaterWhereItLies` |
 | Ripples | group velocity within 3 % of $d\omega/dk$ for gravity waves (λ 0.63 m, $c_g = c/2$), the slowest ripple (λ 1.7 cm, 0.23 m/s) and capillary waves (λ 2 mm, $c_g = 3c/2$); viscous decay $e^{-2\nu k^2 t}$ within 5 % | `SurfacePatch.Ripples*`, `SurfacePatch.ViscosityDamps*` |
 
 The BlueROV2 check shows the model is implemented as published; it is as close to the real
@@ -161,7 +209,12 @@ still level, and each hit is then moved onto $\eta$ (or onto a crest in front of
 in double, on every tier (`sensors::rayOntoWater`); a lidar's return takes the surface's slope as
 its normal. The camera's realistic colour draws it too; its depth is moved on the undistorted
 pinhole ray (a distorted lens's depth is off by its distortion there). The viewer's realistic
-water is lifted and shaded by it (viewer.md).
+water is lifted and shaded by it (viewer.md). Not modelled in how it looks: Cox and Munk's
+upwind-crosswind anisotropy and skewness; waves of 6 to 30 cm, which neither the grid's physics
+(no wind-wave growth) nor the ripples hold; dissolved matter and particles in the water (pure
+water's optics: real lakes and ponds are browner and murkier); light scattered more than once
+under the surface; ripples on the camera sensors' water from the downwash (they see the wind's
+only: the sensors read no stress).
 
 Not modelled: added mass for shapes other than a sphere, and added inertia in rotation, without
 coefficients; off-diagonal added mass and damping; wave radiation and diffraction (the waves pass

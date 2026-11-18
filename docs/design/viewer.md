@@ -99,13 +99,18 @@ flowchart LR
   the scene in HDR (Cook-Torrance GGX from each material's metallic and roughness, sky light by
   Lazarov's split-sum, grain where a surface is rough), sky, water, see-through things, then ambient
   occlusion, bloom, ACES tone map and FXAA, with overlays drawn on top. A water prim is one with
-  `WaterAPI_1`: Gerstner waves whose height follows the site's wind, ripples, Fresnel reflection,
-  depth-based colour, caustics, foam where it meets things. Limits: what the water looks like does
+  `WaterAPI_1`: Gerstner waves whose height follows the site's wind, capillary ripples from the
+  air's friction velocity by Cox and Munk (resolved per pixel, the rest as Beckmann facets of the
+  same slope variance), exact Fresnel per facet over eight facets a pixel (the mirror pass's
+  image at the distance its depth, binding 10, gives, else the sky), the sun's glitter, Snell
+  refraction to the bottom with pure water's absorption and backscatter (water.md "How the water
+  looks"), caustics, foam where it meets things. Limits: what the water looks like does
   not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
   no wake. The physics' own surface under a rotor's downwash (water.md) is drawn: the server's
   `water/surface` volume lifts the first water body by $\eta$ and its slope shades it (per pixel,
   in place of the made-up ripples there, on top of the swell; `RealisticWaterSurface`, binding 8 of
-  `realistic.slang`), and the spray's water near the surface (`aero/spray`) foams it where the
+  `realistic.slang`; the server's `water/friction_velocity` volume roughens it where the outwash
+  rubs it), and the spray's water near the surface (`aero/spray`) foams it where the
   outwash tears it off (0.3 m of drops over it, full foam at 2 g/m², a drawing choice).
   `--water-relief X` shades it X times as steep, its height true (1 by default: as the physics
   has it).
@@ -118,7 +123,8 @@ flowchart LR
   `aero/spray` box (binding 9, `RealisticSpray`) is marched along each view ray (24 steps), its
   extinction 3/(ρ_w D) per kg/m³ over the equal shares of 50, 150 and 450 µm drops (29.6 /m per
   kg/m³, Q_ext = 2), and what it takes out is replaced by the daylight's white. Without wind the realistic
-  water is still (no swell, made-up ripples, caustics or drifting foam below 3 m/s), and
+  water is still (no swell, caustics or drifting foam below 3 m/s; no ripples below a friction
+  velocity of 4.5 cm/s), and
   `--water-relief` scales only the slopes; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.

@@ -2,7 +2,8 @@
 // water, and the final image. Colours are linear and in HDR until fsComposite. Colour model:
 // Cook-Torrance with GGX (Walter et al. 2007), Smith visibility and Schlick's Fresnel; image-based
 // light by Lazarov's analytic split-sum (2013). Sky: an analytic gradient. Tone map: ACES, Narkowicz's
-// fit (2015). Water: Gerstner waves (Tessendorf 2001, §2) and the Fresnel of water, n = 1.33.
+// fit (2015). Water: Gerstner waves (Tessendorf 2001, §2), the physics' surface, Cox and Munk's
+// ripples and the exact Fresnel of water, n = 1.333 (see the water's optics below).
 //
 // Everything is relative to the camera, whose eye is at the origin: the GPU never sees a large
 // coordinate. Noise is anchored to `worldWrap`, the eye's world position wrapped at 1024 m.
@@ -55,10 +56,13 @@ struct Lamp
     float4 color;    // linear RGB of luminance 1
 };
 [[vk::binding(7)]] StructuredBuffer<Lamp> lamps;
-// The moving surface's cells in row order: η (m over the still level), ∂η/∂x, ∂η/∂y, foam (0-1).
+// The moving surface's cells in row order, two each: η (m over the still level), ∂η/∂x, ∂η/∂y,
+// foam (0-1); then the ripples' slope variance (water_optics) and the way they run (x, y), 0.
 [[vk::binding(8)]] StructuredBuffer<float4> surfaceCells;
 // The spray's water per cell (kg/m³), x fastest, then y, then z.
 [[vk::binding(9)]] StructuredBuffer<float> sprayCells;
+// The mirror pass's depth: how far what the water reflects stands from it.
+[[vk::binding(10)]] Sampler2D mirrorDepth;
 
 struct Push
 {
@@ -1055,11 +1059,14 @@ void gerstner(float2 world, float t, out float3 displacement, out float3 normal)
 }
 
 // The physics' moving surface at a point (relative to the eye, x and y), bilinear between cell
-// centres: η, its slope, the foam. `share` is how much of it is there: 0 outside the patch, rising
-// to 1 over its outer cells, where the patch's sponge has already calmed it.
-float4 movingSurface(float2 relativeXY, out float share)
+// centres: η, its slope, the foam; and in `rough`, the ripples' slope variance there and the way
+// they run (water_optics, from the air's friction on the cell and the wind's). `share` is how
+// much of it is there: 0 outside the patch, rising to 1 over its outer cells, where the patch's
+// sponge has already calmed it.
+float4 movingSurface(float2 relativeXY, out float share, out float4 rough)
 {
     share = 0.0;
+    rough = float4(frame.surfaceLook.y, frame.surfaceLook.zw, 0.0);
     uint n = uint(frame.surface.w);
     if (n < 2u)
         return float4(0, 0, 0, 0);
@@ -1070,10 +1077,13 @@ float4 movingSurface(float2 relativeXY, out float share)
     uint2 c = min(uint2(f), uint2(n - 2u, n - 2u));
     float2 t = f - float2(c);
     uint i = c.y * n + c.x;
-    float4 v = lerp(lerp(surfaceCells[i], surfaceCells[i + 1u], t.x),
-                    lerp(surfaceCells[i + n], surfaceCells[i + n + 1u], t.x), t.y);
+    float4 v = lerp(lerp(surfaceCells[2u * i], surfaceCells[2u * (i + 1u)], t.x),
+                    lerp(surfaceCells[2u * (i + n)], surfaceCells[2u * (i + n + 1u)], t.x), t.y);
+    float4 r = lerp(lerp(surfaceCells[2u * i + 1u], surfaceCells[2u * (i + 1u) + 1u], t.x),
+                    lerp(surfaceCells[2u * (i + n) + 1u], surfaceCells[2u * (i + n + 1u) + 1u], t.x), t.y);
     float edge = min(min(f.x, f.y), min(last - f.x, last - f.y));
     share = saturate(edge / 4.0);
+    rough = lerp(rough, r, share);
     return v;
 }
 
@@ -1119,7 +1129,8 @@ WaterOutput vsWater(uint vertex : SV_VertexID)
     gerstner(world, frame.worldWrap.w, displacement, normal);
     // The physics' surface on top of the drawn swell: linear waves add.
     float share;
-    float lift = movingSurface(relativeXY, share).x * share;  // its true height; relief: slope
+    float4 rough;
+    float lift = movingSurface(relativeXY, share, rough).x * share;  // its true height; relief: slope
     displacement.z += lift;
     WaterOutput output;
     if (skirt)
@@ -1145,26 +1156,6 @@ WaterOutput vsWater(uint vertex : SV_VertexID)
     return output;
 }
 
-// Small ripples that the mesh is too coarse to hold: the slope of several scrolling noise layers.
-float2 ripple(float2 world, float t, float distance)
-{
-    float wind = 1.0 + 0.1 * min(frame.water.y, 16.0);
-    float2 slope = float2(0, 0);
-    float scale = 2.6;
-    float amount = 0.11 * wind * windShare();
-    for (int i = 0; i < 4; ++i)
-    {
-        float3 p = float3(world * scale + float2(0.7, 0.4) * t * (0.55 + 0.25 * float(i)) + float(i) * 7.1, t * 0.45);
-        const float e = 0.08;
-        float dx = noise3(p + float3(e, 0, 0)) - noise3(p - float3(e, 0, 0));
-        float dy = noise3(p + float3(0, e, 0)) - noise3(p - float3(0, e, 0));
-        slope += float2(dx, dy) / (2.0 * e) * amount;
-        scale *= 2.3;
-        amount *= 0.72;
-    }
-    return slope / (1.0 + distance * 0.018);
-}
-
 // A dancing web of light on what lies under the water.
 float caustics(float2 p, float t)
 {
@@ -1174,6 +1165,103 @@ float caustics(float2 p, float t)
     return pow(saturate(1.0 - n * 2.4), 5.0);
 }
 
+// --- the water's optics (docs/physics/water.md "How the water looks") -------------------------
+//
+// The surface is three scales of slope: the drawn swell (Gerstner) and the physics' moving
+// surface η, which the mesh and its cells hold; the capillary ripples the air raises below the
+// grid (λ 4.8 to 0.8 cm), whose slope variance σ² comes from the air's friction velocity by Cox
+// and Munk (water_optics, computed per cell on the host); and of those ripples, the ones a pixel
+// resolves are drawn as waves, the rest are the facets' spread in a Beckmann distribution of the
+// same σ² (Beckmann and Spizzichino 1963; Walter et al. 2007): the total slope variance is kept
+// whatever the distance. Reflection is the exact Fresnel of water, n = 1.333, per facet; the
+// light under the surface is pure water's absorption (Pope and Fry 1997) and backscatter (Morel
+// 1974), and the bottom seen by Snell's law.
+
+static const float kWaterIndex = 1.333;
+static const float kRippleLongest = 0.048;  // m: the longest ripple below the 3 cm grid's 6 cm
+static const float kRippleRatio = 0.56;      // between octaves: 4 octaves span 4.8 to 0.8 cm
+// The sun's disc, 0.53° across: the half-vector's spread it adds, its variance, rad².
+static const float kSunDiscVariance = 1.1e-5;
+// Pure water's absorption, 1/m, at 620, 550 and 465 nm (Pope and Fry, Appl. Opt. 36(33), 1997).
+static const float3 kWaterAbsorption = float3(0.27, 0.0565, 0.0102);
+// Pure water's backscatter, 1/m: half its scattering b_w(λ) = 0.00222·(500/λ)^4.32 (Morel,
+// "Optical properties of pure water and pure sea water", 1974; TODO(verify) the 0.00222).
+static const float3 kWaterBackscatter = float3(0.00044, 0.00073, 0.00152);
+
+// Unpolarized Fresnel reflectance from air into water at an incidence of cosine `c`
+// (water_optics::fresnel): 0.020 at normal incidence, 1 at grazing.
+float fresnelWater(float c)
+{
+    c = saturate(c);
+    float st2 = (1.0 - c * c) / (kWaterIndex * kWaterIndex);
+    float ct = sqrt(max(1.0 - st2, 0.0));
+    float rs = (c - kWaterIndex * ct) / (c + kWaterIndex * ct);
+    float rp = (kWaterIndex * c - ct) / (kWaterIndex * c + ct);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+// ω of a capillary-gravity wave on deep water, rad/s (Lamb 1932, §267; σ/ρ = 7.275e-5 m³/s²).
+float rippleOmega(float k)
+{
+    return sqrt(9.81 * k + 7.275e-5 * k * k * k);
+}
+
+// The ripples a pixel of `footprint` m resolves, as the slope they add (x, y), and the share of
+// `variance` it does not resolve, returned: four octaves of four waves each, running within ±63°
+// of `runs`, each octave a quarter of the variance (the saturation range: as much slope per
+// octave), its waves in packets.
+float ripples(float2 world, float t, float variance, float2 runs, float footprint, out float2 slope)
+{
+    slope = float2(0.0, 0.0);
+    float unresolved = 0.0;
+    if (variance <= 0.0)
+        return 0.0;
+    float heading = atan2(runs.y, runs.x);
+    float lambda = kRippleLongest;
+    for (int j = 0; j < 4; ++j)
+    {
+        float share = variance * 0.25;
+        float seen = smoothstep(1.0, 2.0, lambda / (2.0 * footprint));
+        unresolved += share * (1.0 - seen);
+        if (seen > 0.0)
+        {
+            float k = 2.0 * PI / lambda;
+            float omega = rippleOmega(k);
+            float amplitude = sqrt(share * 0.5) * seen;  // each wave's slope: 4·s²/2 = share
+            // Packets: an envelope of mean square ~1 (value noise's is ~0.29), drifting.
+            float envelope = 1.85 * noise3(float3(world / (lambda * 3.0), t * 0.7 + float(j) * 5.3));
+            for (int i = 0; i < 4; ++i)
+            {
+                float h = hash(float3(float(j), float(i), 0.37));
+                float h2 = hash(float3(float(i), float(j), 1.91));
+                float angle = heading + (h - 0.5) * 2.2;
+                float2 d = float2(cos(angle), sin(angle));
+                float phase = 2.0 * PI * frac(dot(d, world) / lambda - frac(omega * t / (2.0 * PI)) + h2);
+                slope += amplitude * envelope * d * cos(phase);
+            }
+        }
+        lambda *= kRippleRatio;
+    }
+    return unresolved;
+}
+
+// What the water reflects along R from P (relative to the eye) for something about `reach` m
+// away: the scene turned over the surface at that point, else the sky. `h` is the still level.
+float3 reflectedAlong(float3 P, float3 R, float reach, float h, float sharpSky)
+{
+    float3 X = P + R * reach;
+    X.z = 2.0 * h - X.z;  // its image under the surface, which the mirror pass drew
+    float4 c = project(X);
+    float3 skyColor = sky(R, sharpSky);
+    if (c.w <= 1e-4)
+        return skyColor;
+    float2 at = c.xy / c.w * 0.5 + 0.5;
+    if (any(at < 0.0) || any(at > 1.0))
+        return skyColor;
+    float4 m = mirrorColor.SampleLevel(at, 0.0);
+    return lerp(skyColor, m.rgb, m.a);
+}
+
 [shader("fragment")]
 float4 fsWater(WaterOutput input) : SV_Target
 {
@@ -1181,22 +1269,29 @@ float4 fsWater(WaterOutput input) : SV_Target
     float3 V = -input.relative / max(distance, 1e-3);
     float2 uv = input.position.xy * frame.screen.zw;
     float t = frame.worldWrap.w;
+    float h = frame.water.x;   // the still level, relative to the eye
+    float3 P = input.relative;
 
-    float above = frame.water.x + 0.0 < 0.0 ? 1.0 : -1.0;  // the eye above the surface?
+    float above = h < 0.0 ? 1.0 : -1.0;  // the eye above the surface?
     float3 N = normalize(input.normal);
     float4 moving = float4(0, 0, 0, 0);
     float movingShare = 0.0;
+    float facets = 0.0;  // the facets' slope variance below the pixel
     if (input.side < 0.5)
     {
-        // The waves' slope per pixel: the mesh only holds their shape.
+        // The swell's slope per pixel: the mesh only holds its shape.
         float3 lifted;
         gerstner(input.world, t, lifted, N);
-        // Where the physics moves the surface its slope is drawn, not the made-up ripples.
+        // The physics' η where it moves the surface, and the air's ripples everywhere.
         float share;
-        moving = movingSurface(input.world - frame.worldWrap.xy, share);
+        float4 rough;
+        moving = movingSurface(input.world - frame.worldWrap.xy, share, rough);
         movingShare = share;
-        float2 slope = ripple(input.world, t, distance) * (1.0 - share) +
-                       moving.yz * frame.surfaceLook.x * share * N.z;
+        float pixel = 2.0 * frame.cameraUp.w * frame.screen.w;  // rad
+        float footprint = distance * pixel / sqrt(max(abs(V.z), 0.05));
+        float2 capillary;
+        facets = ripples(input.world, t, rough.x, rough.yz, footprint, capillary);
+        float2 slope = moving.yz * frame.surfaceLook.x * share * N.z + capillary;
         N = normalize(float3(N.xy - slope, N.z));
         N *= above;
     }
@@ -1204,65 +1299,138 @@ float4 fsWater(WaterOutput input) : SV_Target
     {
         N = -N;
     }
+    float NV = saturate(dot(N, V)) + 1e-4;
 
-    // Reflection: what stands above the water, mirrored, and the sky behind it.
-    float NV = saturate(dot(N, V));
-    float fresnel = 0.02 + 0.98 * pow(1.0 - NV, 5.0);
-    float3 R = reflect(-V, N);
-    R.z = abs(R.z) + 0.01;
-    float2 mirrorUv = saturate(uv + N.xy * float2(0.035, 0.07) / (1.0 + distance * 0.02));
-    float4 mirrored = mirrorColor.SampleLevel(mirrorUv, 0.0);
-    float3 reflection = lerp(sky(normalize(R), 1.0), mirrored.rgb, mirrored.a);
-
-    // Refraction: what lies below, seen through the water, losing red first.
+    // --- reflection: the facets' Fresnel-weighted view of the scene and the sky --------------
+    // How far what is reflected stands: from the mirror pass's depth (its image's view depth).
     float near = frame.cameraForward.w;
-    float2 bentUv = saturate(uv + N.xy * 0.04 / (1.0 + distance * 0.06));
-    float depthThere = sceneDepth.SampleLevel(bentUv, 0.0).r;
+    float mirrorDepthHere = mirrorDepth.SampleLevel(uv, 0.0).r;
+    float reach = 40.0;
+    if (mirrorDepthHere > 0.0)
+        reach = clamp(length(viewRay(uv) * (near / mirrorDepthHere) - P), 0.02, 200.0);
+    float3 reflection = float3(0.0, 0.0, 0.0);
+    float reflectance = 0.0;
+    if (facets < 1e-4 || input.side > 0.5)
+    {
+        float3 R = reflect(-V, N);
+        R.z = abs(R.z) + 0.001;
+        reflectance = fresnelWater(NV);
+        reflection = reflectedAlong(P, normalize(R), reach, h, 1.0) * reflectance;
+    }
+    else
+    {
+        // Eight facet normals drawn from the Beckmann distribution of variance `facets`
+        // (tan²θ = −σ²·ln(1−u)), each weighted by how much of it the eye sees (V·H / cos θ).
+        float3 T1 = normalize(abs(N.z) < 0.9 ? cross(N, float3(0, 0, 1)) : cross(N, float3(1, 0, 0)));
+        float3 T2 = cross(N, T1);
+        float spin = hash(float3(input.position.xy, frac(t * 0.37) * 61.0));
+        float sumW = 0.0;
+        float sharpSky = saturate(1.0 - sqrt(facets) * 6.0);
+        for (int i = 0; i < 8; ++i)
+        {
+            float u1 = frac(spin + float(i) * 0.618034);
+            float u2 = (float(i) + 0.5) / 8.0 + spin * 0.125;
+            float tan2 = -facets * log(1.0 - 0.98 * u1);
+            float cosT = rsqrt(1.0 + tan2);
+            float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));
+            float phi = 2.0 * PI * u2;
+            float3 H = normalize(T1 * (cos(phi) * sinT) + T2 * (sin(phi) * sinT) + N * cosT);
+            float VH = dot(V, H);
+            if (VH <= 0.0)
+                continue;
+            float w = VH / cosT;
+            float3 R = reflect(-V, H);
+            R.z = abs(R.z) + 0.001;  // a facet that sends it down sees the water's own surface
+            float F = fresnelWater(VH);
+            reflection += w * F * reflectedAlong(P, normalize(R), reach, h, sharpSky);
+            reflectance += w * F;
+            sumW += w;
+        }
+        reflection /= max(sumW, 1e-6);
+        reflectance /= max(sumW, 1e-6);
+    }
+
+    // --- refraction: the bottom through the surface by Snell's law, and the water's own light --
+    float sunUp = saturate(frame.sunDirection.z);
+    float3 Tr = refract(-V, N, 1.0 / kWaterIndex);
     float waterDepth = input.position.z;
+    float2 bentUv = uv;
+    float3 bottomAt = P;
+    bool seenBottom = false;
+    float bottomLevel = frame.water.w;
+    if (above > 0.0 && input.side < 0.5 && Tr.z < -1e-3)
+    {
+        float3 Q = P + Tr * ((bottomLevel - P.z) / Tr.z);
+        float4 c = project(Q);
+        if (c.w > 1e-4)
+        {
+            float2 at = c.xy / c.w * 0.5 + 0.5;
+            if (all(at >= 0.0) && all(at <= 1.0) && sceneDepth.SampleLevel(at, 0.0).r <= waterDepth)
+                bentUv = at;
+        }
+        bottomAt = Q;
+    }
+    float depthThere = sceneDepth.SampleLevel(bentUv, 0.0).r;
     if (depthThere > waterDepth)
     {
         // That sample is in front of the water: look straight through instead.
         bentUv = uv;
         depthThere = sceneDepth.SampleLevel(uv, 0.0).r;
     }
-    float3 below = sceneColor.SampleLevel(bentUv, 0.0).rgb;
-    float viewZ = near / max(waterDepth, 1e-6);
-    float belowZ = depthThere > 0.0 ? near / depthThere : viewZ + 200.0;
-    float forward = max(dot(-V, frame.cameraForward.xyz), 0.05);
-    float path = max(belowZ - viewZ, 0.0) / forward;
-    if (input.side > 0.5)
-        path = max(path, 0.8);
-    static const float3 kAbsorption = float3(0.46, 0.14, 0.09);  // 1/m: clear coastal water
-    float3 transmitted = exp(-kAbsorption * path);
-    float3 point = viewRay(bentUv) * belowZ;
-    float submerged = max(frame.water.x - point.z, 0.0);
+    float3 below = float3(0.0, 0.0, 0.0);
+    float3 point = bottomAt;
+    if (depthThere > 0.0)
+    {
+        below = sceneColor.SampleLevel(bentUv, 0.0).rgb;
+        point = viewRay(bentUv) * (near / depthThere);
+        seenBottom = true;
+    }
+    else if (input.side > 0.5 || above < 0.0)
+    {
+        point = P + normalize(input.relative) * 0.8;
+    }
+    float pathView = max(length(point - P), input.side > 0.5 ? 0.8 : 0.0);
+    if (!seenBottom && input.side < 0.5)
+        pathView = 1e3;  // nothing under it: deep
+    float submerged = max(h - point.z, 0.0);
+    // The sun's light down to the bottom, along its refracted ray.
+    float cosSunWater = sqrt(max(1.0 - (1.0 - sunUp * sunUp) / (kWaterIndex * kWaterIndex), 0.0));
+    float3 down = exp(-kWaterAbsorption * submerged / max(cosSunWater, 0.1));
+    float3 alongView = exp(-kWaterAbsorption * pathView);
     float3 lightOnBottom = caustics(point.xy + frame.worldWrap.xy, t) * windShare() * exp(-submerged * 0.6) *
                            saturate(submerged * 4.0) * frame.sunDirection.z * 1.3;
-    below *= 1.0 + lightOnBottom;
-    // Light scattered back by the water itself: its own colour.
-    float sunUp = saturate(frame.sunDirection.z);
-    float3 deep = float3(0.004, 0.045, 0.075) * (0.45 + 1.2 * sunUp) * frame.light.x;
-    float3 water = below * transmitted + deep * (1.0 - transmitted);
+    float sunIn = 1.0 - fresnelWater(sunUp);
+    below *= (1.0 + lightOnBottom) * down * sunIn;
+    // The water's own light: a deep column's irradiance reflectance R∞ = 0.33·b_b/(a + b_b)
+    // (Gordon, Brown and Jacobs 1975; Morel and Prieur 1977), lit by the sun and the sky that
+    // went in, seen through what is left of the column.
+    float3 rInf = 0.33 * kWaterBackscatter / (kWaterAbsorption + kWaterBackscatter);
+    float visibility = sunLight(P, float3(0, 0, 1));
+    float3 downwelling = (frame.sunColor.rgb * frame.sunDirection.w * sunUp * visibility / PI +
+                          float3(0.38, 0.46, 0.60) * frame.light.x) * sunIn;
+    float3 upwelling = rInf * downwelling * (1.0 - alongView * down);
+    // Out through the surface: what is not reflected, its radiance divided by n².
+    float3 water = (below * alongView + upwelling) * (1.0 - reflectance) / (kWaterIndex * kWaterIndex);
 
-    // Light through wave crests, turned green.
-    float crest = saturate((input.relative.z - frame.water.x) / max(waveScale(), 0.01) * 0.8);
-    water += float3(0.015, 0.09, 0.075) * crest * crest * sunUp * pow(1.0 - NV, 2.0) * 2.0 * frame.light.x;
+    float3 color = water + reflection;
 
-    float3 color = lerp(water, reflection, fresnel);
-
-    // The sun's glitter, by GGX on the wavy surface.
+    // The sun's glitter: Beckmann facets of the unresolved ripples and the sun's disc, on the
+    // resolved surface: F·D/(4·N·V) times the sun's illuminance (G ≈ 1 for these slopes).
     float3 L = frame.sunDirection.xyz;
-    float3 H = normalize(V + L);
-    float NH = saturate(dot(N, H));
-    float a = 0.045 + 0.03 * saturate(frame.water.y * 0.1);
-    float a2 = a * a;
-    float d = NH * NH * (a2 - 1.0) + 1.0;
-    float D = a2 / (PI * d * d);
-    float visibility = sunLight(input.relative, float3(0, 0, 1));
-    color += min(D * 0.25 * fresnelSun(saturate(dot(V, H))), 6.0) * frame.sunColor.rgb * frame.sunDirection.w * saturate(dot(N, L)) * visibility;
+    if (frame.sunDirection.w > 0.0 && L.z > 0.0 && input.side < 0.5)
+    {
+        float3 H = normalize(V + L);
+        float NH = max(dot(N, H), 1e-3);
+        float a2 = facets + kSunDiscVariance;
+        float tan2 = (1.0 - NH * NH) / (NH * NH);
+        float D = exp(-tan2 / a2) / (PI * a2 * NH * NH * NH * NH);
+        float glint = min(D * fresnelWater(saturate(dot(V, H))) / (4.0 * NV), 600.0);
+        color += glint * frame.sunColor.rgb * frame.sunDirection.w * visibility;
+    }
 
     // Foam: where the water meets something, and on the crests in a strong wind.
-    float shore = 1.0 - saturate(path * forward / 0.22);
+    float crest = saturate((input.relative.z - frame.water.x) / max(waveScale(), 0.01) * 0.8);
+    float shore = 1.0 - saturate(pathView * max(dot(-V, frame.cameraForward.xyz), 0.05) / 0.22);
     float tearing = saturate((crest - 0.72) * 3.0) * saturate((frame.water.y - 6.0) / 8.0);
     float tf = t * windShare();  // foam drifts only in a wind
     float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * tf, tf * 0.25), 3);
@@ -1275,9 +1443,4 @@ float4 fsWater(WaterOutput input) : SV_Target
         color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp) * frame.light.x, foam * 0.85);
 
     return float4(fogged(color, input.relative), 1.0);
-}
-
-float fresnelSun(float VH)
-{
-    return 0.02 + 0.98 * pow(1.0 - VH, 5.0);
 }

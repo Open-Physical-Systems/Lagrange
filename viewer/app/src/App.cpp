@@ -1467,6 +1467,12 @@ public:
                 (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
             }
             foamStream_.reset();
+            if (frictionStream_) {
+                (void)client_.watchField(kWaterFrictionField, 0.0, SliceOrientation::Horizontal,
+                                         false);
+                frictionStream_.reset();
+            }
+            frictionOf_.reset();
             renderOptions_.waterSurface.reset();
             renderOptions_.spray3d.reset();
             surfaceOf_.reset();
@@ -1480,17 +1486,24 @@ public:
             foamStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
         }
         const std::shared_ptr<const FieldVolumeData> volume = surfaceStream_->latestVolume();
+        if (!frictionStream_ && available(kWaterFrictionField)) {
+            frictionStream_ =
+                client_.watchField(kWaterFrictionField, 0.0, SliceOrientation::Horizontal, true);
+        }
         const std::shared_ptr<const FieldVolumeData> spray =
             foamStream_ ? foamStream_->latestVolume() : nullptr;
+        const std::shared_ptr<const FieldVolumeData> friction =
+            frictionStream_ ? frictionStream_->latestVolume() : nullptr;
         if (!volume || volume->components != 1U || volume->nx != volume->ny || volume->nz != 1U ||
             volume->values.size() != static_cast<std::size_t>(volume->nx) * volume->ny) {
             return;
         }
-        if (volume == surfaceOf_ && spray == foamOf_) {
+        if (volume == surfaceOf_ && spray == foamOf_ && friction == frictionOf_) {
             return;  // nothing new
         }
         surfaceOf_ = volume;
         foamOf_ = spray;
+        frictionOf_ = friction;
         renderOptions_.spray3d.reset();
         if (spray && spray->components == 1U && spray->cellM > 0.0 && spray->valueMax > 0.0 &&
             spray->values.size() == static_cast<std::size_t>(spray->nx) * spray->ny * spray->nz) {
@@ -1506,6 +1519,19 @@ public:
         look->cell = volume->cellM;
         look->first = {volume->origin[0], volume->origin[1]};
         look->heights = volume->values;
+        // The air's friction velocity in the same grid, interleaved x, y per cell: x for every
+        // cell, then y (RealisticWaterSurface::friction).
+        const std::size_t cells = look->heights.size();
+        if (friction && friction->components == 2U && friction->nx == volume->nx &&
+            friction->ny == volume->ny && friction->values.size() == 2 * cells &&
+            std::abs(friction->origin[0] - volume->origin[0]) < 1e-6 &&
+            std::abs(friction->origin[1] - volume->origin[1]) < 1e-6) {
+            look->friction.resize(2 * cells);
+            for (std::size_t i = 0; i < cells; ++i) {
+                look->friction[i] = friction->values[2 * i];
+                look->friction[cells + i] = friction->values[2 * i + 1];
+            }
+        }
         if (spray && spray->components == 1U && spray->cellM > 0.0 &&
             spray->values.size() == static_cast<std::size_t>(spray->nx) * spray->ny * spray->nz) {
             const double level = volume->origin[2];
@@ -2463,8 +2489,11 @@ private:
     static constexpr const char* kWaterSurfaceField = "water/surface";
     std::shared_ptr<FieldStream> surfaceStream_;  // the realistic view's moving water
     std::shared_ptr<FieldStream> foamStream_;     // the spray for its foam
-    std::shared_ptr<const FieldVolumeData> surfaceOf_, foamOf_;  // what waterSurface was made of
-    float sprayTime_{0.0F};                                      // s, for the streaks' fall
+    static constexpr const char* kWaterFrictionField = "water/friction_velocity";
+    std::shared_ptr<FieldStream> frictionStream_;  // the air's rub on it, for its ripples
+    std::shared_ptr<const FieldVolumeData> surfaceOf_, foamOf_,
+        frictionOf_;         // what waterSurface was made of
+    float sprayTime_{0.0F};  // s, for the streaks' fall
     struct Particle {
         std::array<double, 3> at{};  // region frame, m
         float age{0.0F};             // s

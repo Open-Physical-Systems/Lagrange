@@ -85,6 +85,9 @@ struct RenderOptions {
         std::array<double, 2> first{};  ///< region frame: the first cell's centre, m
         std::vector<float> heights;     ///< m over the still level, row order
         std::vector<float> foam;        ///< 0-1 per cell, or empty
+        /// The air's friction velocity on the water (m/s; x for every cell, then y), from the
+        /// server's water/friction_velocity volume, or empty.
+        std::vector<float> friction;
     };
     std::shared_ptr<const WaterSurface> waterSurface;
     /// The spray's water per cell (aero/spray, kg/m³), drawn by the realistic view as mist.
