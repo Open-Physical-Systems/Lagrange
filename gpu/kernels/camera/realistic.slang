@@ -31,6 +31,9 @@ struct Frame
     float4 surface;           // the water's moving surface (water.md): xy the first cell's centre
                               // relative to the eye; z: its cell, m; w: cells a side (0: none)
     float4 surfaceLook;       // x: relief, the slopes' scale (1: the physics' slopes as they are)
+    float4 sprayBox;          // the spray's water (RealisticSpray): xyz the first cell's centre
+                              // relative to the eye; w: its cell, m
+    float4 sprayDims;         // xyz: cells (0: none); w: extinction per kg/m³ of water, 1/m
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -54,6 +57,8 @@ struct Lamp
 [[vk::binding(7)]] StructuredBuffer<Lamp> lamps;
 // The moving surface's cells in row order: η (m over the still level), ∂η/∂x, ∂η/∂y, foam (0-1).
 [[vk::binding(8)]] StructuredBuffer<float4> surfaceCells;
+// The spray's water per cell (kg/m³), x fastest, then y, then z.
+[[vk::binding(9)]] StructuredBuffer<float> sprayCells;
 
 struct Push
 {
@@ -177,6 +182,47 @@ float3 skyByDay(float3 dir, float sharp)
     return lerp(horizonGround, clear, smoothstep(-0.03, 0.02, dir.z));
 }
 
+// The spray's water at a point relative to the eye (kg/m³), trilinear between cell centres.
+float sprayAt(float3 relative)
+{
+    uint3 n = uint3(frame.sprayDims.xyz);
+    float3 f = clamp((relative - frame.sprayBox.xyz) / frame.sprayBox.w, float3(0, 0, 0),
+                     float3(n) - 1.001);
+    uint3 c = min(uint3(f), max(n, uint3(2, 2, 2)) - 2u);
+    float3 t = f - float3(c);
+    uint i = (c.z * n.y + c.y) * n.x + c.x;
+    uint dy = n.x;
+    uint dz = n.x * n.y;
+    float a = lerp(lerp(sprayCells[i], sprayCells[i + 1u], t.x),
+                   lerp(sprayCells[i + dy], sprayCells[i + dy + 1u], t.x), t.y);
+    float b = lerp(lerp(sprayCells[i + dz], sprayCells[i + dz + 1u], t.x),
+                   lerp(sprayCells[i + dz + dy], sprayCells[i + dz + dy + 1u], t.x), t.y);
+    return lerp(a, b, t.z);
+}
+
+// The spray's optical depth from the eye to `relative`: its extinction (sprayDims.w per kg/m³ of
+// water, drops much larger than the wavelength) along the segment's stretch inside its box.
+float sprayDepth(float3 relative)
+{
+    if (any(frame.sprayDims.xyz < 2.0))
+        return 0.0;
+    float3 lo = frame.sprayBox.xyz - 0.5 * frame.sprayBox.w;
+    float3 hi = lo + frame.sprayDims.xyz * frame.sprayBox.w;
+    float3 inv = 1.0 / (abs(relative) > 1e-6 ? relative : float3(1e-6, 1e-6, 1e-6));
+    float3 t0 = (lo) * inv;
+    float3 t1 = (hi) * inv;
+    float enter = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), max(min(t0.z, t1.z), 0.0));
+    float leave = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), min(max(t0.z, t1.z), 1.0));
+    if (leave <= enter)
+        return 0.0;
+    static const int kSteps = 24;
+    float step = (leave - enter) / float(kSteps);
+    float water = 0.0;
+    for (int k = 0; k < kSteps; ++k)
+        water += sprayAt(relative * (enter + (float(k) + 0.5) * step));
+    return water * frame.sprayDims.w * step * length(relative);
+}
+
 float3 fogged(float3 color, float3 relative)
 {
     float distance = length(relative);
@@ -184,7 +230,16 @@ float3 fogged(float3 color, float3 relative)
     float amount = 1.0 - exp(-distance * (season == 3 ? 0.005 : season == 2 ? 0.0028 : 0.0009));
     float3 dir = relative / max(distance, 1e-3);
     float3 far = sky(float3(dir.xy, max(dir.z, 0.03)), 0.0);
-    return lerp(color, far, amount);
+    color = lerp(color, far, amount);
+    // The spray's mist: what it takes out of the light, scattered back as the daylight's white.
+    float tau = sprayDepth(relative);
+    if (tau > 0.0)
+    {
+        float sunUp = saturate(frame.sunDirection.z);
+        float3 mist = float3(0.80, 0.83, 0.86) * (0.45 + 0.65 * sunUp) * frame.light.x;
+        color = lerp(color, mist, 1.0 - exp(-tau));
+    }
+    return color;
 }
 
 // --- shadow ---------------------------------------------------------------------------------

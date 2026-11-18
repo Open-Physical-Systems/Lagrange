@@ -114,7 +114,10 @@ flowchart LR
   water/surface:xy:highpass`) shows sub-millimetre rings beside a dimple of centimetres, and its
   spray the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are,
   coloured by the map (`--overlays spray`; downwash.md §5b); without it the realistic view draws
-  the same drops as pale water, more opaque where there is more. Without wind the realistic
+  the same drops as pale water, more opaque where there is more, and their water as mist: the
+  `aero/spray` box (binding 9, `RealisticSpray`) is marched along each view ray (24 steps), its
+  extinction 3/(ρ_w D) per kg/m³ over the equal shares of 50, 150 and 450 µm drops (29.6 /m per
+  kg/m³, Q_ext = 2), and what it takes out is replaced by the daylight's white. Without wind the realistic
   water is still (no swell, made-up ripples, caustics or drifting foam below 3 m/s), and
   `--water-relief` scales only the slopes; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a

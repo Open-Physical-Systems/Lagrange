@@ -49,8 +49,10 @@ struct Frame {
     std::array<float, 4> light;    // daylight share, lamps, linear output, unused
     std::array<float, 4> surface;  // first cell's centre relative to the eye, cell, cells a side
     std::array<float, 4> surfaceLook;  // relief, unused
+    std::array<float, 4> sprayBox;     // first cell's centre relative to the eye, cell
+    std::array<float, 4> sprayDims;    // cells, extinction per kg/m³
 };
-static_assert(sizeof(Frame) == 384);
+static_assert(sizeof(Frame) == 416);
 
 // Must match Lamp in realistic.slang.
 struct GpuLamp {
@@ -325,14 +327,13 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 9> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 10> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
-        bindings.at(b).descriptorType = b == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                        : b == 7 || b == 8
-                                            ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-                                            : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings.at(b).descriptorType = b == 0   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                        : b >= 7 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                                 : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings.at(b).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -343,7 +344,7 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     const std::array<VkDescriptorPoolSize, 3> sizes{
         {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
-         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6}}};
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -367,6 +368,8 @@ RealisticRenderer::RealisticRenderer(const Device& device,
                             static_cast<VkDeviceSize>(kMaxRealisticSurfaceCells) *
                                 kMaxRealisticSurfaceCells * 4 * sizeof(float),
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    spray_ = createBuffer(device_, kMaxRealisticSprayCells * sizeof(float),
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -390,6 +393,7 @@ RealisticRenderer::~RealisticRenderer() {
     destroy(device_, frames_);
     destroy(device_, lamps_);
     destroy(device_, surface_);
+    destroy(device_, spray_);
     destroy(device_, shadow_);
     destroy(device_, hdr_);
     destroy(device_, hdrCopy_);
@@ -475,6 +479,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
         const VkDescriptorBufferInfo uniform{frames_.buffer, offset, sizeof(Frame)};
         const VkDescriptorBufferInfo lampData{lamps_.buffer, 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo surfaceData{surface_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo sprayData{spray_.buffer, 0, VK_WHOLE_SIZE};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
         const std::array<VkDescriptorImageInfo, 6> images{{
@@ -485,7 +490,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
             {repeat_, textures_->albedo_.view, read},
             {repeat_, textures_->normal_.view, read},
         }};
-        std::array<VkWriteDescriptorSet, 9> writes{};
+        std::array<VkWriteDescriptorSet, 10> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -495,9 +500,9 @@ void RealisticRenderer::descriptors(const Image& depth) {
             if (b == 0) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 w.pBufferInfo = &uniform;
-            } else if (b == 7 || b == 8) {
+            } else if (b >= 7) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                w.pBufferInfo = b == 7 ? &lampData : &surfaceData;
+                w.pBufferInfo = b == 7 ? &lampData : b == 8 ? &surfaceData : &sprayData;
             } else {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &images.at(b - 1);
@@ -653,6 +658,22 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             main.surface = {f(moving.first[0] - eye[0]), f(moving.first[1] - eye[1]), cell,
                             static_cast<float>(n)};
             main.surfaceLook = {moving.relief, 0.0F, 0.0F, 0.0F};
+        }
+    }
+    {
+        const RealisticSpray& spray = settings.spray;
+        const std::size_t count =
+            static_cast<std::size_t>(spray.cells[0]) * spray.cells[1] * spray.cells[2];
+        if (spray.cells[0] >= 2 && spray.cells[1] >= 2 && spray.cells[2] >= 2 &&
+            count <= kMaxRealisticSprayCells && spray.water.size() == count && spray.cell > 0.0 &&
+            spray.extinctionPerKg > 0.0) {
+            std::memcpy(spray_.mapped, spray.water.data(), count * sizeof(float));
+            flush(device_, spray_);
+            main.sprayBox = {f(spray.first[0] - eye[0]), f(spray.first[1] - eye[1]),
+                             f(spray.first[2] - eye[2]), f(spray.cell)};
+            main.sprayDims = {static_cast<float>(spray.cells[0]),
+                              static_cast<float>(spray.cells[1]),
+                              static_cast<float>(spray.cells[2]), f(spray.extinctionPerKg)};
         }
     }
     main.screen = {static_cast<float>(extent.width), static_cast<float>(extent.height),

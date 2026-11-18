@@ -1026,8 +1026,9 @@ public:
                    a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
                    a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
                    a.waterSurface == b.waterSurface && a.waterRelief == b.waterRelief &&
-                   sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
-                   a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
+                   a.spray3d == b.spray3d && sameValues(a.temperature, b.temperature) &&
+                   sameValues(a.current, b.current) && a.heatCovered == b.heatCovered &&
+                   a.lamps == b.lamps &&
                    (a.skyIlluminance == b.skyIlluminance ||
                     (std::isnan(a.skyIlluminance) && std::isnan(b.skyIlluminance)));
         }
@@ -1467,6 +1468,7 @@ public:
             }
             foamStream_.reset();
             renderOptions_.waterSurface.reset();
+            renderOptions_.spray3d.reset();
             surfaceOf_.reset();
             return;
         }
@@ -1489,6 +1491,16 @@ public:
         }
         surfaceOf_ = volume;
         foamOf_ = spray;
+        renderOptions_.spray3d.reset();
+        if (spray && spray->components == 1U && spray->cellM > 0.0 && spray->valueMax > 0.0 &&
+            spray->values.size() == static_cast<std::size_t>(spray->nx) * spray->ny * spray->nz) {
+            auto mist = std::make_shared<RenderOptions::Spray>();
+            mist->cells = {spray->nx, spray->ny, spray->nz};
+            mist->cell = spray->cellM;
+            mist->first = spray->origin;
+            mist->water = spray->values;
+            renderOptions_.spray3d = std::move(mist);
+        }
         auto look = std::make_shared<RenderOptions::WaterSurface>();
         look->cells = volume->nx;
         look->cell = volume->cellM;

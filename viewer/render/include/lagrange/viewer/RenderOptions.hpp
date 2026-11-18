@@ -87,6 +87,14 @@ struct RenderOptions {
         std::vector<float> foam;        ///< 0-1 per cell, or empty
     };
     std::shared_ptr<const WaterSurface> waterSurface;
+    /// The spray's water per cell (aero/spray, kg/m³), drawn by the realistic view as mist.
+    struct Spray {
+        std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz
+        double cell{0.0};                      ///< m
+        std::array<double, 3> first{};         ///< region frame: the first cell's centre, m
+        std::vector<float> water;              ///< kg/m³, x fastest
+    };
+    std::shared_ptr<const Spray> spray3d;
     /// How much the realistic view scales the moving surface's heights and slopes: 1 as the
     /// physics has them (--water-relief; more shows sub-millimetre ripples, a drawing choice).
     float waterRelief{1.0F};
