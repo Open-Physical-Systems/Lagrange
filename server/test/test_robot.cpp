@@ -1042,8 +1042,8 @@ TEST(OlderStates, ControllersReadTheLayoutsEarlierReleasesSaved) {
         EXPECT_TRUE(copter.restoreState(reader).ok());
         StateWriter now;
         ASSERT_TRUE(copter.saveState(now).ok());
-        EXPECT_EQ(now.bytes().size(), old.bytes().size() + 8 + 1 + 6 * 8 + 3U)
-            << "1.2's stand height, ramp and leash appended";
+        EXPECT_EQ(now.bytes().size(), old.bytes().size() + 8 + 1 + 6 * 8 + 3U + 2 * 8)
+            << "1.2's stand height, ramp and leash, and 1.4's attitude integral appended";
         StateReader again(now.bytes());
         EXPECT_TRUE(copter.restoreState(again).ok()) << "and read back as 1.2 and later save";
         StateWriter twice;
