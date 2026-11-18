@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -75,6 +76,28 @@ struct RenderOptions {
     float airflowMax{0.0F};  ///< m/s, the speed the colour map tops out at (set by the app).
     /// Spray off water (downwash.md §5b): the server's aero/spray volume drawn as falling streaks.
     bool spray{false};
+    /// The water's moving surface (water.md "The surface under a rotor"), from the server's
+    /// water/surface volume, and the foam where its spray is torn off (aero/spray): the
+    /// realistic view lifts and shades the first body of water by them. Null: the still level.
+    struct WaterSurface {
+        std::uint32_t cells{0};         ///< a side
+        double cell{0.0};               ///< m
+        std::array<double, 2> first{};  ///< region frame: the first cell's centre, m
+        std::vector<float> heights;     ///< m over the still level, row order
+        std::vector<float> foam;        ///< 0-1 per cell, or empty
+    };
+    std::shared_ptr<const WaterSurface> waterSurface;
+    /// The spray's water per cell (aero/spray, kg/m³), drawn by the realistic view as mist.
+    struct Spray {
+        std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz
+        double cell{0.0};                      ///< m
+        std::array<double, 3> first{};         ///< region frame: the first cell's centre, m
+        std::vector<float> water;              ///< kg/m³, x fastest
+    };
+    std::shared_ptr<const Spray> spray3d;
+    /// How much the realistic view scales the moving surface's heights and slopes: 1 as the
+    /// physics has them (--water-relief; more shows sub-millimetre ripples, a drawing choice).
+    float waterRelief{1.0F};
     /// Lamps (RFC 0021 §4), lighting the realistic view: from the scene's LampAPI_1 prims, their
     /// attributes and their lamp/<n>/intensity signals (RFC 0021 §7).
     struct Lamp {

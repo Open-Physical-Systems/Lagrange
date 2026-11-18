@@ -28,6 +28,12 @@ struct Frame
     float4 light;             // x: the daylight's share (1: the drawn day; the sky and the sun's
                               // light scale by it); y: lamps; z: 1 to write the linear HDR value
                               // (calibration tests); w: unused
+    float4 surface;           // the water's moving surface (water.md): xy the first cell's centre
+                              // relative to the eye; z: its cell, m; w: cells a side (0: none)
+    float4 surfaceLook;       // x: relief, the slopes' scale (1: the physics' slopes as they are)
+    float4 sprayBox;          // the spray's water (RealisticSpray): xyz the first cell's centre
+                              // relative to the eye; w: its cell, m
+    float4 sprayDims;         // xyz: cells (0: none); w: extinction per kg/m³ of water, 1/m
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -49,6 +55,10 @@ struct Lamp
     float4 color;    // linear RGB of luminance 1
 };
 [[vk::binding(7)]] StructuredBuffer<Lamp> lamps;
+// The moving surface's cells in row order: η (m over the still level), ∂η/∂x, ∂η/∂y, foam (0-1).
+[[vk::binding(8)]] StructuredBuffer<float4> surfaceCells;
+// The spray's water per cell (kg/m³), x fastest, then y, then z.
+[[vk::binding(9)]] StructuredBuffer<float> sprayCells;
 
 struct Push
 {
@@ -172,6 +182,47 @@ float3 skyByDay(float3 dir, float sharp)
     return lerp(horizonGround, clear, smoothstep(-0.03, 0.02, dir.z));
 }
 
+// The spray's water at a point relative to the eye (kg/m³), trilinear between cell centres.
+float sprayAt(float3 relative)
+{
+    uint3 n = uint3(frame.sprayDims.xyz);
+    float3 f = clamp((relative - frame.sprayBox.xyz) / frame.sprayBox.w, float3(0, 0, 0),
+                     float3(n) - 1.001);
+    uint3 c = min(uint3(f), max(n, uint3(2, 2, 2)) - 2u);
+    float3 t = f - float3(c);
+    uint i = (c.z * n.y + c.y) * n.x + c.x;
+    uint dy = n.x;
+    uint dz = n.x * n.y;
+    float a = lerp(lerp(sprayCells[i], sprayCells[i + 1u], t.x),
+                   lerp(sprayCells[i + dy], sprayCells[i + dy + 1u], t.x), t.y);
+    float b = lerp(lerp(sprayCells[i + dz], sprayCells[i + dz + 1u], t.x),
+                   lerp(sprayCells[i + dz + dy], sprayCells[i + dz + dy + 1u], t.x), t.y);
+    return lerp(a, b, t.z);
+}
+
+// The spray's optical depth from the eye to `relative`: its extinction (sprayDims.w per kg/m³ of
+// water, drops much larger than the wavelength) along the segment's stretch inside its box.
+float sprayDepth(float3 relative)
+{
+    if (any(frame.sprayDims.xyz < 2.0))
+        return 0.0;
+    float3 lo = frame.sprayBox.xyz - 0.5 * frame.sprayBox.w;
+    float3 hi = lo + frame.sprayDims.xyz * frame.sprayBox.w;
+    float3 inv = 1.0 / (abs(relative) > 1e-6 ? relative : float3(1e-6, 1e-6, 1e-6));
+    float3 t0 = (lo) * inv;
+    float3 t1 = (hi) * inv;
+    float enter = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), max(min(t0.z, t1.z), 0.0));
+    float leave = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), min(max(t0.z, t1.z), 1.0));
+    if (leave <= enter)
+        return 0.0;
+    static const int kSteps = 24;
+    float step = (leave - enter) / float(kSteps);
+    float water = 0.0;
+    for (int k = 0; k < kSteps; ++k)
+        water += sprayAt(relative * (enter + (float(k) + 0.5) * step));
+    return water * frame.sprayDims.w * step * length(relative);
+}
+
 float3 fogged(float3 color, float3 relative)
 {
     float distance = length(relative);
@@ -179,7 +230,16 @@ float3 fogged(float3 color, float3 relative)
     float amount = 1.0 - exp(-distance * (season == 3 ? 0.005 : season == 2 ? 0.0028 : 0.0009));
     float3 dir = relative / max(distance, 1e-3);
     float3 far = sky(float3(dir.xy, max(dir.z, 0.03)), 0.0);
-    return lerp(color, far, amount);
+    color = lerp(color, far, amount);
+    // The spray's mist: what it takes out of the light, scattered back as the daylight's white.
+    float tau = sprayDepth(relative);
+    if (tau > 0.0)
+    {
+        float sunUp = saturate(frame.sunDirection.z);
+        float3 mist = float3(0.80, 0.83, 0.86) * (0.45 + 0.65 * sunUp) * frame.light.x;
+        color = lerp(color, mist, 1.0 - exp(-tau));
+    }
+    return color;
 }
 
 // --- shadow ---------------------------------------------------------------------------------
@@ -959,7 +1019,13 @@ static const Wave waves[8] = {
 float waveScale()
 {
     float wind = frame.water.y;
-    return 0.05 + 0.0065 * min(wind * wind, 200.0);
+    return 0.0065 * min(wind * wind, 200.0);  // still without wind: only the physics moves it
+}
+
+// 0 in still air, 1 from a light breeze (3 m/s) up: how much of the made-up motion is drawn.
+float windShare()
+{
+    return saturate(frame.water.y / 3.0);
 }
 
 void gerstner(float2 world, float t, out float3 displacement, out float3 normal)
@@ -986,6 +1052,29 @@ void gerstner(float2 world, float t, out float3 displacement, out float3 normal)
                            -q * w.direction.y * w.direction.y * wa * s, w.direction.y * wa * co);
     }
     normal = normalize(cross(tangentX, tangentY));
+}
+
+// The physics' moving surface at a point (relative to the eye, x and y), bilinear between cell
+// centres: η, its slope, the foam. `share` is how much of it is there: 0 outside the patch, rising
+// to 1 over its outer cells, where the patch's sponge has already calmed it.
+float4 movingSurface(float2 relativeXY, out float share)
+{
+    share = 0.0;
+    uint n = uint(frame.surface.w);
+    if (n < 2u)
+        return float4(0, 0, 0, 0);
+    float2 f = (relativeXY - frame.surface.xy) / frame.surface.z;
+    float last = float(n - 1u);
+    if (any(f < 0.0) || any(f > last))
+        return float4(0, 0, 0, 0);
+    uint2 c = min(uint2(f), uint2(n - 2u, n - 2u));
+    float2 t = f - float2(c);
+    uint i = c.y * n + c.x;
+    float4 v = lerp(lerp(surfaceCells[i], surfaceCells[i + 1u], t.x),
+                    lerp(surfaceCells[i + n], surfaceCells[i + n + 1u], t.x), t.y);
+    float edge = min(min(f.x, f.y), min(last - f.x, last - f.y));
+    share = saturate(edge / 4.0);
+    return v;
 }
 
 struct WaterOutput
@@ -1028,6 +1117,10 @@ WaterOutput vsWater(uint vertex : SV_VertexID)
     float3 displacement;
     float3 normal;
     gerstner(world, frame.worldWrap.w, displacement, normal);
+    // The physics' surface on top of the drawn swell: linear waves add.
+    float share;
+    float lift = movingSurface(relativeXY, share).x * share;  // its true height; relief: slope
+    displacement.z += lift;
     WaterOutput output;
     if (skirt)
     {
@@ -1058,7 +1151,7 @@ float2 ripple(float2 world, float t, float distance)
     float wind = 1.0 + 0.1 * min(frame.water.y, 16.0);
     float2 slope = float2(0, 0);
     float scale = 2.6;
-    float amount = 0.11 * wind;
+    float amount = 0.11 * wind * windShare();
     for (int i = 0; i < 4; ++i)
     {
         float3 p = float3(world * scale + float2(0.7, 0.4) * t * (0.55 + 0.25 * float(i)) + float(i) * 7.1, t * 0.45);
@@ -1091,12 +1184,19 @@ float4 fsWater(WaterOutput input) : SV_Target
 
     float above = frame.water.x + 0.0 < 0.0 ? 1.0 : -1.0;  // the eye above the surface?
     float3 N = normalize(input.normal);
+    float4 moving = float4(0, 0, 0, 0);
+    float movingShare = 0.0;
     if (input.side < 0.5)
     {
         // The waves' slope per pixel: the mesh only holds their shape.
         float3 lifted;
         gerstner(input.world, t, lifted, N);
-        float2 slope = ripple(input.world, t, distance);
+        // Where the physics moves the surface its slope is drawn, not the made-up ripples.
+        float share;
+        moving = movingSurface(input.world - frame.worldWrap.xy, share);
+        movingShare = share;
+        float2 slope = ripple(input.world, t, distance) * (1.0 - share) +
+                       moving.yz * frame.surfaceLook.x * share * N.z;
         N = normalize(float3(N.xy - slope, N.z));
         N *= above;
     }
@@ -1136,7 +1236,7 @@ float4 fsWater(WaterOutput input) : SV_Target
     float3 transmitted = exp(-kAbsorption * path);
     float3 point = viewRay(bentUv) * belowZ;
     float submerged = max(frame.water.x - point.z, 0.0);
-    float3 lightOnBottom = caustics(point.xy + frame.worldWrap.xy, t) * exp(-submerged * 0.6) *
+    float3 lightOnBottom = caustics(point.xy + frame.worldWrap.xy, t) * windShare() * exp(-submerged * 0.6) *
                            saturate(submerged * 4.0) * frame.sunDirection.z * 1.3;
     below *= 1.0 + lightOnBottom;
     // Light scattered back by the water itself: its own colour.
@@ -1164,9 +1264,13 @@ float4 fsWater(WaterOutput input) : SV_Target
     // Foam: where the water meets something, and on the crests in a strong wind.
     float shore = 1.0 - saturate(path * forward / 0.22);
     float tearing = saturate((crest - 0.72) * 3.0) * saturate((frame.water.y - 6.0) / 8.0);
-    float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * t, t * 0.25), 3);
-    float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * t, t * 0.4), 2);
+    float tf = t * windShare();  // foam drifts only in a wind
+    float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * tf, tf * 0.25), 3);
+    float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * tf, tf * 0.4), 2);
     float foam = saturate(smoothstep(0.42, 0.62, cell * (0.6 + streak)) * saturate(shore * 1.5 + tearing));
+    // Whitecap where the physics tears spray off (downwash.md §5b): its foam, broken up.
+    float torn = saturate(moving.w * movingShare);
+    foam = max(foam, torn * saturate(0.35 + smoothstep(0.3, 0.6, cell * (0.6 + streak))));
     if (input.side < 0.5)
         color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp) * frame.light.x, foam * 0.85);
 

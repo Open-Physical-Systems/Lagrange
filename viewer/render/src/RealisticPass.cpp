@@ -99,6 +99,30 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     }
     settings.lamps = lamps_;
     settings.skyIlluminance = options.skyIlluminance;
+    if (const auto& moving = options.waterSurface) {
+        settings.waterSurface.cells = moving->cells;
+        settings.waterSurface.cell = moving->cell;
+        settings.waterSurface.first = moving->first;
+        settings.waterSurface.heights = moving->heights;
+        settings.waterSurface.foam = moving->foam;
+        settings.waterSurface.relief = options.waterRelief;
+    }
+    if (const auto& spray = options.spray3d) {
+        // The drops' extinction per kg/m³ of water: Q_ext = 2 for drops much larger than the
+        // wavelength (van de Hulst 1957, §8.42), 3/(ρ_w·D) per kg/m³, over the aerodynamics
+        // domain's equal shares of 50, 150 and 450 µm drops (downwash.md §5b).
+        constexpr double kWaterDensity = 1000.0;                            // kg/m³
+        constexpr std::array<double, 3> kDiameters{50e-6, 150e-6, 450e-6};  // m
+        double perKg = 0.0;
+        for (const double d : kDiameters) {
+            perKg += 3.0 / (kWaterDensity * d) / static_cast<double>(kDiameters.size());
+        }
+        settings.spray.cells = spray->cells;
+        settings.spray.cell = spray->cell;
+        settings.spray.first = spray->first;
+        settings.spray.water = spray->water;
+        settings.spray.extinctionPerKg = perKg;
+    }
     return renderer_.record(commands, draws_, view, settings, meshes, color, depth);
 }
 

@@ -1546,6 +1546,10 @@ struct Server::Impl {
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
         sensing.values["smoke"] = hasFires();  // the fires' smoke field (RFC 0022 §4)
+        if (waterSurface) {
+            sensing.values["water_surface"] = true;  // lidars and cameras meet it at η (water.md)
+            surfaceGrid(sensing);
+        }
         if (siteTemperature) {
             sensing.values["ambient_temperature"] = *siteTemperature;
         }

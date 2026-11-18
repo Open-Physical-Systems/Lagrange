@@ -38,6 +38,99 @@ constexpr std::uint32_t kSprayEntity = 0x5350'0000U;
 
 }  // namespace
 
+void addJetFluctuation(std::span<double> pressure, int cells, const std::array<long, 2>& cornerCell,
+                       double share, random::Stream& rng) {
+    const auto n = static_cast<std::size_t>(cells);
+    if (cells < 2 || pressure.size() != n * n || share == 0.0) {
+        return;
+    }
+    constexpr long kStep = kJetFluctuationCells;
+    const auto floorDiv = [](long a, long b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
+    // The lattice nodes round the patch, in world cells, and a normal value at each.
+    const long x0 = floorDiv(cornerCell[0], kStep);
+    const long y0 = floorDiv(cornerCell[1], kStep);
+    const long x1 = floorDiv(cornerCell[0] + cells - 1, kStep) + 1;
+    const long y1 = floorDiv(cornerCell[1] + cells - 1, kStep) + 1;
+    const auto nx = static_cast<std::size_t>(x1 - x0 + 1);
+    const auto ny = static_cast<std::size_t>(y1 - y0 + 1);
+    std::vector<double> node(nx * ny);
+    for (double& v : node) {
+        v = rng.normal();
+    }
+    std::vector<double> field(n * n);
+    double sum2 = 0.0;
+    for (std::size_t y = 0; y < n; ++y) {
+        for (std::size_t x = 0; x < n; ++x) {
+            const long wx = cornerCell[0] + static_cast<long>(x);
+            const long wy = cornerCell[1] + static_cast<long>(y);
+            const long cx = floorDiv(wx, kStep);
+            const long cy = floorDiv(wy, kStep);
+            const double tx = static_cast<double>(wx - cx * kStep) / kStep;
+            const double ty = static_cast<double>(wy - cy * kStep) / kStep;
+            const auto at = [&](long i, long j) {
+                return node[static_cast<std::size_t>(j - y0) * nx +
+                            static_cast<std::size_t>(i - x0)];
+            };
+            const double v = (1 - ty) * ((1 - tx) * at(cx, cy) + tx * at(cx + 1, cy)) +
+                             ty * ((1 - tx) * at(cx, cy + 1) + tx * at(cx + 1, cy + 1));
+            field[y * n + x] = v;
+            sum2 += v * v;
+        }
+    }
+    const double rms = std::sqrt(sum2 / static_cast<double>(n * n));
+    if (!(rms > 0.0)) {
+        return;
+    }
+    for (std::size_t i = 0; i < n * n; ++i) {
+        pressure[i] += pressure[i] * share * field[i] / rms;
+    }
+}
+
+Downwash::Vec3 recirculation(const Downwash& downwash, const Downwash::Vec3& x) {
+    Downwash::Vec3 out{};
+    for (const Downwash::Group& g : downwash.groups()) {
+        if (!g.hits || g.hitWater < 0 || !(g.arriveSpeed > 0.0) || !(g.length > 0.0)) {
+            continue;
+        }
+        const Downwash::Vec3& n = g.hitNormal;
+        const auto dot = [](const Downwash::Vec3& a, const Downwash::Vec3& b) {
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        };
+        const Downwash::Vec3 up{g.centre[0] - g.hitPoint[0], g.centre[1] - g.hitPoint[1],
+                                g.centre[2] - g.hitPoint[2]};
+        const double h = dot(up, n);
+        const double strength = 1.0 - h / (kRecirculationHeights * g.length);
+        if (!(h > 0.0) || strength <= 0.0) {
+            continue;
+        }
+        // x in the meridian plane: r out from the impingement point along the surface, z up.
+        const Downwash::Vec3 d{x[0] - g.hitPoint[0], x[1] - g.hitPoint[1], x[2] - g.hitPoint[2]};
+        const double z = dot(d, n);
+        const Downwash::Vec3 flat{d[0] - z * n[0], d[1] - z * n[1], d[2] - z * n[2]};
+        const double r = std::sqrt(dot(flat, flat));
+        if (r < 1e-9) {
+            continue;
+        }
+        const double ringR = kRecirculationRadius * std::max(g.arriveRadius, g.length / 2.0);
+        const double core = h / 2.0;
+        const double dr = r - ringR;
+        const double dz = z - h / 2.0;
+        const double rho = std::hypot(dr, dz);
+        if (rho < 1e-9) {
+            continue;
+        }
+        const double edge = kRecirculationShare * g.arriveSpeed * strength;
+        const double speed = rho < core ? edge * rho / core : edge * core / rho;
+        // Turning (−dz, dr): outward under the centre, up outside it.
+        const double vr = -dz / rho * speed;
+        const double vz = dr / rho * speed;
+        for (std::size_t k = 0; k < 3; ++k) {
+            out[k] += vr * flat[k] / r + vz * n[k];
+        }
+    }
+    return out;
+}
+
 double kelvinHelmholtzOnset(double rhoAir, double rhoWater, double tension, double gravity) {
     if (rhoAir <= 0.0 || rhoWater <= rhoAir || tension <= 0.0 || gravity <= 0.0) {
         return std::numeric_limits<double>::infinity();
@@ -246,6 +339,15 @@ void WaterAir::step(const StepContext& context, const Downwash& downwash, double
                 }
             }
         }
+        // The jet's unsteadiness: what rings the surface (kJetPressureFluctuation).
+        {
+            random::Stream rng(context.seed, context.stepIndex,
+                               kSprayEntity + 0x80U + static_cast<std::uint32_t>(w));
+            addJetFluctuation(pool.pressure, n,
+                              {std::lround(pool.corner[0] / grid_.cell),
+                               std::lround(pool.corner[1] / grid_.cell)},
+                              fluctuation_, rng);
+        }
         if (spray_) {
             bus.write(pool.peakOut, peak);
             bus.write(pool.rateOut, torn);
@@ -286,7 +388,12 @@ void WaterAir::step(const StepContext& context, const Downwash& downwash, double
     if (!spray_) {
         return;
     }
-    moveDrops(context, dt, rhoAir, air);
+    // The drops also ride the recirculation the fitted wake leaves out (recirculation()).
+    moveDrops(context, dt, rhoAir, [&](const Downwash::Vec3& x) {
+        const Downwash::Vec3 u = air(x);
+        const Downwash::Vec3 back = recirculation(downwash, x);
+        return Downwash::Vec3{u[0] + back[0], u[1] + back[1], u[2] + back[2]};
+    });
     for (std::size_t j = 0; j < rotorSpray_.size(); ++j) {
         bus.write(rotorSpray_[j], j < hubs.size() ? sprayAt(hubs[j]) : 0.0);
     }

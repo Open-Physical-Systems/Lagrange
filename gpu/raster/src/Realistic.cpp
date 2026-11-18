@@ -47,8 +47,12 @@ struct Frame {
     std::array<float, 4> mode;
     std::array<float, 4> weather;  // rain mm/h, snow mm/h, wind x, y m/s
     std::array<float, 4> light;    // daylight share, lamps, linear output, unused
+    std::array<float, 4> surface;  // first cell's centre relative to the eye, cell, cells a side
+    std::array<float, 4> surfaceLook;  // relief, unused
+    std::array<float, 4> sprayBox;     // first cell's centre relative to the eye, cell
+    std::array<float, 4> sprayDims;    // cells, extinction per kg/m³
 };
-static_assert(sizeof(Frame) == 352);
+static_assert(sizeof(Frame) == 416);
 
 // Must match Lamp in realistic.slang.
 struct GpuLamp {
@@ -323,12 +327,12 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 10> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
         bindings.at(b).descriptorType = b == 0   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                        : b == 7 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                        : b >= 7 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                                                  : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings.at(b).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
@@ -340,7 +344,7 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     const std::array<VkDescriptorPoolSize, 3> sizes{
         {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
-         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3}}};
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -359,6 +363,12 @@ RealisticRenderer::RealisticRenderer(const Device& device,
 
     frames_ = createBuffer(device_, 2 * kFrameStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
     lamps_ = createBuffer(device_, kMaxRealisticLamps * sizeof(GpuLamp),
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    surface_ = createBuffer(device_,
+                            static_cast<VkDeviceSize>(kMaxRealisticSurfaceCells) *
+                                kMaxRealisticSurfaceCells * 4 * sizeof(float),
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    spray_ = createBuffer(device_, kMaxRealisticSprayCells * sizeof(float),
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
@@ -382,6 +392,8 @@ RealisticRenderer::~RealisticRenderer() {
     vkDestroySampler(d, nearest_, nullptr);
     destroy(device_, frames_);
     destroy(device_, lamps_);
+    destroy(device_, surface_);
+    destroy(device_, spray_);
     destroy(device_, shadow_);
     destroy(device_, hdr_);
     destroy(device_, hdrCopy_);
@@ -466,6 +478,8 @@ void RealisticRenderer::descriptors(const Image& depth) {
     const auto write = [&](VkDescriptorSet set, VkDeviceSize offset, const Image& scene) {
         const VkDescriptorBufferInfo uniform{frames_.buffer, offset, sizeof(Frame)};
         const VkDescriptorBufferInfo lampData{lamps_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo surfaceData{surface_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo sprayData{spray_.buffer, 0, VK_WHOLE_SIZE};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
         const std::array<VkDescriptorImageInfo, 6> images{{
@@ -476,7 +490,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
             {repeat_, textures_->albedo_.view, read},
             {repeat_, textures_->normal_.view, read},
         }};
-        std::array<VkWriteDescriptorSet, 8> writes{};
+        std::array<VkWriteDescriptorSet, 10> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -486,9 +500,9 @@ void RealisticRenderer::descriptors(const Image& depth) {
             if (b == 0) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 w.pBufferInfo = &uniform;
-            } else if (b == 7) {
+            } else if (b >= 7) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                w.pBufferInfo = &lampData;
+                w.pBufferInfo = b == 7 ? &lampData : b == 8 ? &surfaceData : &sprayData;
             } else {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &images.at(b - 1);
@@ -613,6 +627,54 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         main.water = {f(water->top), settings.windSpeed, 1.0F, f(water->bottom)};
         main.waterRect = {f(water->center[0]), f(water->center[1]), f(water->half[0]),
                           f(water->half[1])};
+    }
+    if (water) {
+        const RealisticWaterSurface& moving = settings.waterSurface;
+        const std::size_t n = moving.cells;
+        if (n >= 2 && n <= kMaxRealisticSurfaceCells && moving.cell > 0.0 &&
+            moving.heights.size() == n * n) {
+            // Per cell: η, its slope by central differences (one-sided at the rim), the foam.
+            auto* cells = static_cast<std::array<float, 4>*>(surface_.mapped);
+            const auto eta = [&](std::size_t x, std::size_t y) {
+                const float v = moving.heights[y * n + x];
+                return std::isfinite(v) ? v : 0.0F;
+            };
+            const auto cell = static_cast<float>(moving.cell);
+            for (std::size_t y = 0; y < n; ++y) {
+                for (std::size_t x = 0; x < n; ++x) {
+                    const std::size_t x0 = x == 0 ? 0 : x - 1;
+                    const std::size_t x1 = x + 1 == n ? x : x + 1;
+                    const std::size_t y0 = y == 0 ? 0 : y - 1;
+                    const std::size_t y1 = y + 1 == n ? y : y + 1;
+                    const float foam = moving.foam.size() == n * n
+                                           ? std::clamp(moving.foam[y * n + x], 0.0F, 1.0F)
+                                           : 0.0F;
+                    cells[y * n + x] = {
+                        eta(x, y), (eta(x1, y) - eta(x0, y)) / (static_cast<float>(x1 - x0) * cell),
+                        (eta(x, y1) - eta(x, y0)) / (static_cast<float>(y1 - y0) * cell), foam};
+                }
+            }
+            flush(device_, surface_);
+            main.surface = {f(moving.first[0] - eye[0]), f(moving.first[1] - eye[1]), cell,
+                            static_cast<float>(n)};
+            main.surfaceLook = {moving.relief, 0.0F, 0.0F, 0.0F};
+        }
+    }
+    {
+        const RealisticSpray& spray = settings.spray;
+        const std::size_t count =
+            static_cast<std::size_t>(spray.cells[0]) * spray.cells[1] * spray.cells[2];
+        if (spray.cells[0] >= 2 && spray.cells[1] >= 2 && spray.cells[2] >= 2 &&
+            count <= kMaxRealisticSprayCells && spray.water.size() == count && spray.cell > 0.0 &&
+            spray.extinctionPerKg > 0.0) {
+            std::memcpy(spray_.mapped, spray.water.data(), count * sizeof(float));
+            flush(device_, spray_);
+            main.sprayBox = {f(spray.first[0] - eye[0]), f(spray.first[1] - eye[1]),
+                             f(spray.first[2] - eye[2]), f(spray.cell)};
+            main.sprayDims = {static_cast<float>(spray.cells[0]),
+                              static_cast<float>(spray.cells[1]),
+                              static_cast<float>(spray.cells[2]), f(spray.extinctionPerKg)};
+        }
     }
     main.screen = {static_cast<float>(extent.width), static_cast<float>(extent.height),
                    1.0F / static_cast<float>(extent.width),

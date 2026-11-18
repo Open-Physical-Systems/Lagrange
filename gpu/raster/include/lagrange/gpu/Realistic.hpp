@@ -57,6 +57,38 @@ struct RealisticLamp {
 /// Lamps drawn per frame at most (RFC 0021 open question 5): the brightest at the eye, by I/d².
 inline constexpr std::size_t kMaxRealisticLamps = 64;
 
+/// The most cells a side of a moving water surface the renderer takes (RealisticWaterSurface).
+inline constexpr std::uint32_t kMaxRealisticSurfaceCells = 256;
+
+/// The most cells of a spray box the renderer takes (RealisticSpray).
+inline constexpr std::size_t kMaxRealisticSprayCells = 65536;
+
+/// The spray off water as the physics has it (downwash.md §5b): its water per cell (kg/m³) in a
+/// box, drawn as mist: its extinction along each view ray, scattered back as the daylight's
+/// white. `extinctionPerKg` (1/m per kg/m³) is the drops' (Q_ext = 2: 3/(ρ_w D) per kg/m³).
+struct RealisticSpray {
+    std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz; fewer than 2 in any: none
+    double cell{0.0};                      ///< m
+    std::array<double, 3> first{};         ///< world: the first cell's centre
+    std::span<const float> water;          ///< kg/m³, x fastest, then y, then z
+    double extinctionPerKg{0.0};           ///< 1/m per kg/m³ of water
+};
+
+/// The water's moving surface as the physics has it (docs/physics/water.md "The surface under a
+/// rotor"): a square grid of heights over the still level on the first body of water, drawn in
+/// place of the flat level where it lies. The water is lifted by η and shaded by its slope (from
+/// the heights by central differences), and foams where `foam` says the spray is torn off.
+struct RealisticWaterSurface {
+    std::uint32_t cells{0};          ///< a side; 0 (or fewer than 2, or over the most): none
+    double cell{0.0};                ///< m
+    std::array<double, 2> first{};   ///< world x and y of the first cell's centre
+    std::span<const float> heights;  ///< m over the still level, cells² in row order (y rows of x)
+    std::span<const float> foam;     ///< 0-1 per cell, or empty
+    /// How much the heights and slopes are scaled when drawn: 1 as the physics has them; more
+    /// exaggerates sub-millimetre ripples so that they can be seen (a drawing choice).
+    float relief{1.0F};
+};
+
 /// The renderer's units per lux (RFC 0021 §4): the drawn sun, kSunStrength, is the IES clear-sky
 /// direct normal illuminance of the light_sensor (sensors.md §9) at the drawn sun's elevation on
 /// the March equinox, so a Lambertian surface of albedo ρ under E lx is drawn ρ·E/π times this.
@@ -102,6 +134,10 @@ struct RealisticSettings {
     /// The sky's horizontal illuminance (lx): the sun and the sky are drawn at its share of
     /// realisticDaylight(), and the picture adapts (realisticAdaptation). NaN: the drawn day.
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
+    /// The first body of water's moving surface, when the physics moves it.
+    RealisticWaterSurface waterSurface;
+    /// The spray's mist, when the run has spray.
+    RealisticSpray spray;
     /// The final image is the scene's linear HDR value, clamped to 1, with no exposure, tone
     /// mapping, bloom or occlusion: for calibration tests.
     bool linear{false};
@@ -159,8 +195,10 @@ private:
     Image hdrCopy_;
     Image mirror_;
     Image mirrorDepth_;
-    Buffer frames_;  // host-visible: the main Frame, then the mirror pass's
-    Buffer lamps_;   // host-visible: up to kMaxRealisticLamps lamps (realistic.slang's Lamp)
+    Buffer frames_;   // host-visible: the main Frame, then the mirror pass's
+    Buffer lamps_;    // host-visible: up to kMaxRealisticLamps lamps (realistic.slang's Lamp)
+    Buffer surface_;  // host-visible: the moving water surface's cells (η, ∂η/∂x, ∂η/∂y, foam)
+    Buffer spray_;    // host-visible: the spray's water per cell (kg/m³)
     VkSampler linear_{VK_NULL_HANDLE};
     VkSampler nearest_{VK_NULL_HANDLE};
     VkSampler repeat_{VK_NULL_HANDLE};

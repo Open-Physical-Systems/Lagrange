@@ -444,6 +444,87 @@ TEST(RealisticLight, ALitPlaneReadsRhoEOverPi) {
 }
 
 // At night with no lamp the picture is black, and a lamp lights a pool on the plane.
+// The water's moving surface (RealisticWaterSurface, water.md): a dimple in the patch changes the
+// water's colour where it lies and nowhere else; the same surface twice draws the same image.
+TEST(RealisticWater, TheMovingSurfaceShadesTheWaterWhereItLies) {
+    const std::vector<float> positions{-3, -3, 0, 3, -3, 0, 3, 3, 0, -3, 3, 0};
+    const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::vector<std::uint32_t> indices{0, 1, 2, 0, 2, 3};
+    const std::vector<MeshSource> meshes{{positions, normals, indices}};
+    std::string error;
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    auto scene = RasterScene::create(gpu != nullptr ? gpu : "", meshes, error, {.realistic = true});
+    ASSERT_TRUE(scene) << error;
+    if (!scene->realistic()) {
+        GTEST_SKIP() << "a software device keeps the simple shading";
+    }
+    PinholeCamera camera;  // 3 m over the water, looking straight down
+    camera.width = 240;
+    camera.height = 240;
+    camera.fx = camera.fy = 120.0;
+    camera.cx = camera.cy = 119.5;
+    camera.position = {0.0, 0.0, 3.0};
+    camera.orientation = {0.0, 1.0, 0.0, 0.0};  // optical z down, x along world x, y along -y
+    RasterInstance water;
+    water.water = true;
+    water.box = {-3.0F, -3.0F, -1.0F, 3.0F, 3.0F, 0.0F};
+    const std::vector<RasterInstance> instances{water};
+    RasterCamera renderer(scene, camera.width, camera.height);
+    // A 1.92 m patch in the +x half (x 0.3 to 2.22 m), a 30 mm dimple with rings in its middle.
+    constexpr std::uint32_t kCells = 64;
+    constexpr double kCell = 0.03;
+    const std::array<double, 2> first{0.3 + kCell / 2.0, -0.96 + kCell / 2.0};
+    std::vector<float> heights(kCells * kCells);
+    for (std::uint32_t y = 0; y < kCells; ++y) {
+        for (std::uint32_t x = 0; x < kCells; ++x) {
+            const double dx = (x - 31.5) * kCell;
+            const double dy = (y - 31.5) * kCell;
+            const double r = std::hypot(dx, dy);
+            heights[y * kCells + x] =
+                static_cast<float>(-0.03 * std::exp(-r * r / 0.04) + 0.002 * std::cos(r / 0.02));
+        }
+    }
+    const auto shoot = [&](bool moving) {
+        RealisticWaterSurface surface;
+        if (moving) {
+            surface.cells = kCells;
+            surface.cell = kCell;
+            surface.first = first;
+            surface.heights = heights;
+        }
+        renderer.setWaterSurface(surface);
+        RasterImages out;
+        renderer.render(instances, camera, out, 1.0);
+        return out;
+    };
+    const RasterImages still = shoot(false);
+    const RasterImages moved = shoot(true);
+    const RasterImages again = shoot(true);
+    EXPECT_EQ(moved.rgba, again.rgba);
+    // Pixel of a world point on the water (z 0): u = cx + fx·x/3, v = cy + fy·y/3.
+    const auto difference = [&](double x0, double x1, double y0, double y1) {
+        double sum = 0.0;
+        int count = 0;
+        for (double x = x0; x <= x1; x += 0.05) {
+            for (double y = y0; y <= y1; y += 0.05) {
+                const auto u =
+                    static_cast<std::size_t>(std::lround(camera.cx + camera.fx * x / 3.0));
+                const auto v =
+                    static_cast<std::size_t>(std::lround(camera.cy + camera.fy * y / 3.0));
+                for (std::size_t c = 0; c < 3; ++c) {
+                    const std::size_t i = 4 * (v * camera.width + u) + c;
+                    sum +=
+                        std::abs(static_cast<int>(moved.rgba[i]) - static_cast<int>(still.rgba[i]));
+                }
+                ++count;
+            }
+        }
+        return sum / (3.0 * count);
+    };
+    EXPECT_GT(difference(0.96, 1.56, -0.3, 0.3), 2.0);   // the dimple: 8-bit levels on average
+    EXPECT_LT(difference(-2.5, -0.5, -2.0, 2.0), 0.05);  // the -x half: untouched
+}
+
 TEST(RealisticLight, NightIsDarkButForTheLamp) {
     const std::vector<float> positions{-50, -50, 0, 50, -50, 0, 50, 50, 0, -50, 50, 0};
     const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};

@@ -50,6 +50,7 @@ ImVec4 viridis(float fraction) {
 /// only field with vertical slices and the airflow particles.
 constexpr const char* kAirField = "aero/wind_speed";
 constexpr const char* kSprayField = "aero/spray";  // the spray off water (downwash.md §5b)
+constexpr const char* kWaterSurfaceField = "water/surface";  // its moving surface (water.md)
 /// |B| of the EMI sources; sliced upright through the robot too (RFC 0013: its own wiring).
 constexpr const char* kFluxField = "emi/flux_density";
 
@@ -65,6 +66,67 @@ struct EnvironmentView {
     double heightM{0.1};
     float opacity{0.85F};
     SliceOrientation orientation{SliceOrientation::Horizontal};
+    /// How the layer's values are coloured (the Overlays panel's "contrast"): as they are, on a
+    /// symmetric log scale over four decades below the largest |value|, or high-passed (less
+    /// their mean over kHighPassCells round each cell), so that sub-millimetre ripples show beside
+    /// a dimple of centimetres (water/surface).
+    enum class Contrast : int { Linear = 0, SymmetricLog = 1, HighPass = 2 };
+    Contrast contrast{Contrast::Linear};
+    static constexpr int kHighPassCells = 3;  // the mean's half width, cells
+
+    /// The slice to draw: the stream's latest, high-passed when asked (made once per slice).
+    std::shared_ptr<const FieldSliceData> shown() {
+        std::shared_ptr<const FieldSliceData> latest = stream ? stream->latest() : nullptr;
+        if (!latest || contrast != Contrast::HighPass || latest->components != 1U) {
+            return latest;
+        }
+        if (latest != passedOf_) {
+            passedOf_ = latest;
+            passed_ = highPassed(*latest);
+        }
+        return passed_;
+    }
+
+    /// `slice` less the mean of its finite values within kHighPassCells cells round each cell.
+    static std::shared_ptr<const FieldSliceData> highPassed(const FieldSliceData& slice) {
+        auto out = std::make_shared<FieldSliceData>(slice);
+        const auto w = static_cast<int>(slice.width);
+        const auto h = static_cast<int>(slice.height);
+        float lo = 0.0F;
+        float hi = 0.0F;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const float v = slice.values[static_cast<std::size_t>(y) * w + x];
+                if (!std::isfinite(v)) {
+                    continue;
+                }
+                double sum = 0.0;
+                int count = 0;
+                for (int dy = -kHighPassCells; dy <= kHighPassCells; ++dy) {
+                    for (int dx = -kHighPassCells; dx <= kHighPassCells; ++dx) {
+                        const int xx = x + dx;
+                        const int yy = y + dy;
+                        if (xx < 0 || yy < 0 || xx >= w || yy >= h) {
+                            continue;
+                        }
+                        const float n = slice.values[static_cast<std::size_t>(yy) * w + xx];
+                        if (std::isfinite(n)) {
+                            sum += n;
+                            ++count;
+                        }
+                    }
+                }
+                const auto passed = static_cast<float>(v - sum / count);
+                out->values[static_cast<std::size_t>(y) * w + x] = passed;
+                lo = std::min(lo, passed);
+                hi = std::max(hi, passed);
+            }
+        }
+        const float most = std::max(-lo, hi);  // symmetric about 0
+        out->valueMin = -most;
+        out->valueMax = most;
+        return out;
+    }
 
     /// Chooses the first available field when none is chosen, and keeps the stream open.
     void follow(PanelContext& context) {
@@ -72,6 +134,15 @@ struct EnvironmentView {
         if (context.fieldSlice != nullptr && !context.fieldSlice->empty() &&
             context.client.environment()) {
             std::string asked = *context.fieldSlice;
+            // An optional last part: the contrast (water/surface:xy:highpass).
+            for (const auto& [word, mode] : {std::pair{":linear", Contrast::Linear},
+                                             std::pair{":symlog", Contrast::SymmetricLog},
+                                             std::pair{":highpass", Contrast::HighPass}}) {
+                if (asked.ends_with(word)) {
+                    contrast = mode;
+                    asked.resize(asked.size() - std::string_view(word).size());
+                }
+            }
             SliceOrientation plane = SliceOrientation::Horizontal;
             if (const std::size_t colon = asked.rfind(':'); colon != std::string::npos) {
                 const std::string name = asked.substr(colon + 1);
@@ -115,11 +186,18 @@ struct EnvironmentView {
         }
         if (!field.empty()) {
             // The app's particles watch the air's XZ slice with volumes: ask for the same.
-            const bool volume = field == kAirField && orientation == SliceOrientation::VerticalXZ &&
-                                context.renderOptions != nullptr && context.renderOptions->airflow;
+            // The water's surface and the spray are always asked with their boxes: the
+            // realistic view and the spray overlay draw from them.
+            const bool volume =
+                (field == kAirField && orientation == SliceOrientation::VerticalXZ &&
+                 context.renderOptions != nullptr && context.renderOptions->airflow) ||
+                field == kWaterSurfaceField || field == kSprayField;
             stream = context.client.watchField(field, heightM, orientation, volume);
         }
     }
+
+private:
+    std::shared_ptr<const FieldSliceData> passedOf_, passed_;
 };
 
 bool emptyState(const PanelContext& context) {
@@ -703,16 +781,30 @@ struct SliceScale {
     float logHigh{0.0F};
     float lowest{0.0F};
     float range{1.0F};
+    /// The symmetric log scale (EnvironmentView::Contrast): 0 in the middle, ±most at the ends.
+    bool symmetricLog{false};
+    float most{1.0F};
 
-    SliceScale(const std::string& field, const FieldSliceData& slice)
-        : logScale(field == kFluxField && slice.valueMax > 0.0F)
+    SliceScale(const std::string& field, const FieldSliceData& slice,
+               EnvironmentView::Contrast contrast = EnvironmentView::Contrast::Linear)
+        : logScale(field == kFluxField && slice.valueMax > 0.0F &&
+                   contrast == EnvironmentView::Contrast::Linear)
         , logHigh(logScale ? std::log10(slice.valueMax) : 0.0F)
         , lowest(slice.valueMin)
-        , range(std::max(slice.valueMax - slice.valueMin, 1e-12F)) {
+        , range(std::max(slice.valueMax - slice.valueMin, 1e-12F))
+        , symmetricLog(contrast == EnvironmentView::Contrast::SymmetricLog)
+        , most(std::max({std::abs(slice.valueMin), std::abs(slice.valueMax), 1e-30F})) {
         logLow = logScale ? std::max(std::log10(std::max(slice.valueMin, 1e-30F)), logHigh - 4.0F)
                           : 0.0F;
     }
     [[nodiscard]] float fraction(float value) const {
+        if (symmetricLog) {
+            // sign(v)·log10(1 + |v|/v0)/log10(1 + most/v0), v0 four decades below the most.
+            const float v0 = most * 1e-4F;
+            const float scaled =
+                std::log10(1.0F + std::abs(value) / v0) / std::log10(1.0F + most / v0);
+            return 0.5F + 0.5F * std::copysign(scaled, value);
+        }
         if (logScale) {
             return (std::log10(std::max(value, 1e-30F)) - logLow) /
                    std::max(logHigh - logLow, 1e-6F);
@@ -739,7 +831,8 @@ const EnvironmentInfo::Field* shownField(const PanelContext& context, const Envi
 /// bar and its range; `wind` adds the air's line when its particles are drawn.
 void sliceLegend(ImDrawList* draw, const ImVec2& origin, const ImVec2& size, const char* label,
                  const char* unit, const std::string& field, const FieldSliceData& slice,
-                 const char* wind) {
+                 const char* wind,
+                 EnvironmentView::Contrast contrast = EnvironmentView::Contrast::Linear) {
     const theme::Fonts& fonts = theme::fonts();
     const float small = px(theme::kCaptionSize);
     const float tall = wind != nullptr ? px(96.0F) : px(74.0F);
@@ -764,14 +857,24 @@ void sliceLegend(ImDrawList* draw, const ImVec2& origin, const ImVec2& size, con
             ImVec2(barLeft + (barRight - barLeft) * (a + 1.0F / kSteps) + 0.5F, barTop + px(8.0F)),
             u32(viridis(a)));
     }
-    const bool logLegend = field == kFluxField && slice.valueMax > 0.0F;
-    const double lowest = logLegend ? std::max(static_cast<double>(slice.valueMin),
-                                               static_cast<double>(slice.valueMax) * 1e-4)
-                                    : static_cast<double>(slice.valueMin);
+    const bool symmetric = contrast != EnvironmentView::Contrast::Linear;
+    const bool logLegend = field == kFluxField && slice.valueMax > 0.0F && !symmetric;
+    const double most = std::max(std::abs(static_cast<double>(slice.valueMin)),
+                                 std::abs(static_cast<double>(slice.valueMax)));
+    const double lowest = logLegend   ? std::max(static_cast<double>(slice.valueMin),
+                                                 static_cast<double>(slice.valueMax) * 1e-4)
+                          : symmetric ? -most
+                                      : static_cast<double>(slice.valueMin);
     char text[64];
-    std::snprintf(text, sizeof(text), logLegend ? "%.3g · log" : "%.3g", lowest);
+    std::snprintf(text, sizeof(text),
+                  logLegend                                             ? "%.3g · log"
+                  : contrast == EnvironmentView::Contrast::SymmetricLog ? "%.3g · symlog"
+                  : contrast == EnvironmentView::Contrast::HighPass     ? "%.3g · high-pass"
+                                                                        : "%.3g",
+                  lowest);
     draw->AddText(fonts.mono, small, ImVec2(barLeft, barTop + px(12.0F)), u32(c::t3), text);
-    std::snprintf(text, sizeof(text), "%.3g", static_cast<double>(slice.valueMax));
+    std::snprintf(text, sizeof(text), "%.3g",
+                  symmetric ? most : static_cast<double>(slice.valueMax));
     const float maxWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
     draw->AddText(fonts.mono, small, ImVec2(barRight - maxWidth, barTop + px(12.0F)), u32(c::t3),
                   text);
@@ -822,8 +925,7 @@ public:
             ImGui::End();
             return;
         }
-        const std::shared_ptr<const FieldSliceData> slice =
-            view_->stream ? view_->stream->latest() : nullptr;
+        const std::shared_ptr<const FieldSliceData> slice = view_->shown();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const ImVec2 size = ImGui::GetContentRegionAvail();
         ImGui::InvisibleButton("##canvas", size);
@@ -851,7 +953,7 @@ public:
             return ImVec2(base.x + static_cast<float>(x - left) * scale,
                           base.y - static_cast<float>(y - bottom) * scale);
         };
-        const SliceScale colours(view_->field, *slice);
+        const SliceScale colours(view_->field, *slice, view_->contrast);
         const auto fraction = [&colours](float value) { return colours.fraction(value); };
         const float cell = static_cast<float>(slice->cellM) * scale;
         for (std::uint32_t r = 0; r < slice->height; ++r) {
@@ -944,7 +1046,8 @@ public:
         }
 
         // Bottom right: the legend.
-        sliceLegend(draw, origin, size, label, unit, view_->field, *slice, nullptr);
+        sliceLegend(draw, origin, size, label, unit, view_->field, *slice, nullptr,
+                    view_->contrast);
         ImGui::End();
     }
 
@@ -1036,8 +1139,7 @@ public:
         const EnvironmentInfo::Field* field = shownField(context, *view_);
         const char* unit = field != nullptr ? field->unit.c_str() : "";
         const char* label = field != nullptr ? field->label.c_str() : view_->field.c_str();
-        const std::shared_ptr<const FieldSliceData> slice =
-            view_->stream ? view_->stream->latest() : nullptr;
+        const std::shared_ptr<const FieldSliceData> slice = view_->shown();
         if (slice && slice->width > 0 && slice->height > 0) {
             drawSlice(draw, *slice, project);
         }
@@ -1063,7 +1165,7 @@ public:
             char wind[64];
             std::snprintf(wind, sizeof(wind), "airflow · particles move with the air");
             sliceLegend(draw, origin, available, label, unit, view_->field, *slice,
-                        context.renderOptions->airflow ? wind : nullptr);
+                        context.renderOptions->airflow ? wind : nullptr, view_->contrast);
         }
         draw->PopClipRect();
         if (!emptyState(context) && view_->field.empty()) {
@@ -1076,7 +1178,7 @@ public:
 private:
     static constexpr double kOrbitRadiansPerPixel = 0.005;
     static constexpr double kZoomPerWheelStep = 0.9;
-    static constexpr std::uint32_t kMostQuadsPerSide = 96;  // larger slices are merged cells
+    static constexpr std::uint32_t kMostQuadsPerSide = 128;  // larger slices: merged cells
 
     static void camera(PanelContext& context, const ImVec2& size) {
         const ImGuiIO& io = ImGui::GetIO();
@@ -1097,7 +1199,7 @@ private:
     /// field colour map at the Overlays panel's opacity.
     template <typename Project>
     void drawSlice(ImDrawList* draw, const FieldSliceData& slice, const Project& project) const {
-        const SliceScale colours(view_->field, slice);
+        const SliceScale colours(view_->field, slice, view_->contrast);
         const std::uint32_t step = std::max<std::uint32_t>(
             1, (std::max(slice.width, slice.height) + kMostQuadsPerSide - 1) / kMostQuadsPerSide);
         const double half = slice.cellM * 0.5;
@@ -1501,6 +1603,20 @@ public:
             ImGui::SameLine(px(8.0F) + px(112.0F));
             ImGui::SetNextItemWidth(-FLT_MIN);
             ImGui::SliderFloat("##opacity", &view_->opacity, 0.1F, 1.0F, "%.2f");
+            // Contrast: sub-millimetre ripples beside a dimple of centimetres (water/surface).
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+            ImGui::TextUnformatted("contrast");
+            ImGui::PopStyleColor();
+            ImGui::SameLine(px(8.0F) + px(112.0F));
+            static constexpr std::array<const char*, 3> kContrasts{"linear", "symlog", "high-pass"};
+            int contrast = static_cast<int>(view_->contrast);
+            ImGui::BeginDisabled(slice->components != 1U);
+            if (widgets::Segmented("##contrast", kContrasts.data(),
+                                   static_cast<int>(kContrasts.size()), &contrast)) {
+                view_->contrast = static_cast<EnvironmentView::Contrast>(contrast);
+            }
+            ImGui::EndDisabled();
             widgets::PropertyRow("colormap", "viridis", nullptr);
             ImGui::Unindent(px(8.0F));
         }

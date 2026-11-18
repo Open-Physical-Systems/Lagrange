@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <numbers>
 #include <vector>
@@ -96,6 +97,103 @@ TEST(DownwashOnWater, TheSampleQuadsDimpleIsItsJetsStagnationPressure) {
         EXPECT_NEAR(dimple / expected, 1.0, 0.02) << height << " m, U " << u << " m/s";
         EXPECT_GT(top - far, -1e-4);  // no great ridge: the volume spreads over the patch
     }
+}
+
+// The jet's unsteadiness (kJetPressureFluctuation) rings the surface: after a still start on
+// the steady dimple, a fluctuating load sends waves out that reach a ring 0.9 m out after one
+// 0.5 m out; a steady load leaves both still. The time-mean dimple stays the steady one.
+TEST(DownwashOnWater, AFluctuatingJetSendsRingsOutAndKeepsItsMeanDimple) {
+    Downwash d = pond();
+    d.update(sampleQuad(1.0));
+    WaterGrid grid;
+    hydrodynamics::SurfaceParams params;
+    params.cells = grid.cells;
+    params.cell = grid.cell;
+    params.depth = 1.2;
+    params.density = kWater;
+    params.gravity = kG;
+    const std::array<double, 2> corner = patchCorner(grid, {0.0, 0.0});
+    const int n = grid.cells;
+    std::vector<double> mean(static_cast<std::size_t>(n * n));
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            mean[static_cast<std::size_t>(y * n + x)] = d.surfacePressure(
+                {corner[0] + (x + 0.5) * grid.cell, corner[1] + (y + 0.5) * grid.cell, kLevel},
+                kRho, 0);
+        }
+    }
+    hydrodynamics::SurfacePatch settled(params);
+    settled.setState(corner, {}, {});
+    for (int i = 0; i < 750; ++i) {  // 30 s at the server's 0.04 s
+        settled.step(grid.step, mean);
+    }
+    const std::vector<double> still(settled.heights().begin(), settled.heights().end());
+    const std::vector<double> rates(settled.rates().begin(), settled.rates().end());
+    // The rms of η less the steady dimple over a ring of radius r (±3 cm) about the middle.
+    const auto ringRms = [&](const hydrodynamics::SurfacePatch& s, double r) {
+        double sum = 0.0;
+        int count = 0;
+        for (int y = 0; y < n; ++y) {
+            for (int x = 0; x < n; ++x) {
+                const double px = corner[0] + (x + 0.5) * grid.cell;
+                const double py = corner[1] + (y + 0.5) * grid.cell;
+                if (std::abs(std::hypot(px, py) - r) <= 0.03) {
+                    const auto i = static_cast<std::size_t>(y * n + x);
+                    const double e = s.heights()[i] - still[i];
+                    sum += e * e;
+                    ++count;
+                }
+            }
+        }
+        return std::sqrt(sum / count);
+    };
+    const auto run = [&](double share, std::vector<std::array<double, 2>>& rings, double& middle) {
+        hydrodynamics::SurfacePatch s(params);
+        s.setState(corner, still, rates);
+        const std::array<long, 2> cell{std::lround(corner[0] / grid.cell),
+                                       std::lround(corner[1] / grid.cell)};
+        const std::size_t deepest =
+            static_cast<std::size_t>(std::ranges::min_element(still) - still.begin());
+        middle = 0.0;
+        constexpr int kSteps = 500;  // 20 s
+        for (int k = 0; k < kSteps; ++k) {
+            std::vector<double> p = mean;
+            random::Stream rng(20261118, static_cast<std::uint64_t>(k), 7);
+            addJetFluctuation(p, n, cell, share, rng);
+            s.step(grid.step, p);
+            rings.push_back({ringRms(s, 0.5), ringRms(s, 0.9)});
+            middle += s.heights()[deepest] / kSteps;
+        }
+    };
+    std::vector<std::array<double, 2>> steady;
+    std::vector<std::array<double, 2>> ringing;
+    double steadyMiddle = 0.0;
+    double ringingMiddle = 0.0;
+    run(0.0, steady, steadyMiddle);
+    run(kJetPressureFluctuation, ringing, ringingMiddle);
+    // Without it: still but for what is left of settling (under a micrometre).
+    EXPECT_LT(std::max(steady.back()[0], steady.back()[1]), 1e-6);
+    // With it: sub-millimetre waves on both rings, by the end.
+    EXPECT_GT(ringing.back()[0], 1e-4);
+    EXPECT_GT(ringing.back()[1], 1e-4);
+    EXPECT_LT(ringing.back()[0], 2e-3);
+    // Outward: the outer ring reaches a tenth of its final level later than the inner one.
+    const auto arrival = [&](int r) {
+        const double level = 0.1 * ringing.back()[static_cast<std::size_t>(r)];
+        for (std::size_t k = 0; k < ringing.size(); ++k) {
+            if (ringing[k][static_cast<std::size_t>(r)] > level) {
+                return k;
+            }
+        }
+        return ringing.size();
+    };
+    EXPECT_LT(arrival(0), arrival(1));
+    // The mean dimple: within 3 % of the steady one (ρ_air U²/(2 ρ_w g), the test above).
+    EXPECT_NEAR(ringingMiddle / steadyMiddle, 1.0, 0.03);
+    std::printf(
+        "rings rms 0.5 m %.3g m, 0.9 m %.3g m; arrivals %zu, %zu steps; mean dimple %.4g vs %.4g "
+        "m\n",
+        ringing.back()[0], ringing.back()[1], arrival(0), arrival(1), ringingMiddle, steadyMiddle);
 }
 
 TEST(DownwashOnWater, TheLoadGridFollowsTheWakeAcrossThePond) {
@@ -244,14 +342,37 @@ TEST(DownwashSpray, NoSprayAboveTheOnsetHeightSprayBelowIt) {
     EXPECT_GT(low.rate, 0.0);
     EXPECT_GT(low.drops, 100U);
     EXPECT_GT(low.extinction, 0.0);  // round the drone, what its cameras look through
-    // 0.5 m up: the outwash's peak 13.7 m/s, 5.2 g/s torn off, about 1400 parcels, 1.1 g/m³ in
-    // the ring at its densest, 0.0013 /m of extinction round the drone, none at the drone.
+    // 0.5 m up: the outwash's peak 13.7 m/s, 5.2 g/s torn off, about 1.3 g/m³ in the ring at
+    // its densest and 2.5 g/m³ brought back to the drone by the recirculation.
     // The drops ride the outwash out in a ring, about a gram per cubic metre at its densest (a
-    // heavy fog's water; kSprayEntrainment's behavioural calibration): 0.1 to 10 g/m³. Without
-    // the recirculation the fitted wake leaves out, few come back up to the drone itself.
+    // heavy fog's water; kSprayEntrainment's behavioural calibration): 0.1 to 10 g/m³. The
+    // recirculation (recirculation()) brings some back up to the drone itself.
     EXPECT_GT(low.ring, 1e-4);
     EXPECT_LT(low.ring, 1e-2);
-    EXPECT_LT(low.nearDrone, low.ring);
+    EXPECT_GT(low.nearDrone, 0.0);
+}
+
+// The recirculation (recirculation()): low over water the ring vortex brings the outwash's
+// drops back up to the drone; at 2 m it is gone (no recirculation, and the outwash only just
+// tears spray off), and the water round the drone is about none.
+TEST(DownwashSpray, TheRecirculationBringsSprayBackToALowDrone) {
+    Downwash high = pond();
+    high.update(sampleQuad(2.0));
+    EXPECT_EQ(recirculation(high, {0.6, 0.0, kLevel + 0.5})[2], 0.0);
+    Downwash low = pond();
+    low.update(sampleQuad(0.3));
+    // Up outside the ring's centre, in at its top, out along the water.
+    const double ringR =
+        kRecirculationRadius * std::max(low.groups()[0].arriveRadius, low.groups()[0].length / 2.0);
+    EXPECT_GT(recirculation(low, {ringR + 0.1, 0.0, kLevel + 0.15})[2], 0.0);
+    EXPECT_LT(recirculation(low, {ringR, 0.0, kLevel + 0.25})[0], 0.0);
+    EXPECT_GT(recirculation(low, {ringR, 0.0, kLevel + 0.05})[0], 0.0);
+    const SprayRun near = runSpray(0.3, 4.0);
+    const SprayRun far = runSpray(2.0, 4.0);
+    std::printf("water at the drone: 0.3 m %.3g kg/m3, 2 m %.3g kg/m3\n", near.nearDrone,
+                far.nearDrone);
+    EXPECT_GT(near.nearDrone, 1e-5);  // above 10 mg/m³: a light fog's water at the drone
+    EXPECT_LT(far.nearDrone, 1e-6);
 }
 
 }  // namespace
