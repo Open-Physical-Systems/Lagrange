@@ -1353,17 +1353,23 @@ public:
         static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
                                                   theme::hex(0x21918C), theme::hex(0x5EC962),
                                                   theme::hex(0xFDE725)};
-        if (!renderOptions_.spray) {
+        // The realistic view draws the drops as water (pale, more opaque where there is more
+        // of it) whenever the run has spray; the Overlays row draws them coloured by the map.
+        const bool asWater = !renderOptions_.spray && foamStream_ != nullptr;
+        if (!renderOptions_.spray && !asWater) {
             if (sprayStream_ && !foamStream_) {
                 (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
             }
             sprayStream_.reset();
             return;
         }
-        if (!sprayStream_) {
+        if (asWater) {
+            sprayStream_.reset();
+        } else if (!sprayStream_) {
             sprayStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
         }
-        const std::shared_ptr<const FieldVolumeData> volume = sprayStream_->latestVolume();
+        const std::shared_ptr<const FieldVolumeData> volume =
+            asWater ? foamStream_->latestVolume() : sprayStream_->latestVolume();
         if (!volume || volume->components != 1U || volume->valueMax <= 0.0F) {
             return;
         }
@@ -1380,6 +1386,11 @@ public:
             lines.origin = volume->origin;
             lines.color = {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
                            a.z + (b.z - a.z) * blend, 1.0F};
+            if (asWater) {  // water drops against the sky: pale, denser where there is more
+                constexpr std::array<float, 3> kDrop{0.86F, 0.92F, 0.97F};
+                lines.color = {kDrop[0], kDrop[1], kDrop[2],
+                               0.3F + 0.6F * static_cast<float>(c) / (kColours - 1)};
+            }
             lines.vertices.clear();
         }
         const double cellVolume = volume->cellM * volume->cellM * volume->cellM;

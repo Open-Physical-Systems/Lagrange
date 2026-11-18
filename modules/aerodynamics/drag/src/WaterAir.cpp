@@ -86,6 +86,51 @@ void addJetFluctuation(std::span<double> pressure, int cells, const std::array<l
     }
 }
 
+Downwash::Vec3 recirculation(const Downwash& downwash, const Downwash::Vec3& x) {
+    Downwash::Vec3 out{};
+    for (const Downwash::Group& g : downwash.groups()) {
+        if (!g.hits || g.hitWater < 0 || !(g.arriveSpeed > 0.0) || !(g.length > 0.0)) {
+            continue;
+        }
+        const Downwash::Vec3& n = g.hitNormal;
+        const auto dot = [](const Downwash::Vec3& a, const Downwash::Vec3& b) {
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        };
+        const Downwash::Vec3 up{g.centre[0] - g.hitPoint[0], g.centre[1] - g.hitPoint[1],
+                                g.centre[2] - g.hitPoint[2]};
+        const double h = dot(up, n);
+        const double strength = 1.0 - h / (kRecirculationHeights * g.length);
+        if (!(h > 0.0) || strength <= 0.0) {
+            continue;
+        }
+        // x in the meridian plane: r out from the impingement point along the surface, z up.
+        const Downwash::Vec3 d{x[0] - g.hitPoint[0], x[1] - g.hitPoint[1], x[2] - g.hitPoint[2]};
+        const double z = dot(d, n);
+        const Downwash::Vec3 flat{d[0] - z * n[0], d[1] - z * n[1], d[2] - z * n[2]};
+        const double r = std::sqrt(dot(flat, flat));
+        if (r < 1e-9) {
+            continue;
+        }
+        const double ringR = kRecirculationRadius * std::max(g.arriveRadius, g.length / 2.0);
+        const double core = h / 2.0;
+        const double dr = r - ringR;
+        const double dz = z - h / 2.0;
+        const double rho = std::hypot(dr, dz);
+        if (rho < 1e-9) {
+            continue;
+        }
+        const double edge = kRecirculationShare * g.arriveSpeed * strength;
+        const double speed = rho < core ? edge * rho / core : edge * core / rho;
+        // Turning (−dz, dr): outward under the centre, up outside it.
+        const double vr = -dz / rho * speed;
+        const double vz = dr / rho * speed;
+        for (std::size_t k = 0; k < 3; ++k) {
+            out[k] += vr * flat[k] / r + vz * n[k];
+        }
+    }
+    return out;
+}
+
 double kelvinHelmholtzOnset(double rhoAir, double rhoWater, double tension, double gravity) {
     if (rhoAir <= 0.0 || rhoWater <= rhoAir || tension <= 0.0 || gravity <= 0.0) {
         return std::numeric_limits<double>::infinity();
@@ -343,7 +388,12 @@ void WaterAir::step(const StepContext& context, const Downwash& downwash, double
     if (!spray_) {
         return;
     }
-    moveDrops(context, dt, rhoAir, air);
+    // The drops also ride the recirculation the fitted wake leaves out (recirculation()).
+    moveDrops(context, dt, rhoAir, [&](const Downwash::Vec3& x) {
+        const Downwash::Vec3 u = air(x);
+        const Downwash::Vec3 back = recirculation(downwash, x);
+        return Downwash::Vec3{u[0] + back[0], u[1] + back[1], u[2] + back[2]};
+    });
     for (std::size_t j = 0; j < rotorSpray_.size(); ++j) {
         bus.write(rotorSpray_[j], j < hubs.size() ? sprayAt(hubs[j]) : 0.0);
     }

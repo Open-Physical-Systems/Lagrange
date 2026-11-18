@@ -342,14 +342,37 @@ TEST(DownwashSpray, NoSprayAboveTheOnsetHeightSprayBelowIt) {
     EXPECT_GT(low.rate, 0.0);
     EXPECT_GT(low.drops, 100U);
     EXPECT_GT(low.extinction, 0.0);  // round the drone, what its cameras look through
-    // 0.5 m up: the outwash's peak 13.7 m/s, 5.2 g/s torn off, about 1400 parcels, 1.1 g/m³ in
-    // the ring at its densest, 0.0013 /m of extinction round the drone, none at the drone.
+    // 0.5 m up: the outwash's peak 13.7 m/s, 5.2 g/s torn off, about 1.3 g/m³ in the ring at
+    // its densest and 2.5 g/m³ brought back to the drone by the recirculation.
     // The drops ride the outwash out in a ring, about a gram per cubic metre at its densest (a
-    // heavy fog's water; kSprayEntrainment's behavioural calibration): 0.1 to 10 g/m³. Without
-    // the recirculation the fitted wake leaves out, few come back up to the drone itself.
+    // heavy fog's water; kSprayEntrainment's behavioural calibration): 0.1 to 10 g/m³. The
+    // recirculation (recirculation()) brings some back up to the drone itself.
     EXPECT_GT(low.ring, 1e-4);
     EXPECT_LT(low.ring, 1e-2);
-    EXPECT_LT(low.nearDrone, low.ring);
+    EXPECT_GT(low.nearDrone, 0.0);
+}
+
+// The recirculation (recirculation()): low over water the ring vortex brings the outwash's
+// drops back up to the drone; at 2 m it is gone (no recirculation, and the outwash only just
+// tears spray off), and the water round the drone is about none.
+TEST(DownwashSpray, TheRecirculationBringsSprayBackToALowDrone) {
+    Downwash high = pond();
+    high.update(sampleQuad(2.0));
+    EXPECT_EQ(recirculation(high, {0.6, 0.0, kLevel + 0.5})[2], 0.0);
+    Downwash low = pond();
+    low.update(sampleQuad(0.3));
+    // Up outside the ring's centre, in at its top, out along the water.
+    const double ringR =
+        kRecirculationRadius * std::max(low.groups()[0].arriveRadius, low.groups()[0].length / 2.0);
+    EXPECT_GT(recirculation(low, {ringR + 0.1, 0.0, kLevel + 0.15})[2], 0.0);
+    EXPECT_LT(recirculation(low, {ringR, 0.0, kLevel + 0.25})[0], 0.0);
+    EXPECT_GT(recirculation(low, {ringR, 0.0, kLevel + 0.05})[0], 0.0);
+    const SprayRun near = runSpray(0.3, 4.0);
+    const SprayRun far = runSpray(2.0, 4.0);
+    std::printf("water at the drone: 0.3 m %.3g kg/m3, 2 m %.3g kg/m3\n", near.nearDrone,
+                far.nearDrone);
+    EXPECT_GT(near.nearDrone, 1e-5);  // above 10 mg/m³: a light fog's water at the drone
+    EXPECT_LT(far.nearDrone, 1e-6);
 }
 
 }  // namespace

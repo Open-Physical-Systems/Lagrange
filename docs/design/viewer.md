@@ -107,12 +107,16 @@ flowchart LR
   in place of the made-up ripples there, on top of the swell; `RealisticWaterSurface`, binding 8 of
   `realistic.slang`), and the spray's water near the surface (`aero/spray`) foams it where the
   outwash tears it off (0.3 m of drops over it, full foam at 2 g/m², a drawing choice).
-  `--water-relief X` draws it X times as high and steep (1 by default: as the physics has it).
+  `--water-relief X` shades it X times as steep, its height true (1 by default: as the physics
+  has it).
   It is also the Environment workspace's `water/surface` field layer, whose Overlays *contrast*
   (linear, symlog over four decades, or high-pass: less the mean over 7 × 7 cells; `--slice
   water/surface:xy:highpass`) shows sub-millimetre rings beside a dimple of centimetres, and its
-  spray the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are
-  (`--overlays spray`; downwash.md §5b); one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
+  spray the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are,
+  coloured by the map (`--overlays spray`; downwash.md §5b); without it the realistic view draws
+  the same drops as pale water, more opaque where there is more. Without wind the realistic
+  water is still (no swell, made-up ripples, caustics or drifting foam below 3 m/s), and
+  `--water-relief` scales only the slopes; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
   Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by

@@ -100,6 +100,24 @@ inline constexpr double kSprayViewReach = 2.5;
 inline constexpr std::size_t kSprayMaxDrops = 2048;
 inline constexpr std::size_t kSprayDropsPerStep = 96;
 
+/// The recirculation of a wake in ground effect, which the fitted wake leaves out: low over a
+/// surface the wall jet separates and rolls up into a ring vortex round the rotor that carries
+/// what it lifted back up and in, into the rotor's inflow (the re-ingestion behind helicopter
+/// brownout and whiteout; Leishman, Principles of Helicopter Aerodynamics, 2nd ed., 2006,
+/// ch. 14 on ground effect and recirculation; TODO(verify) the section and every number below).
+/// Behavioural, and only for the spray drops: a Rankine ring vortex in each meridian plane of a
+/// wake that meets water, centred kRecirculationRadius arrival radii out from the impingement
+/// point and half the rotors' height up, its core half that height; turning outward along the
+/// surface, up on the outside, inward at the top, down on the inside; its edge speed
+/// kRecirculationShare of the arriving jet's, falling linearly with the height to nothing at
+/// kRecirculationHeights wake widths (the motor-to-motor diagonal), where the wall jet stays
+/// attached (TODO(verify) the height at which a rotor's recirculation ceases).
+inline constexpr double kRecirculationRadius = 1.5;   // arrival radii
+inline constexpr double kRecirculationShare = 0.3;    // of the arriving jet's speed
+inline constexpr double kRecirculationHeights = 1.5;  // wake widths
+/// The recirculating air at `x` (m/s, world) of every wake of `downwash` that meets water.
+[[nodiscard]] Downwash::Vec3 recirculation(const Downwash& downwash, const Downwash::Vec3& x);
+
 /// Per body of water w, writes water/<w>/patch (m, 2: the lower corner of the patch, following
 /// the first wake that meets this water: moved when the wake's centre leaves the patch's middle
 /// half; NaN until a wake comes), water/<w>/air_pressure (Pa, per cell: Downwash::surfacePressure)

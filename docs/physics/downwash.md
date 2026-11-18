@@ -129,6 +129,20 @@ For the sample quadcopter the outwash passes the onset with the rotor plane belo
 over the water. At 0.5 m it tears off 5 g/s, carried out in a ring 1.5 to 2.5 m from the axis
 and up to half a metre high.
 
+**Recirculation.** Low over a surface a rotor's wall jet separates and rolls up into a ring
+vortex that carries what it lifted back up and in, into the rotor's inflow: the re-ingestion
+behind helicopter brownout and whiteout (Leishman, *Principles of Helicopter Aerodynamics*,
+2006, ch. 14; TODO(verify) the section and the numbers). The fitted wake has no flow up, so the
+drops (only they) also ride a behavioural ring vortex (`recirculation()`): a Rankine vortex in
+each meridian plane, 1.5 arrival radii out and half the rotors' height up, its core half that
+height, turning outward along the water and inward at the top, its edge speed 30 % of the
+arriving jet's, falling linearly to nothing at 1.5 wake widths (motor-to-motor diagonals) up.
+For the sample quadcopter it brings about 3 g/m³ of spray to the drone at 0.3 m and 2.5 g/m³ at
+0.5 m, and none at 2 m. Unsteadiness: the jet's load on the water also carries a turbulent
+pressure fluctuation, 10 % of its mean rms (`kJetPressureFluctuation`, TODO(verify) a measured
+p_rms/p_s), band-limited on a 9 cm lattice, from the run's Philox streams: it rings the surface
+(water.md).
+
 The spray does what rain does (aerodynamics.md §3.2, weather.md):
 
 - **Impact.** Its drops hit every link they meet at their own velocity (`impactForce`).
@@ -195,6 +209,8 @@ a third of real time; 5 cm and coarser merge the jets too early to be worth it.
 | Wall beside a drone | fitted to our own OpenFOAM; the fade length 3.5 ± 2.7 D is weak and may reach too far | `test_downwash_pair` |
 | Fountain | fitted to our own OpenFOAM only, within 0.23 N; **no measurement** | `test_downwash` |
 | A jet stopped by water | pressure adds up to the thrust within 2 % from 1 m up, 7 % at 0.5 m (where the jets merge); the outwash over water is the ground's at the same height | `Downwash.TheSurfaceCarriesTheJetsMomentumAsPressure`, `Downwash.AWakeStopsOnWaterAsOnTheGround` |
+| Spray back at the drone (recirculation) | about 3 g/m³ within 0.25 m of the sample at 0.3 m, none at 2 m; the vortex turns outward along the water and in at its top; **behavioural, no measurement** (TODO(verify)) | `DownwashSpray.TheRecirculationBringsSprayBackToALowDrone` |
+| The jet's unsteadiness on the water | rings of 0.5 mm rms reach 0.5 m out before 0.9 m; none without it; the mean dimple within 0.5 % of the steady one; the 10 % share unmeasured (TODO(verify)) | `DownwashOnWater.AFluctuatingJetSendsRingsOutAndKeepsItsMeanDimple` |
 | Spray onset | the Kelvin–Helmholtz speed, 6.6 m/s, against the outwash's peak: the sample below 2.3 m; **no measurement of rotor-wash spray onset or amount** (TODO(verify)); the rate is behavioural | `DownwashSpray.*` |
 | Drops' fall | terminal speeds within 10 % of Gunn and Kinzer (0.1–0.5 mm) | `DownwashSpray.DropsFallAtGunnAndKinzersSpeeds` |
 | Live box against our OpenFOAM | at 3 cm the centreline within 20 % and the outwash within 6 %; at 4 cm the outwash 19 % low; the air through the discs 15–20 % low | `test_lbm_box` |
@@ -204,8 +220,8 @@ other, and scenery other than boxes, still water and the ground plane. Over wate
 surface's own motion under the wake (millimetres, see water.md), a moving water surface's
 different friction from a rigid wall's (the 0.05 is a smooth wall's, TODO(verify) over water),
 and the live box (`lbm`) still has no water in it, only the ground. Spray: the recirculation
-that brings spray back up into a low rotor's inflow (the fitted wake has no flow up), so
-little spray reaches the drone itself; rotors taking in water (thrust and torque); the spray's
+is behavioural, for the drops only (the links and the rotors do not feel it), and no
+measurement backs its strength or reach; rotors taking in water (thrust and torque); the spray's
 size distribution and rate, which no measurement here backs; drops hitting and breaking on
 the water; spray as a lidar return (only its extinction).
 
