@@ -6,6 +6,7 @@
 
 #include "lagrange/aerodynamics/Downwash.hpp"
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/random/Philox.hpp"
 
 #include <array>
 #include <functional>
@@ -26,6 +27,28 @@ struct WaterGrid {
 /// of the cell, so the two domains' grids agree.
 [[nodiscard]] std::array<double, 2> patchCorner(const WaterGrid& grid,
                                                 const std::array<double, 2>& centre);
+
+// --- The jet's unsteadiness on the surface ------------------------------------------------
+
+/// The rms of an impinging jet's wall-pressure fluctuation as a share of its mean (stagnation)
+/// pressure there. Turbulent impinging jets carry pressure fluctuations of order a tenth of the
+/// stagnation pressure near the stagnation region (TODO(verify): a measured p_rms/p_s for a
+/// rotor's or a round jet's impingement at the heights a drone hovers). What makes a real dimple
+/// flicker and ring; without it a steady jet only sets a still dimple.
+inline constexpr double kJetPressureFluctuation = 0.1;
+/// The fluctuation's spatial scale (cells of the grid between its random values): three cells
+/// (9 cm on the server's 3 cm grid), so it excites waves the grid resolves (two cells a
+/// wavelength at least) and not the grid's own noise. Its values are bilinear between them.
+inline constexpr int kJetFluctuationCells = 3;
+
+/// Adds the jet's unsteady part to `pressure` (Pa, cells² in row order): each cell's mean times
+/// `share` times a zero-mean field of unit rms, band-limited by bilinear interpolation between
+/// standard normal values on a lattice every kJetFluctuationCells cells, anchored to the world
+/// grid at `cornerCell` (the patch's lower corner in whole cells), drawn from `rng`. The field is
+/// scaled to unit rms over the lattice's interpolation (its variance is (2/3)² of the values'
+/// in the middle of a lattice cell, 4/9 on average in 2D for bilinear: divided out).
+void addJetFluctuation(std::span<double> pressure, int cells, const std::array<long, 2>& cornerCell,
+                       double share, random::Stream& rng);
 
 // --- Spray (downwash.md §5b) ---------------------------------------------------------------
 
@@ -120,6 +143,9 @@ public:
         int water{0};      // the body of water it fell from
     };
     [[nodiscard]] const std::vector<Drop>& dropList() const { return drops_; }
+    /// The jet's pressure fluctuation as a share of its mean (kJetPressureFluctuation; 0: a
+    /// steady load, a still dimple).
+    void setFluctuation(double share) { fluctuation_ = share; }
     void saveState(StateWriter& writer) const;
     bool restoreState(StateReader& reader);
 
@@ -139,6 +165,7 @@ private:
     double next_{0.0};
     double last_{0.0};
     bool spray_{false};
+    double fluctuation_{kJetPressureFluctuation};
     double gravity_{9.80665};
     std::vector<Drop> drops_;
     std::vector<SignalId> rotorSpray_;

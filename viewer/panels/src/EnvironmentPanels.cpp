@@ -1178,7 +1178,7 @@ public:
 private:
     static constexpr double kOrbitRadiansPerPixel = 0.005;
     static constexpr double kZoomPerWheelStep = 0.9;
-    static constexpr std::uint32_t kMostQuadsPerSide = 96;  // larger slices are merged cells
+    static constexpr std::uint32_t kMostQuadsPerSide = 128;  // larger slices: merged cells
 
     static void camera(PanelContext& context, const ImVec2& size) {
         const ImGuiIO& io = ImGui::GetIO();

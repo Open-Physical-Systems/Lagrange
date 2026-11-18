@@ -30,7 +30,7 @@ struct Frame
                               // (calibration tests); w: unused
     float4 surface;           // the water's moving surface (water.md): xy the first cell's centre
                               // relative to the eye; z: its cell, m; w: cells a side (0: none)
-    float4 surfaceLook;       // x: relief (1: the physics' heights and slopes as they are)
+    float4 surfaceLook;       // x: relief, the slopes' scale (1: the physics' slopes as they are)
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -964,7 +964,13 @@ static const Wave waves[8] = {
 float waveScale()
 {
     float wind = frame.water.y;
-    return 0.05 + 0.0065 * min(wind * wind, 200.0);
+    return 0.0065 * min(wind * wind, 200.0);  // still without wind: only the physics moves it
+}
+
+// 0 in still air, 1 from a light breeze (3 m/s) up: how much of the made-up motion is drawn.
+float windShare()
+{
+    return saturate(frame.water.y / 3.0);
 }
 
 void gerstner(float2 world, float t, out float3 displacement, out float3 normal)
@@ -1058,7 +1064,7 @@ WaterOutput vsWater(uint vertex : SV_VertexID)
     gerstner(world, frame.worldWrap.w, displacement, normal);
     // The physics' surface on top of the drawn swell: linear waves add.
     float share;
-    float lift = movingSurface(relativeXY, share).x * frame.surfaceLook.x * share;
+    float lift = movingSurface(relativeXY, share).x * share;  // its true height; relief: slope
     displacement.z += lift;
     WaterOutput output;
     if (skirt)
@@ -1090,7 +1096,7 @@ float2 ripple(float2 world, float t, float distance)
     float wind = 1.0 + 0.1 * min(frame.water.y, 16.0);
     float2 slope = float2(0, 0);
     float scale = 2.6;
-    float amount = 0.11 * wind;
+    float amount = 0.11 * wind * windShare();
     for (int i = 0; i < 4; ++i)
     {
         float3 p = float3(world * scale + float2(0.7, 0.4) * t * (0.55 + 0.25 * float(i)) + float(i) * 7.1, t * 0.45);
@@ -1175,7 +1181,7 @@ float4 fsWater(WaterOutput input) : SV_Target
     float3 transmitted = exp(-kAbsorption * path);
     float3 point = viewRay(bentUv) * belowZ;
     float submerged = max(frame.water.x - point.z, 0.0);
-    float3 lightOnBottom = caustics(point.xy + frame.worldWrap.xy, t) * exp(-submerged * 0.6) *
+    float3 lightOnBottom = caustics(point.xy + frame.worldWrap.xy, t) * windShare() * exp(-submerged * 0.6) *
                            saturate(submerged * 4.0) * frame.sunDirection.z * 1.3;
     below *= 1.0 + lightOnBottom;
     // Light scattered back by the water itself: its own colour.
@@ -1203,8 +1209,9 @@ float4 fsWater(WaterOutput input) : SV_Target
     // Foam: where the water meets something, and on the crests in a strong wind.
     float shore = 1.0 - saturate(path * forward / 0.22);
     float tearing = saturate((crest - 0.72) * 3.0) * saturate((frame.water.y - 6.0) / 8.0);
-    float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * t, t * 0.25), 3);
-    float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * t, t * 0.4), 2);
+    float tf = t * windShare();  // foam drifts only in a wind
+    float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * tf, tf * 0.25), 3);
+    float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * tf, tf * 0.4), 2);
     float foam = saturate(smoothstep(0.42, 0.62, cell * (0.6 + streak)) * saturate(shore * 1.5 + tearing));
     // Whitecap where the physics tears spray off (downwash.md §5b): its foam, broken up.
     float torn = saturate(moving.w * movingShare);
