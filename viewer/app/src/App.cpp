@@ -1444,12 +1444,10 @@ public:
 
     /// The water's moving surface for the realistic view (water.md "The surface under a rotor"):
     /// the server's water/surface volume (the first body of water's patch, heights over the still
-    /// level) and, for the foam where spray is torn off, the aero/spray volume's water within
-    /// kFoamReachM of the surface, as kg/m² against kFoamKgM2 (a drawing choice). Watched only
-    /// while the realistic view draws and the run has them; only through the protocol.
+    /// level), the air's friction velocity on it (the ripples and whitecaps, water_optics) and
+    /// the aero/spray volume (the mist). Watched only while the realistic view draws and the run
+    /// has them; only through the protocol.
     void followWaterSurface() {
-        constexpr double kFoamReachM = 0.3;  // m over the still level: spray just torn off
-        constexpr double kFoamKgM2 = 2e-3;   // kg/m² of it for full foam
         const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
         const auto available = [&](const char* name) {
             return info && std::ranges::any_of(info->fields, [&](const EnvironmentInfo::Field& f) {
@@ -1530,48 +1528,6 @@ public:
             for (std::size_t i = 0; i < cells; ++i) {
                 look->friction[i] = friction->values[2 * i];
                 look->friction[cells + i] = friction->values[2 * i + 1];
-            }
-        }
-        if (spray && spray->components == 1U && spray->cellM > 0.0 &&
-            spray->values.size() == static_cast<std::size_t>(spray->nx) * spray->ny * spray->nz) {
-            const double level = volume->origin[2];
-            look->foam.assign(look->heights.size(), 0.0F);
-            // The spray's water within kFoamReachM of the surface, per spray column (kg/m²),
-            // then bilinear between the columns' centres at each surface cell.
-            std::vector<double> columns(static_cast<std::size_t>(spray->nx) * spray->ny, 0.0);
-            for (std::uint32_t z = 0; z < spray->nz; ++z) {
-                if (spray->origin[2] + z * spray->cellM > level + kFoamReachM) {
-                    break;
-                }
-                for (std::size_t i = 0; i < columns.size(); ++i) {
-                    columns[i] += spray->values[z * columns.size() + i] * spray->cellM;
-                }
-            }
-            const auto column = [&](long c, long r) {
-                c = std::clamp(c, 0L, static_cast<long>(spray->nx) - 1);
-                r = std::clamp(r, 0L, static_cast<long>(spray->ny) - 1);
-                return columns[static_cast<std::size_t>(r) * spray->nx +
-                               static_cast<std::size_t>(c)];
-            };
-            for (std::uint32_t y = 0; y < volume->ny; ++y) {
-                for (std::uint32_t x = 0; x < volume->nx; ++x) {
-                    const double fx =
-                        (volume->origin[0] + x * volume->cellM - spray->origin[0]) / spray->cellM;
-                    const double fy =
-                        (volume->origin[1] + y * volume->cellM - spray->origin[1]) / spray->cellM;
-                    if (fx < -0.5 || fy < -0.5 || fx > spray->nx - 0.5 || fy > spray->ny - 0.5) {
-                        continue;
-                    }
-                    const auto c = static_cast<long>(std::floor(fx));
-                    const auto r = static_cast<long>(std::floor(fy));
-                    const double tx = fx - static_cast<double>(c);
-                    const double ty = fy - static_cast<double>(r);
-                    const double kg =
-                        (1 - ty) * ((1 - tx) * column(c, r) + tx * column(c + 1, r)) +
-                        ty * ((1 - tx) * column(c, r + 1) + tx * column(c + 1, r + 1));
-                    look->foam[static_cast<std::size_t>(y) * volume->nx + x] =
-                        static_cast<float>(std::min(kg / kFoamKgM2, 1.0));
-                }
             }
         }
         renderOptions_.waterSurface = std::move(look);

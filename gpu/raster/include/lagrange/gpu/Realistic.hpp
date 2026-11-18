@@ -233,6 +233,7 @@ private:
     std::vector<std::array<float, 4>> balls_;
     // Per frame: the lamps by brightness at the eye (−I/d², index), kept to reuse its capacity.
     std::vector<std::pair<double, std::size_t>> lampOrder_;
+    std::vector<double> rippleVariance_, rippleDirection_;  // water_optics::fetchLimitedRipples
     Pipeline sky_;
     Pipeline waterPipe_;
     Pipeline composite_;

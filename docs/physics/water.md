@@ -144,19 +144,43 @@ velocity on the water by the neutral log law, $U(z) = (u_*/\kappa)\ln(z/z_0)$ wi
 $z_0 = 0.011\,u_*^2/g + 0.11\,\nu_{air}/u_*$ (Charnock; Smith 1988). The friction velocity is the
 downwash's on each cell of the moving patch (`water/<w>/air_stress`, served as
 `water/friction_velocity`) with the site's wind's added as a stress ($u_*$ from its speed at
-10 m by the same law). **Assumed:** that the ripples are in equilibrium with the local $u_*$
-whatever makes it, so a sea's slope statistics apply on a patch of metres. Centimetre ripples come
-to equilibrium within tens of centimetres and a second; longer wind waves do not, which is why
-only the short waves' share is taken, and why the outwash's ring roughens while the stagnant
-centre under the jet stays a mirror. The slope is taken isotropic (Cox and Munk's upwind and
-crosswind differ by 3.16 to 1.92).
+10 m by the same law). **Assumed:** that a sea's slope statistics apply to the local $u_*$
+whatever makes it, on a patch of metres; longer wind waves do not come to equilibrium there,
+which is why only the short waves' share is taken.
+
+**Fetch.** The ripples need a run of water to grow, so they are not set to that equilibrium cell
+by cell: along the air's path the variance relaxes to it, $dS/ds = \gamma\,(S_{eq} - S)$, with
+$\gamma$ the energy growth of the ripple of least phase speed (λ 1.71 cm, $c_m$ 0.231 m/s) over its
+group speed: Plant's (1982) $\beta = 0.04\,(u_*/c_m)^2\,\omega$ less viscous decay $4\nu k^2$,
+over $c_m$ (`water_optics::fetchLimitedRipples`, upwind sweeps on the patch's grid; the air comes
+in at its rim with the wind's ripples). Nothing grows below $u_* = \sqrt{100\,\nu\,k\,c_m}
+\approx 9$ cm/s, where decay wins. So under a jet the water is a mirror round the stagnation point,
+where the outwash starts from rest with no fetch behind it, the ripples grow over the inner
+annulus and are roughest round the outwash's peak (Tanner et al.'s 1.7 R), and they fade outward
+with $u_*$, with no step anywhere. Behavioural: a relaxation, not a wave spectrum's
+linear-then-exponential growth.
+
+**Direction.** Cox and Munk's upwind and crosswind slopes rise as 3.16 and 1.92 ($\times10^{-3}U$)
+on a clean sea and 0.78 and 0.84 under a slick; their short waves' shares, 2.38 to 1.08, split the
+ripples' variance 2.2 to 1 along the stress (radial in an outwash) and across it, in the facets'
+Gaussian and in the glitter's $D$. The drawn ripples run within ±63° of the stress, which gives
+the same 2.2, and their packets are streaks four times longer along it than across (the wall
+layer's streaks; the aspect is not measured for ripples, TODO(verify)): cat's paws running out
+from the jet.
+
+**Whitecaps.** Where the outwash's speed $u_m = u_*/0.05$ passes the Kelvin–Helmholtz onset
+(6.7 m/s, where its spray is torn off: downwash.md §5b), a share of the water
+$W = 3.84\cdot10^{-6}\,U_{10}^{3.41}$ (Monahan and O'Muircheartaigh 1980, $U_{10}$ from the local
+$u_*$ by the log law) is white, drawn as streaked patches of that coverage; none below the onset.
+Monahan's fit is for the sea at 1 to 20 m/s; a wall jet a metre long is beyond its data
+(TODO(verify)). The spray's mist over it is the spray's own water (downwash.md §5b).
 
 **What a pixel resolves.** The ripples are four octaves (4.8 to 0.8 cm, as much slope variance
 in each, as in the capillary saturation range), each of four capillary-gravity waves running
 within ±63° of the stress, $\omega^2 = gk + \sigma k^3/\rho_w$, in packets. The octaves wider
 than two pixels are drawn as waves (glitter breaks into sparkles); the rest are the facets'
-spread in a Beckmann distribution of the same variance, so the total slope variance is kept
-whatever the distance.
+spread in Cox and Munk's Gaussian of the same variance and direction, so the total slope variance
+is kept whatever the distance.
 
 **Light.** Reflection is the exact unpolarised Fresnel of water, $n = 1.333$ (0.020 at normal
 incidence, 1 at grazing), per facet: eight Beckmann facets per pixel each reflect the scene (the
@@ -204,6 +228,7 @@ $1/(1 + m_a/m)$; with this gain a steady push settles in one step on the exact $
 | The dimple under a steady jet | $\rho_{air}U^2/(2\rho_w g)$ within 2 % for 5.7 to 16.6 m/s (2 to 17 mm), and within 0.5 % for the sample quadcopter at 0.5, 1 and 2 m; **no measurement of a rotor's dimple** | `SurfacePatch.TheDimpleUnderASteadyJetIsHydrostatic`, `DownwashOnWater.TheSampleQuadsDimpleIsItsJetsStagnationPressure` |
 | Lidars and cameras on the moving surface | a vertical ray hits the level plus $\eta$ within 1e-9 m; a slanted ray's hit is its first crossing within a hundredth of a cell (0.3 mm); a lidar over a 25 mm dimple reads it within 1e-9 m on the CPU reference (bit for bit run to run) and within 1 mm on the GPU path | `MovingWater.*` (test_moving_water) |
 | How the water looks: Fresnel | the exact unpolarised reflectance, $(n-1)^2/(n+1)^2 = 0.020$ at normal incidence, 0.060 at 60°, to 1 at grazing | `WaterOptics.FresnelOfWater` |
+| How the water looks: fetch, direction, whitecaps | calm where $u_*$ < 9 cm/s and at a jet's stagnation point, grown past 60 % of equilibrium by the outwash's peak, roughest in the annulus; upwind to crosswind 2.38 : 1.08; whitecaps none below the Kelvin–Helmholtz onset (6.7 m/s), Monahan's 1 % at 10 m/s; **the growth coefficient (Plant's 0.04), the streaks' aspect and Monahan's law in a wall jet not checked against a rotor's water** | `WaterOptics.TheFetchLeavesACalmCentreUnderAJet`, `WaterOptics.RipplesAreSteeperAlongTheWindThanAcross`, `WaterOptics.WhitecapsOnlyWhereTheOutwashTearsTheSurface`, `DownwashOnWater.TheFrictionVelocityIsCalmUnderTheJetAndPeaksInAnAnnulus` |
 | How the water looks: ripples | none below the onset (Cox and Munk's clean and slick fits meet at $U_{12.5} = 1.40$ m/s, $u_*$ 4.5 cm/s; Kahma and Donelan: ~5 cm/s), rising with $u_*$; at a 10 m/s wind ($u_*$ 0.36 m/s, Charnock) under the whole clean sea's 0.055; a dimple changes the picture only where it lies; **no photograph or measurement of the water under a rotor compared** | `WaterOptics.RippleSlopeVarianceFollowsTheWind`, `RealisticWater.TheMovingSurfaceShadesTheWaterWhereItLies` |
 | Ripples | group velocity within 3 % of $d\omega/dk$ for gravity waves (λ 0.63 m, $c_g = c/2$), the slowest ripple (λ 1.7 cm, 0.23 m/s) and capillary waves (λ 2 mm, $c_g = 3c/2$); viscous decay $e^{-2\nu k^2 t}$ within 5 % | `SurfacePatch.Ripples*`, `SurfacePatch.ViscosityDamps*` |
 
@@ -221,7 +246,7 @@ in double, on every tier (`sensors::rayOntoWater`); a lidar's return takes the s
 its normal. The camera's realistic colour draws it too; its depth is moved on the undistorted
 pinhole ray (a distorted lens's depth is off by its distortion there). The viewer's realistic
 water is lifted and shaded by it (viewer.md). Not modelled in how it looks: Cox and Munk's
-upwind-crosswind anisotropy and skewness; waves of 6 to 30 cm, which neither the grid's physics
+skewness and peakedness; waves of 6 to 30 cm, which neither the grid's physics
 (no wind-wave growth) nor the ripples hold; particles in the water (only pure water and,
 with `--water-cdom`, its dissolved matter: real lakes are also turbid); light scattered more than once
 under the surface; ripples on the camera sensors' water from the downwash (they see the wind's

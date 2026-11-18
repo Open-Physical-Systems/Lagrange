@@ -660,13 +660,16 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         const std::size_t n = moving.cells;
         if (n >= 2 && n <= kMaxRealisticSurfaceCells && moving.cell > 0.0 &&
             moving.heights.size() == n * n) {
-            // Per cell: η, its slope by central differences (one-sided at the rim), the foam;
-            // then the ripples' slope variance under the air's friction there and the wind's
-            // (their stresses, ρ·u*·|u*|, add as vectors), and the way they run.
+            // Per cell: η, its slope by central differences (one-sided at the rim), the
+            // whitecaps; then the ripples' slope variance the fetch has grown under the air's
+            // friction there and the wind's (water_optics::fetchLimitedRipples), and the way
+            // the stress runs.
             auto* cells = static_cast<std::array<float, 4>*>(surface_.mapped);
             const bool rubbed = moving.friction.size() == 2 * n * n;
-            const std::array<double, 2> windStress{windFriction * windFriction * windTo[0],
-                                                   windFriction * windFriction * windTo[1]};
+            const std::array<double, 2> windU{windFriction * windTo[0], windFriction * windTo[1]};
+            water_optics::fetchLimitedRipples(n, moving.cell, moving.friction, windU,
+                                              rippleVariance_, rippleDirection_);
+            const double onset = water_optics::kelvinHelmholtzOnset();
             const auto eta = [&](std::size_t x, std::size_t y) {
                 const float v = moving.heights[y * n + x];
                 return std::isfinite(v) ? v : 0.0F;
@@ -674,31 +677,25 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             const auto cell = static_cast<float>(moving.cell);
             for (std::size_t y = 0; y < n; ++y) {
                 for (std::size_t x = 0; x < n; ++x) {
+                    const std::size_t i = y * n + x;
                     const std::size_t x0 = x == 0 ? 0 : x - 1;
                     const std::size_t x1 = x + 1 == n ? x : x + 1;
                     const std::size_t y0 = y == 0 ? 0 : y - 1;
                     const std::size_t y1 = y + 1 == n ? y : y + 1;
-                    const float foam = moving.foam.size() == n * n
-                                           ? std::clamp(moving.foam[y * n + x], 0.0F, 1.0F)
-                                           : 0.0F;
-                    cells[2 * (y * n + x)] = {
+                    float foam =
+                        moving.foam.size() == n * n ? std::clamp(moving.foam[i], 0.0F, 1.0F) : 0.0F;
+                    double outwash = 0.0;
+                    if (rubbed && std::isfinite(moving.friction[i]) &&
+                        std::isfinite(moving.friction[n * n + i])) {
+                        outwash = std::hypot(moving.friction[i], moving.friction[n * n + i]);
+                    }
+                    foam =
+                        std::max(foam, f(water_optics::whitecapOf(outwash, windFriction, onset)));
+                    cells[2 * i] = {
                         eta(x, y), (eta(x1, y) - eta(x0, y)) / (static_cast<float>(x1 - x0) * cell),
                         (eta(x, y1) - eta(x, y0)) / (static_cast<float>(y1 - y0) * cell), foam};
-                    std::array<double, 2> stress = windStress;  // m²/s², τ/ρ
-                    if (rubbed) {
-                        const double ux = moving.friction[y * n + x];
-                        const double uy = moving.friction[n * n + y * n + x];
-                        if (std::isfinite(ux) && std::isfinite(uy)) {
-                            const double u = std::hypot(ux, uy);
-                            stress[0] += u * ux;
-                            stress[1] += u * uy;
-                        }
-                    }
-                    const double magnitude = std::hypot(stress[0], stress[1]);
-                    const double variance = water_optics::rippleSlopeVariance(std::sqrt(magnitude));
-                    cells[2 * (y * n + x) + 1] = {
-                        f(variance), magnitude > 0.0 ? f(stress[0] / magnitude) : f(windTo[0]),
-                        magnitude > 0.0 ? f(stress[1] / magnitude) : f(windTo[1]), 0.0F};
+                    cells[2 * i + 1] = {f(rippleVariance_[i]), f(rippleDirection_[i]),
+                                        f(rippleDirection_[n * n + i]), 0.0F};
                 }
             }
             flush(device_, surface_);

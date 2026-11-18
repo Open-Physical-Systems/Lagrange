@@ -5,6 +5,7 @@
 #include "lagrange/gpu/Realistic.hpp"
 #include "lagrange/gpu/WaterOptics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -491,6 +493,104 @@ TEST(WaterOptics, RippleSlopeVarianceFollowsTheWind) {
     EXPECT_NEAR(clean, 0.003 + 5.12e-3 * 10.2, 0.003);
     EXPECT_GT(rippleSlopeVariance(u), 0.3 * clean);
     EXPECT_LT(rippleSlopeVariance(u), clean);
+}
+
+// Cox and Munk's anisotropy: the short waves' upwind share rises as 2.38e-3·U, the crosswind as
+// 1.08e-3·U (clean minus slick of each), so σ_u²/σ_c² = 2.2, and the two add to the total.
+TEST(WaterOptics, RipplesAreSteeperAlongTheWindThanAcross) {
+    using namespace water_optics;
+    for (const double u : {0.08, 0.2, 0.5}) {
+        const auto [up, cross] = rippleSlopeVariances(u);
+        EXPECT_NEAR(up + cross, rippleSlopeVariance(u), 1e-15) << u;
+        EXPECT_NEAR(up / cross, 2.38 / 1.08, 1e-9) << u;
+    }
+    const auto calm = rippleSlopeVariances(0.03);
+    EXPECT_EQ(calm[0], 0.0);
+    EXPECT_EQ(calm[1], 0.0);
+}
+
+// The ripple of least phase speed: 1.71 cm, 0.231 m/s (Lamb §267). The air grows it only above
+// u* = √(100·ν·k·c) ≈ 9 cm/s, where Plant's growth passes viscous decay.
+TEST(WaterOptics, RipplesGrowOnlyWhereTheAirOutrunsViscosity) {
+    using namespace water_optics;
+    EXPECT_NEAR(2.0 * std::numbers::pi / rippleWavenumber(), 0.0171, 2e-4);
+    EXPECT_NEAR(ripplePhaseSpeed(), 0.231, 2e-3);
+    const double threshold =
+        std::sqrt(100.0 * kWaterViscosity * rippleWavenumber() * ripplePhaseSpeed());
+    EXPECT_EQ(rippleGrowthRate(0.99 * threshold), 0.0);
+    EXPECT_GT(rippleGrowthRate(1.01 * threshold), 0.0);
+    EXPECT_GT(fetchRate(0.4), fetchRate(0.2));
+}
+
+// A jet's outwash on the grid: u* rising as (ρ/ρ_p)^0.8 to a peak at ρ_p and falling as
+// (ρ_p/ρ)^1.1 (Tanner et al. 2015, as the aerodynamics domain's), outward. The ripples are
+// calm where the air leaves the stagnation point (no fetch, too weak to grow them), grow over
+// the annulus to near their equilibrium, and the stress's direction is radial.
+TEST(WaterOptics, TheFetchLeavesACalmCentreUnderAJet) {
+    using namespace water_optics;
+    constexpr std::size_t n = 128;
+    constexpr double cell = 0.03;
+    constexpr double peakU = 0.5;    // m/s
+    constexpr double peakAt = 0.45;  // m
+    const double mid = 0.5 * static_cast<double>(n - 1);
+    std::vector<float> friction(2 * n * n);
+    const auto uStar = [&](double r) {
+        return peakU * (r < peakAt ? std::pow(r / peakAt, 0.8) : std::pow(peakAt / r, 1.1));
+    };
+    for (std::size_t y = 0; y < n; ++y) {
+        for (std::size_t x = 0; x < n; ++x) {
+            const double dx = (static_cast<double>(x) - mid) * cell;
+            const double dy = (static_cast<double>(y) - mid) * cell;
+            const double r = std::hypot(dx, dy);
+            friction[y * n + x] = static_cast<float>(uStar(r) * dx / r);
+            friction[n * n + y * n + x] = static_cast<float>(uStar(r) * dy / r);
+        }
+    }
+    std::vector<double> variance;
+    std::vector<double> direction;
+    fetchLimitedRipples(n, cell, friction, {0.0, 0.0}, variance, direction);
+    const auto along = [&](double r) {  // on the +x axis, r from the centre
+        const auto x = static_cast<std::size_t>(std::lround(mid + r / cell));
+        const auto y = static_cast<std::size_t>(std::lround(mid));
+        return std::pair{variance[y * n + x], direction[y * n + x]};
+    };
+    EXPECT_EQ(along(0.05).first, 0.0);  // calm: u* under the growth threshold
+    const double inner = along(0.15).first / rippleSlopeVariance(uStar(0.15));
+    const double ring = along(peakAt).first / rippleSlopeVariance(peakU);
+    EXPECT_LT(inner, 0.6);  // the fetch lags
+    EXPECT_GT(ring, 0.6);   // grown by the peak
+    EXPECT_LT(ring, 1.0 + 1e-9);
+    EXPECT_NEAR(along(peakAt).second, 1.0, 1e-3);  // runs outward
+    // The roughest water is in the annulus, not under the jet.
+    double best = 0.0;
+    double bestAt = 0.0;
+    for (double r = 0.0; r < 1.8; r += cell) {
+        if (along(r).first > best) {
+            best = along(r).first;
+            bestAt = r;
+        }
+    }
+    EXPECT_GT(bestAt, 0.6 * peakAt);
+    EXPECT_LT(bestAt, 2.0 * peakAt);
+    // Without air the water stays a mirror.
+    fetchLimitedRipples(n, cell, {}, {0.0, 0.0}, variance, direction);
+    EXPECT_EQ(*std::ranges::max_element(variance), 0.0);
+}
+
+// Whitecaps: Monahan and O'Muircheartaigh's 3.84e-6·U10^3.41 (1 % at about 10 m/s); in a
+// rotor's wall jet none below the Kelvin–Helmholtz onset of its speed (6.7 m/s, where its spray
+// starts), Monahan's above.
+TEST(WaterOptics, WhitecapsOnlyWhereTheOutwashTearsTheSurface) {
+    using namespace water_optics;
+    EXPECT_NEAR(kelvinHelmholtzOnset(), 6.7, 0.1);
+    EXPECT_NEAR(whitecapFraction(10.0), 3.84e-6 * std::pow(10.0, 3.41), 1e-12);
+    EXPECT_NEAR(whitecapFraction(10.0), 0.01, 1e-3);
+    EXPECT_EQ(whitecapFraction(0.0), 0.0);
+    const double onset = kelvinHelmholtzOnset() * kWallJetFriction;  // u* there
+    EXPECT_EQ(whitecapOf(0.99 * onset, 0.0), 0.0);
+    EXPECT_GT(whitecapOf(1.01 * onset, 0.0), 0.0);
+    EXPECT_NEAR(whitecapOf(0.6, 0.0), whitecapFraction(windAt(0.6, 10.0)), 1e-12);
+    EXPECT_GT(whitecapOf(0.6, 0.0), whitecapOf(0.4, 0.0));
 }
 
 // At night with no lamp the picture is black, and a lamp lights a pool on the plane.

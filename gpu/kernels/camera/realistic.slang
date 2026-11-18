@@ -59,7 +59,8 @@ struct Lamp
 };
 [[vk::binding(7)]] StructuredBuffer<Lamp> lamps;
 // The moving surface's cells in row order, two each: η (m over the still level), ∂η/∂x, ∂η/∂y,
-// foam (0-1); then the ripples' slope variance (water_optics) and the way they run (x, y), 0.
+// whitecap and foam coverage (0-1); then the ripples' slope variance the fetch has grown
+// (water_optics::fetchLimitedRipples), the way the air's stress runs (x, y), 0.
 [[vk::binding(8)]] StructuredBuffer<float4> surfaceCells;
 // The spray's water per cell (kg/m³), x fastest, then y, then z.
 [[vk::binding(9)]] StructuredBuffer<float> sprayCells;
@@ -1189,6 +1190,14 @@ static const float kRippleRatio = 0.56;      // between octaves: 4 octaves span 
 // The sun's disc, 0.53° across (radius 4.65 mrad): the half-vector turns by half the
 // direction, a disc of radius 2.33 mrad, whose slope variance (both axes, a²/2) is added, rad².
 static const float kSunDiscVariance = 2.7e-6;
+// The share of the ripples' slope variance along the air's stress: Cox and Munk's short waves,
+// 2.38e-3·U upwind to 1.08e-3·U across (water_optics::rippleSlopeVariances).
+static const float kUpwindShare = 2.38 / 3.46;
+// The ripples' packets as streaks along the air (cat's paws): the wall layer's streaks are
+// elongated in the flow, several times longer than they are wide (Kline et al., J. Fluid Mech.
+// 30(4), 1967, near the wall; TODO(verify) the aspect of the streaks in wind ripples, e.g.
+// Caulliez, Ricci and Dupont, Phys. Fluids 10(4), 1998). Length over width of a packet.
+static const float kStreakAspect = 4.0;
 // Pure water's absorption, 1/m, at 620, 550 and 465 nm (Pope and Fry, Appl. Opt. 36(33), 1997).
 static const float3 kWaterAbsorption = float3(0.27, 0.0565, 0.0102);
 // Pure water's backscatter, 1/m: half its scattering b_w(λ) = 0.00222·(500/λ)^4.32 (Morel,
@@ -1217,7 +1226,9 @@ float rippleOmega(float k)
 // `variance` it does not resolve, returned: four octaves of eight waves each (their wavelengths
 // spread ±20 % round the octave's, so that they do not beat into fringes), running within ±63°
 // of `runs`, each octave a quarter of the variance (the saturation range: as much slope per
-// octave), its waves in packets.
+// octave), its waves in packets streaked along `runs` (kStreakAspect). Spread evenly over ±63°
+// (1.1 rad) their slope is <cos²>/<sin²> = 2.16 times steeper along `runs` than across, Cox and
+// Munk's 2.2 (kUpwindShare): the drawn ripples are as anisotropic as the facets.
 float ripples(float2 world, float t, float variance, float2 runs, float footprint, out float2 slope)
 {
     slope = float2(0.0, 0.0);
@@ -1225,6 +1236,8 @@ float ripples(float2 world, float t, float variance, float2 runs, float footprin
     if (variance <= 0.0)
         return 0.0;
     float heading = atan2(runs.y, runs.x);
+    // Packets in the frame of the stress: long along it, narrow across.
+    float2 streak = float2(dot(world, runs) / kStreakAspect, dot(world, float2(-runs.y, runs.x)));
     float lambda = kRippleLongest;
     for (int j = 0; j < 4; ++j)
     {
@@ -1242,7 +1255,7 @@ float ripples(float2 world, float t, float variance, float2 runs, float footprin
                 float wavelength = lambda * (0.8 + 0.4 * h3);
                 float omega = rippleOmega(2.0 * PI / wavelength);
                 // Packets: an envelope of mean square ~1 (value noise's is ~0.29), drifting.
-                float envelope = 1.85 * noise3(float3(world / (wavelength * 2.5) + h2 * 17.0, t * 0.7 + float(i)));
+                float envelope = 1.85 * noise3(float3(streak / (wavelength * 2.5) + h2 * 17.0, t * 0.7 + float(i)));
                 float angle = heading + (h - 0.5) * 2.2;
                 float2 d = float2(cos(angle), sin(angle));
                 float phase = 2.0 * PI * frac(dot(d, world) / wavelength - frac(omega * t / (2.0 * PI)) + h2);
@@ -1296,6 +1309,7 @@ float4 fsWater(WaterOutput input) : SV_Target
     float4 moving = float4(0, 0, 0, 0);
     float movingShare = 0.0;
     float facets = 0.0;  // the facets' slope variance below the pixel
+    float2 runs = frame.surfaceLook.zw;  // the way the air's stress runs there
     if (input.side < 0.5)
     {
         // The swell's slope per pixel: the mesh only holds its shape.
@@ -1309,7 +1323,8 @@ float4 fsWater(WaterOutput input) : SV_Target
         float pixel = 2.0 * frame.cameraUp.w * frame.screen.w;  // rad
         float footprint = distance * pixel / sqrt(max(abs(V.z), 0.05));
         float2 capillary;
-        facets = ripples(input.world, t, rough.x, rough.yz, footprint, capillary);
+        runs = normalize(rough.yz + float2(1e-6, 0.0));
+        facets = ripples(input.world, t, rough.x, runs, footprint, capillary);
         float2 slope = moving.yz * frame.surfaceLook.x * share * N.z + capillary;
         N = normalize(float3(N.xy - slope, N.z));
         N *= above;
@@ -1353,10 +1368,13 @@ float4 fsWater(WaterOutput input) : SV_Target
     }
     else
     {
-        // Eight facet normals drawn from the Beckmann distribution of variance `facets`
-        // (tan²θ = −σ²·ln(1−u)), each weighted by how much of it the eye sees (V·H / cos θ).
-        float3 T1 = normalize(abs(N.z) < 0.9 ? cross(N, float3(0, 0, 1)) : cross(N, float3(1, 0, 0)));
+        // Eight facet normals drawn from Cox and Munk's Gaussian of slopes, σ_u² along the air's
+        // stress and σ_c² across (kUpwindShare of `facets` and the rest; Box–Muller), each
+        // weighted by how much of it the eye sees (V·H / cos θ).
+        float3 T1 = normalize(float3(runs, 0.0) - N * dot(N, float3(runs, 0.0)) + float3(0, 0, 1e-6));
         float3 T2 = cross(N, T1);
+        float sigmaU = sqrt(facets * kUpwindShare);
+        float sigmaC = sqrt(facets * (1.0 - kUpwindShare));
         float spin = hash(float3(input.position.xy, frac(t * 0.37) * 61.0));
         float sumW = 0.0;
         float sharpSky = saturate(1.0 - sqrt(facets) * 6.0);
@@ -1364,11 +1382,11 @@ float4 fsWater(WaterOutput input) : SV_Target
         {
             float u1 = frac(spin + float(i) * 0.618034);
             float u2 = (float(i) + 0.5) / 8.0 + spin * 0.125;
-            float tan2 = -facets * log(1.0 - 0.98 * u1);
-            float cosT = rsqrt(1.0 + tan2);
-            float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));
+            float radius = sqrt(-2.0 * log(1.0 - 0.98 * u1));
             float phi = 2.0 * PI * u2;
-            float3 H = normalize(T1 * (cos(phi) * sinT) + T2 * (sin(phi) * sinT) + N * cosT);
+            float2 z = radius * float2(sigmaU * cos(phi), sigmaC * sin(phi));  // slopes
+            float cosT = rsqrt(1.0 + dot(z, z));
+            float3 H = normalize(-T1 * z.x - T2 * z.y + N);
             float VH = dot(V, H);
             if (VH <= 0.0)
                 continue;
@@ -1454,11 +1472,18 @@ float4 fsWater(WaterOutput input) : SV_Target
     float3 L = frame.sunDirection.xyz;
     if (frame.sunDirection.w > 0.0 && L.z > 0.0 && input.side < 0.5)
     {
+        // Cox and Munk's slope density, anisotropic along the air's stress: p(z_u, z_c) =
+        // exp(−½(z_u²/σ_u² + z_c²/σ_c²))/(2π·σ_u·σ_c), D = p/cos⁴θ; with the sun's disc in both.
         float3 H = normalize(V + L);
         float NH = max(dot(N, H), 1e-3);
-        float a2 = facets + kSunDiscVariance;
-        float tan2 = (1.0 - NH * NH) / (NH * NH);
-        float D = exp(-tan2 / a2) / (PI * a2 * NH * NH * NH * NH);
+        float3 Tu = normalize(float3(runs, 0.0) - N * dot(N, float3(runs, 0.0)) + float3(0, 0, 1e-6));
+        float3 Tc = cross(N, Tu);
+        float zu = dot(H, Tu) / NH;
+        float zc = dot(H, Tc) / NH;
+        float su2 = facets * kUpwindShare + 0.5 * kSunDiscVariance;
+        float sc2 = facets * (1.0 - kUpwindShare) + 0.5 * kSunDiscVariance;
+        float D = exp(-0.5 * (zu * zu / su2 + zc * zc / sc2)) /
+                  (2.0 * PI * sqrt(su2 * sc2) * NH * NH * NH * NH);
         float glint = min(D * fresnelWater(saturate(dot(V, H))) / (4.0 * NV), 3000.0);
         color += glint * frame.sunColor.rgb * frame.sunDirection.w * visibility;
     }
@@ -1471,9 +1496,20 @@ float4 fsWater(WaterOutput input) : SV_Target
     float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * tf, tf * 0.25), 3);
     float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * tf, tf * 0.4), 2);
     float foam = saturate(smoothstep(0.42, 0.62, cell * (0.6 + streak)) * saturate(shore * 1.5 + tearing));
-    // Whitecap where the physics tears spray off (downwash.md §5b): its foam, broken up.
-    float torn = saturate(moving.w * movingShare);
-    foam = max(foam, torn * saturate(0.35 + smoothstep(0.3, 0.6, cell * (0.6 + streak))));
+    // Whitecaps (water_optics::whitecapOf): a coverage W of the area white, as patches where a
+    // noise passes its (1 − W) quantile, streaked along the air. The noise is near normal of mean
+    // 0.5 and sd 0.12 (fbm of 3 octaves; TODO(verify) measured), its quantile by the logistic
+    // approximation Φ⁻¹(p) ≈ ln(p/(1−p))/1.702.
+    float coverage = saturate(moving.w * movingShare);
+    if (coverage > 1e-4)
+    {
+        float2 along = float2(dot(input.world, runs) / kStreakAspect, dot(input.world, float2(-runs.y, runs.x)));
+        // Patches a few centimetres across (spume streaks; their size is not from the law).
+        float patches = fbm(float3(along * 28.0, t * 0.6), 3);
+        float p = clamp(1.0 - coverage, 1e-3, 1.0 - 1e-3);
+        float q = 0.5 + 0.12 * log(p / (1.0 - p)) / 1.702;
+        foam = max(foam, smoothstep(q - 0.05, q + 0.05, patches));
+    }
     if (input.side < 0.5)
         color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp) * frame.light.x, foam * 0.85);
 

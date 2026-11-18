@@ -104,6 +104,36 @@ TEST(DownwashOnWater, TheSampleQuadsDimpleIsItsJetsStagnationPressure) {
 // The jet's unsteadiness (kJetPressureFluctuation) rings the surface: after a still start on
 // the steady dimple, a fluctuating load sends waves out that reach a ring 0.9 m out after one
 // 0.5 m out; a steady load leaves both still. The time-mean dimple stays the steady one.
+// The air's friction velocity on the water that the optics roughen it by: the outwash's,
+// none at the jet's stagnation point, rising to a peak in an annulus about 2.2 arrival radii out
+// (Tanner et al.'s 1.7 R), falling beyond.
+TEST(DownwashOnWater, TheFrictionVelocityIsCalmUnderTheJetAndPeaksInAnAnnulus) {
+    for (const double height : {0.3, 0.5}) {
+        Downwash d = pond();
+        d.update(sampleQuad(height));
+        ASSERT_EQ(d.groups().size(), 1U);
+        const Downwash::Group& g = d.groups()[0];
+        ASSERT_TRUE(g.hits);
+        const auto uStar = [&](double r) {
+            const Vec3 f = d.surfaceFriction({g.hitPoint[0] + r, g.hitPoint[1], kLevel}, 0);
+            return std::hypot(f[0], f[1]);
+        };
+        double peak = 0.0;
+        double peakAt = 0.0;
+        for (double r = 0.005; r < 1.5; r += 0.005) {
+            if (uStar(r) > peak) {
+                peak = uStar(r);
+                peakAt = r;
+            }
+        }
+        EXPECT_EQ(uStar(0.0), 0.0) << height;
+        EXPECT_LT(uStar(0.01 * g.arriveRadius), 0.05 * peak) << height;
+        EXPECT_GT(peakAt, 1.5 * g.arriveRadius) << height;
+        EXPECT_LT(peakAt, 3.0 * g.arriveRadius) << height;
+        EXPECT_LT(uStar(4.0 * peakAt), 0.3 * peak) << height;
+    }
+}
+
 TEST(DownwashOnWater, AFluctuatingJetSendsRingsOutAndKeepsItsMeanDimple) {
     Downwash d = pond();
     d.update(sampleQuad(1.0));
