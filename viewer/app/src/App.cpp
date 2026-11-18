@@ -1345,7 +1345,8 @@ public:
     /// cell, coloured as the field map by the cell's water against the box's most. Added to the
     /// airflow's overlay slot.
     void buildSpray() {
-        constexpr double kMarkKg = 4e-7;   // kg of water per streak drawn
+        constexpr double kMarkKg = 2e-6;   // kg of water per streak drawn
+        constexpr double kDecades = 3.0;   // of water per cell the shades span
         constexpr int kMostPerCell = 12;   // streaks
         constexpr float kStreakM = 0.03F;  // a streak's length
         constexpr float kFallMps = 0.8F;   // how fast the streaks go down in their cell
@@ -1389,7 +1390,7 @@ public:
             if (asWater) {  // water drops against the sky: pale, denser where there is more
                 constexpr std::array<float, 3> kDrop{0.86F, 0.92F, 0.97F};
                 lines.color = {kDrop[0], kDrop[1], kDrop[2],
-                               0.3F + 0.6F * static_cast<float>(c) / (kColours - 1)};
+                               0.1F + 0.75F * static_cast<float>(c) / (kColours - 1)};
             }
             lines.vertices.clear();
         }
@@ -1404,11 +1405,18 @@ public:
                     if (!(water > 0.0F)) {
                         continue;
                     }
+                    // As many streaks as the cell's water holds marks (none for less than
+                    // half a mark: a lone parcel far out is not drawn as a cell full of drops),
+                    // shaded on a log scale over kDecades below the box's most, so that the
+                    // thin spray far out does not read as dense as the cloud at the drone.
                     const int marks = std::min(
-                        kMostPerCell,
-                        std::max(1, static_cast<int>(std::lround(water * cellVolume / kMarkKg))));
-                    const int c = std::clamp(static_cast<int>(water / volume->valueMax * kColours),
-                                             0, kColours - 1);
+                        kMostPerCell, static_cast<int>(std::lround(water * cellVolume / kMarkKg)));
+                    if (marks == 0) {
+                        continue;
+                    }
+                    const double share =
+                        1.0 + std::log10(std::max(water / volume->valueMax, 1e-9F)) / kDecades;
+                    const int c = std::clamp(static_cast<int>(share * kColours), 0, kColours - 1);
                     std::vector<float>& out =
                         airflowOverlays_[first + static_cast<std::size_t>(c)].vertices;
                     for (int m = 0; m < marks; ++m) {
