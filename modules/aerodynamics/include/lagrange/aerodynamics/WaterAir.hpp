@@ -108,7 +108,8 @@ inline constexpr std::size_t kSprayDropsPerStep = 96;
 /// Behavioural, and only for the spray drops: a Rankine ring vortex in each meridian plane of a
 /// wake that meets water, centred kRecirculationRadius arrival radii out from the impingement
 /// point and half the rotors' height up, its core half that height; turning outward along the
-/// surface, up on the outside, inward at the top, down on the inside; its edge speed
+/// surface, up on the outside, inward at the top, down on the inside (none beyond twice the
+/// core from its centre, falling linearly to it, and none over the rotor plane); its edge speed
 /// kRecirculationShare of the arriving jet's, falling linearly with the height to nothing at
 /// kRecirculationHeights wake widths (the motor-to-motor diagonal), where the wall jet stays
 /// attached (TODO(verify) the height at which a rotor's recirculation ceases).
@@ -117,6 +118,16 @@ inline constexpr double kRecirculationShare = 0.3;    // of the arriving jet's s
 inline constexpr double kRecirculationHeights = 1.5;  // wake widths
 /// The recirculating air at `x` (m/s, world) of every wake of `downwash` that meets water.
 [[nodiscard]] Downwash::Vec3 recirculation(const Downwash& downwash, const Downwash::Vec3& x);
+
+/// The rotors' inflow above their discs, which the fitted wake leaves out (Downwash: "Not
+/// modelled: inflow above the disc"), for the spray drops: on a disc's axis the vortex cylinder's
+/// upstream velocity w(s) = v_i·(1 − s/√(s² + R²)) at s above the disc (Leishman, Principles of
+/// Helicopter Aerodynamics, 2nd ed., 2006, §2.7), v_i at the disc; off the axis the same with s
+/// the distance to the nearest point of the disc, towards it. Far off it is v_i·R²/(2·d²), a sink
+/// drawing π·R²·v_i from the half space above (continuity). So spray that the recirculation
+/// lifts to the rotor plane is drawn into the discs and blown down again, as re-ingested debris
+/// is; none is carried over the rotors. Zero under each disc's plane, where the wake is.
+[[nodiscard]] Downwash::Vec3 rotorInflow(const Downwash& downwash, const Downwash::Vec3& x);
 
 /// Per body of water w, writes water/<w>/patch (m, 2: the lower corner of the patch, following
 /// the first wake that meets this water: moved when the wake's centre leaves the patch's middle

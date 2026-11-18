@@ -137,7 +137,16 @@ jets meeting under the frame and turning up (§6, the fountain). The fitted wake
 drops (only they) also ride a behavioural ring vortex (`recirculation()`): a Rankine vortex in
 each meridian plane, 1.5 arrival radii out and half the rotors' height up, its core half that
 height, turning outward along the water and inward at the top, its edge speed 30 % of the
-arriving jet's, falling linearly to nothing at 1.5 wake widths (motor-to-motor diagonals) up.
+arriving jet's, falling linearly to nothing at 1.5 wake widths (motor-to-motor diagonals) up;
+the ring is no bigger than the wake that feeds it (its speed falls to nothing at twice the core
+from its centre, and stops at the rotor plane). Over the rotor plane the drops ride the rotors'
+inflow (`rotorInflow()`): on each disc's axis the vortex cylinder's upstream velocity
+$w(s) = v_i\,(1 - s/\sqrt{s^2 + R^2})$ (Leishman 2006, §2.7), off it the same towards the
+nearest point of the disc, which far off is a sink drawing $\pi R^2 v_i$ from the half space
+above ($v_i R^2/(2d^2)$, continuity). So what the recirculation brings up to the rotors is drawn
+through the discs and blown down again, as re-ingested debris is, and the spray stays low: for
+the sample at 0.3 m and 0.5 m, 95 % of its water stays under 0.26 m and 0.37 m, and under 3 %
+rises over the rotor plane, mixed up by the gusts (none of it more than 0.35 m over the rotors).
 For the sample quadcopter it brings about 3 g/m³ of spray to the drone at 0.3 m and 2.5 g/m³ at
 0.5 m, and none at 2 m. Unsteadiness: the jet's load on the water also carries a turbulent
 pressure fluctuation, 10 % of its mean rms (`kJetPressureFluctuation`, TODO(verify) a measured
@@ -216,10 +225,12 @@ a third of real time; 5 cm and coarser merge the jets too early to be worth it.
 | Spray back at the drone (recirculation) | about 3 g/m³ within 0.25 m of the sample at 0.3 m, none at 2 m; the vortex turns outward along the water and in at its top; **behavioural, no measurement** (TODO(verify)) | `DownwashSpray.TheRecirculationBringsSprayBackToALowDrone` |
 | The jet's unsteadiness on the water | rings of 0.5 mm rms reach 0.5 m out before 0.9 m; none without it; the mean dimple within 0.5 % of the steady one; the 10 % share unmeasured (TODO(verify)) | `DownwashOnWater.AFluctuatingJetSendsRingsOutAndKeepsItsMeanDimple` |
 | Spray onset | the Kelvin–Helmholtz speed, 6.6 m/s, against the outwash's peak: the sample below 2.3 m; **no measurement of rotor-wash spray onset or amount** (TODO(verify)); the rate is behavioural | `DownwashSpray.*` |
+| Where the spray stays | the sample at 0.3 and 0.5 m: 95 % of its water under the rotor plane, under 5 % over it, none two rotor diameters over it; **behavioural (the inflow off the axis and the ring's reach are modelling choices), no measurement** | `DownwashSpray.TheSprayStaysUnderTheRotors` |
 | Drops' fall | terminal speeds within 10 % of Gunn and Kinzer (0.1–0.5 mm) | `DownwashSpray.DropsFallAtGunnAndKinzersSpeeds` |
 | Live box against our OpenFOAM | at 3 cm the centreline within 20 % and the outwash within 6 %; at 4 cm the outwash 19 % low; the air through the discs 15–20 % low | `test_lbm_box` |
 
-Not modelled: inflow above the disc, swirl, unsteadiness, rotors of one drone affecting each
+Not modelled: inflow above the disc in the air the links and other robots feel (the drops alone
+ride it), swirl, unsteadiness, rotors of one drone affecting each
 other, and scenery other than boxes, still water and the ground plane. Over water: the
 surface's own motion under the wake (millimetres, see water.md), a moving water surface's
 different friction from a rigid wall's (the 0.05 is a smooth wall's, TODO(verify) over water),

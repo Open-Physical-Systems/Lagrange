@@ -161,7 +161,10 @@ whatever the distance.
 **Light.** Reflection is the exact unpolarised Fresnel of water, $n = 1.333$ (0.020 at normal
 incidence, 1 at grazing), per facet: eight Beckmann facets per pixel each reflect the scene (the
 mirror pass's image, found where the reflected ray meets what it reflects, at the distance the
-mirror pass's depth gives) or the sky. Tilted facets see higher, darker sky at a lower Fresnel, so
+mirror pass's depth gives) or the sky; a facet that sends the ray down meets the water again,
+which reflects the sky by Fresnel at that grazing incidence and lets the water's own light
+through (a second bounce); a resolved ripple's back, turned from the eye, is masked by the crest
+in front of it. Tilted facets see higher, darker sky at a lower Fresnel, so
 the rough ring is darker and duller than still water, and the drone's and the sky's reflections
 blur there. The sun's glitter is $F\,D/(4\,\mathbf n\cdot\mathbf v)\,E_{sun}$ with $D$ the
 Beckmann distribution of the unresolved facets widened by the sun's 0.53° disc; on still water it
@@ -170,7 +173,15 @@ is the sun's own image. Under the surface, light is absorbed by pure water (Pope
 refracted path (Snell's law to the bottom), so the bottom shows through clear shallow water and
 goes blue-green with depth; the water's own light is a deep column's reflectance
 $R_\infty = 0.33\,b_b/(a + b_b)$ (Gordon et al. 1975; Morel and Prieur 1977) with pure water's
-backscatter (Morel 1974), and what leaves the surface is divided by $n^2$.
+backscatter (Morel 1974), and what leaves the surface is divided by $n^2$. Lakes and rivers
+also hold coloured dissolved organic matter (CDOM), whose absorption is
+$a(\lambda) = a(440)\,e^{-0.014(\lambda - 440)}$ (Bricaud, Morel and Prieur 1981): the
+viewer's `--water-cdom A440` (1/m; 0, pure water, by default; natural waters 0.1 to 10,
+TODO(verify) the range against Kirk, *Light and Photosynthesis in Aquatic Ecosystems*) adds it,
+which darkens the water and turns it brown-green and hides the bottom. Over dark water a
+roughened patch reads darker than the mirror round it at low angles (its facets see higher,
+darker sky at lower Fresnel); over a bright, shallow, clear bottom it reads lighter, because
+the light the roughness does not reflect shows the bottom.
 
 ## Solving it
 
@@ -211,8 +222,8 @@ its normal. The camera's realistic colour draws it too; its depth is moved on th
 pinhole ray (a distorted lens's depth is off by its distortion there). The viewer's realistic
 water is lifted and shaded by it (viewer.md). Not modelled in how it looks: Cox and Munk's
 upwind-crosswind anisotropy and skewness; waves of 6 to 30 cm, which neither the grid's physics
-(no wind-wave growth) nor the ripples hold; dissolved matter and particles in the water (pure
-water's optics: real lakes and ponds are browner and murkier); light scattered more than once
+(no wind-wave growth) nor the ripples hold; particles in the water (only pure water and,
+with `--water-cdom`, its dissolved matter: real lakes are also turbid); light scattered more than once
 under the surface; ripples on the camera sensors' water from the downwash (they see the wind's
 only: the sensors read no stress).
 

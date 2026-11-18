@@ -86,6 +86,39 @@ void addJetFluctuation(std::span<double> pressure, int cells, const std::array<l
     }
 }
 
+Downwash::Vec3 rotorInflow(const Downwash& downwash, const Downwash::Vec3& x) {
+    Downwash::Vec3 out{};
+    for (const Downwash::Group& g : downwash.groups()) {
+        for (const Downwash::Rotor& r : g.rotors) {
+            if (!(r.thrust > 0.0) || !(r.induced > 0.0) || !(r.radius > 0.0)) {
+                continue;
+            }
+            const Downwash::Vec3& n = r.thrustAxis;
+            const Downwash::Vec3 d{x[0] - r.hub[0], x[1] - r.hub[1], x[2] - r.hub[2]};
+            const double s = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
+            if (s <= 0.0) {
+                continue;  // under the disc: the wake's
+            }
+            // The nearest point of the disc, and the way to it.
+            Downwash::Vec3 flat{d[0] - s * n[0], d[1] - s * n[1], d[2] - s * n[2]};
+            const double r0 = std::sqrt(flat[0] * flat[0] + flat[1] * flat[1] + flat[2] * flat[2]);
+            const double scale = r0 > r.radius ? r.radius / r0 : 1.0;
+            const Downwash::Vec3 to{flat[0] * scale - d[0], flat[1] * scale - d[1],
+                                    flat[2] * scale - d[2]};
+            const double distance = std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+            if (distance < 1e-9) {
+                continue;
+            }
+            const double speed =
+                r.induced * (1.0 - distance / std::sqrt(distance * distance + r.radius * r.radius));
+            for (std::size_t k = 0; k < 3; ++k) {
+                out[k] += speed * to[k] / distance;
+            }
+        }
+    }
+    return out;
+}
+
 Downwash::Vec3 recirculation(const Downwash& downwash, const Downwash::Vec3& x) {
     Downwash::Vec3 out{};
     for (const Downwash::Group& g : downwash.groups()) {
@@ -120,7 +153,14 @@ Downwash::Vec3 recirculation(const Downwash& downwash, const Downwash::Vec3& x) 
             continue;
         }
         const double edge = kRecirculationShare * g.arriveSpeed * strength;
-        const double speed = rho < core ? edge * rho / core : edge * core / rho;
+        // A ring of finite size: the Rankine profile out to the core, then falling to nothing
+        // at twice it, and nothing over the rotor plane, where the rotors' inflow takes over
+        // (rotorInflow); the vortex is no farther-reaching than the wake that feeds it.
+        if (rho >= 2.0 * core || z >= h) {
+            continue;
+        }
+        const double speed =
+            rho < core ? edge * rho / core : edge * core / rho * (2.0 - rho / core);
         // Turning (−dz, dr): outward under the centre, up outside it.
         const double vr = -dz / rho * speed;
         const double vz = dr / rho * speed;
@@ -388,11 +428,14 @@ void WaterAir::step(const StepContext& context, const Downwash& downwash, double
     if (!spray_) {
         return;
     }
-    // The drops also ride the recirculation the fitted wake leaves out (recirculation()).
+    // The drops also ride the recirculation and the inflow the fitted wake leaves out
+    // (recirculation(), rotorInflow()).
     moveDrops(context, dt, rhoAir, [&](const Downwash::Vec3& x) {
         const Downwash::Vec3 u = air(x);
         const Downwash::Vec3 back = recirculation(downwash, x);
-        return Downwash::Vec3{u[0] + back[0], u[1] + back[1], u[2] + back[2]};
+        const Downwash::Vec3 in = rotorInflow(downwash, x);
+        return Downwash::Vec3{u[0] + back[0] + in[0], u[1] + back[1] + in[1],
+                              u[2] + back[2] + in[2]};
     });
     for (std::size_t j = 0; j < rotorSpray_.size(); ++j) {
         bus.write(rotorSpray_[j], j < hubs.size() ? sprayAt(hubs[j]) : 0.0);

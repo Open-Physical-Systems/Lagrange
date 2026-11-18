@@ -45,6 +45,9 @@ void usage() {
         "  --water-relief <x>     shade the water's moving surface x times as steep (its height\n"
         "                         stays true; 1: as the physics has it; more shows sub-mm "
         "ripples)\n"
+        "  --water-cdom <a>       the water's dissolved organic matter: its absorption at\n"
+        "                         440 nm, 1/m (0: pure water, the default; lakes and rivers\n"
+        "                         0.1 to 10); darker and browner with more\n"
         "  --slice <field>[:xy|xz|yz][:linear|symlog|highpass]  the Slice 2D panel's field,\n"
         "                         plane and contrast, e.g.\n"
         "                         aero/wind_speed:xz\n"
@@ -207,6 +210,15 @@ int main(int argc, char** argv) {
                 return 2;
             }
             options.waterRelief = relief;
+        } else if (arg == "--water-cdom") {
+            const std::string text = value();
+            char* end = nullptr;
+            const float a440 = std::strtof(text.c_str(), &end);
+            if (end == text.c_str() || *end != '\0' || !(a440 >= 0.0F && a440 <= 50.0F)) {
+                std::fputs("error: --water-cdom expects an absorption from 0 to 50 1/m\n", stderr);
+                return 2;
+            }
+            options.waterCdom = a440;
         } else if (arg == "--open") {
             options.openPath = value();
         } else if (arg == "--scope") {

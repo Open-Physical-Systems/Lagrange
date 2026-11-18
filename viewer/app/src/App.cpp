@@ -1026,9 +1026,9 @@ public:
                    a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
                    a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
                    a.waterSurface == b.waterSurface && a.waterRelief == b.waterRelief &&
-                   a.spray3d == b.spray3d && sameValues(a.temperature, b.temperature) &&
-                   sameValues(a.current, b.current) && a.heatCovered == b.heatCovered &&
-                   a.lamps == b.lamps &&
+                   a.waterCdom == b.waterCdom && a.spray3d == b.spray3d &&
+                   sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
+                   a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
                    (a.skyIlluminance == b.skyIlluminance ||
                     (std::isnan(a.skyIlluminance) && std::isnan(b.skyIlluminance)));
         }
@@ -1355,8 +1355,8 @@ public:
         static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
                                                   theme::hex(0x21918C), theme::hex(0x5EC962),
                                                   theme::hex(0xFDE725)};
-        // The realistic view draws the drops as water (pale, more opaque where there is more
-        // of it) whenever the run has spray; the Overlays row draws them coloured by the map.
+        // The realistic view draws the drops as mist whenever the run has spray; the Overlays
+        // row draws them as streaks coloured by the map.
         const bool asWater = !renderOptions_.spray && foamStream_ != nullptr;
         if (!renderOptions_.spray && !asWater) {
             if (sprayStream_ && !foamStream_) {
@@ -1366,12 +1366,17 @@ public:
             return;
         }
         if (asWater) {
+            // The realistic view draws the drops as what they look like at the distances it is
+            // seen from: mist (realistic.slang's spray march, their extinction). A drop of
+            // 50 to 450 µm subtends 0.15 mrad at 3 m, under a third of a 1080p pixel (about
+            // 0.5 mrad at 60°): one by one they are not seen, only together. No streaks.
             sprayStream_.reset();
-        } else if (!sprayStream_) {
+            return;
+        }
+        if (!sprayStream_) {
             sprayStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
         }
-        const std::shared_ptr<const FieldVolumeData> volume =
-            asWater ? foamStream_->latestVolume() : sprayStream_->latestVolume();
+        const std::shared_ptr<const FieldVolumeData> volume = sprayStream_->latestVolume();
         if (!volume || volume->components != 1U || volume->valueMax <= 0.0F) {
             return;
         }
@@ -1388,11 +1393,6 @@ public:
             lines.origin = volume->origin;
             lines.color = {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
                            a.z + (b.z - a.z) * blend, 1.0F};
-            if (asWater) {  // water drops against the sky: pale, denser where there is more
-                constexpr std::array<float, 3> kDrop{0.86F, 0.92F, 0.97F};
-                lines.color = {kDrop[0], kDrop[1], kDrop[2],
-                               0.1F + 0.75F * static_cast<float>(c) / (kColours - 1)};
-            }
             lines.vertices.clear();
         }
         const double cellVolume = volume->cellM * volume->cellM * volume->cellM;
@@ -2310,6 +2310,7 @@ public:
     /// The field and plane the Slice 2D panel starts on ("aero/wind_speed:xz").
     void setSlice(std::string slice) { slice_ = std::move(slice); }
     void setWaterRelief(float relief) { renderOptions_.waterRelief = relief; }
+    void setWaterCdom(float a440) { renderOptions_.waterCdom = a440; }
     void setSeason(const std::string& name) {
         if (name == "fall") {
             renderOptions_.season = Season::Fall;
@@ -2767,6 +2768,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setFocusPanel(options.focusPanel);
         ui.setSlice(options.slice);
         ui.setWaterRelief(options.waterRelief);
+        ui.setWaterCdom(options.waterCdom);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
@@ -3272,6 +3274,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setFocusPanel(options.focusPanel);
         ui.setSlice(options.slice);
         ui.setWaterRelief(options.waterRelief);
+        ui.setWaterCdom(options.waterCdom);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);

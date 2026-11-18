@@ -99,6 +99,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     }
     settings.lamps = lamps_;
     settings.skyIlluminance = options.skyIlluminance;
+    settings.waterCdom = options.waterCdom;
     if (const auto& moving = options.waterSurface) {
         settings.waterSurface.cells = moving->cells;
         settings.waterSurface.cell = moving->cell;

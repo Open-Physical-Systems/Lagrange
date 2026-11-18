@@ -103,8 +103,10 @@ flowchart LR
   air's friction velocity by Cox and Munk (resolved per pixel, the rest as Beckmann facets of the
   same slope variance), exact Fresnel per facet over eight facets a pixel (the mirror pass's
   image at the distance its depth, binding 10, gives, else the sky), the sun's glitter, Snell
-  refraction to the bottom with pure water's absorption and backscatter (water.md "How the water
-  looks"), caustics, foam where it meets things. Limits: what the water looks like does
+  refraction to the bottom with pure water's absorption and backscatter, and dissolved organic
+  matter by `--water-cdom A440` (water.md "How the water looks"), caustics, foam where it meets
+  things. The water's far sides (its skirt facing away) are not drawn: the water pass writes no
+  depth, and they would draw over its surface. Limits: what the water looks like does
   not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
   no wake. The physics' own surface under a rotor's downwash (water.md) is drawn: the server's
   `water/surface` volume lifts the first water body by $\eta$ and its slope shades it (per pixel,
@@ -119,7 +121,8 @@ flowchart LR
   water/surface:xy:highpass`) shows sub-millimetre rings beside a dimple of centimetres, and its
   spray the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are,
   coloured by the map (`--overlays spray`; downwash.md §5b); without it the realistic view draws
-  the same drops as pale water, more opaque where there is more, and their water as mist: the
+  the drops only as mist (one by one, 50 to 450 µm drops are under a third of a pixel from a
+  metre or more away, so they are seen only together): the
   `aero/spray` box (binding 9, `RealisticSpray`) is marched along each view ray (24 steps), its
   extinction 3/(ρ_w D) per kg/m³ over the equal shares of 50, 150 and 450 µm drops (29.6 /m per
   kg/m³, Q_ext = 2), and what it takes out is replaced by the daylight's white. Without wind the realistic

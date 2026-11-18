@@ -140,6 +140,10 @@ struct RealisticSettings {
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
     /// The first body of water's moving surface, when the physics moves it.
     RealisticWaterSurface waterSurface;
+    /// Its coloured dissolved organic matter: the absorption at 440 nm (1/m), spread over the
+    /// spectrum as a·exp(−0.014·(λ − 440 nm)) (Bricaud, Morel and Prieur, Limnol. Oceanogr.
+    /// 26(1), 1981). 0: pure water.
+    float waterCdom{0.0F};
     /// The spray's mist, when the run has spray.
     RealisticSpray spray;
     /// The final image is the scene's linear HDR value, clamped to 1, with no exposure, tone

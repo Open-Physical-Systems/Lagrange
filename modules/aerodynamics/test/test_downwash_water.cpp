@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <memory>
 #include <numbers>
+#include <span>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -275,6 +277,9 @@ private:
 struct SprayRun {
     double peak{0.0}, rate{0.0}, nearDrone{0.0}, extinction{0.0}, rotor{0.0}, ring{0.0};
     std::size_t drops{0};
+    // The drops' heights over the water (m) at the end: the highest, the height under which 95 %
+    // of their water is, and the share of their water over the rotor plane.
+    double highest{0.0}, height95{0.0}, overRotors{0.0};
 };
 
 SprayRun runSpray(double height, double seconds) {
@@ -308,6 +313,35 @@ SprayRun runSpray(double height, double seconds) {
         }
     }
     out.drops = rigPtr->air.drops();
+    {
+        const std::span<const double> at =
+            scheduler.bus().readN(scheduler.bus().find("aero/spray_drops"));
+        const std::span<const double> mass =
+            scheduler.bus().readN(scheduler.bus().find("aero/spray_mass"));
+        std::vector<std::pair<double, double>> byHeight;  // height, mass
+        double total = 0.0;
+        for (std::size_t i = 0; i < mass.size(); ++i) {
+            if (mass[i] > 0.0 && std::isfinite(at[3 * i + 2])) {
+                const double z = at[3 * i + 2] - kLevel;
+                byHeight.emplace_back(z, mass[i]);
+                total += mass[i];
+                out.highest = std::max(out.highest, z);
+                if (z > height) {
+                    out.overRotors += mass[i];
+                }
+            }
+        }
+        std::ranges::sort(byHeight);
+        double sum = 0.0;
+        for (const auto& [z, m] : byHeight) {
+            sum += m;
+            if (sum >= 0.95 * total) {
+                out.height95 = z;
+                break;
+            }
+        }
+        out.overRotors = total > 0.0 ? out.overRotors / total : 0.0;
+    }
     out.peak = read("water/pond/outwash_peak");
     out.rate = read("water/pond/spray_rate");
     return out;
@@ -350,6 +384,24 @@ TEST(DownwashSpray, NoSprayAboveTheOnsetHeightSprayBelowIt) {
     EXPECT_GT(low.ring, 1e-4);
     EXPECT_LT(low.ring, 1e-2);
     EXPECT_GT(low.nearDrone, 0.0);
+}
+
+// Where the spray stays: low, under the rotors. The recirculation lifts it up the outside and
+// back in, and the rotors' inflow (WaterAir: the vortex cylinder upstream of each disc) pulls
+// what reaches the rotor plane down through the discs, so the spray is not carried over the drone
+// and 95 % of it stays under the rotor plane (a few per cent mixed over it by the gusts).
+TEST(DownwashSpray, TheSprayStaysUnderTheRotors) {
+    for (const double height : {0.3, 0.5}) {
+        const SprayRun run = runSpray(height, 6.0);
+        std::printf(
+            "%.1f m: %zu drops, highest %.2f m, 95%% under %.2f m, %.1f%% over the "
+            "rotors\n",
+            height, run.drops, run.highest, run.height95, 100.0 * run.overRotors);
+        ASSERT_GT(run.drops, 100U);
+        EXPECT_LT(run.height95, height);
+        EXPECT_LT(run.overRotors, 0.05);  // what the turbulence (kSprayTurbulence) mixes up
+        EXPECT_LT(run.highest, height + 2.0 * 0.127 * 2.0);  // two rotor diameters over them
+    }
 }
 
 // The recirculation (recirculation()): low over water the ring vortex brings the outwash's

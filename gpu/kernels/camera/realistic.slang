@@ -35,6 +35,8 @@ struct Frame
     float4 sprayBox;          // the spray's water (RealisticSpray): xyz the first cell's centre
                               // relative to the eye; w: its cell, m
     float4 sprayDims;         // xyz: cells (0: none); w: extinction per kg/m³ of water, 1/m
+    float4 waterOptics;       // xyz: dissolved organic matter's absorption at 620, 550, 465 nm,
+                              // 1/m; w: unused
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -1083,7 +1085,11 @@ float4 movingSurface(float2 relativeXY, out float share, out float4 rough)
                     lerp(surfaceCells[2u * (i + n) + 1u], surfaceCells[2u * (i + n + 1u) + 1u], t.x), t.y);
     float edge = min(min(f.x, f.y), min(last - f.x, last - f.y));
     share = saturate(edge / 4.0);
-    rough = lerp(rough, r, share);
+    // The air's ripples fade to the wind's round the patch's middle, over its outer third: the
+    // outwash goes on past the patch, which only bounds where it is known, and falls with the
+    // distance from the wake (a circle, not the patch's square, so that no edge is drawn).
+    float away = length(f - 0.5 * last) / (0.5 * last);
+    rough = lerp(rough, r, saturate((1.0 - away) / 0.35));
     return v;
 }
 
@@ -1180,8 +1186,9 @@ float caustics(float2 p, float t)
 static const float kWaterIndex = 1.333;
 static const float kRippleLongest = 0.048;  // m: the longest ripple below the 3 cm grid's 6 cm
 static const float kRippleRatio = 0.56;      // between octaves: 4 octaves span 4.8 to 0.8 cm
-// The sun's disc, 0.53° across: the half-vector's spread it adds, its variance, rad².
-static const float kSunDiscVariance = 1.1e-5;
+// The sun's disc, 0.53° across (radius 4.65 mrad): the half-vector turns by half the
+// direction, a disc of radius 2.33 mrad, whose slope variance (both axes, a²/2) is added, rad².
+static const float kSunDiscVariance = 2.7e-6;
 // Pure water's absorption, 1/m, at 620, 550 and 465 nm (Pope and Fry, Appl. Opt. 36(33), 1997).
 static const float3 kWaterAbsorption = float3(0.27, 0.0565, 0.0102);
 // Pure water's backscatter, 1/m: half its scattering b_w(λ) = 0.00222·(500/λ)^4.32 (Morel,
@@ -1207,7 +1214,8 @@ float rippleOmega(float k)
 }
 
 // The ripples a pixel of `footprint` m resolves, as the slope they add (x, y), and the share of
-// `variance` it does not resolve, returned: four octaves of four waves each, running within ±63°
+// `variance` it does not resolve, returned: four octaves of eight waves each (their wavelengths
+// spread ±20 % round the octave's, so that they do not beat into fringes), running within ±63°
 // of `runs`, each octave a quarter of the variance (the saturation range: as much slope per
 // octave), its waves in packets.
 float ripples(float2 world, float t, float variance, float2 runs, float footprint, out float2 slope)
@@ -1225,18 +1233,19 @@ float ripples(float2 world, float t, float variance, float2 runs, float footprin
         unresolved += share * (1.0 - seen);
         if (seen > 0.0)
         {
-            float k = 2.0 * PI / lambda;
-            float omega = rippleOmega(k);
-            float amplitude = sqrt(share * 0.5) * seen;  // each wave's slope: 4·s²/2 = share
-            // Packets: an envelope of mean square ~1 (value noise's is ~0.29), drifting.
-            float envelope = 1.85 * noise3(float3(world / (lambda * 3.0), t * 0.7 + float(j) * 5.3));
-            for (int i = 0; i < 4; ++i)
+            float amplitude = sqrt(share * 0.25) * seen;  // each wave's slope: 8·s²/2 = share
+            for (int i = 0; i < 8; ++i)
             {
                 float h = hash(float3(float(j), float(i), 0.37));
                 float h2 = hash(float3(float(i), float(j), 1.91));
+                float h3 = hash(float3(float(i) + 3.1, float(j) * 1.7, 5.3));
+                float wavelength = lambda * (0.8 + 0.4 * h3);
+                float omega = rippleOmega(2.0 * PI / wavelength);
+                // Packets: an envelope of mean square ~1 (value noise's is ~0.29), drifting.
+                float envelope = 1.85 * noise3(float3(world / (wavelength * 2.5) + h2 * 17.0, t * 0.7 + float(i)));
                 float angle = heading + (h - 0.5) * 2.2;
                 float2 d = float2(cos(angle), sin(angle));
-                float phase = 2.0 * PI * frac(dot(d, world) / lambda - frac(omega * t / (2.0 * PI)) + h2);
+                float phase = 2.0 * PI * frac(dot(d, world) / wavelength - frac(omega * t / (2.0 * PI)) + h2);
                 slope += amplitude * envelope * d * cos(phase);
             }
         }
@@ -1247,6 +1256,16 @@ float ripples(float2 world, float t, float variance, float2 runs, float footprin
 
 // What the water reflects along R from P (relative to the eye) for something about `reach` m
 // away: the scene turned over the surface at that point, else the sky. `h` is the still level.
+// A facet that sends the ray down: it meets the water again close by, which reflects the sky
+// along the ray turned up by Fresnel at that grazing incidence and lets through the water's own
+// light (`own`): a second bounce off a level surface (multiple scattering between facets).
+float3 reflectedDown(float3 R, float3 own, float sharpSky)
+{
+    float3 up = float3(R.xy, -R.z);
+    float F = fresnelWater(-R.z);
+    return F * sky(normalize(up + float3(0, 0, 0.001)), sharpSky) + (1.0 - F) * own;
+}
+
 float3 reflectedAlong(float3 P, float3 R, float reach, float h, float sharpSky)
 {
     float3 X = P + R * reach;
@@ -1294,12 +1313,27 @@ float4 fsWater(WaterOutput input) : SV_Target
         float2 slope = moving.yz * frame.surfaceLook.x * share * N.z + capillary;
         N = normalize(float3(N.xy - slope, N.z));
         N *= above;
+        // A resolved ripple's back, turned from the eye, is hidden behind the crest in front
+        // (masking): the pixel sees that crest's face instead, so the normal is turned back
+        // until it faces the eye.
+        float facing = dot(N, V);
+        if (facing < 0.1)
+            N = normalize(N + (0.1 - facing) * V);
     }
     else if (dot(N, V) < 0.0)
     {
-        N = -N;
+        // The far sides, seen from over or in the water: hidden behind its surface. The water
+        // pass writes no depth, so it would draw over the surface; it is not drawn.
+        discard;
     }
     float NV = saturate(dot(N, V)) + 1e-4;
+    // The water's own light as it leaves the surface, for what a second bounce sees (the deep
+    // column's: see the refraction below).
+    float sunUp0 = saturate(frame.sunDirection.z);
+    float3 absorption0 = kWaterAbsorption + frame.waterOptics.xyz;
+    float3 own = 0.33 * kWaterBackscatter / (absorption0 + kWaterBackscatter) *
+                 (frame.sunColor.rgb * frame.sunDirection.w * sunUp0 / PI + float3(0.38, 0.46, 0.60) * frame.light.x) /
+                 (kWaterIndex * kWaterIndex);
 
     // --- reflection: the facets' Fresnel-weighted view of the scene and the sky --------------
     // How far what is reflected stands: from the mirror pass's depth (its image's view depth).
@@ -1313,9 +1347,9 @@ float4 fsWater(WaterOutput input) : SV_Target
     if (facets < 1e-4 || input.side > 0.5)
     {
         float3 R = reflect(-V, N);
-        R.z = abs(R.z) + 0.001;
         reflectance = fresnelWater(NV);
-        reflection = reflectedAlong(P, normalize(R), reach, h, 1.0) * reflectance;
+        reflection = (R.z > 0.0 ? reflectedAlong(P, normalize(R), reach, h, 1.0) : reflectedDown(R, own, 1.0)) *
+                     reflectance;
     }
     else
     {
@@ -1340,9 +1374,9 @@ float4 fsWater(WaterOutput input) : SV_Target
                 continue;
             float w = VH / cosT;
             float3 R = reflect(-V, H);
-            R.z = abs(R.z) + 0.001;  // a facet that sends it down sees the water's own surface
             float F = fresnelWater(VH);
-            reflection += w * F * reflectedAlong(P, normalize(R), reach, h, sharpSky);
+            reflection += w * F * (R.z > 0.0 ? reflectedAlong(P, normalize(R), reach, h, sharpSky)
+                                             : reflectedDown(R, own, sharpSky));
             reflectance += w * F;
             sumW += w;
         }
@@ -1395,8 +1429,9 @@ float4 fsWater(WaterOutput input) : SV_Target
     float submerged = max(h - point.z, 0.0);
     // The sun's light down to the bottom, along its refracted ray.
     float cosSunWater = sqrt(max(1.0 - (1.0 - sunUp * sunUp) / (kWaterIndex * kWaterIndex), 0.0));
-    float3 down = exp(-kWaterAbsorption * submerged / max(cosSunWater, 0.1));
-    float3 alongView = exp(-kWaterAbsorption * pathView);
+    float3 absorption = kWaterAbsorption + frame.waterOptics.xyz;  // and its dissolved matter
+    float3 down = exp(-absorption * submerged / max(cosSunWater, 0.1));
+    float3 alongView = exp(-absorption * pathView);
     float3 lightOnBottom = caustics(point.xy + frame.worldWrap.xy, t) * windShare() * exp(-submerged * 0.6) *
                            saturate(submerged * 4.0) * frame.sunDirection.z * 1.3;
     float sunIn = 1.0 - fresnelWater(sunUp);
@@ -1404,7 +1439,7 @@ float4 fsWater(WaterOutput input) : SV_Target
     // The water's own light: a deep column's irradiance reflectance R∞ = 0.33·b_b/(a + b_b)
     // (Gordon, Brown and Jacobs 1975; Morel and Prieur 1977), lit by the sun and the sky that
     // went in, seen through what is left of the column.
-    float3 rInf = 0.33 * kWaterBackscatter / (kWaterAbsorption + kWaterBackscatter);
+    float3 rInf = 0.33 * kWaterBackscatter / (absorption + kWaterBackscatter);
     float visibility = sunLight(P, float3(0, 0, 1));
     float3 downwelling = (frame.sunColor.rgb * frame.sunDirection.w * sunUp * visibility / PI +
                           float3(0.38, 0.46, 0.60) * frame.light.x) * sunIn;
@@ -1424,7 +1459,7 @@ float4 fsWater(WaterOutput input) : SV_Target
         float a2 = facets + kSunDiscVariance;
         float tan2 = (1.0 - NH * NH) / (NH * NH);
         float D = exp(-tan2 / a2) / (PI * a2 * NH * NH * NH * NH);
-        float glint = min(D * fresnelWater(saturate(dot(V, H))) / (4.0 * NV), 600.0);
+        float glint = min(D * fresnelWater(saturate(dot(V, H))) / (4.0 * NV), 3000.0);
         color += glint * frame.sunColor.rgb * frame.sunDirection.w * visibility;
     }
 

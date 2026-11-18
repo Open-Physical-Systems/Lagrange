@@ -101,6 +101,9 @@ struct RenderOptions {
     /// How much the realistic view scales the moving surface's heights and slopes: 1 as the
     /// physics has them (--water-relief; more shows sub-millimetre ripples, a drawing choice).
     float waterRelief{1.0F};
+    /// The water's coloured dissolved organic matter (CDOM): its absorption at 440 nm, 1/m
+    /// (--water-cdom; 0: pure water). The realistic view absorbs by it as well (water.md).
+    float waterCdom{0.0F};
     /// Lamps (RFC 0021 §4), lighting the realistic view: from the scene's LampAPI_1 prims, their
     /// attributes and their lamp/<n>/intensity signals (RFC 0021 §7).
     struct Lamp {

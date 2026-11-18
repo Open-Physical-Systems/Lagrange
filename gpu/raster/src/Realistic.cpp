@@ -52,8 +52,9 @@ struct Frame {
     std::array<float, 4> surfaceLook;  // relief, the wind's ripple slope variance, its direction
     std::array<float, 4> sprayBox;     // first cell's centre relative to the eye, cell
     std::array<float, 4> sprayDims;    // cells, extinction per kg/m³
+    std::array<float, 4> waterOptics;  // CDOM absorption at 620, 550, 465 nm (1/m), unused
 };
-static_assert(sizeof(Frame) == 416);
+static_assert(sizeof(Frame) == 432);
 
 // Must match Lamp in realistic.slang.
 struct GpuLamp {
@@ -647,6 +648,13 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             : std::array<double, 2>{1.0, 0.0};
     main.surfaceLook = {1.0F, f(water_optics::rippleSlopeVariance(windFriction)), f(windTo[0]),
                         f(windTo[1])};
+    {
+        // CDOM's absorption a(λ) = a(440)·exp(−S·(λ − 440)), S = 0.014 /nm (Bricaud et al.).
+        const auto cdom = [&](double nm) {
+            return f(std::max(settings.waterCdom, 0.0F) * std::exp(-0.014 * (nm - 440.0)));
+        };
+        main.waterOptics = {cdom(620.0), cdom(550.0), cdom(465.0), 0.0F};
+    }
     if (water) {
         const RealisticWaterSurface& moving = settings.waterSurface;
         const std::size_t n = moving.cells;
