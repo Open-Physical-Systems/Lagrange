@@ -35,6 +35,9 @@ struct ServerOptions {
     /// The site's air density, kg/m³ (--air-density; a profile's rotor_aero.air_density
     /// overrides it). A site parameter with no default: rotors do not run without it.
     std::optional<double> airDensityKgM3;
+    /// --no-downwash-water: wakes go through water to the ground, its surface stays still and
+    /// no spray (as a profile's aerodynamics.downwash_water: false, which it gives way to).
+    bool downwashWater{true};
     /// The weather (--weather KEY=VALUE,...: temperature K, pressure Pa, relative_humidity,
     /// visibility m, rain_rate m/s, dust_concentration kg/m³, dust_median_diameter m,
     /// solar_irradiance W/m², sky_temperature K; a profile's weather keys override them). The

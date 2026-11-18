@@ -116,6 +116,8 @@ and starts flat and still, centred on it. It costs nothing while nothing presses
 `surface_min` and `surface_max`. The water's cells are under the moved surface, so floating
 bodies see it, and the rotors measure their ground effect to it ([rotors.md](rotors.md)).
 
+![The sample quadcopter 0.6 m over a pond: the water/surface layer shows its four rotors' dimples (8 mm deep), and its spray drops ride the outwash out](../imgs/drone-water-dimple.png)
+
 **The sample quadcopter's dimple** (2.0 kg, 10-inch propellers), over still water:
 
 | Rotor plane over the water | Jet arriving | Dimple | $\rho_{air}U^2/(2\rho_w g)$ |

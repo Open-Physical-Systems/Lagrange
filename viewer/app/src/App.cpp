@@ -924,6 +924,7 @@ public:
         buildSensorOverlays();
         buildRadarOverlays();
         buildAirflow();
+        buildSpray();  // after the airflow: its drops go in the same overlay slot
         buildCables();
         followWeather();
         followLamps();
@@ -1022,7 +1023,7 @@ public:
                    a.snowMmPerH == b.snowMmPerH && a.snowCover == b.snowCover && a.wind == b.wind &&
                    a.temperatureLow == b.temperatureLow && a.temperatureHigh == b.temperatureHigh &&
                    a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
-                   a.airflow == b.airflow && a.airflowMax == b.airflowMax &&
+                   a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
                    sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
                    a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
                    (a.skyIlluminance == b.skyIlluminance ||
@@ -1333,6 +1334,89 @@ public:
                                             static_cast<float>(p.at[2] - volume->origin[2])};
             out.insert(out.end(), {head[0] - v[0] * kTrailS, head[1] - v[1] * kTrailS,
                                    head[2] - v[2] * kTrailS, head[0], head[1], head[2]});
+        }
+    }
+
+    /// Spray off water (downwash.md §5b): the server's box of the spray's water per cell
+    /// (FieldVolume of aero/spray, kg/m³, from the aerodynamics domain's drops), drawn as short
+    /// falling streaks, as many in a cell as its water holds marks of kMarkKg, at places fixed per
+    /// cell, coloured as the field map by the cell's water against the box's most. Added to the
+    /// airflow's overlay slot.
+    void buildSpray() {
+        constexpr double kMarkKg = 4e-7;   // kg of water per streak drawn
+        constexpr int kMostPerCell = 12;   // streaks
+        constexpr float kStreakM = 0.03F;  // a streak's length
+        constexpr float kFallMps = 0.8F;   // how fast the streaks go down in their cell
+        constexpr int kColours = 4;
+        static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
+                                                  theme::hex(0x21918C), theme::hex(0x5EC962),
+                                                  theme::hex(0xFDE725)};
+        if (!renderOptions_.spray) {
+            if (sprayStream_) {
+                (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
+                sprayStream_.reset();
+            }
+            return;
+        }
+        if (!sprayStream_) {
+            sprayStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = sprayStream_->latestVolume();
+        if (!volume || volume->components != 1U || volume->valueMax <= 0.0F) {
+            return;
+        }
+        sprayTime_ += std::clamp(ImGui::GetIO().DeltaTime, 0.0F, 0.1F);
+        const std::size_t first = airflowOverlays_.size();
+        airflowOverlays_.resize(first + kColours);
+        for (int c = 0; c < kColours; ++c) {
+            const float t = (static_cast<float>(c) + 0.5F) / kColours * 4.0F;
+            const auto index = std::min(static_cast<std::size_t>(t), std::size_t{3});
+            const float blend = t - static_cast<float>(index);
+            const ImVec4& a = kStops.at(index);
+            const ImVec4& b = kStops.at(index + 1);
+            OverlayLines& lines = airflowOverlays_[first + static_cast<std::size_t>(c)];
+            lines.origin = volume->origin;
+            lines.color = {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
+                           a.z + (b.z - a.z) * blend, 1.0F};
+            lines.vertices.clear();
+        }
+        const double cellVolume = volume->cellM * volume->cellM * volume->cellM;
+        const auto cell = static_cast<float>(volume->cellM);
+        for (std::uint32_t z = 0; z < volume->nz; ++z) {
+            for (std::uint32_t y = 0; y < volume->ny; ++y) {
+                for (std::uint32_t x = 0; x < volume->nx; ++x) {
+                    const std::size_t i =
+                        (static_cast<std::size_t>(z) * volume->ny + y) * volume->nx + x;
+                    const float water = volume->values[i];
+                    if (!(water > 0.0F)) {
+                        continue;
+                    }
+                    const int marks = std::min(
+                        kMostPerCell,
+                        std::max(1, static_cast<int>(std::lround(water * cellVolume / kMarkKg))));
+                    const int c = std::clamp(static_cast<int>(water / volume->valueMax * kColours),
+                                             0, kColours - 1);
+                    std::vector<float>& out =
+                        airflowOverlays_[first + static_cast<std::size_t>(c)].vertices;
+                    for (int m = 0; m < marks; ++m) {
+                        // A fixed place in the cell per mark (a hash of the cell and the mark).
+                        std::uint32_t h = static_cast<std::uint32_t>(i) * 2654435761U +
+                                          static_cast<std::uint32_t>(m) * 40503U;
+                        const auto next = [&h] {
+                            h ^= h << 13U;
+                            h ^= h >> 17U;
+                            h ^= h << 5U;
+                            return static_cast<float>(h & 0xFFFFU) / 65535.0F - 0.5F;
+                        };
+                        const float px = (static_cast<float>(x) + next()) * cell;
+                        const float py = (static_cast<float>(y) + next()) * cell;
+                        const float fall =
+                            std::fmod(sprayTime_ * kFallMps + (next() + 0.5F) * cell, cell);
+                        const float pz = (static_cast<float>(z) + 0.5F) * cell - fall;
+                        out.insert(out.end(), {px, py, pz + kStreakM, px, py, pz});
+                    }
+                }
+            }
         }
     }
 
@@ -2064,6 +2148,7 @@ public:
                                names.find("radar") != std::string::npos;
         renderOptions_.airflow =
             renderOptions_.airflow || names.find("airflow") != std::string::npos;
+        renderOptions_.spray = renderOptions_.spray || names.find("spray") != std::string::npos;
     }
     /// The field and plane the Slice 2D panel starts on ("aero/wind_speed:xz").
     void setSlice(std::string slice) { slice_ = std::move(slice); }
@@ -2241,6 +2326,9 @@ private:
     std::shared_ptr<const SignalCatalog> skyCatalog_;
     std::shared_ptr<ScopeBuffer> skyIlluminance_;  // env/sky_illuminance, lx
     static constexpr const char* kAirField = "aero/wind_speed";
+    static constexpr const char* kSprayField = "aero/spray";
+    std::shared_ptr<FieldStream> sprayStream_;
+    float sprayTime_{0.0F};  // s, for the streaks' fall
     struct Particle {
         std::array<double, 3> at{};  // region frame, m
         float age{0.0F};             // s

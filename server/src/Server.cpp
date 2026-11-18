@@ -121,11 +121,18 @@ constexpr const char* kSmokeField = "fire/smoke_extinction";  // env/smoke/extin
 constexpr const char* kAirField = "aero/wind_speed";
 // RFC 0012: the cells of every link with a thermal material, as FieldVolumes in its frame.
 constexpr const char* kThermalCellsField = "thermal/cells";
-// The grid of the water's moving surface under the downwash (water.md), the same for the water,
-// aerodynamics and rotor domains.
+// The water's moving surface under the downwash (water.md), one FieldVolume of nz 1 over the
+// first body of water's patch, and the spray off it (downwash.md §5b), its water per cell.
+constexpr const char* kWaterSurfaceField = "water/surface";
+constexpr const char* kSprayField = "aero/spray";
+// The surface's grid, the same for the water, aerodynamics and rotor domains.
 constexpr std::int64_t kSurfaceCells = 128;
 constexpr double kSurfaceCell = 0.03;  // m
 constexpr double kSurfaceStep = 0.04;  // s
+// The spray's volume for the viewer: 40 × 40 × 10 cells of 0.15 m round its drops.
+constexpr std::uint32_t kSprayNx = 40;
+constexpr std::uint32_t kSprayNz = 10;
+constexpr double kSprayCell = 0.15;    // m
 constexpr double kAirSliceCell = 0.1;  // m: a drone is about half a metre across
 // The air around the robot for the viewer's particles: 28 × 28 × 20 cells of 0.2 m, from 3.4 m
 // below the robot to 0.6 m above it, five times a second.
@@ -1632,6 +1639,9 @@ struct Server::Impl {
         settings.streamingUnloadRadius = appliedUnloadRadius;
         settings.streamingCollisionRadius = appliedCollisionRadius;
         settings.aerodynamics = appliedAerodynamics;
+        if (!options.downwashWater) {
+            settings.aerodynamics.try_emplace("downwash_water", false);
+        }
         settings.rotorAero = appliedRotorAero;
         settings.thermal = appliedThermal;
         settings.weather = appliedWeather;
@@ -6434,6 +6444,13 @@ struct Server::Impl {
               "temperature is not given");
         field(kSmokeField, "smoke extinction", "fire", units::per_m, 1, hasFires(),
               "the stage has no fires (FireAPI_1)");
+        field(kWaterSurfaceField, "water surface", "hydrodynamics", units::m, 1,
+              waterSurfaceSignal().valid(),
+              "the water's surface does not move: it needs water, rotors with their downwash "
+              "and the site's air density");
+        field(kSprayField, "spray", "aerodynamics", units::kg_per_m3, 1,
+              scheduler != nullptr && scheduler->bus().find("aero/spray_drops").valid(),
+              "no spray: it needs the water's moving surface and aerodynamics.downwash_spray");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -6767,7 +6784,142 @@ struct Server::Impl {
 
     /// The air's velocity in a box around the robot (kAirField only), for the viewer's
     /// particles: kVolumeNx² × kVolumeNz cells, down to the ground.
+    /// The first body of water's moving surface on the bus (water/<w>/surface), or none.
+    SignalId waterSurfaceSignal(std::string* water = nullptr) const {
+        if (scheduler == nullptr) {
+            return {};
+        }
+        for (const SchemaInstance* s : WorldView(robot.world).instancesOf("WaterAPI_1")) {
+            const std::string& name = robot.world.prims.instanceNames.at(s->prim.index);
+            if (const SignalId id = scheduler->bus().find("water/" + name + "/surface");
+                id.valid()) {
+                if (water != nullptr) {
+                    *water = name;
+                }
+                return id;
+            }
+        }
+        return {};
+    }
+
+    /// The water's surface (kWaterSurfaceField): its patch's heights over the still level, a
+    /// FieldVolume one cell high at that level.
+    std::optional<v1::Envelope> waterSurfaceVolume() const {
+        std::string water;
+        const SignalId heights = waterSurfaceSignal(&water);
+        if (!heights.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> eta = scheduler->bus().readN(heights);
+        const std::span<const double> corner =
+            scheduler->bus().readN(scheduler->bus().find("water/" + water + "/surface_origin"));
+        const auto n = static_cast<std::size_t>(kSurfaceCells);
+        if (eta.size() != n * n || corner.size() != 2 || !std::isfinite(corner[0])) {
+            return std::nullopt;
+        }
+        double level = 0.0;
+        for (const hydrodynamics::WaterBody& w : hydrodynamics::waterOf(WorldView(robot.world))) {
+            if (w.name == water) {
+                level = w.surface[2];
+            }
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(kWaterSurfaceField);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_nx(static_cast<std::uint32_t>(n));
+        volume.set_ny(static_cast<std::uint32_t>(n));
+        volume.set_nz(1);
+        volume.set_cell_m(kSurfaceCell);
+        volume.set_components(1);
+        volume.set_origin_x(corner[0] + kSurfaceCell / 2.0);
+        volume.set_origin_y(corner[1] + kSurfaceCell / 2.0);
+        volume.set_origin_z(level);
+        std::vector<float> values(eta.size());
+        float hi = 0.0F;
+        for (std::size_t i = 0; i < eta.size(); ++i) {
+            values[i] = static_cast<float>(eta[i]);
+            hi = std::max(hi, std::abs(values[i]));
+        }
+        volume.set_value_max(hi);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The spray off water (kSprayField): its drops' water per cell (kg/m³) in a box round
+    /// them, from aero/spray_drops and aero/spray_mass.
+    std::optional<v1::Envelope> sprayVolume() const {
+        if (scheduler == nullptr) {
+            return std::nullopt;
+        }
+        const SignalId at = scheduler->bus().find("aero/spray_drops");
+        const SignalId mass = scheduler->bus().find("aero/spray_mass");
+        if (!at.valid() || !mass.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> x = scheduler->bus().readN(at);
+        const std::span<const double> m = scheduler->bus().readN(mass);
+        // The box: centred on the drops' mean, from the lowest of them up.
+        double cx = 0.0;
+        double cy = 0.0;
+        double low = std::numeric_limits<double>::infinity();
+        std::size_t count = 0;
+        for (std::size_t i = 0; 3 * i + 2 < x.size() && i < m.size(); ++i) {
+            if (!std::isfinite(x[3 * i])) {
+                break;
+            }
+            cx += x[3 * i];
+            cy += x[3 * i + 1];
+            low = std::min(low, x[3 * i + 2]);
+            ++count;
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(kSprayField);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_nx(kSprayNx);
+        volume.set_ny(kSprayNx);
+        volume.set_nz(kSprayNz);
+        volume.set_cell_m(kSprayCell);
+        volume.set_components(1);
+        const double half = (kSprayNx - 1) * kSprayCell / 2.0;
+        volume.set_origin_x((count > 0 ? cx / static_cast<double>(count) : 0.0) - half);
+        volume.set_origin_y((count > 0 ? cy / static_cast<double>(count) : 0.0) - half);
+        volume.set_origin_z(count > 0 ? low + kSprayCell / 2.0 : 0.0);
+        std::vector<float> values(static_cast<std::size_t>(kSprayNx) * kSprayNx * kSprayNz, 0.0F);
+        const double cellVolume = kSprayCell * kSprayCell * kSprayCell;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto index = [&](double v, double origin) {
+                return static_cast<long>(std::floor((v - origin) / kSprayCell + 0.5));
+            };
+            const long col = index(x[3 * i], volume.origin_x());
+            const long row = index(x[3 * i + 1], volume.origin_y());
+            const long layer = index(x[3 * i + 2], volume.origin_z());
+            if (col < 0 || row < 0 || layer < 0 || col >= kSprayNx || row >= kSprayNx ||
+                layer >= kSprayNz) {
+                continue;
+            }
+            values[static_cast<std::size_t>((layer * kSprayNx + row) * kSprayNx + col)] +=
+                static_cast<float>(m[i] / cellVolume);
+        }
+        volume.set_value_max(values.empty() ? 0.0F : *std::ranges::max_element(values));
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
     std::optional<v1::Envelope> fieldVolume(const std::string& name) const {
+        if (name == kWaterSurfaceField) {
+            return waterSurfaceVolume();
+        }
+        if (name == kSprayField) {
+            return sprayVolume();
+        }
         if (name != kAirField || !aeroRuns()) {
             return std::nullopt;
         }
@@ -6817,6 +6969,48 @@ struct Server::Impl {
         v1::SliceOrientation orientation = v1::SLICE_ORIENTATION_HORIZONTAL) const {
         if (name == kAirField) {
             return airSlice(height, orientation);
+        }
+        if (name == kWaterSurfaceField || name == kSprayField) {
+            // A layer of their volume: the water's one, or the spray's nearest `height`.
+            if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL) {
+                return std::nullopt;
+            }
+            const std::optional<v1::Envelope> box =
+                name == kWaterSurfaceField ? waterSurfaceVolume() : sprayVolume();
+            if (!box) {
+                return std::nullopt;
+            }
+            const v1::FieldVolume& volume = box->field_volume();
+            const auto layer = static_cast<std::uint32_t>(
+                std::clamp(std::lround((height - volume.origin_z()) / volume.cell_m()), 0L,
+                           static_cast<long>(volume.nz()) - 1));
+            const std::size_t cells = static_cast<std::size_t>(volume.nx()) * volume.ny();
+            const std::string& all = volume.values().inline_();
+            if (all.size() < (layer + 1) * cells * sizeof(float)) {
+                return std::nullopt;
+            }
+            std::vector<float> values(cells);
+            std::memcpy(values.data(), all.data() + layer * cells * sizeof(float),
+                        cells * sizeof(float));
+            v1::Envelope envelope;
+            v1::FieldSlice& slice = *envelope.mutable_field_slice();
+            slice.set_field(name);
+            slice.mutable_sim_time()->set_ns(scheduler->now().ns);
+            slice.set_width(volume.nx());
+            slice.set_height(volume.ny());
+            slice.set_components(1);
+            slice.set_origin_x(volume.origin_x());
+            slice.set_origin_y(volume.origin_y());
+            slice.set_cell_m(volume.cell_m());
+            slice.set_height_m(volume.origin_z() + layer * volume.cell_m());
+            const auto [lo, hi] = std::ranges::minmax(values);
+            slice.set_value_min(lo);
+            slice.set_value_max(hi);
+            std::string bytes(reinterpret_cast<const char*>(values.data()),
+                              values.size() * sizeof(float));
+            slice.mutable_values()->set_size(bytes.size());
+            slice.mutable_values()->set_inline_(std::move(bytes));
+            return envelope;
         }
         if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField &&
             name != kSmokeField) {
