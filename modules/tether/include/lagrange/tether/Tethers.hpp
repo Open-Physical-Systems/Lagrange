@@ -5,6 +5,8 @@
 // It writes each cable's tensions, length, winch speed, contacts and node positions, and pulls
 // and pushes bodies through body/<b>/wrench/tether. With rotors and the aerodynamics domain it
 // reads tether/<n>/downwash, the rotors' air at each node, and blows the cable with it too.
+// Its winch takes tether/<n>/length_command (m), tension_command (N) and winch_speed_command
+// (m/s) while the run goes (optional inputs, from a plugin or ROS by --ros-topics; ≤ 0: none).
 // Zero substitute (`--domain tether=off`):
 // tensions 0 and nothing else.
 
@@ -60,6 +62,8 @@ private:
         SignalId tensionAttach{}, tensionAnchor{}, length{}, winchSpeed{}, contacts{}, caught{},
             nodes{};
         SignalId downwash{};  // input: the rotors' air at each node
+        // Optional inputs, the winch's commands while it runs (≤ 0 or unconnected: none).
+        SignalId lengthCommand{}, tensionCommand{}, speedCommand{};
     };
 
     [[nodiscard]] Pose bodyPose(BodyId body, const SignalBus& bus) const;

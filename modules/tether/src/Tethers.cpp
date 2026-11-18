@@ -241,6 +241,16 @@ Status Tethers::declare(const WorldView& world, const ModuleConfig& config, Sign
         SignalSpec nodes = spec(base + "nodes", SignalType::ScalarArray, units::m, "world_local");
         nodes.arrayLength = static_cast<std::uint32_t>(3 * cables_.back().capacity());
         o.nodes = d.output(nodes);
+        // The winch's commands while it runs (Cable::command): optional, none until written.
+        const auto command = [&](const char* name, Unit unit) {
+            SignalSpec c = spec(base + name, SignalType::Scalar, unit);
+            c.optional = true;
+            c.defaultValue = 0.0;
+            return d.input(c);
+        };
+        o.lengthCommand = command("length_command", units::m);
+        o.tensionCommand = command("tension_command", units::N);
+        o.speedCommand = command("winch_speed_command", units::m_per_s);
         // The rotors' downwash at each node, from the aerodynamics domain when it runs with
         // rotors (rotor_aero.md §2.7); a step late, at last step's nodes.
         SignalSpec stream =
@@ -398,6 +408,9 @@ Status Tethers::step(const StepContext& context, SignalBus& bus) {
             stream_.push_back({dw[3 * i], dw[3 * i + 1], dw[3 * i + 2]});
         }
         air.stream = stream_;
+        cable.command({.length = bus.read(o.lengthCommand),
+                       .tension = bus.read(o.tensionCommand),
+                       .speed = bus.read(o.speedCommand)});
         cable.step(dt, anchor, attach, obstacles_, air);
         // What the cable did to the bodies: contact pushes, the pull at each end.
         const auto pushes = cable.pushes();

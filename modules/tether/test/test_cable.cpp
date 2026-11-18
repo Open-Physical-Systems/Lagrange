@@ -4,7 +4,9 @@
 // same run.
 #include "lagrange/tether/Cable.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 #include <vector>
 
@@ -330,6 +332,58 @@ TEST(Cable, ATensionWinchHoldsItsTension) {
     EXPECT_GT(cable.length(), 3.7);
     EXPECT_NEAR(climbing, p.winchTension, 0.5);
     EXPECT_NEAR(holding, p.winchTension, 0.5);
+}
+
+// Commanded while it runs (Cable::command, tether/<n>/*_command): a fixed winch pays out to a
+// length command at the commanded speed and reels back in; a tension command then takes over
+// and holds that tension; no command leaves it as its parameters say (fixed).
+TEST(Cable, TheWinchFollowsCommandsWhileItRuns) {
+    CableParams p;
+    p.length = 2.0;
+    p.maxLength = 30.0;
+    p.segmentLength = 0.2;
+    p.linearDensity = 0.03;
+    p.winch = Winch::Fixed;
+    p.winchSpeed = 1.0;
+    const Vec3 anchor{0.0, 0.0, 0.0};
+    const Vec3 attach{1.0, 0.0, 1.0};
+    Cable cable(p, anchor, attach, 0);
+    Air air;
+    const auto run = [&](int steps) {
+        double fastest = 0.0;
+        for (int i = 0; i < steps; ++i) {
+            cable.step(1e-3, anchor, attach, {}, air);
+            fastest = std::max(fastest, std::abs(cable.winchSpeed()));
+        }
+        return fastest;
+    };
+    (void)run(500);
+    EXPECT_NEAR(cable.length(), 2.0, 1e-9);  // fixed: no command, no change
+    // Out to 5 m at 2 m/s: 1.5 s at full speed, settled within 3 s.
+    cable.command({.length = 5.0, .speed = 2.0});
+    EXPECT_NEAR(run(3000), 2.0, 1e-9);
+    EXPECT_NEAR(cable.length(), 5.0, 0.01);
+    // Back to 3 m at the parameters' 1 m/s.
+    cable.command({.length = 3.0});
+    EXPECT_NEAR(run(4000), 1.0, 1e-9);
+    EXPECT_NEAR(cable.length(), 3.0, 0.01);
+    // A tension command: it reels in the slack until the anchor holds about 3 N.
+    cable.command({.tension = 3.0});
+    (void)run(6000);
+    double tension = 0.0;
+    for (int i = 0; i < 2000; ++i) {
+        cable.step(1e-3, anchor, attach, {}, air);
+        tension += cable.tensionAnchor() / 2000.0;
+    }
+    std::printf("winch commands: %.2f m, anchor tension %.2f N (command 3 N)\n", cable.length(),
+                tension);
+    EXPECT_NEAR(tension, 3.0, 0.5);
+    EXPECT_LT(cable.length(), 3.0);
+    // No command: fixed again, where it is.
+    cable.command({});
+    const double held = cable.length();
+    (void)run(1000);
+    EXPECT_NEAR(cable.length(), held, 1e-9);
 }
 
 // Laid out through a box (its arch through a slab above the ends): it comes out at a few m/s,
