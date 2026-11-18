@@ -212,8 +212,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 if (domain.contains("turbulence") && domain["turbulence"].is_string()) {
                     settings.aerodynamics["turbulence"] = domain["turbulence"].as<std::string>();
                 }
-                if (domain.contains("downwash") && domain["downwash"].is_bool()) {
-                    settings.aerodynamics["downwash"] = domain["downwash"].as<bool>();
+                for (const char* key : {"downwash", "downwash_water", "downwash_spray"}) {
+                    if (domain.contains(key) && domain[key].is_bool()) {
+                        settings.aerodynamics[key] = domain[key].as<bool>();
+                    }
                 }
                 if (domain.contains("downwash_model") && domain["downwash_model"].is_string()) {
                     settings.aerodynamics["downwash_model"] =

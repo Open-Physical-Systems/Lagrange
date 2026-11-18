@@ -49,6 +49,7 @@ ImVec4 viridis(float fraction) {
 /// The air's speed: wind, gusts and the rotors' wakes (server kAirField, rotor_aero.md §5). The
 /// only field with vertical slices and the airflow particles.
 constexpr const char* kAirField = "aero/wind_speed";
+constexpr const char* kSprayField = "aero/spray";  // the spray off water (downwash.md §5b)
 /// |B| of the EMI sources; sliced upright through the robot too (RFC 0013: its own wiring).
 constexpr const char* kFluxField = "emi/flux_density";
 
@@ -1441,6 +1442,34 @@ public:
             ImGui::PopStyleColor();
             const char* note = air->available ? "m/s" : air->unavailableReason.c_str();
             // Cut with an ellipsis when the panel is narrow; whole in a tooltip (QA3 F6).
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+            fit::textRight(note);
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+            ImGui::PopID();
+        }
+        // The spray off water (downwash.md §5b): its drops, drawn where the physics has them.
+        const auto spray = std::ranges::find_if(
+            info.fields, [](const EnvironmentInfo::Field& f) { return f.name == kSprayField; });
+        if (spray != info.fields.end()) {
+            ImGui::PushID("spray");
+            bool& on = context.renderOptions->spray;
+            ImGui::BeginDisabled(!spray->available);
+            if (!spray->available) {
+                on = false;
+            }
+            widgets::Checkbox("##show", &on);
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::AlignTextToFramePadding();
+            widgets::Swatch(widgets::domainColor(spray->domain));
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::PushStyleColor(ImGuiCol_Text, spray->available ? c::t1 : c::t3);
+            ImGui::TextUnformatted("spray · drops");
+            ImGui::PopStyleColor();
+            const char* note = spray->available ? "kg/m³" : spray->unavailableReason.c_str();
             ImGui::SameLine(0.0F, px(8.0F));
             ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
             ImGui::PushStyleColor(ImGuiCol_Text, c::t3);

@@ -171,6 +171,8 @@ void printServerOptions(std::FILE* out) {
         "            a profile's world.geo_origin also sets it)\n"
         "  --air-density KG_M3  the site's air density, for rotors (ISA sea level: 1.225; no\n"
         "            default; a profile's rotor_aero.air_density also sets it)\n"
+        "  --no-downwash-water  wakes go through water to the ground: no dimple, ripples or\n"
+        "            spray (profile aerodynamics.downwash_water: false)\n"
         "  --weather K=V,...  the weather: temperature (K), pressure (Pa) and relative_humidity\n"
         "            (0-1), the site, no defaults; visibility (m, fog), rain_rate (m/s),\n"
         "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
@@ -446,6 +448,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             }
             constexpr double kDegree = std::numbers::pi / 180.0;
             options.geoOrigin = coords::Geodetic{lat * kDegree, lon * kDegree, height};
+        } else if (arg == "--no-downwash-water") {
+            options.downwashWater = false;
         } else if (arg == "--air-density") {
             const char* text = value();
             char* end = nullptr;

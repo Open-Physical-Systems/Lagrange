@@ -248,6 +248,12 @@ what the ends hold.
 | `rotor/<j>/air_velocity` | m/s, world | aerodynamics | rotor_aero (`bem`, config `rotor_air`) |
 | `body/<b>/wrench/aero` | N, N·m | aerodynamics | wrench sum |
 | `env/dust/downwash` | kg/m³ | aerodynamics | weather (config `downwash_dust`) |
+| `water/<w>/patch`, `air_pressure`, `air_stress` | m, Pa, Pa | aerodynamics (config `water_surface`) | hydrodynamics `surface` |
+| `water/<w>/surface`, `surface_origin`, `surface_min`, `surface_max` | m | hydrodynamics `surface` | hydrodynamics `water`, rotor_aero (config `surface_cells`) |
+| `water/<w>/outwash_peak`, `spray_rate` | m/s, kg/s | aerodynamics | scopes |
+| `rotor/<j>/spray`, `env/spray/downwash` | kg/m³ | aerodynamics | scopes |
+| `env/spray/extinction`, `env/spray/rate` | 1/m, m/s | aerodynamics | weather (config `downwash_spray`) |
+| `aero/spray_drops` | m (x, y, z per drop) | aerodynamics | server (viewer) |
 | `tether/<n>/nodes` | m, world, 3 per node | tether | aerodynamics |
 | `tether/<n>/downwash` | m/s, world, 3 per node | aerodynamics | tether (feedback) |
 

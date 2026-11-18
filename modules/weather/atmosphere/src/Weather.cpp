@@ -263,6 +263,18 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
         groundDustDiameter_ = config.get<double>("ground_dust_diameter").value_or(1e-4);
     }
     liftedDust_ = 0.0;
+    // Spray the rotors' outwash tears off water (the aerodynamics domain, downwash.md §5b): its
+    // extinction joins the air's, and its drops wet lenses as rain does.
+    sprayExtinctionIn_ = sprayRateIn_ = SignalId{};
+    if (config.get<bool>("downwash_spray").value_or(false) && !clear_) {
+        SignalSpec extinction = spec("env/spray/extinction", SignalType::Scalar, units::per_m);
+        extinction.feedback = extinction.optional = true;
+        SignalSpec rate = spec("env/spray/rate", SignalType::Scalar, units::m_per_s);
+        rate.feedback = rate.optional = true;
+        sprayExtinctionIn_ = d.input(extinction);
+        sprayRateIn_ = d.input(rate);
+    }
+    sprayExtinction_ = sprayRate_ = 0.0;
     fogFieldOut_ = d.output(spec("env/extinction/field", SignalType::Field3D, units::per_m));
     windFieldOut_ = d.output(
         spec("env/wind/velocity_field", SignalType::Field3D, units::m_per_s, "world_local"));
@@ -287,6 +299,8 @@ Status Weather::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
 Status Weather::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
     liftedDust_ = downwashDustIn_.valid() && dust_ ? bus.read(downwashDustIn_) : 0.0;
+    sprayExtinction_ = sprayExtinctionIn_.valid() ? bus.read(sprayExtinctionIn_) : 0.0;
+    sprayRate_ = sprayRateIn_.valid() ? bus.read(sprayRateIn_) : 0.0;
     if (wetFriction_ && s_.rainRate > 0.0) {
         // Wetting towards 1, faster in heavier rain up to kWettingRainRate.
         const double rate = std::min(s_.rainRate / kWettingRainRate, 1.0) / kWettingTimeS;
@@ -307,7 +321,8 @@ Status Weather::step(const StepContext& context, SignalBus& bus) {
     }
     if (lens_) {
         const double rate =
-            ((rain_ ? s_.rainRate : 0.0) + snowing) / kLensRainReference / kLensRainTimeS +
+            ((rain_ ? s_.rainRate : 0.0) + snowing + sprayRate_) / kLensRainReference /
+                kLensRainTimeS +
             (dust_ ? (s_.dustConcentration + liftedDust_) / kLensDustReference / kLensDustTimeS
                    : 0.0);
         for (double& c : contamination_) {
@@ -333,7 +348,7 @@ void Weather::writeAll(SignalBus& bus) const {
                               : 0.0;
     const auto total = [&](double wavelength) {
         return (fog_ ? fogExtinction(s_.visibility, wavelength) : 0.0) + rain + dust +
-               (snow_ ? snowExtinction(snowRate_) : 0.0);
+               (snow_ ? snowExtinction(snowRate_) : 0.0) + sprayExtinction_;
     };
     bus.write(visibleOut_, total(kVisibleWavelength));
     bus.write(nir905Out_, total(kLidar905));

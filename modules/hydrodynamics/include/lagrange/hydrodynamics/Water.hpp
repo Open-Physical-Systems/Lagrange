@@ -60,6 +60,10 @@ void addWater(Model& model, const WaterBody& water);
 /// and centripetal terms for a diagonal M_A (Fossen 2011, eq. 6.43) and ν̇_r smoothed per axis
 /// with gain 1/(1 + m_a/m) as above. Buoyancy stays the cells'; the water's acceleration still
 /// pushes the displaced volume (ρ·V·a_w).
+///
+/// With config "surface" (the water's moving surface runs, SurfaceWaves) it reads
+/// water/<w>/surface and surface_origin (config "surface_cells", "surface_cell" as SurfaceWaves')
+/// and adds their height to the surface the cells are under.
 /// A vehicle's own hydrodynamic coefficients in Fossen's model (Handbook of Marine Craft
 /// Hydrodynamics and Motion Control, 2011, ch. 6), in its body frame (x forward, y, z, then roll,
 /// pitch, yaw about them), all positive numbers: diagonal added mass (kg, then kg·m²; −X_u̇ ...
@@ -125,6 +129,15 @@ private:
     void fossenWrench(Body& body, std::span<const double> p, std::span<const double> v, double t,
                       double dt, double under, std::array<double, 6>& wrench);
     std::vector<WaterBody> waters_;
+    // The moving surface (config "surface", with "surface_cells" and "surface_cell"): per body
+    // of water, its heights and grid corner, read each step.
+    struct Moving {
+        SignalId heights, origin;
+        std::span<const double> now, corner;
+    };
+    std::vector<Moving> moving_;
+    int surfaceCells_{0};
+    double surfaceCell_{0.0};
     std::vector<double> wavenumbers_;  // per water body, rad/m (0: no waves)
     std::vector<Body> bodies_;
     std::array<double, 3> gravity_{};

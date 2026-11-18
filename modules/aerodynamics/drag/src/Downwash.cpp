@@ -232,6 +232,26 @@ void Downwash::findSurfaces(Group& g) const {
             g.hitNormal = groundNormal_;
         }
     }
+    g.hitWater = -1;
+    // Water: a level surface over its rectangle, met from above.
+    for (std::size_t w = 0; w < water_.size(); ++w) {
+        const WaterSurface& water = water_[w];
+        const double towards = -g.wakeAxis[2];
+        const double height = g.centre[2] - water.centre[2];
+        if (towards <= 1e-3 || height <= 0.0 || height / towards >= best) {
+            continue;
+        }
+        const double t = height / towards;
+        const double x = g.centre[0] + t * g.wakeAxis[0];
+        const double y = g.centre[1] + t * g.wakeAxis[1];
+        if (std::abs(x - water.centre[0]) <= water.halfX &&
+            std::abs(y - water.centre[1]) <= water.halfY) {
+            best = t;
+            g.hits = true;
+            g.hitWater = static_cast<int>(w);
+            g.hitNormal = {0.0, 0.0, 1.0};
+        }
+    }
     for (std::size_t b = 0; b < boxes_.size(); ++b) {
         double t = 0.0;
         int axis = 0;
@@ -240,6 +260,7 @@ void Downwash::findSurfaces(Group& g) const {
             best = t;
             g.hits = true;
             g.hitBox = static_cast<int>(b);
+            g.hitWater = -1;
             g.hitAxis = axis;
             g.hitSide = side;
             Vec3 local{};
@@ -317,6 +338,17 @@ bool Downwash::insideObstacle(const Vec3& x) const {
     });
 }
 
+int Downwash::waterUnder(const Vec3& x) const {
+    for (std::size_t w = 0; w < water_.size(); ++w) {
+        const WaterSurface& water = water_[w];
+        if (std::abs(x[0] - water.centre[0]) <= water.halfX &&
+            std::abs(x[1] - water.centre[1]) <= water.halfY && x[2] <= water.centre[2]) {
+            return static_cast<int>(w);
+        }
+    }
+    return -1;
+}
+
 double Downwash::nearestWall(const Vec3& x, Vec3& normal) const {
     double best = std::numeric_limits<double>::infinity();
     for (const Box& b : boxes_) {
@@ -345,19 +377,29 @@ double Downwash::nearestWall(const Vec3& x, Vec3& normal) const {
     return best;
 }
 
-double Downwash::axialSpeed(const Group& g, const Vec3& x, double& s) const {
+double Downwash::axialSpeed(const Group& g, const Vec3& x, double& s, double widen) const {
+    double near = 0.0;
+    double far = 0.0;
+    const double beta = jetParts(g, x, s, widen, near, far);
+    return (1.0 - beta) * near + beta * far;
+}
+
+double Downwash::jetParts(const Group& g, const Vec3& x, double& s, double widen, double& near,
+                          double& far) const {
+    near = far = 0.0;
     double across = 0.0;
     split(x, g.centre, g.wakeAxis, s, across);
+    across /= widen;
     if (s <= 0.0) {
         return 0.0;
     }
     const double beta = mergeWeight(s / g.length);
-    double near = 0.0;
     if (beta < 1.0) {
         for (const Rotor& r : g.rotors) {
             double si = 0.0;
             double ri = 0.0;
             split(x, r.hub, g.wakeAxis, si, ri);
+            ri /= widen;
             if (si <= 0.0) {
                 continue;
             }
@@ -366,12 +408,11 @@ double Downwash::axialSpeed(const Group& g, const Vec3& x, double& s) const {
                     (1.0 - std::tanh((ri - edge) / (kNearEdge * r.radius)));
         }
     }
-    double far = 0.0;
     if (beta > 0.0) {
         far = farJetSpeed(g.hoverInduced, g.length, s) *
               farJetProfile(across / farJetHalfWidth(g.length, s));
     }
-    return (1.0 - beta) * near + beta * far;
+    return beta;
 }
 
 Vec3 Downwash::velocityAt(const Vec3& x, std::size_t exclude) const {
@@ -381,6 +422,9 @@ Vec3 Downwash::velocityAt(const Vec3& x, std::size_t exclude) const {
     }
     if (insideObstacle(x)) {
         return out;  // inside a building
+    }
+    if (waterUnder(x) >= 0) {
+        return out;  // under water
     }
     for (const Group& g : groups_) {
         if (g.id == exclude) {
@@ -433,14 +477,61 @@ Vec3 Downwash::velocityAt(const Vec3& x, std::size_t exclude) const {
 double Downwash::peakOutwash() const {
     double best = 0.0;
     for (const Group& g : groups_) {
-        if (!g.hits || g.hitBox >= 0) {
-            continue;  // dust lies on the ground, not on roofs
+        if (!g.hits || g.hitBox >= 0 || g.hitWater >= 0) {
+            continue;  // dust lies on the ground, not on roofs or water
         }
         const double r = g.arriveRadius / kCalRadius;
         best = std::max(best, outwashSpeed(g.arriveSpeed, g.arriveRadius, kOutwashPeakRadius * r,
                                            kOutwashPeakHeight * r));
     }
     return best;
+}
+
+double Downwash::surfacePressure(const Vec3& x, double rhoAir, int water) const {
+    double p = 0.0;
+    for (const Group& g : groups_) {
+        if (!g.hits || g.hitWater != water || (water < 0 && !onHitFace(g, x))) {
+            continue;
+        }
+        // The near wake's and the merged jet's pressures, blended as their momentum fluxes
+        // (each carries the thrust; blending the speeds would lose some where they merge).
+        double s = 0.0;
+        double near = 0.0;
+        double far = 0.0;
+        const double beta = jetParts(g, x, s, std::numbers::sqrt2, near, far);
+        const double normal = -dot(g.wakeAxis, g.hitNormal);  // u_n = u·cos(incidence)
+        p += 0.5 * rhoAir * normal * normal * ((1.0 - beta) * near * near + beta * far * far);
+    }
+    return p;
+}
+
+Vec3 Downwash::surfaceOutwash(const Vec3& x, int water) const {
+    Vec3 out{};
+    for (const Group& g : groups_) {
+        if (!g.hits || g.hitWater != water || (water < 0 && !onHitFace(g, x))) {
+            continue;
+        }
+        Vec3 radial = sub(x, g.hitPoint);
+        const double off = dot(radial, g.hitNormal);
+        for (std::size_t k = 0; k < 3; ++k) {
+            radial[k] -= off * g.hitNormal[k];
+        }
+        const double rho = norm(radial);
+        if (rho <= 1e-9) {
+            continue;
+        }
+        const double v = outwashSpeed(g.arriveSpeed, g.arriveRadius, rho,
+                                      kOutwashPeakHeight * g.arriveRadius / kCalRadius);
+        for (std::size_t k = 0; k < 3; ++k) {
+            out[k] += v * radial[k] / rho;
+        }
+    }
+    return out;
+}
+
+Vec3 Downwash::surfaceFriction(const Vec3& x, int water) const {
+    const Vec3 u = surfaceOutwash(x, water);
+    return {kWallJetFriction * u[0], kWallJetFriction * u[1], kWallJetFriction * u[2]};
 }
 
 std::array<double, 3> windAt(const Wind& wind, double groundZ, const std::array<double, 3>& gust,

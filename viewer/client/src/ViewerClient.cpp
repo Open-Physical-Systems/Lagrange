@@ -641,7 +641,7 @@ float FieldSliceData::sample(double x, double y) const {
 }
 
 bool FieldVolumeData::sample(const std::array<double, 3>& at, std::array<float, 3>& out) const {
-    if (cellM <= 0.0 || nx < 2 || ny < 2 || nz < 2) {
+    if (cellM <= 0.0 || nx < 2 || ny < 2 || nz < 2 || components != 3U) {
         return false;
     }
     std::array<double, 3> f{};
@@ -871,7 +871,10 @@ void ViewerClient::handleFieldVolume(const v1::Envelope& envelope) {
     const std::uint64_t cells = static_cast<std::uint64_t>(volume.nx()) * volume.ny() * volume.nz();
     const std::uint32_t components = volume.components();
     const bool inPrim = !volume.prim_path().empty();
-    if (cells == 0 || cells > kMaxCells || components != (inPrim ? 1U : 3U) ||
+    // In a prim: one scalar per cell; in the region frame: a vector (the air) or a scalar (the
+    // spray's water, aero/spray, and the water's surface, water/surface).
+    if (cells == 0 || cells > kMaxCells ||
+        (inPrim ? components != 1U : components != 3U && components != 1U) ||
         volume.cell_m() <= 0.0 || !std::isfinite(volume.cell_m()) ||
         bytes.size() != cells * components * sizeof(float)) {
         ++stream->rejected_;

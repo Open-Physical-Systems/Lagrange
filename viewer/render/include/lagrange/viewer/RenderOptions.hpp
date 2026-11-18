@@ -73,6 +73,8 @@ struct RenderOptions {
     /// server's aero/wind_speed volume around the robot and drawn as streaks coloured by speed.
     bool airflow{false};
     float airflowMax{0.0F};  ///< m/s, the speed the colour map tops out at (set by the app).
+    /// Spray off water (downwash.md §5b): the server's aero/spray volume drawn as falling streaks.
+    bool spray{false};
     /// Lamps (RFC 0021 §4), lighting the realistic view: from the scene's LampAPI_1 prims, their
     /// attributes and their lamp/<n>/intensity signals (RFC 0021 §7).
     struct Lamp {

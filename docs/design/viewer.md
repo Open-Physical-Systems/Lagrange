@@ -102,7 +102,11 @@ flowchart LR
   `WaterAPI_1`: Gerstner waves whose height follows the site's wind, ripples, Fresnel reflection,
   depth-based colour, caustics, foam where it meets things. Limits: what the water looks like does
   not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
-  no wake; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
+  no wake (the physics' own surface under a rotor's downwash, millimetres deep, is drawn instead as
+  the Environment workspace's `water/surface` field layer, heights over the still level, and its
+  spray as the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are,
+  from the `aero/spray` volume; `--overlays spray`, `--slice water/surface`; water.md,
+  downwash.md §5b); one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
   Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
