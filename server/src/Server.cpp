@@ -12,6 +12,7 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/humans/Body.hpp"
 #include "lagrange/humans/Humans.hpp"
+#include "lagrange/hydrodynamics/Surface.hpp"
 #include "lagrange/hydrodynamics/Water.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/lights/Lights.hpp"
@@ -120,6 +121,11 @@ constexpr const char* kSmokeField = "fire/smoke_extinction";  // env/smoke/extin
 constexpr const char* kAirField = "aero/wind_speed";
 // RFC 0012: the cells of every link with a thermal material, as FieldVolumes in its frame.
 constexpr const char* kThermalCellsField = "thermal/cells";
+// The grid of the water's moving surface under the downwash (water.md), the same for the water,
+// aerodynamics and rotor domains.
+constexpr std::int64_t kSurfaceCells = 128;
+constexpr double kSurfaceCell = 0.03;  // m
+constexpr double kSurfaceStep = 0.04;  // s
 constexpr double kAirSliceCell = 0.1;  // m: a drone is about half a metre across
 // The air around the robot for the viewer's particles: 28 × 28 × 20 cells of 0.2 m, from 3.4 m
 // below the robot to 0.6 m above it, five times a second.
@@ -1022,6 +1028,24 @@ struct Server::Impl {
                           ModuleConfig(traffic));
             }
         }
+        // The water's moving surface under the rotors' downwash (downwash.md §5a, water.md):
+        // with water, rotors, the downwash and the air density, unless the profile turns
+        // aerodynamics.downwash_water off. The water, aerodynamics and rotor domains share its
+        // grid.
+        const auto flagOn = [&settings](const char* key) {
+            const auto it = settings.aerodynamics.find(key);
+            return it == settings.aerodynamics.end() || !std::holds_alternative<bool>(it->second) ||
+                   std::get<bool>(it->second);
+        };
+        const bool waterSurface =
+            !WorldView(robot.world).instancesOf("WaterAPI_1").empty() && !off("hydrodynamics") &&
+            hasRotors() && !off("aerodynamics") && flagOn("downwash") && flagOn("downwash_water") &&
+            (settings.aerodynamics.contains("air_density") || settings.airDensityKgM3);
+        const auto surfaceGrid = [](ModuleConfigData& config) {
+            config.values["surface_cells"] = kSurfaceCells;
+            config.values["surface_cell"] = kSurfaceCell;
+            config.values["surface_step"] = kSurfaceStep;
+        };
         // Water: floats and drags what enters it; off, it is only a surface to the sensors.
         if (!WorldView(robot.world).instancesOf("WaterAPI_1").empty() && !off("hydrodynamics")) {
             ModuleConfigData water;
@@ -1033,6 +1057,13 @@ struct Server::Impl {
             water.values["wave_towards"] = options.waterWaves[2];
             for (const auto& [body, coefficients] : options.hydroCoefficients) {
                 water.values["fossen:" + body] = coefficients;
+            }
+            if (waterSurface) {
+                water.values["surface"] = true;
+                surfaceGrid(water);
+                ModuleConfigData surface;
+                surfaceGrid(surface);
+                next->add(std::make_unique<hydrodynamics::SurfaceWaves>(), ModuleConfig(surface));
             }
             next->add(std::make_unique<hydrodynamics::Water>(), ModuleConfig(water));
         }
@@ -1302,6 +1333,9 @@ struct Server::Impl {
                 downwashWanted) {
                 weather.values["downwash_dust"] = true;
             }
+            if (waterSurface && flagOn("downwash_spray")) {
+                weather.values["downwash_spray"] = true;  // the spray off water, downwash.md §5b
+            }
             const ModuleConfig config(weather);
             if (weather::Weather::hasSite(WorldView(robot.world), config)) {
                 if (!(off("weather") && addPluginSubstitute("weather", weather))) {
@@ -1326,6 +1360,10 @@ struct Server::Impl {
             }
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
+            }
+            if (waterSurface) {
+                aero.values["water_surface"] = true;
+                surfaceGrid(aero);
             }
             // The rotors' downwash on the tethers (RFC 0011 step 6): each cable's node count,
             // so the domain can read its nodes and write the air at them.
@@ -1385,6 +1423,15 @@ struct Server::Impl {
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             // With the weather the air's density is its own (temperature, pressure, humidity).
             air.values.emplace(rotor_aero::kWeatherAirKey, weatherAir);
+            if (waterSurface) {
+                surfaceGrid(air);  // the ground effect over the moving surface
+            }
+            // Over water the ground effect takes the water's surface, unless the profile says
+            // aerodynamics.downwash_water: false.
+            if (const auto it = settings.aerodynamics.find("downwash_water");
+                it != settings.aerodynamics.end() && std::holds_alternative<bool>(it->second)) {
+                air.values.emplace("water_surface", std::get<bool>(it->second));
+            }
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));
             if (options.ardupilotPort) {

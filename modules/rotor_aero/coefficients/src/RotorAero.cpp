@@ -8,6 +8,8 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <span>
+#include <string>
 
 namespace lagrange::rotor_aero {
 
@@ -24,6 +26,31 @@ SignalSpec scalar(std::string name, Unit unit) {
 
 std::array<double, 3> cross(const std::array<double, 3>& a, const std::array<double, 3>& b) {
     return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+
+/// The moving water surface's height (m) under `at`, bilinear between cell centres of a grid
+/// of `cells` a side (as hydrodynamics::gridHeight); 0 outside it or without one.
+double surfaceHeight(std::span<const double> heights, std::span<const double> corner, int cells,
+                     double cell, const std::array<double, 3>& at) {
+    const auto n = static_cast<std::size_t>(cells);
+    if (corner.size() != 2 || heights.size() != n * n || !std::isfinite(corner[0]) ||
+        !std::isfinite(corner[1])) {
+        return 0.0;
+    }
+    const double fx = (at[0] - corner[0]) / cell - 0.5;
+    const double fy = (at[1] - corner[1]) / cell - 0.5;
+    if (!(fx >= 0.0 && fy >= 0.0 && fx <= cells - 1 && fy <= cells - 1)) {
+        return 0.0;
+    }
+    const int col = std::min(static_cast<int>(fx), cells - 2);
+    const int row = std::min(static_cast<int>(fy), cells - 2);
+    const double tx = fx - col;
+    const double ty = fy - row;
+    const auto h = [&](int x, int y) {
+        return heights[static_cast<std::size_t>(y) * n + static_cast<std::size_t>(x)];
+    };
+    return (1.0 - ty) * ((1.0 - tx) * h(col, row) + tx * h(col + 1, row)) +
+           ty * ((1.0 - tx) * h(col, row + 1) + tx * h(col + 1, row + 1));
 }
 
 }  // namespace
@@ -108,6 +135,39 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
             groundPoint_ = colliders.poseInBody[c].position;
             groundNormal_ = rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, 1.0});
         }
+    }
+
+    // Water (WaterAPI_1): its surface is the ground for a rotor above it (rotors.md, "Over
+    // water"). The prim's position is the still surface's middle; 10 m a side without a size,
+    // as the water domain reads it.
+    water_.clear();
+    for (const SchemaInstance* s : config.get<bool>("water_surface").value_or(true)
+                                       ? world.instancesOf("WaterAPI_1")
+                                       : std::vector<const SchemaInstance*>{}) {
+        constexpr double kDefaultSize = 10.0;  // m
+        Pond pond{world.raw().prims.poseInBody.at(s->prim.index).position,
+                  s->real("water:sizeX").value_or(kDefaultSize) / 2.0,
+                  s->real("water:sizeY").value_or(kDefaultSize) / 2.0,
+                  {},
+                  {}};
+        surfaceCells_ = static_cast<int>(config.get<std::int64_t>("surface_cells").value_or(0));
+        surfaceCell_ = config.get<double>("surface_cell").value_or(0.0);
+        if (surfaceCells_ > 1 && surfaceCell_ > 0.0) {
+            const std::string base =
+                "water/" + world.raw().prims.instanceNames.at(s->prim.index) + "/";
+            SignalSpec heights = scalar(base + "surface", units::m);
+            heights.type = SignalType::ScalarArray;
+            heights.frame = "world_local";
+            heights.arrayLength = static_cast<std::uint32_t>(surfaceCells_ * surfaceCells_);
+            heights.optional = heights.feedback = true;
+            SignalSpec origin = heights;
+            origin.name = base + "surface_origin";
+            origin.arrayLength = 2;
+            origin.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            pond.heights = d.input(heights);
+            pond.origin = d.input(origin);
+        }
+        water_.push_back(pond);
     }
 
     // Ceilings: the fixed boxes of the scenery (on the world, or on a body that does not move,
@@ -365,13 +425,30 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             }
         }
         double target = load.thrust;
-        if (groundEffect_ && hasGround_) {
-            const std::array<double, 3> above{hub.position[0] - groundPoint_[0],
-                                              hub.position[1] - groundPoint_[1],
-                                              hub.position[2] - groundPoint_[2]};
-            const double height = above[0] * groundNormal_[0] + above[1] * groundNormal_[1] +
-                                  above[2] * groundNormal_[2];
-            target *= groundEffect(r.params.radius, height);
+        if (groundEffect_ && (hasGround_ || !water_.empty())) {
+            // The nearest surface under the hub: the ground, or a body of water's surface.
+            double height = std::numeric_limits<double>::infinity();
+            if (hasGround_) {
+                const std::array<double, 3> above{hub.position[0] - groundPoint_[0],
+                                                  hub.position[1] - groundPoint_[1],
+                                                  hub.position[2] - groundPoint_[2]};
+                height = above[0] * groundNormal_[0] + above[1] * groundNormal_[1] +
+                         above[2] * groundNormal_[2];
+            }
+            for (const Pond& w : water_) {
+                double over = hub.position[2] - w.centre[2];
+                if (w.heights.valid()) {
+                    over -= surfaceHeight(bus.readN(w.heights), bus.readN(w.origin), surfaceCells_,
+                                          surfaceCell_, hub.position);
+                }
+                if (over >= 0.0 && std::abs(hub.position[0] - w.centre[0]) <= w.halfX &&
+                    std::abs(hub.position[1] - w.centre[1]) <= w.halfY) {
+                    height = std::min(height, over);
+                }
+            }
+            if (std::isfinite(height)) {
+                target *= groundEffect(r.params.radius, height);
+            }
         }
         if (groundEffect_ && !ceilings_.empty()) {
             // The nearest fixed box straight up the thrust axis (slab test in its frame).

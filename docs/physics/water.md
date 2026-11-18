@@ -71,6 +71,59 @@ water's acceleration still pushes the displaced volume. The sample is the BlueRO
 1898, Table A1, CC BY 4.0): damping identified from open-loop runs in a pool, added mass by
 Eidsvik's method.
 
+## The surface under a rotor
+
+With rotors, the downwash and the site's air density in the run, the water's surface moves under
+the wakes (`lagrange_hydrodynamics`'s `surface` module, every 40 ms). The profile's
+`aerodynamics.downwash_water: false` keeps it flat.
+
+```mermaid
+flowchart LR
+    DW["downwash over the water<br/>(aerodynamics)"] -->|"water/w/air_pressure<br/>p = ½ρ_air u_n²"| S["linear capillary-gravity waves<br/>on a 3.84 m patch, 3 cm cells"]
+    DW -->|"water/w/air_stress<br/>τ = ρ_air u*²"| S
+    DW -->|"water/w/patch<br/>(follows the wake)"| S
+    S -->|"water/w/surface"| B["bodies in the water"]
+    S --> R["rotors' ground effect"]
+    S --> V["viewer"]
+```
+
+**The equations.** The surface's height $\eta(x, y, t)$ over its still level obeys linear
+potential-flow theory (Lamb, *Hydrodynamics*, 1932, §267 and §348). Each Fourier mode of
+wavenumber $k$ is a damped oscillator,
+
+$$
+\ddot\eta_k + 2\gamma_k\dot\eta_k + \omega_k^2\,\eta_k
+  = -\frac{k\tanh(kd)}{\rho_w}\,\hat p_k - \frac{\tanh(kd)}{kd}\,\frac{i\,\mathbf k\cdot\hat{\boldsymbol\tau}_k}{\rho_w},
+\qquad
+\omega_k^2 = \Big(g k + \frac{\sigma k^3}{\rho_w}\Big)\tanh(kd), \qquad \gamma_k = 2\nu k^2
+$$
+
+with $\sigma$ water's surface tension (72.75 mN/m at 20 °C, Vargaftik et al. 1983), $\nu$ its
+viscosity and $d$ its depth. A steady pressure gives the hydrostatic dimple
+$\eta = -p/(\rho_w g)$ (surface tension only smooths what is a few centimetres wide). The
+tangential stress is taken as a force spread over the depth (shallow water's
+$\partial_t^2\eta = g d\,\nabla^2\eta - \nabla\cdot\boldsymbol\tau/\rho_w$ with the pressure
+term's depth factor), a modelling choice: what it sets up is under 1 % of the dimple. The
+loads come from the downwash ([downwash.md](downwash.md) §5a).
+
+**Solving it.** The modes are integrated exactly over each step (the load held), so the step
+has no stability limit. The patch is 128 × 128 cells of 3 cm, periodic in the transform; its
+outer eighth damps the water's velocity so waves leave and do not wrap round, and cells off the
+water (the bank) are damped hard. The patch follows the first wake over the water by whole cells
+and starts flat and still, centred on it. It costs nothing while nothing presses on it.
+
+**Outputs.** `water/<w>/surface` (m, per cell), `surface_origin` (the grid's corner),
+`surface_min` and `surface_max`. The water's cells are under the moved surface, so floating
+bodies see it, and the rotors measure their ground effect to it ([rotors.md](rotors.md)).
+
+**The sample quadcopter's dimple** (2.0 kg, 10-inch propellers), over still water:
+
+| Rotor plane over the water | Jet arriving | Dimple | $\rho_{air}U^2/(2\rho_w g)$ |
+|---|---|---|---|
+| 0.5 m | 12.4 m/s (four jets) | 9.6 mm | 9.6 mm |
+| 1 m | 10.2 m/s (merging) | 6.4 mm | 6.4 mm |
+| 2 m | 6.5 m/s (merged) | 2.6 mm | 2.6 mm |
+
 ## Solving it
 
 Added mass makes the force depend on the body's own acceleration, which an explicit exchange
@@ -89,10 +142,19 @@ $1/(1 + m_a/m)$; with this gain a steady push settles in one step on the exact $
 | A 0.4 m float on 0.1 m, 4 s waves | heaves 0.1 m within 1 cm | `Water.ASmallFloatRidesLongWaves` |
 | BlueROV2 Heavy at full thrust (Fossen) | top speeds 0.729 / 0.626 / 0.713 m/s (surge, sway, heave) against the published model's 0.72 / 0.63 / 0.71; start acceleration within 3 % of $F/(m + m_a)$ | `Water.TheBlueRov2ReachesItsTopSpeedsWithFossensModel` |
 | Against a real vehicle in a pool | through the published model only: it is within about 10 % of their pool runs | — |
+| The dimple under a steady jet | $\rho_{air}U^2/(2\rho_w g)$ within 2 % for 5.7 to 16.6 m/s (2 to 17 mm), and within 0.5 % for the sample quadcopter at 0.5, 1 and 2 m; **no measurement of a rotor's dimple** | `SurfacePatch.TheDimpleUnderASteadyJetIsHydrostatic`, `DownwashOnWater.TheSampleQuadsDimpleIsItsJetsStagnationPressure` |
+| Ripples | group velocity within 3 % of $d\omega/dk$ for gravity waves (λ 0.63 m, $c_g = c/2$), the slowest ripple (λ 1.7 cm, 0.23 m/s) and capillary waves (λ 2 mm, $c_g = 3c/2$); viscous decay $e^{-2\nu k^2 t}$ within 5 % | `SurfacePatch.Ripples*`, `SurfacePatch.ViscosityDamps*` |
 
 The BlueROV2 check shows the model is implemented as published; it is as close to the real
 vehicle as von Benzon et al.'s model is, for this vehicle only. A body without its own
 coefficients takes a sphere's added mass and the cells' drag, which no measurement backs.
+
+Not modelled at the surface under a rotor: anything non-linear (the dimple is millimetres, so
+linear theory holds; a jet that would dig a cavity, or breaking waves, are out of it); the
+jet's turbulence, which makes a real dimple flicker (the load is the mean flow's); the waves'
+own push back on the air; the surface's cells under 3 cm (capillary ripples are only partly
+resolved); the moved surface for the lidars and cameras (they see the still level, as the dimple
+is far under their range noise); the viewer's water draws it (viewer.md).
 
 Not modelled: added mass for shapes other than a sphere, and added inertia in rotation, without
 coefficients; off-diagonal added mass and damping; wave radiation and diffraction (the waves pass

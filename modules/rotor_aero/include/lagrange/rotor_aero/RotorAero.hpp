@@ -60,7 +60,10 @@ inline constexpr double kCeilingReach = 6.0;       // ×R
 /// every joint with RotorAPI_1 is a propeller whose static thrust and shaft torque follow its
 /// coefficients, with a first-order inflow lag (config "inflow_time_constant", s; 0, the
 /// default, for none) and ground effect against the world's ground plane (config
-/// "ground_effect", default true).
+/// "ground_effect", default true), or against a body of water's surface where one (WaterAPI_1)
+/// is under the hub (config "water_surface", default true); with config "surface_cells" and
+/// "surface_cell" (the water domain moves its surface) it reads water/<w>/surface and
+/// surface_origin and measures the height to the moving surface.
 ///
 /// Per rotor joint j with child link c it reads joint/<j>/velocity and body/<c>/pose, and writes
 /// rotor/<j>/thrust (N), rotor/<j>/aero_torque (N·m, on the rotor about its axis),
@@ -145,6 +148,14 @@ private:
         std::array<double, 3> half{};
     };
     std::vector<Ceiling> ceilings_;
+    struct Pond {  // a body of water (WaterAPI_1): its still surface, world frame
+        std::array<double, 3> centre{};
+        double halfX{0.0}, halfY{0.0};
+        SignalId heights, origin;  // its moving surface, when the water domain runs one
+    };
+    std::vector<Pond> water_;
+    int surfaceCells_{0};      // the moving surface's grid (config "surface_cells")
+    double surfaceCell_{0.0};  // m (config "surface_cell")
     std::vector<Rotor> rotors_;
 };
 

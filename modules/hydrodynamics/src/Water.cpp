@@ -1,9 +1,11 @@
+#include "lagrange/hydrodynamics/Surface.hpp"
 #include "lagrange/hydrodynamics/Water.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <span>
@@ -330,6 +332,23 @@ Status Water::declare(const WorldView& world, const ModuleConfig& config, Signal
         body.submerged = d.output(spec(base + "submerged", SignalType::Scalar, units::one));
         bodies_.push_back(std::move(body));
     }
+    moving_.clear();
+    if (config.get<bool>("surface").value_or(false)) {
+        surfaceCells_ = static_cast<int>(config.get<std::int64_t>("surface_cells").value_or(128));
+        surfaceCell_ = config.get<double>("surface_cell").value_or(0.03);
+        const auto n = static_cast<std::uint32_t>(surfaceCells_ * surfaceCells_);
+        for (const WaterBody& w : waters_) {
+            SignalSpec heights = spec("water/" + w.name + "/surface", SignalType::ScalarArray,
+                                      units::m, "world_local");
+            heights.arrayLength = n;
+            SignalSpec origin = heights;
+            origin.name = "water/" + w.name + "/surface_origin";
+            origin.arrayLength = 2;
+            origin.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            heights.optional = heights.feedback = origin.optional = origin.feedback = true;
+            moving_.push_back({d.input(heights), d.input(origin), {}, {}});
+        }
+    }
     return {};
 }
 
@@ -388,6 +407,10 @@ Water::Flow Water::flowAt(const WaterBody& water, double wavenumber,
 Status Water::step(const StepContext& context, SignalBus& bus) {
     const double t = context.t.seconds();
     const double dt = context.dt.seconds();
+    for (Moving& m : moving_) {
+        m.now = bus.readN(m.heights);
+        m.corner = bus.readN(m.origin);
+    }
     for (Body& body : bodies_) {
         const std::span<const double> p = bus.readN(body.pose);
         const std::span<const double> v = bus.readN(body.twist);
@@ -416,7 +439,12 @@ Status Water::step(const StepContext& context, SignalBus& bus) {
                         continue;
                     }
                     const Flow flow = flowAt(water, wavenumbers_[w], at, t);
-                    const double top = flow.surface;
+                    double top = flow.surface;
+                    if (w < moving_.size() && moving_[w].corner.size() == 2) {
+                        top +=
+                            gridHeight(moving_[w].now, surfaceCells_, surfaceCell_,
+                                       {moving_[w].corner[0], moving_[w].corner[1]}, at[0], at[1]);
+                    }
                     if (at[2] - cell.height / 2.0 > top) {
                         continue;
                     }

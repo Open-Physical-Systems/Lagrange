@@ -90,6 +90,14 @@ $$
 
 It is +33 % at half a radius (the clamp), +6.7 % at one radius and +1.6 % at two.
 
+**Over water** (`WaterAPI_1`, `--water`) the same formula takes $z$ to the water's surface
+under the hub, not to the ground under the water: a rotor 0.2 m over a pond 1 m deep feels the
+pond's surface, as Cheeseman and Bennett's image vortex sits under the first surface the wake
+meets. When the water's own surface moves (the downwash's dimple, water.md "The surface under a
+rotor"), its height under the hub counts; the dimple is millimetres, so it changes the factor
+by well under 0.1 %. The profile's `aerodynamics.downwash_water: false` puts the ground effect
+back on the ground plane only.
+
 **Ceiling effect** (Hsiao and Chirarattananon 2019): a ray up each rotor's axis finds the
 nearest fixed box of the scenery at distance $d$. With $\delta = R/d$ and $\alpha_0 = 1.6$:
 
@@ -110,8 +118,11 @@ That's +11 % at half a radius, +3 % at one and under 1 % beyond two. It is left 
 | Vortex ring state | NeuroBEM's fit exactly; thrust joins hover's within 0.1 % | `Bem.TheVortexRing*` |
 | Against measured quadrotor flights (NeuroBEM, 13 held-out segments) | `coefficients` 1.46 N RMS (their own fit 1.49 N); `bem` 1.12 N (their BEM 0.98 N) | `tools/validation/neurobem.sh` |
 | Ground effect | equals Cheeseman–Bennett for z/R from 0.5 to 3; **not yet compared with measurements** | `test_rotor_aero` |
+| Ground effect over water | Cheeseman–Bennett with z to the water's surface, the ground under it ignored; **no measurement over water** (a moving surface may give less than a rigid one) | `RotorAero.OverWaterTheGroundEffectIsTakenFromItsSurface` |
 | Static thrust against published propeller data | **owed** | — |
 
-What isn't modelled: wake skew inside the disc (the fore-aft inflow gradient in forward flight),
+What isn't modelled: a rough or breaking water surface's weaker ground effect (the formula is
+for a rigid plane), spray or water drawn into the rotor (only its impact on the airframe, in
+downwash.md "Over water"), wake skew inside the disc (the fore-aft inflow gradient in forward flight),
 blade flapping of rigid propellers beyond the hub moment, stall delay on rotating blades, and
 Reynolds-number effects beyond what the section data cover.

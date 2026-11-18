@@ -126,6 +126,21 @@ std::vector<RotorSource> rotorSources(const WorldView& world) {
     return out;
 }
 
+std::vector<Downwash::WaterSurface> waterSurfaces(const WorldView& world) {
+    constexpr double kDefaultSize = 10.0;  // m, WaterBody's
+    std::vector<Downwash::WaterSurface> out;
+    const World& raw = world.raw();
+    for (const SchemaInstance* s : world.instancesOf("WaterAPI_1")) {
+        Downwash::WaterSurface w;
+        w.name = raw.prims.instanceNames.at(s->prim.index);
+        w.centre = raw.prims.poseInBody.at(s->prim.index).position;
+        w.halfX = s->real("water:sizeX").value_or(kDefaultSize) / 2.0;
+        w.halfY = s->real("water:sizeY").value_or(kDefaultSize) / 2.0;
+        out.push_back(std::move(w));
+    }
+    return out;
+}
+
 std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world) {
     const std::map<std::size_t, std::size_t> roots = rotorRoots(world);
     const World::Bodies& bodies = world.bodies();
@@ -377,8 +392,10 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         }
         return it->second;
     };
+    std::vector<std::string> rotorNames;
     if (downwashOn_) {
         for (const RotorSource& source : rotorSources(world)) {
+            rotorNames.push_back(source.joint);
             RotorLink r;
             r.radius = source.radius;
             r.group = source.group;
@@ -460,7 +477,28 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         downwash_.clearGround();
     }
     downwash_.setObstacles(downwashObstacles(world.raw()));
+    // Water (config "downwash_water", default true): a wake stops on its surface.
+    waterOn_ = config.get<bool>("downwash_water").value_or(true);
+    downwash_.setWater(waterOn_ ? waterSurfaces(world) : std::vector<Downwash::WaterSurface>{});
     others_ = downwash_;
+    // Its load on the water's moving surface, when the water domain runs one (config
+    // "water_surface", with "surface_cells", "surface_cell" and "surface_step" as the water's).
+    {
+        std::vector<Downwash::WaterSurface> surfaces;
+        if (waterOn_ && downwashOn_ && !rotors_.empty() &&
+            config.get<bool>("water_surface").value_or(false)) {
+            surfaces = downwash_.water();
+        }
+        WaterGrid grid;
+        grid.cells = static_cast<int>(config.get<std::int64_t>("surface_cells").value_or(128));
+        grid.cell = config.get<double>("surface_cell").value_or(0.03);
+        grid.step = config.get<double>("surface_step").value_or(0.04);
+        // Spray (config "downwash_spray", default true): drops torn off by the outwash.
+        const bool spray = config.get<bool>("downwash_spray").value_or(true);
+        if (Status s = waterAir_.declare(surfaces, grid, spray, rotorNames, gravity_, d); !s.ok()) {
+            return s;
+        }
+    }
     airBox_ = SignalId{};
     if (lbmWanted_ && !rotors_.empty()) {
         airBox_ =
@@ -569,6 +607,7 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     }
     downwash_.update({});
     others_.update({});
+    waterAir_.init(bus);
     live_.reset();
     published_.reset();
     liveGroup_ = Downwash::kNoGroup;
@@ -748,6 +787,22 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
         return downwash_.velocityAt(at, group);
     };
+    // The water under the wakes: its surface's load, and the spray carried by the whole air.
+    if (!waterAir_.empty()) {
+        std::vector<Vec3> hubs;
+        hubs.reserve(wakes.size());
+        for (const Downwash::Rotor& w : wakes) {
+            hubs.push_back(w.hub);
+        }
+        waterAir_.step(
+            context, downwash_, rho_, hubs,
+            [&](const Vec3& x) {
+                const Vec3 mean = meanAir(x);
+                const Vec3 w = wakeAt(x, Downwash::kNoGroup);
+                return Vec3{mean[0] + w[0], mean[1] + w[1], mean[2] + w[2]};
+            },
+            bus);
+    }
     // Every robot's wake at each tether node, its own drone's too: the cable is not the rotors'
     // body (the rotor data leave out only what the rotors do to their own airframe).
     for (TetherNodes& cable : cables_) {
@@ -852,6 +907,19 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
                 force[k] += hit[k];
             }
         }
+        // Spray off water: its drops, at their own velocity, stopped by the link.
+        if (waterAir_.drops() > 0) {
+            Vec3 dropVelocity{};
+            const double spray = waterAir_.sprayAt(at, &dropVelocity);
+            if (spray > 0.0) {
+                const Vec3 drops{dropVelocity[0] - velocity[0], dropVelocity[1] - velocity[1],
+                                 dropVelocity[2] - velocity[2]};
+                const Vec3 hit = impactForce(spray, rotate(conjugate(q), drops), link.area);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    force[k] += hit[k];
+                }
+            }
+        }
         const Vec3 omegaLocal = rotate(conjugate(q), omega);
         const Vec3 damping{-link.damping[0] * omegaLocal[0], -link.damping[1] * omegaLocal[1],
                            -link.damping[2] * omegaLocal[2]};
@@ -947,6 +1015,10 @@ Status AeroDrag::saveState(StateWriter& writer) const {
             writer.put(v);
         }
     }
+    // After the links', so a state saved before the water's spray still restores.
+    if (!waterAir_.empty()) {
+        waterAir_.saveState(writer);
+    }
     return {};
 }
 
@@ -959,6 +1031,9 @@ Status AeroDrag::restoreState(StateReader& reader) {
             }
         }
         link.turbulence.setState(s);
+    }
+    if (!waterAir_.empty() && !waterAir_.restoreState(reader)) {
+        return Status::error(StatusCode::InvalidConfig, "aerodynamics water state truncated");
     }
     return {};
 }

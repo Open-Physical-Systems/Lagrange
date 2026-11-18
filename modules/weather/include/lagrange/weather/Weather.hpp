@@ -98,7 +98,10 @@ inline constexpr double kLidar1550 = 1550e-9;         // m
 /// without the dust effect) and env/dust/median_diameter (m, its grains), and
 /// sensor/<s>/contamination for every sensor. Default
 /// step 50 ms. With config "downwash_dust" it reads env/dust/downwash (kg/m³, the dust rotor
-/// outwash lifts, of grains "ground_dust_diameter") and adds it to the air's dust.
+/// outwash lifts, of grains "ground_dust_diameter") and adds it to the air's dust. With config
+/// "downwash_spray" it reads env/spray/extinction (1/m, the spray off water round the first
+/// multirotor) and adds it to every band's extinction, and env/spray/rate (m/s of water) and
+/// wets every sensor's lens with it as with rain.
 ///
 /// Wet friction and lens contamination are behavioural models (domains/weather.md §7: range
 /// checks, not point validations): surfaces wet with time constant kWettingTimeS once it rains
@@ -149,9 +152,12 @@ private:
     SignalId fogFieldOut_, windFieldOut_;
     std::shared_ptr<const fields::Field> fogField_, windField_;
     std::vector<SignalId> contaminationOut_;
-    SignalId downwashDustIn_;          // env/dust/downwash, with config "downwash_dust"
-    double liftedDust_{0.0};           // kg/m³, this step's
-    double groundDustDiameter_{1e-4};  // m, the lifted grains'
+    SignalId downwashDustIn_;                   // env/dust/downwash, with config "downwash_dust"
+    double liftedDust_{0.0};                    // kg/m³, this step's
+    double groundDustDiameter_{1e-4};           // m, the lifted grains'
+    SignalId sprayExtinctionIn_, sprayRateIn_;  // env/spray/*, with config "downwash_spray"
+    double sprayExtinction_{0.0};               // 1/m, this step's
+    double sprayRate_{0.0};                     // m/s of water onto lenses, this step's
 };
 
 // Behavioural constants (see the class comment). Modelling choices, not measured values.

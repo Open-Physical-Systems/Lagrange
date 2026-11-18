@@ -243,5 +243,90 @@ TEST(Downwash, TheFountainIsTheHoverCasesFit) {
     EXPECT_EQ(fountainLift(0.2), fountainLift(kFountainLowest)) << "held below the lowest case";
 }
 
+// --- Over water (Downwash::setWater; downwash.md "Over water") ----------------------------
+
+/// A pond 1.2 m deep whose surface is at z = 1.2 over the ground at 0, 6 m a side.
+Downwash pond() {
+    Downwash d;
+    d.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+    d.setWater({Downwash::WaterSurface{"pond", {0.0, 0.0, 1.2}, 3.0, 3.0}});
+    return d;
+}
+
+TEST(Downwash, AWakeStopsOnWaterAsOnTheGround) {
+    // The same drone 1 m over the pond and 1 m over bare ground: the same jet arrives and the
+    // same outwash spreads; nothing moves under the surface, and no dust lifts from water.
+    Downwash water = pond();
+    water.update(offboard(2.2));
+    Downwash ground;
+    ground.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+    ground.update(offboard(1.0));
+    const Downwash::Group& g = water.groups()[0];
+    ASSERT_TRUE(g.hits);
+    EXPECT_EQ(g.hitWater, 0);
+    EXPECT_EQ(g.hitBox, -1);
+    EXPECT_NEAR(g.hitPoint[2], 1.2, 1e-9);
+    EXPECT_NEAR(g.arriveSpeed, ground.groups()[0].arriveSpeed, 1e-12);
+    for (const double r : {0.2, 0.5, 1.0, 2.0}) {
+        EXPECT_NEAR(water.velocityAt({r, 0.0, 1.21})[0], ground.velocityAt({r, 0.0, 0.01})[0],
+                    1e-12)
+            << r;
+    }
+    EXPECT_EQ(water.velocityAt({0.0, 0.0, 1.0})[2], 0.0);  // under the surface
+    EXPECT_EQ(water.peakOutwash(), 0.0);
+    EXPECT_GT(ground.peakOutwash(), 0.0);
+    // Beside the pond the wake goes down to the ground.
+    Downwash beside = pond();
+    beside.update(offboard(2.2, 0, 5.0));
+    EXPECT_EQ(beside.groups()[0].hitWater, -1);
+    EXPECT_NEAR(beside.groups()[0].hitPoint[2], 0.0, 1e-9);
+}
+
+TEST(Downwash, TheSurfaceCarriesTheJetsMomentumAsPressure) {
+    // Not fitted: a jet stopped by a surface pushes it with its whole momentum flux, the thrust
+    // (∫p dA = T), and the stagnation pressure on the axis is ½ρU² of the arriving jet.
+    for (const double height : {0.5, 1.0, 2.0, 4.0}) {
+        Downwash d = pond();
+        d.update(offboard(1.2 + height));
+        const double thrust = 0.572 * kGravity;
+        double force = 0.0;
+        constexpr int kCells = 600;
+        const double span = 3.0;
+        const double cell = 2.0 * span / kCells;
+        for (int i = 0; i < kCells; ++i) {
+            for (int j = 0; j < kCells; ++j) {
+                const Vec3 x{-span + (i + 0.5) * cell, -span + (j + 0.5) * cell, 1.2};
+                force += d.surfacePressure(x, kRho, 0) * cell * cell;
+            }
+        }
+        // Within the near wake's and far jet's own momentum budgets (0.93 at 0.5 m, where the
+        // jets merge; 1.02 from 1 m down).
+        EXPECT_NEAR(force / thrust, 1.0, 0.08) << height;
+        EXPECT_EQ(d.surfacePressure({0.0, 0.0, 1.2}, kRho, -1), 0.0);  // not the ground's
+    }
+    Downwash high = pond();
+    high.update(offboard(1.2 + 10.0 * 0.266));
+    const double u = high.groups()[0].arriveSpeed;
+    EXPECT_NEAR(high.surfacePressure({0.0, 0.0, 1.2}, kRho, 0), 0.5 * kRho * u * u, 1e-9);
+}
+
+TEST(Downwash, TheOutwashsFrictionVelocityOnWater) {
+    Downwash d = pond();
+    d.update(offboard(2.2));
+    for (const double r : {0.3, 0.6, 1.2}) {
+        const Vec3 u = d.surfaceOutwash({r, 0.0, 1.2}, 0);
+        const Vec3 f = d.surfaceFriction({r, 0.0, 1.2}, 0);
+        EXPECT_GT(u[0], 0.0) << r;  // outwards
+        EXPECT_NEAR(f[0], kWallJetFriction * u[0], 1e-12);
+        // The wall jet's peak, the largest across the layer there.
+        const Downwash::Group& g = d.groups()[0];
+        EXPECT_NEAR(u[0],
+                    outwashSpeed(g.arriveSpeed, g.arriveRadius, r,
+                                 kOutwashPeakHeight * g.arriveRadius /
+                                     (1.0 / std::sqrt(1.0 + 1.0 / std::numbers::sqrt2))),
+                    1e-12);
+    }
+}
+
 }  // namespace
 }  // namespace lagrange::aerodynamics
