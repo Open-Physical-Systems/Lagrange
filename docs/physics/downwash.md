@@ -132,7 +132,8 @@ and up to half a metre high.
 **Recirculation.** Low over a surface a rotor's wall jet separates and rolls up into a ring
 vortex that carries what it lifted back up and in, into the rotor's inflow: the re-ingestion
 behind helicopter brownout and whiteout (Leishman, *Principles of Helicopter Aerodynamics*,
-2006, ch. 14; TODO(verify) the section and the numbers). The fitted wake has no flow up, so the
+2006, ch. 14; TODO(verify) the section and the numbers); our own OpenFOAM hover runs show the
+jets meeting under the frame and turning up (§6, the fountain). The fitted wake has no flow up, so the
 drops (only they) also ride a behavioural ring vortex (`recirculation()`): a Rankine vortex in
 each meridian plane, 1.5 arrival radii out and half the rotors' height up, its core half that
 height, turning outward along the water and inward at the top, its edge speed 30 % of the
@@ -141,7 +142,10 @@ For the sample quadcopter it brings about 3 g/m³ of spray to the drone at 0.3 m
 0.5 m, and none at 2 m. Unsteadiness: the jet's load on the water also carries a turbulent
 pressure fluctuation, 10 % of its mean rms (`kJetPressureFluctuation`, TODO(verify) a measured
 p_rms/p_s), band-limited on a 9 cm lattice, from the run's Philox streams: it rings the surface
-(water.md).
+(water.md). The rings it sends out are about a tenth of the mean dimple near the jet (the
+quasi-static answer, $\eta' \approx p'/(\rho_w g)$ for a fluctuation of a tenth of the mean),
+falling off outward: sub-millimetre to about 2 mm for the sample's size of drone, so the
+viewer's `--water-relief` is needed to see them at a distance; it scales the drawn slopes only.
 
 The spray does what rain does (aerodynamics.md §3.2, weather.md):
 
