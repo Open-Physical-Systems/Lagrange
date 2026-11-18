@@ -42,7 +42,10 @@ void usage() {
         "                         lit (without one), unlit, wireframe, collision or thermal\n"
         "  --overlays <list>      show these from the start: "
         "grid,axes,sensors,radar,airflow,spray\n"
-        "  --slice <field>[:xy|xz|yz]  the Slice 2D panel's field and plane, e.g.\n"
+        "  --water-relief <x>     draw the water's moving surface x times as high and steep\n"
+        "                         (1: as the physics has it; more shows sub-mm ripples)\n"
+        "  --slice <field>[:xy|xz|yz][:linear|symlog|highpass]  the Slice 2D panel's field,\n"
+        "                         plane and contrast, e.g.\n"
         "                         aero/wind_speed:xz\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
@@ -194,6 +197,15 @@ int main(int argc, char** argv) {
             options.overlays = value();
         } else if (arg == "--slice") {
             options.slice = value();
+        } else if (arg == "--water-relief") {
+            const std::string text = value();
+            char* end = nullptr;
+            const float relief = std::strtof(text.c_str(), &end);
+            if (end == text.c_str() || *end != '\0' || !(relief > 0.0F && relief <= 1000.0F)) {
+                std::fputs("error: --water-relief expects a factor from 0 to 1000\n", stderr);
+                return 2;
+            }
+            options.waterRelief = relief;
         } else if (arg == "--open") {
             options.openPath = value();
         } else if (arg == "--scope") {

@@ -28,6 +28,9 @@ struct Frame
     float4 light;             // x: the daylight's share (1: the drawn day; the sky and the sun's
                               // light scale by it); y: lamps; z: 1 to write the linear HDR value
                               // (calibration tests); w: unused
+    float4 surface;           // the water's moving surface (water.md): xy the first cell's centre
+                              // relative to the eye; z: its cell, m; w: cells a side (0: none)
+    float4 surfaceLook;       // x: relief (1: the physics' heights and slopes as they are)
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -49,6 +52,8 @@ struct Lamp
     float4 color;    // linear RGB of luminance 1
 };
 [[vk::binding(7)]] StructuredBuffer<Lamp> lamps;
+// The moving surface's cells in row order: η (m over the still level), ∂η/∂x, ∂η/∂y, foam (0-1).
+[[vk::binding(8)]] StructuredBuffer<float4> surfaceCells;
 
 struct Push
 {
@@ -988,6 +993,29 @@ void gerstner(float2 world, float t, out float3 displacement, out float3 normal)
     normal = normalize(cross(tangentX, tangentY));
 }
 
+// The physics' moving surface at a point (relative to the eye, x and y), bilinear between cell
+// centres: η, its slope, the foam. `share` is how much of it is there: 0 outside the patch, rising
+// to 1 over its outer cells, where the patch's sponge has already calmed it.
+float4 movingSurface(float2 relativeXY, out float share)
+{
+    share = 0.0;
+    uint n = uint(frame.surface.w);
+    if (n < 2u)
+        return float4(0, 0, 0, 0);
+    float2 f = (relativeXY - frame.surface.xy) / frame.surface.z;
+    float last = float(n - 1u);
+    if (any(f < 0.0) || any(f > last))
+        return float4(0, 0, 0, 0);
+    uint2 c = min(uint2(f), uint2(n - 2u, n - 2u));
+    float2 t = f - float2(c);
+    uint i = c.y * n + c.x;
+    float4 v = lerp(lerp(surfaceCells[i], surfaceCells[i + 1u], t.x),
+                    lerp(surfaceCells[i + n], surfaceCells[i + n + 1u], t.x), t.y);
+    float edge = min(min(f.x, f.y), min(last - f.x, last - f.y));
+    share = saturate(edge / 4.0);
+    return v;
+}
+
 struct WaterOutput
 {
     float4 position : SV_Position;
@@ -1028,6 +1056,10 @@ WaterOutput vsWater(uint vertex : SV_VertexID)
     float3 displacement;
     float3 normal;
     gerstner(world, frame.worldWrap.w, displacement, normal);
+    // The physics' surface on top of the drawn swell: linear waves add.
+    float share;
+    float lift = movingSurface(relativeXY, share).x * frame.surfaceLook.x * share;
+    displacement.z += lift;
     WaterOutput output;
     if (skirt)
     {
@@ -1091,12 +1123,19 @@ float4 fsWater(WaterOutput input) : SV_Target
 
     float above = frame.water.x + 0.0 < 0.0 ? 1.0 : -1.0;  // the eye above the surface?
     float3 N = normalize(input.normal);
+    float4 moving = float4(0, 0, 0, 0);
+    float movingShare = 0.0;
     if (input.side < 0.5)
     {
         // The waves' slope per pixel: the mesh only holds their shape.
         float3 lifted;
         gerstner(input.world, t, lifted, N);
-        float2 slope = ripple(input.world, t, distance);
+        // Where the physics moves the surface its slope is drawn, not the made-up ripples.
+        float share;
+        moving = movingSurface(input.world - frame.worldWrap.xy, share);
+        movingShare = share;
+        float2 slope = ripple(input.world, t, distance) * (1.0 - share) +
+                       moving.yz * frame.surfaceLook.x * share * N.z;
         N = normalize(float3(N.xy - slope, N.z));
         N *= above;
     }
@@ -1167,6 +1206,9 @@ float4 fsWater(WaterOutput input) : SV_Target
     float cell = fbm(float3(input.world * 3.3 + float2(0.3, 0.2) * t, t * 0.25), 3);
     float streak = fbm(float3(input.world * 11.0 - float2(0.25, 0.1) * t, t * 0.4), 2);
     float foam = saturate(smoothstep(0.42, 0.62, cell * (0.6 + streak)) * saturate(shore * 1.5 + tearing));
+    // Whitecap where the physics tears spray off (downwash.md §5b): its foam, broken up.
+    float torn = saturate(moving.w * movingShare);
+    foam = max(foam, torn * saturate(0.35 + smoothstep(0.3, 0.6, cell * (0.6 + streak))));
     if (input.side < 0.5)
         color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp) * frame.light.x, foam * 0.85);
 

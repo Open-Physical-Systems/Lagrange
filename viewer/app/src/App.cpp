@@ -925,6 +925,7 @@ public:
         buildRadarOverlays();
         buildAirflow();
         buildSpray();  // after the airflow: its drops go in the same overlay slot
+        followWaterSurface();
         buildCables();
         followWeather();
         followLamps();
@@ -1024,6 +1025,7 @@ public:
                    a.temperatureLow == b.temperatureLow && a.temperatureHigh == b.temperatureHigh &&
                    a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
                    a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
+                   a.waterSurface == b.waterSurface && a.waterRelief == b.waterRelief &&
                    sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
                    a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
                    (a.skyIlluminance == b.skyIlluminance ||
@@ -1352,10 +1354,10 @@ public:
                                                   theme::hex(0x21918C), theme::hex(0x5EC962),
                                                   theme::hex(0xFDE725)};
         if (!renderOptions_.spray) {
-            if (sprayStream_) {
+            if (sprayStream_ && !foamStream_) {
                 (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
-                sprayStream_.reset();
             }
+            sprayStream_.reset();
             return;
         }
         if (!sprayStream_) {
@@ -1418,6 +1420,104 @@ public:
                 }
             }
         }
+    }
+
+    /// The water's moving surface for the realistic view (water.md "The surface under a rotor"):
+    /// the server's water/surface volume (the first body of water's patch, heights over the still
+    /// level) and, for the foam where spray is torn off, the aero/spray volume's water within
+    /// kFoamReachM of the surface, as kg/m² against kFoamKgM2 (a drawing choice). Watched only
+    /// while the realistic view draws and the run has them; only through the protocol.
+    void followWaterSurface() {
+        constexpr double kFoamReachM = 0.3;  // m over the still level: spray just torn off
+        constexpr double kFoamKgM2 = 2e-3;   // kg/m² of it for full foam
+        const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
+        const auto available = [&](const char* name) {
+            return info && std::ranges::any_of(info->fields, [&](const EnvironmentInfo::Field& f) {
+                       return f.name == name && f.available;
+                   });
+        };
+        const bool wanted = renderOptions_.shading == Shading::Realistic;
+        if (!wanted || !available(kWaterSurfaceField)) {
+            if (surfaceStream_) {
+                (void)client_.watchField(kWaterSurfaceField, 0.0, SliceOrientation::Horizontal,
+                                         false);
+                surfaceStream_.reset();
+            }
+            if (foamStream_ && !sprayStream_) {
+                (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
+            }
+            foamStream_.reset();
+            renderOptions_.waterSurface.reset();
+            surfaceOf_.reset();
+            return;
+        }
+        if (!surfaceStream_) {
+            surfaceStream_ =
+                client_.watchField(kWaterSurfaceField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        if (!foamStream_ && available(kSprayField)) {
+            foamStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = surfaceStream_->latestVolume();
+        const std::shared_ptr<const FieldVolumeData> spray =
+            foamStream_ ? foamStream_->latestVolume() : nullptr;
+        if (!volume || volume->components != 1U || volume->nx != volume->ny || volume->nz != 1U ||
+            volume->values.size() != static_cast<std::size_t>(volume->nx) * volume->ny) {
+            return;
+        }
+        if (volume == surfaceOf_ && spray == foamOf_) {
+            return;  // nothing new
+        }
+        surfaceOf_ = volume;
+        foamOf_ = spray;
+        auto look = std::make_shared<RenderOptions::WaterSurface>();
+        look->cells = volume->nx;
+        look->cell = volume->cellM;
+        look->first = {volume->origin[0], volume->origin[1]};
+        look->heights = volume->values;
+        if (spray && spray->components == 1U && spray->cellM > 0.0 &&
+            spray->values.size() == static_cast<std::size_t>(spray->nx) * spray->ny * spray->nz) {
+            const double level = volume->origin[2];
+            look->foam.assign(look->heights.size(), 0.0F);
+            // The spray's water within kFoamReachM of the surface, per spray column (kg/m²),
+            // then bilinear between the columns' centres at each surface cell.
+            std::vector<double> columns(static_cast<std::size_t>(spray->nx) * spray->ny, 0.0);
+            for (std::uint32_t z = 0; z < spray->nz; ++z) {
+                if (spray->origin[2] + z * spray->cellM > level + kFoamReachM) {
+                    break;
+                }
+                for (std::size_t i = 0; i < columns.size(); ++i) {
+                    columns[i] += spray->values[z * columns.size() + i] * spray->cellM;
+                }
+            }
+            const auto column = [&](long c, long r) {
+                c = std::clamp(c, 0L, static_cast<long>(spray->nx) - 1);
+                r = std::clamp(r, 0L, static_cast<long>(spray->ny) - 1);
+                return columns[static_cast<std::size_t>(r) * spray->nx +
+                               static_cast<std::size_t>(c)];
+            };
+            for (std::uint32_t y = 0; y < volume->ny; ++y) {
+                for (std::uint32_t x = 0; x < volume->nx; ++x) {
+                    const double fx =
+                        (volume->origin[0] + x * volume->cellM - spray->origin[0]) / spray->cellM;
+                    const double fy =
+                        (volume->origin[1] + y * volume->cellM - spray->origin[1]) / spray->cellM;
+                    if (fx < -0.5 || fy < -0.5 || fx > spray->nx - 0.5 || fy > spray->ny - 0.5) {
+                        continue;
+                    }
+                    const auto c = static_cast<long>(std::floor(fx));
+                    const auto r = static_cast<long>(std::floor(fy));
+                    const double tx = fx - static_cast<double>(c);
+                    const double ty = fy - static_cast<double>(r);
+                    const double kg =
+                        (1 - ty) * ((1 - tx) * column(c, r) + tx * column(c + 1, r)) +
+                        ty * ((1 - tx) * column(c, r + 1) + tx * column(c + 1, r + 1));
+                    look->foam[static_cast<std::size_t>(y) * volume->nx + x] =
+                        static_cast<float>(std::min(kg / kFoamKgM2, 1.0));
+                }
+            }
+        }
+        renderOptions_.waterSurface = std::move(look);
     }
 
     /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
@@ -2152,6 +2252,7 @@ public:
     }
     /// The field and plane the Slice 2D panel starts on ("aero/wind_speed:xz").
     void setSlice(std::string slice) { slice_ = std::move(slice); }
+    void setWaterRelief(float relief) { renderOptions_.waterRelief = relief; }
     void setSeason(const std::string& name) {
         if (name == "fall") {
             renderOptions_.season = Season::Fall;
@@ -2328,7 +2429,11 @@ private:
     static constexpr const char* kAirField = "aero/wind_speed";
     static constexpr const char* kSprayField = "aero/spray";
     std::shared_ptr<FieldStream> sprayStream_;
-    float sprayTime_{0.0F};  // s, for the streaks' fall
+    static constexpr const char* kWaterSurfaceField = "water/surface";
+    std::shared_ptr<FieldStream> surfaceStream_;  // the realistic view's moving water
+    std::shared_ptr<FieldStream> foamStream_;     // the spray for its foam
+    std::shared_ptr<const FieldVolumeData> surfaceOf_, foamOf_;  // what waterSurface was made of
+    float sprayTime_{0.0F};                                      // s, for the streaks' fall
     struct Particle {
         std::array<double, 3> at{};  // region frame, m
         float age{0.0F};             // s
@@ -2601,6 +2706,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
         ui.setSlice(options.slice);
+        ui.setWaterRelief(options.waterRelief);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
@@ -3105,6 +3211,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
         ui.setSlice(options.slice);
+        ui.setWaterRelief(options.waterRelief);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);

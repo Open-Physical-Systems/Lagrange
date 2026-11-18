@@ -394,6 +394,8 @@ struct RasterCamera::Impl {
     std::unique_ptr<RealisticRenderer> realistic;
     std::vector<RealisticDraw> draws;
     std::vector<RealisticLamp> lamps;  // setLighting
+    RealisticWaterSurface water;       // setWaterSurface, its spans into these:
+    std::vector<float> waterHeights, waterFoam;
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
     bool linear{false};
     bool colour{true};  // false: only depth and ids are drawn (setColour)
@@ -530,6 +532,14 @@ void RasterCamera::setLighting(std::span<const RealisticLamp> lamps, double skyI
     impl_->lamps.assign(lamps.begin(), lamps.end());
     impl_->skyIlluminance = skyIlluminance;
     impl_->linear = linear;
+}
+
+void RasterCamera::setWaterSurface(const RealisticWaterSurface& surface) {
+    impl_->waterHeights.assign(surface.heights.begin(), surface.heights.end());
+    impl_->waterFoam.assign(surface.foam.begin(), surface.foam.end());
+    impl_->water = surface;
+    impl_->water.heights = impl_->waterHeights;
+    impl_->water.foam = impl_->waterFoam;
 }
 
 void RasterCamera::setColour(bool drawn) {
@@ -862,6 +872,7 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
             settings.lamps = impl_->lamps;
             settings.skyIlluminance = impl_->skyIlluminance;
             settings.linear = impl_->linear;
+            settings.waterSurface = impl_->water;
             transitionImage(commands, impl_->realisticDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
             impl_->realistic->record(commands, impl_->draws, view, settings, *scene.meshes,

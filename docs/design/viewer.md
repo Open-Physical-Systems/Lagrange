@@ -102,11 +102,17 @@ flowchart LR
   `WaterAPI_1`: Gerstner waves whose height follows the site's wind, ripples, Fresnel reflection,
   depth-based colour, caustics, foam where it meets things. Limits: what the water looks like does
   not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
-  no wake (the physics' own surface under a rotor's downwash, millimetres deep, is drawn instead as
-  the Environment workspace's `water/surface` field layer, heights over the still level, and its
-  spray as the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are,
-  from the `aero/spray` volume; `--overlays spray`, `--slice water/surface`; water.md,
-  downwash.md §5b); one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
+  no wake. The physics' own surface under a rotor's downwash (water.md) is drawn: the server's
+  `water/surface` volume lifts the first water body by $\eta$ and its slope shades it (per pixel,
+  in place of the made-up ripples there, on top of the swell; `RealisticWaterSurface`, binding 8 of
+  `realistic.slang`), and the spray's water near the surface (`aero/spray`) foams it where the
+  outwash tears it off (0.3 m of drops over it, full foam at 2 g/m², a drawing choice).
+  `--water-relief X` draws it X times as high and steep (1 by default: as the physics has it).
+  It is also the Environment workspace's `water/surface` field layer, whose Overlays *contrast*
+  (linear, symlog over four decades, or high-pass: less the mean over 7 × 7 cells; `--slice
+  water/surface:xy:highpass`) shows sub-millimetre rings beside a dimple of centimetres, and its
+  spray the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are
+  (`--overlays spray`; downwash.md §5b); one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
   Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
