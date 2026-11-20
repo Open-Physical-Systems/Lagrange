@@ -929,6 +929,7 @@ public:
         buildCables();
         followWeather();
         followLamps();
+        followRotors();
         // The 3D view is drawn again only when something it shows changed: a new frame of the
         // scene, the camera, the size, the options or an overlay. The display may run at 144 Hz
         // while the scene changes at 50 Hz, or not at all when paused; the GPU it would spend
@@ -1232,6 +1233,112 @@ public:
         }
         renderOptions_.skyIlluminance =
             skyIlluminance_ ? skyIlluminance_->latest() : std::numeric_limits<double>::quiet_NaN();
+    }
+
+    /// The rotors whose outwash bends the realistic view's grass (gpu/GroundAir.hpp), from the
+    /// signal catalog only (invariant 14; joints are not scene prims): every rotor/<j>/thrust,
+    /// with its induced_velocity and thrust_axis, and its hub at the prim of joint/<j>/* (the
+    /// joint's child link, Server::primOfSignal). The disc radius from momentum theory, as
+    /// rotor_aero writes v_i: R = √(T / (2ρπ v_i²)) (Leishman 2006, §2.2), ρ env/air_density
+    /// when the run has it, else ISA sea level (ICAO Doc 7488), the air rotors fly in by default.
+    void followRotors() {
+        renderOptions_.rotors.clear();
+        const auto frame = scene_;
+        if (!frame || !frame->statics) {
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        const auto catalog = client_.catalog();
+        if (catalog != rotorCatalog_) {
+            rotorCatalog_ = catalog;
+            for (SceneRotor& rotor : rotors_) {
+                for (const auto& b : {rotor.thrust, rotor.induced, rotor.axis[0], rotor.axis[1],
+                                      rotor.axis[2]}) {
+                    if (b) {
+                        client_.unsubscribe(b);
+                    }
+                }
+            }
+            rotors_.clear();
+            airDensity_.reset();
+            if (catalog) {
+                const std::string head = "rotor/";
+                const std::string tail = "/thrust";
+                for (const SignalInfo& info : catalog->signals) {
+                    const std::string& n = info.name;
+                    if (n.size() <= head.size() + tail.size() || n.rfind(head, 0) != 0 ||
+                        n.compare(n.size() - tail.size(), tail.size(), tail) != 0) {
+                        continue;
+                    }
+                    const std::string joint =
+                        n.substr(head.size(), n.size() - head.size() - tail.size());
+                    std::uint32_t link = kNone;
+                    const std::string jointHead = "joint/" + joint + "/";
+                    for (const SignalInfo& other : catalog->signals) {
+                        if (other.name.rfind(jointHead, 0) == 0 && other.prim != kNone) {
+                            link = other.prim;
+                            break;
+                        }
+                    }
+                    const std::string base = head + joint + "/";
+                    if (link == kNone || catalog->find(base + "induced_velocity") == nullptr ||
+                        catalog->find(base + "thrust_axis") == nullptr) {
+                        continue;
+                    }
+                    SceneRotor& rotor = rotors_.emplace_back();
+                    rotor.name = joint;
+                    rotor.link = link;
+                    rotor.thrust = client_.watchSignal(base + "thrust");
+                    rotor.induced = client_.watchSignal(base + "induced_velocity");
+                    for (std::uint32_t k = 0; k < 3; ++k) {
+                        rotor.axis[k] = client_.watchSignal(base + "thrust_axis", k);
+                    }
+                    std::fprintf(stderr, "lagrange_viewer: rotor %s on prim %u for the outwash\n",
+                                 joint.c_str(), link);
+                }
+                if (!rotors_.empty() && catalog->find("env/air_density") != nullptr) {
+                    airDensity_ = client_.watchSignal("env/air_density");
+                }
+            }
+        }
+        // ISA sea-level density, kg/m³ (ICAO Doc 7488/3), when the run gives none.
+        constexpr double kSeaLevelDensity = 1.225;
+        const double rho = airDensity_ && airDensity_->latest() > 0.0 ? airDensity_->latest()
+                                                                       : kSeaLevelDensity;
+        for (const SceneRotor& rotor : rotors_) {
+            if (!rotor.thrust || !rotor.induced || !rotor.axis[0] || !rotor.axis[1] ||
+                !rotor.axis[2] || rotor.link >= frame->transforms.size() ||
+                rotor.link >= statics.prims.size()) {
+                continue;
+            }
+            RenderOptions::Rotor drawn;
+            drawn.hub = frame->transforms[rotor.link].position;
+            drawn.thrustAxis = {rotor.axis[0]->latest(), rotor.axis[1]->latest(),
+                                rotor.axis[2]->latest()};
+            drawn.induced = rotor.induced->latest();
+            drawn.thrust = rotor.thrust->latest();
+            if (!(drawn.thrust > 0.0) || !(drawn.induced > 0.0) || !std::isfinite(drawn.thrust)) {
+                continue;
+            }
+            drawn.radius = std::sqrt(drawn.thrust / (2.0 * rho * std::numbers::pi *
+                                                     drawn.induced * drawn.induced));
+            // Its robot: the top prim above its link.
+            std::uint32_t root = rotor.link;
+            for (std::size_t guard = 0; guard < statics.prims.size(); ++guard) {
+                const std::uint32_t up = statics.prims[root].parent;
+                if (up == kNone || up >= statics.prims.size()) {
+                    break;
+                }
+                root = up;
+            }
+            drawn.group = root;
+            renderOptions_.rotors.push_back(drawn);
+        }
+        if (std::getenv("LAGRANGE_DEBUG_OUTWASH") != nullptr && !renderOptions_.rotors.empty()) {
+            const RenderOptions::Rotor& r = renderOptions_.rotors.front();
+            std::fprintf(stderr, "outwash: %zu rotors, T %.2f N, v_i %.2f m/s, R %.3f m, z %.2f\n",
+                         renderOptions_.rotors.size(), r.thrust, r.induced, r.radius, r.hub[2]);
+        }
     }
 
     /// `v` turned by the unit quaternion `q` (w, x, y, z).
@@ -2345,6 +2452,7 @@ private:
             any = true;
         }
         if (!any) {
+            applyStartView();  // a world of only large things: --camera still holds
             return;
         }
         double size = 0.0;
@@ -2360,6 +2468,10 @@ private:
             }
             renderOptions_.follow = true;
         }
+        applyStartView();
+    }
+
+    void applyStartView() {
         if (startView_) {
             camera_.target = {(*startView_)[0], (*startView_)[1], (*startView_)[2]};
             camera_.distance = (*startView_)[3];
@@ -2436,6 +2548,15 @@ private:
         double rotationSpeed{0.0};  // rad/s, a beacon's
     };
     std::vector<SceneLamp> lamps_;
+    struct SceneRotor {  // per rotor/<j>/thrust (gpu/GroundAir.hpp)
+        std::string name;
+        std::uint32_t link{kNone};  // the prim of joint/<j>/*: its child link
+        std::shared_ptr<ScopeBuffer> thrust, induced;
+        std::array<std::shared_ptr<ScopeBuffer>, 3> axis;  // thrust_axis x, y, z
+    };
+    std::vector<SceneRotor> rotors_;
+    std::shared_ptr<ScopeBuffer> airDensity_;  // env/air_density, kg/m³
+    std::shared_ptr<const SignalCatalog> rotorCatalog_;
     std::uint64_t lampGeneration_{0};
     std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> lampAttributes_;
     std::shared_ptr<const SignalCatalog> skyCatalog_;

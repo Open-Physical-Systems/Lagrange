@@ -29,6 +29,7 @@ private:
     gpu::RealisticRenderer renderer_;
     std::vector<gpu::RealisticDraw> draws_;
     std::vector<gpu::RealisticLamp> lamps_;  // this frame's (RenderOptions::lamps)
+    std::vector<gpu::AirRotor> rotors_;      // this frame's (RenderOptions::rotors)
     // What does not change between frames of one stage: per drawn prim, its index and its draw
     // without the pose, made again when the stage's generation changes.
     std::shared_ptr<const SceneStatics> staticsOf_;

@@ -4,6 +4,7 @@
 // and the camera sensor (invariant 13): the sun's shadow map, the scene in HDR with sky, materials
 // and water, then the final image.
 
+#include "lagrange/gpu/GroundAir.hpp"
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Resources.hpp"
 
@@ -149,6 +150,11 @@ struct RealisticSettings {
     /// The final image is the scene's linear HDR value, clamped to 1, with no exposure, tone
     /// mapping, bloom or occlusion: for calibration tests.
     bool linear{false};
+    /// Rotor discs (GroundAir.hpp): their outwash over the ground at `groundHeight` (m, world z;
+    /// NaN: the top of what is drawn under the robot) bends grass and vegetation
+    /// (realistic.slang's groundAir), up to kMaxAirJets robots.
+    std::span<const AirRotor> rotors;
+    double groundHeight{std::numeric_limits<double>::quiet_NaN()};
 };
 
 /// The photographs of surfaces, shared by the renderers on a device.
@@ -236,6 +242,9 @@ private:
     std::vector<double> rippleVariance_, rippleDirection_;  // water_optics::fetchLimitedRipples
     Pipeline sky_;
     Pipeline waterPipe_;
+    Pipeline vegPipe_;  // reeds and shrubs, made in the vertex shader (realistic.slang vsVeg)
+    // Per frame: each vegetation patch's push constants and its clump count.
+    std::vector<std::pair<std::array<float, 24>, std::uint32_t>> vegPatches_;
     Pipeline composite_;
 };
 

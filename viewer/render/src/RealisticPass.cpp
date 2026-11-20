@@ -98,6 +98,12 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         }
     }
     settings.lamps = lamps_;
+    rotors_.clear();
+    for (const RenderOptions::Rotor& from : options.rotors) {
+        rotors_.push_back({from.hub, from.thrustAxis, from.radius, from.induced, from.thrust,
+                           from.group});
+    }
+    settings.rotors = rotors_;
     settings.skyIlluminance = options.skyIlluminance;
     settings.waterCdom = options.waterCdom;
     if (const auto& moving = options.waterSurface) {

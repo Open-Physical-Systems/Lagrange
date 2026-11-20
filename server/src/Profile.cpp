@@ -55,6 +55,10 @@ std::string whyNotRunnable(const std::string& domain) {
         {"hydrodynamics",
          "the stage has no water (WaterAPI_1, --water); disable hydrodynamics and name a "
          "substitute"},
+        {"vegetation",
+         "the world has no reeds, shrubs or tall grass (a fixed box or plane with a canopy: "
+         "sensmat:preset reeds, shrub, tall_grass); disable vegetation and name a substitute "
+         "(zero)"},
         {"tether",
          "the stage has no tethers (TetherAPI_1, --tether); disable tether and name a "
          "substitute (zero)"},

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include <embree4/rtcore.h>
 
@@ -432,6 +433,101 @@ LidarReturn lidarReturn(const SurfaceMaterial& m, bool hasMaterial, bool wavelen
         out.detected = power / (r * r) >= referenceReflectivity / (maxRange * maxRange);
     }
     return out;
+}
+
+namespace {
+// The canopy's path along the beam and its extinction per metre.
+std::pair<double, double> canopyPath(double canopyHeight, double leafAreaIndex, double cosIncidence,
+                                     double range) {
+    constexpr double kMinCosine = 1e-3;  // a beam along the soil: bounded by its range
+    const double c = std::max(std::abs(cosIncidence), kMinCosine);
+    const double path = std::min(canopyHeight / c, std::max(range, 0.0));
+    return {path, kCanopyProjection * std::max(leafAreaIndex, 0.0) / canopyHeight};
+}
+}  // namespace
+
+double canopyShortening(double canopyHeight, double cosIncidence, double range, double u) {
+    return canopyShortening(canopyHeight, kCanopyLeafAreaIndex, cosIncidence, range, u);
+}
+
+double canopyMeanShortening(double canopyHeight, double cosIncidence, double range) {
+    return canopyMeanShortening(canopyHeight, kCanopyLeafAreaIndex, cosIncidence, range);
+}
+
+double canopyShortening(double canopyHeight, double leafAreaIndex, double cosIncidence,
+                        double range, double u) {
+    if (!(canopyHeight > 0.0) || !(leafAreaIndex > 0.0) || !std::isfinite(range)) {
+        return 0.0;
+    }
+    const auto [path, mu] = canopyPath(canopyHeight, leafAreaIndex, cosIncidence, range);
+    const double s = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16)) / mu;
+    return s >= path ? 0.0 : path - s;
+}
+
+double canopyMeanShortening(double canopyHeight, double leafAreaIndex, double cosIncidence,
+                            double range) {
+    if (!(canopyHeight > 0.0) || !(leafAreaIndex > 0.0) || !std::isfinite(range)) {
+        return 0.0;
+    }
+    const auto [path, mu] = canopyPath(canopyHeight, leafAreaIndex, cosIncidence, range);
+    return path + std::expm1(-mu * path) / mu;
+}
+
+bool canopyVolumeSpan(ShapeType type, const std::array<double, 3>& size, const Pose& placed,
+                      const std::array<double, 3>& origin, const std::array<double, 3>& direction,
+                      double canopyHeight, double range, double& enter, double& leave) {
+    if (!(canopyHeight > 0.0) || (type != ShapeType::Box && type != ShapeType::Plane)) {
+        return false;
+    }
+    // The beam in the collider's frame.
+    const std::array<double, 4> back = conjugate(placed.orientation);
+    const std::array<double, 3> o =
+        rotate(back, {origin[0] - placed.position[0], origin[1] - placed.position[1],
+                      origin[2] - placed.position[2]});
+    const std::array<double, 3> d = rotate(back, direction);
+    constexpr double kUnbounded = std::numeric_limits<double>::infinity();
+    std::array<double, 3> lo{-kUnbounded, -kUnbounded, 0.0};
+    std::array<double, 3> hi{kUnbounded, kUnbounded, canopyHeight};
+    if (type == ShapeType::Box) {
+        lo = {-size[0], -size[1], size[2]};
+        hi = {size[0], size[1], size[2] + canopyHeight};
+    }
+    double t0 = 0.0;
+    double t1 = std::isfinite(range) ? range : kUnbounded;
+    for (std::size_t k = 0; k < 3; ++k) {  // slabs (Kay and Kajiya 1986)
+        if (std::abs(d.at(k)) < 1e-15) {
+            if (o.at(k) < lo.at(k) || o.at(k) > hi.at(k)) {
+                return false;
+            }
+            continue;
+        }
+        double a = (lo.at(k) - o.at(k)) / d.at(k);
+        double b = (hi.at(k) - o.at(k)) / d.at(k);
+        if (a > b) {
+            std::swap(a, b);
+        }
+        t0 = std::max(t0, a);
+        t1 = std::min(t1, b);
+        if (t0 >= t1) {
+            return false;
+        }
+    }
+    if (!std::isfinite(t1)) {
+        return false;  // along an unbounded slab with no end: no range to bound it
+    }
+    enter = t0;
+    leave = t1;
+    return true;
+}
+
+double canopyVolumeStop(double enter, double leave, double canopyHeight, double leafAreaIndex,
+                        double u) {
+    if (!(canopyHeight > 0.0) || !(leafAreaIndex > 0.0) || !(leave > enter)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double mu = kCanopyProjection * leafAreaIndex / canopyHeight;
+    const double s = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16)) / mu;
+    return enter + s < leave ? enter + s : std::numeric_limits<double>::infinity();
 }
 
 double distanceToShape(ShapeType type, const std::array<double, 3>& size, const Pose& pose,

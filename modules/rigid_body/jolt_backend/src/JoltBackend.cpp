@@ -4,6 +4,7 @@
 
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/SurfaceContact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -945,13 +946,13 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                                      "jolt: collider of " + bodies.names[owner.index] + ": " +
                                          std::string(shape.GetError().c_str()));
             }
-            tagFriction(*shape.Get(), world.colliders.friction[c]);
+            tagFriction(*shape.Get(), colliderFrictionOnSurface(world, c));
             compound.AddShape(jv(p.position),
                               shapeRotation(world.colliders.shape[c], p.orientation), shape.Get());
             if (parts == 0) {
-                firstFriction = world.colliders.friction[c];
+                firstFriction = colliderFrictionOnSurface(world, c);
             }
-            mixedFriction = mixedFriction || world.colliders.friction[c] != firstFriction;
+            mixedFriction = mixedFriction || colliderFrictionOnSurface(world, c) != firstFriction;
             ++parts;
         }
         JPH::RefConst<JPH::Shape> shape;
@@ -1023,7 +1024,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
             return Status::error(StatusCode::InvalidConfig,
                                  "jolt: " + std::string(shape.GetError().c_str()));
         }
-        tagFriction(*shape.Get(), world.colliders.friction[c]);
+        tagFriction(*shape.Get(), colliderFrictionOnSurface(world, c));
         JPH::BodyCreationSettings settings(shape.Get(), JPH::RVec3(jv(p.position)),
                                            shapeRotation(world.colliders.shape[c], p.orientation),
                                            JPH::EMotionType::Static, kStaticLayer);

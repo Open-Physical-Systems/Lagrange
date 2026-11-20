@@ -207,6 +207,87 @@ TEST(MujocoBackend, FrictionScaleMakesTheBoxSlide) {
     }
 }
 
+// --- surfaces: grass (docs/physics/ground.md "Engine contacts on grass") -------------------
+
+/// A solid 1 kg ball of radius 0.1 m on a ground of the given surface, gravity tilted by
+/// `slopeDegrees` to make a slope, sliding friction 1 so it rolls without slipping.
+World ballOnSurface(double slopeDegrees, const SurfaceMaterial& ground) {
+    World world;
+    const double angle = slopeDegrees * std::numbers::pi / 180.0;
+    world.gravityLocal = {kGravity * std::sin(angle), 0.0, -kGravity * std::cos(angle)};
+    world.addCollider(kWorldBody, ShapeType::Box, {50.0, 5.0, 0.1}, Pose{{0.0, 0.0, -0.1}}, 1.0);
+    world.surfaceMaterials.push_back(ground);
+    world.colliders.material.back() = 0;
+    const double inertia = 0.4 * 1.0 * 0.1 * 0.1;  // kg·m², solid sphere, 2/5 m r²
+    const BodyId ball = world.addBody("ball", kWorldBody, Pose{{0.0, 0.0, 0.1}}, 1.0, {},
+                                      diagonal(inertia, inertia, inertia));
+    world.addJoint("ball_free", JointType::Free, ball, {0.0, 0.0, 1.0}, false);
+    world.addCollider(ball, ShapeType::Sphere, {0.1, 0.0, 0.0}, Pose{}, 1.0);
+    return world;
+}
+
+/// The ball's acceleration down the slope from 0.5 to 1.5 s, m/s².
+double rollingAcceleration(double slopeDegrees, const SurfaceMaterial& ground) {
+    const World world = ballOnSurface(slopeDegrees, ground);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    wire(scheduler, world);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{500'000'000}).ok());
+    const double v0 = read(scheduler, "body/ball/twist", 0);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{1'500'000'000}).ok());
+    return read(scheduler, "body/ball/twist", 0) - v0;
+}
+
+TEST(MujocoBackend, RollingResistanceSlowsABallAtTheClosedFormRate) {
+    // m a = m g sin θ − F, I α = F r − Crr N r, a = α r:
+    // a = g (sin θ − Crr cos θ) m r² / (I + m r²), with m r² / (I + m r²) = 5/7 for a solid ball.
+    const double slope = 10.0;
+    const double angle = slope * std::numbers::pi / 180.0;
+    const double share = 1.0 / (1.0 + 0.4);
+    const double bare = rollingAcceleration(slope, SurfaceMaterial{});
+    EXPECT_NEAR(bare, kGravity * std::sin(angle) * share, 0.01 * kGravity * std::sin(angle));
+    SurfaceMaterial grass;
+    grass.rollingResistance = 0.08;  // a test value, not the preset
+    const double slowed = rollingAcceleration(slope, grass);
+    EXPECT_NEAR(slowed, kGravity * (std::sin(angle) - 0.08 * std::cos(angle)) * share,
+                0.01 * kGravity * std::sin(angle));
+}
+
+TEST(MujocoBackend, RollingResistanceHoldsABallOnAGentleSlope) {
+    // Crr 0.1 > tan 3° = 0.052: rolling resistance holds it, and never rolls it back up.
+    SurfaceMaterial grass;
+    grass.rollingResistance = 0.1;
+    const World world = ballOnSurface(3.0, grass);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_LT(std::abs(read(scheduler, "body/ball/pose", 0)), 0.01);
+}
+
+TEST(MujocoBackend, SurfaceFrictionScaleMakesTheBoxSlide) {
+    // As FrictionScaleMakesTheBoxSlide, from the ground's surface instead of the weather.
+    for (const double scale : {1.0, 0.5}) {
+        World world = boxOnGround(20.0, 0.5);
+        SurfaceMaterial slick;
+        slick.frictionScale = scale;
+        world.surfaceMaterials.push_back(slick);
+        world.colliders.material.front() = 0;  // the ground plane
+        // The pair takes the larger coefficient, so the box's own surface must be scaled too.
+        world.colliders.material.back() = 0;
+        Scheduler scheduler;
+        scheduler.add(std::make_unique<MujocoBackend>());
+        wire(scheduler, world);
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+        const double moved = std::abs(read(scheduler, "body/box/pose", 0));
+        if (scale == 1.0) {
+            EXPECT_LT(moved, 0.01) << "sticks at full friction";
+        } else {
+            EXPECT_GT(moved, 0.1) << "slides at half friction";
+        }
+    }
+}
+
 /// How far the box of boxOnGround(10°, μ 0.3) creeps down the slope from 2 to 4 s (m/s), with
 /// `noslip` noslip iterations, or MuJoCo's default when it is negative.
 double creepRate(std::int64_t noslip) {

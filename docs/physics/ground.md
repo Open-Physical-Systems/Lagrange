@@ -1,0 +1,238 @@
+# The ground under wheels, beams and contacts
+
+What a surface's material (`SurfaceMaterial`, authored by USD `sensmat:preset` or URDF
+`<gazebo reference=L><sensor_material preset=.../></gazebo>`) does to what touches it. The presets
+`grass`, `wet_grass` and `tall_grass` live in `core/world/src/World.cpp`.
+
+## Wheels on grass
+
+`lagrange_vehicle_dynamics` (raycast suspension, MF-Tyre or linear tyres) reads, for the ground
+shape each wheel's ray hits:
+
+- **Friction.** The tyre's friction is scaled by the collider's friction, the surface's
+  `frictionScale` and the weather's `env/friction_scale`, all three multiplied
+  (`mu = friction · frictionScale · env/friction_scale`; the scale is folded into the per-shape
+  friction by the server's `groundQuery`). Braking and traction are both bounded by it.
+- **Rolling resistance.** `F = Crr · Fz` against the rolling, with `Crr` the surface's
+  `rollingResistance` (on top of the tyre's own, which the tyre models here leave out) and `Fz`
+  the wheel's load. It is applied as a moment `Crr · Fz · r` on the wheel through the same
+  stick-slip (Karnopp) clamp as the brake: it slows the wheel to rest within a step at most and
+  never turns it backwards, so a parked car does not creep or chatter on level grass, and the
+  tyre passes it on to the chassis as a longitudinal force. Signal
+  `wheel/<j>/rolling_resistance` (N), declared only when some ground surface has `Crr > 0`
+  (so that runs without one keep their bus layout and their saved states).
+
+Closed forms checked in `modules/vehicle_dynamics/test/test_vehicle_dynamics.cpp`:
+coasting on level grass decelerates at `g · Crr` (default ground: almost not at all), locked-wheel
+braking on `frictionScale = 0.5` stops in `v² / (2 · 0.5 · μ · g)` and the run-up's acceleration
+stays under `0.5 · μ · g`, and a car parked on level grass holds still.
+
+### Rain on grass
+
+`grass` is **dry** grass. Rain wets every surface through the weather's `env/friction_scale`
+(`frictionScale(wetness, ...)` in `modules/weather/atmosphere/src/Weather.cpp`), which the wheels
+already multiply in, so it is not counted again in the preset. `wet_grass` is for ground that is
+wet whatever the weather (dew, irrigated turf) and should not be combined with rain, or the
+wetness counts twice.
+
+TODO(verify): the weather's wet factor is one number for every surface, but a tyre loses more of
+its grip on wet grass (water films on the leaves) than on wet asphalt, whose texture drains it.
+If a published dry/wet tyre-on-grass friction ratio supports it, the surface material could carry
+its own wet factor and the vehicle module would blend it by `env/wetness`-like state; that needs
+the wetness on the bus (today only `env/friction_scale` is), so it is left for now.
+
+### Numbers and sources
+
+| Preset | frictionScale | rollingResistance | Source |
+|---|---|---|---|
+| grass | 0.9 | 0.08 | Crr: within J. Y. Wong, *Theory of Ground Vehicles*, Table 1.1 (after Taborek): car tyres, unpaved road 0.05, field 0.1–0.35. TODO(verify) the table and a turf measurement (Holloway, Wilson and Drach, "Examination of ATV tire forces generated on clay, grass and sand surfaces", SAE, 1989). frictionScale TODO(verify) |
+| wet_grass | 0.6 | 0.1 | TODO(verify) both |
+| tall_grass | 0.9 | 0.12 | TODO(verify) both: the standing sward adds bulldozing drag |
+
+## Engine contacts on grass
+
+Robots whose wheels are bodies in the physics engine (the sample diff-drive AMR, arms on
+casters, anything without `VehicleAPI_1`) feel a grass surface through two terms of its
+`SurfaceMaterial` (`sensmat:preset = "grass"`, URDF `<sensor_material preset="grass"/>`). Both
+engines read them through `lagrange/world/SurfaceContact.hpp`, so MuJoCo and Jolt agree.
+
+**Sliding friction.** When the engine model is built, each collider's Coulomb coefficient is
+its own times its surface's `frictionScale` (`colliderFrictionOnSurface`). Both engines combine
+a pair by the larger of the two coefficients (MuJoCo's rule for geom friction; the Jolt backend's
+`SetCombineFriction`), so a grass ground lowers the grip of a wheel only when the wheel's own
+coefficient is not higher than the ground's scaled one. The weather's `env/friction_scale` still
+multiplies on top at run time.
+
+**Rolling resistance.** A coefficient of rolling resistance Crr is the resisting force over the
+load (Wong, *Theory of Ground Vehicles*, 4th ed., ch. 1 "Rolling resistance"; TODO(verify) the section number). After each MuJoCo step, for every
+contact with a surface of `rollingResistance` > 0 (the larger of the two geoms', the same pair
+rule as friction), the backend applies to each moving body a torque
+
+    τ = −Crr · N · r · ω̂_t
+
+with N the contact's normal force, r the distance from the body's centre of mass to the contact
+point (the rolling radius for a wheel, sphere or cylinder), and ω̂_t the direction of the
+bodies' relative spin less its part about the contact normal (turning on the spot is not
+rolling). The other body takes the opposite torque. The torque is a Coulomb-like limit: it is
+never more than stops the relative rolling in one step (I_contact · |ω_t| / dt), so a wheel at
+rest stays at rest and is never rolled backwards. It is applied as a generalized force for the
+next step (one step of lag, 1 ms by default).
+
+MuJoCo's own rolling friction (condim 6, `friction[2]`) was not used: its coefficient is a
+length (Crr · r) and the pair takes the larger geom's, so a ground geom cannot carry one value
+that is right for wheels of different radii.
+
+For a free roller of mass m, moment of inertia I and radius r down a slope θ this gives the
+closed form
+
+    a = g (sin θ − Crr cos θ) · m r² / (I + m r²)
+
+and on flat ground a deceleration Crr · g · m r² / (I + m r²). The tests
+`MujocoBackend.RollingResistanceSlowsABallAtTheClosedFormRate` (a solid ball on a 10° slope,
+within 1 % of g sin θ), `RollingResistanceHoldsABallOnAGentleSlope` (Crr above tan θ holds it)
+and `SurfaceFrictionScaleMakesTheBoxSlide` check it (`test_mujoco_backend`).
+
+**Jolt.** Jolt scales friction the same way. Rolling resistance in Jolt is TODO: Jolt has no
+rolling friction, and the same torque has to be applied from its contacts after each step with
+`rollingResistanceTorque` (the helper is shared for that purpose). Until then a robot on grass
+rolls farther under `--physics jolt` than under MuJoCo.
+
+Road vehicles (`VehicleAPI_1`) do not use engine contacts for their wheels; see
+"Wheels on grass".
+
+## Lidar over grass
+
+A collider with a grass preset (`sensmat:preset = "grass"`, `wet_grass`, `tall_grass`, or URDF
+`<sensor_material preset="grass"/>`) is the soil, with blades of height `canopyHeight` standing
+on it. A lidar beam that reaches the soil has crossed a path
+
+    L = min(h / cos θ, r)
+
+of canopy, where h is the canopy height, θ the beam's incidence on the soil and r the range. The
+blades are treated as a turbid medium: a beam goes a free path s into it with probability
+exp(−μ s), with μ = G · LAI / h. This is the gap fraction exp(−G · LAI / cos θ) of Nilson (1971)
+spread evenly over the layer (Beer–Lambert), with G = 0.5 for a spherical leaf angle
+distribution (Ross 1981). The return comes from the first blade, L − s before the soil, or from
+the soil when s ≥ L. A grazing beam has a long path through the layer and mostly ends in the blade
+tops; a steep beam reaches deeper and sometimes the soil. The mean shortening is
+
+    E[Δr] = L − (1 − exp(−μ L)) / μ
+
+which `test_shape_caster` (`CanopyReturn.*`) checks over 200 000 beams.
+
+The draw comes from each beam's own Philox stream (seed, step, `kCanopyStream` + beam), so the CPU
+reference stays bit-reproducible and the result does not depend on the number of threads. Tiers:
+Tier 0 casts on the CPU; on Tiers 1 and 2 the GPU ray scan returns the soil hit and the same
+shortening is applied on the CPU afterwards, so every tier gives the same canopy model. Surfaces
+with `canopyHeight` 0 (every other preset) are unchanged.
+
+Numbers and their status:
+
+| Preset | ρ 905 nm | ρ 1550 nm | specular | canopy height |
+|---|---|---|---|---|
+| grass | 0.5 | 0.3 | 0 | 0.05 m |
+| wet_grass | 0.45 | 0.2 | 0.05 | 0.05 m |
+| tall_grass | 0.5 | 0.3 | 0 | 0.4 m |
+
+- Reflectivities: green leaves reflect about half at the near-infrared plateau (905 nm) and less
+  at 1550 nm, between the leaf water absorption bands. TODO(verify): read both values from the
+  USGS Spectral Library v7 (Kokaly et al. 2017, USGS Data Series 1035) "Lawn_Grass GDS91"
+  spectrum; the wet-grass numbers are not measured.
+- Canopy height: 5 cm for a mown lawn, 40 cm for uncut grass. TODO(verify) against a mowing-height
+  source.
+- Leaf area index: 3 for all three (`kCanopyLeafAreaIndex`). TODO(verify) against turf
+  measurements (e.g. Lee et al. 2011, Crop Science, mowing height and Kentucky bluegrass canopy).
+- Not modelled: blades bending in the wind, multiple returns per beam (only the first), the
+  blades' own reflectivity differing from the preset's, and grass seen from the side above its
+  top (the canopy is only a layer on the collider's surface).
+
+References: T. Nilson (1971), "A theoretical analysis of the frequency of gaps in plant stands",
+Agricultural Meteorology 8, 25–38. J. Ross (1981), *The Radiation Regime and Architecture of
+Plant Stands*, Junk. W. Ni-Meister et al. (2001), "Modeling lidar waveforms in heterogeneous and
+discrete canopies", IEEE TGRS 39(9), 1943–1958. R. F. Kokaly et al. (2017), USGS Spectral
+Library Version 7, USGS Data Series 1035.
+
+## Reeds and shrubs
+
+Reeds on a channel bank, shrubs and tall grass stand much higher than a lawn, so a beam or a robot
+can be inside them without touching the soil. They come from the same surface presets (`reeds`,
+`shrub`, `tall_grass`; USD `sensmat:preset`, URDF `<sensor_material preset="reeds"/>`), whose
+`canopyHeight` h and `leafAreaIndex` (LAI) describe the layer of stems and leaves over the
+collider.
+
+**The canopy as a volume.** On a fixed box the canopy is the box's top face extruded upward by h;
+on a plane it is the slab 0 ≤ z ≤ h (in the collider's frame, z up). Other shapes (hulls, height
+fields, meshes) keep only the return at their hit described in "Lidar over grass".
+
+**Lidar.** Inside the volume the leaves are a turbid medium, as for grass: a beam's free path s
+has P(s > x) = exp(−μx), with μ = G·LAI/h and G = 0.5 (Nilson 1971; Ross 1981). A beam crossing
+the volume over [enter, leave] stops at enter + s when that is before `leave`. This applies to
+every beam that crosses a canopy, not only the ones that hit the top: a drone's lidar flying level
+1 m over a reed bank sees the reeds, and the share of its beams that stop in a bank of width L is
+1 − exp(−μL). A stopped beam takes the canopy's reflectivities, with the mean |cos| of a
+spherical leaf angle distribution (0.5) as its incidence. The draws come from the beam's own
+Philox stream, one per canopy crossed in collider order. The CPU and GPU tiers share this step:
+the GPU scan returns the hit, and the canopies are crossed on the CPU after it. Tests:
+`CanopyVolume.*` and `CanopyReturn.LeafAreaIndexOfTheSurface` in
+`modules/sensors/test/test_shape_caster.cpp` (the stop share and the mean depth against the
+closed form of a truncated exponential).
+
+**Drag on bodies.** The `vegetation` domain (`lagrange_vegetation`, `modules/vegetation`) runs
+whenever the world has such a canopy (`--domain vegetation=off` leaves it out, the zero
+substitute). At 1 ms it cuts each moving body's colliders into cells, and each cell inside a
+canopy is slowed by the quadratic drag of emergent stems per unit volume (Nepf 1999, eq. 1):
+
+F = −½ ρ C_d a V |v| v
+
+with a = G·LAI/h the frontal area per volume, V the cell's volume, v its velocity (with the
+body's spin), C_d = 1, the value Nepf reports for sparse cylinder arrays (TODO(verify) for reeds
+and shrubs, whose leaves are not cylinders), and ρ the site's air density (`--air-density`; no
+air density, no drag). It writes `body/<b>/wrench/vegetation` (summed into the body's wrench) and
+`body/<b>/in_vegetation`, the share of the body's volume in a canopy. There is no force at rest.
+
+Nepf's model is for water flowing past fixed stems. In air the same form gives a small force: a
+0.1 m³ robot at 1 m/s through 1.5 m reeds with LAI 4 feels about 0.08 N. A real robot pushing
+reeds aside mostly works against the stems bending, which this model does not include
+(TODO(verify) against a push-through test; a module config `density` can stand in for an
+effective density). Tests: `modules/vegetation/test/test_vegetation.cpp` (the closed form,
+quadratic in speed, opposite the motion, zero at rest, outside the layer and at h = 0).
+
+### Numbers and sources
+
+| Preset | h (m) | LAI | Source |
+|---|---|---|---|
+| `reeds` | 1.5 | 4 | Common reed (*Phragmites australis*) grows up to about 3–4 m in full stands; 1.5 m is a low or young bank stand. TODO(verify) the height against a survey and the LAI against reedbed measurements (LAI-2000 surveys, or LAI from specific leaf area) |
+| `shrub` | 0.8 | 3 | TODO(verify) |
+| `tall_grass` | 0.4 | 3 | TODO(verify) |
+
+- Nepf, H. M. (1999). Drag, turbulence, and diffusion in flow through emergent vegetation.
+  *Water Resources Research* 35(2), 479–489. doi:10.1029/1998WR900069.
+- Ross, J. (1981). *The Radiation Regime and Architecture of Plant Stands*. Junk, The Hague.
+- Nilson, T. (1971). A theoretical analysis of the frequency of gaps in plant stands.
+  *Agricultural Meteorology* 8, 25–38.
+
+## Grass in the rotor downwash
+
+The realistic look (viewer and camera sensors, invariant 13) bends grass and vegetation by the air
+over the ground, read only through `groundAir` in `gpu/kernels/camera/realistic.slang`: the site
+wind plus the outwash of every hovering robot's rotors. The outwash is the aerodynamics domain's
+own (`aerodynamics::Downwash`, [downwash.md](downwash.md)), ported to `lagrange/gpu/GroundAir.hpp`
+for a level ground and no wake skew:
+
+- per robot, the wake goes down from its mean hub along the summed thrust axes and arrives at the
+  ground with the near wake's speed `v_i·(1 + s/√(s² + R²))` (Leishman 2006, §2.7), blended into
+  the merged jet of Bauersfeld et al. (2024, arXiv:2403.13321) between 1.5 and 2.5 motor
+  distances below;
+- the radial outwash there follows the fit to Tanner et al. (2015, AHS Forum 71,
+  NTRS 20160006428): a peak of 1.9 V_h at 1.7 R from the axis, 0.05 R above the ground, in a
+  layer 0.15 R deep, slower and wider for a higher rotor.
+
+Blades stand taller than that wall layer, so the grass is bent by the jet's peak speed at each
+radius. The rotors come from `rotor/<j>/thrust`, `induced_velocity` and `thrust_axis` and the
+rotor link's pose: the viewer subscribes to them through the protocol, camera sensors read them
+from the bus (optional inputs, last step's values); at most 8 robots per frame.
+
+The outwash is unsteady (Tanner et al. report fluctuations of the order of the mean); it is drawn
+as gusts running outward at half its speed, broken by noise. Their size and strength are a
+drawing choice (TODO(verify): the measured spectrum). `test_downwash`'s `GroundAir.*` check the
+port against `Downwash::velocityAt` (to 1e-9) and that no rotors leave the site wind alone.

@@ -21,6 +21,7 @@ find_package(lagrange_vehicle_dynamics REQUIRED)
 find_package(lagrange_traffic REQUIRED)
 find_package(lagrange_humans REQUIRED)
 find_package(lagrange_hydrodynamics REQUIRED)
+find_package(lagrange_vegetation REQUIRED)
 find_package(lagrange_tether REQUIRED)
 find_package(lagrange_fire REQUIRED)
 find_package(lagrange_lights REQUIRED)
@@ -104,6 +105,7 @@ target_link_libraries(
         lagrange_traffic::lagrange_traffic
         lagrange_humans::lagrange_humans
         lagrange_hydrodynamics::lagrange_hydrodynamics
+        lagrange_vegetation::lagrange_vegetation
         lagrange_tether::lagrange_tether
         lagrange_fire::lagrange_fire
         lagrange_lights::lagrange_lights

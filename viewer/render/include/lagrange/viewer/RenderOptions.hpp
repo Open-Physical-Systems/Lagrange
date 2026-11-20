@@ -118,6 +118,19 @@ struct RenderOptions {
         bool operator==(const Lamp&) const = default;
     };
     std::vector<Lamp> lamps;
+    /// Rotors (RotorAPI_1) whose outwash bends grass and vegetation in the realistic view
+    /// (gpu/GroundAir.hpp): their link's pose and rotor/<j>/thrust, induced_velocity and
+    /// thrust_axis signals.
+    struct Rotor {
+        std::array<double, 3> hub{};         ///< region frame, m
+        std::array<double, 3> thrustAxis{};  ///< unit
+        double radius{0.0};                  ///< m
+        double induced{0.0};                 ///< m/s
+        double thrust{0.0};                  ///< N
+        std::uint32_t group{0};              ///< its robot (root prim)
+        bool operator==(const Rotor&) const = default;
+    };
+    std::vector<Rotor> rotors;
     /// The sky's horizontal illuminance (lx, env/sky_illuminance); NaN: the drawn day.
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
 };

@@ -9,6 +9,8 @@
 #include "shaders/kRealShadowFragment.hpp"
 #include "shaders/kRealShadowVertex.hpp"
 #include "shaders/kRealSkyFragment.hpp"
+#include "shaders/kRealVegFragment.hpp"
+#include "shaders/kRealVegVertex.hpp"
 #include "shaders/kRealWaterFragment.hpp"
 #include "shaders/kRealWaterVertex.hpp"
 
@@ -28,7 +30,22 @@ namespace {
 constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kFinalFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr std::uint32_t kShadowSize = 2048;  // per cascade; the atlas is two side by side
-constexpr VkDeviceSize kFrameStride = 512;   // at least any device's uniform buffer alignment
+constexpr VkDeviceSize kFrameStride = 1024;  // at least any device's uniform buffer alignment
+
+// Vegetation (realistic.slang vsVeg). Kinds are surfacePatternOf's; heights follow the surface
+// presets' canopyHeight (core/world/src/World.cpp: reeds 1.5 m, shrub 0.8 m, both TODO(verify)).
+// Spacing, reach and budget are drawing choices, not measurements.
+constexpr int kReedsKind = 15;
+constexpr int kShrubKind = 16;
+constexpr double kReedsSpacing = 0.22;  // m between clumps
+constexpr double kShrubSpacing = 0.7;
+constexpr double kReedsHeight = 1.4;  // m, of the tallest blades
+constexpr double kShrubHeight = 0.8;
+constexpr double kReedsReach = 70.0;  // m from the eye where the clumps have faded out
+constexpr double kShrubReach = 110.0;
+constexpr std::uint32_t kVegBudget = 60000;  // clumps per frame
+constexpr std::uint32_t kVegVertices = 360;  // per clump, realistic.slang kVegVertices
+constexpr float kNotMirrored = 1e9F;         // vsVeg's mirror plane when not mirrored
 constexpr std::uint32_t kWaterGrid = 256;    // kGrid in realistic.slang
 
 // Must match Frame and Push in realistic.slang.
@@ -47,14 +64,18 @@ struct Frame {
     std::array<float, 4> screen;
     std::array<float, 4> mode;
     std::array<float, 4> weather;  // rain mm/h, snow mm/h, wind x, y m/s
-    std::array<float, 4> light;    // daylight share, lamps, linear output, unused
+    std::array<float, 4> light;    // daylight share, lamps, linear output, ground jets
     std::array<float, 4> surface;  // first cell's centre relative to the eye, cell, cells a side
     std::array<float, 4> surfaceLook;  // relief, the wind's ripple slope variance, its direction
     std::array<float, 4> sprayBox;     // first cell's centre relative to the eye, cell
     std::array<float, 4> sprayDims;    // cells, extinction per kg/m³
     std::array<float, 4> waterOptics;  // CDOM absorption at 620, 550, 465 nm (1/m), unused
+    // Rotor outwash (GroundAir.hpp): per jet, its hit point relative to the eye and arriving
+    // speed, then its arriving radius.
+    std::array<std::array<float, 4>, 2 * kMaxAirJets> airJets;
 };
-static_assert(sizeof(Frame) == 432);
+static_assert(sizeof(Frame) == 432 + 32 * kMaxAirJets);
+static_assert(sizeof(Frame) <= kFrameStride);
 
 // Must match Lamp in realistic.slang.
 struct GpuLamp {
@@ -262,18 +283,26 @@ std::array<float, 3> colorOfTemperature(double kelvin) {
 }
 
 float surfacePatternOf(std::string_view name) {
-    static constexpr std::array<std::pair<std::string_view, float>, 11> kWords{
+    // First match wins: the grass kinds' longer words come before plain "grass" and "lawn".
+    static constexpr std::array<std::pair<std::string_view, float>, 18> kWords{
         {{"brick", 1.0F},
          {"asphalt", 2.0F},
          {"pavement", 3.0F},
          {"plaster", 4.0F},
          {"concrete", 5.0F},
+         {"tall_grass", 12.0F},
+         {"meadow", 12.0F},
+         {"wet_grass", 13.0F},
+         {"dry_grass", 14.0F},
          {"lawn", 6.0F},
+         {"grass", 6.0F},
          {"leaves", 7.0F},
          {"road_paint", 8.0F},
          {"window_glass", 9.0F},
          {"bark", 10.0F},
-         {"roof_felt", 11.0F}}};
+         {"roof_felt", 11.0F},
+         {"reeds", 15.0F},
+         {"shrub", 16.0F}}};
     for (const auto& [word, value] : kWords) {
         if (name.find(word) != std::string_view::npos) {
             return value;
@@ -384,7 +413,7 @@ RealisticRenderer::~RealisticRenderer() {
     VkDevice d = device_.device();
     vkDeviceWaitIdle(d);
     for (Pipeline* p : {&shadowPipe_, &opaque_, &depthOnly_, &opaqueShade_, &transparent_, &sky_,
-                        &waterPipe_, &composite_}) {
+                        &waterPipe_, &composite_, &vegPipe_}) {
         vkDestroyPipeline(d, p->pipeline, nullptr);
         vkDestroyPipelineLayout(d, p->layout, nullptr);
     }
@@ -447,6 +476,14 @@ void RealisticRenderer::pipelines() {
     water.vertex = kRealWaterVertex;
     water.fragment = kRealWaterFragment;
     buildPipeline(device_, water, waterPipe_.layout, waterPipe_.pipeline);
+
+    // Vegetation: real geometry, so it writes depth and is drawn in the shading pass after the
+    // meshes (depth tested against them) and before the sky.
+    PipelineSpec veg = sky;
+    veg.vertex = kRealVegVertex;
+    veg.fragment = kRealVegFragment;
+    veg.depthWrite = true;
+    buildPipeline(device_, veg, vegPipe_.layout, vegPipe_.pipeline);
 
     PipelineSpec composite = sky;
     composite.fragment = kRealCompositeFragment;
@@ -619,7 +656,47 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     if (lampCount != 0) {
         flush(device_, lamps_);
     }
-    main.light = {f(daylight), static_cast<float>(lampCount), settings.linear ? 1.0F : 0.0F, 0.0F};
+    // Rotor outwash over the ground (GroundAir.hpp), for groundAir.
+    // The ground under each robot: the given height, else the highest top of a drawn box below
+    // its hubs by more than kBelowHubs (its own parts are within that), else the ground draw.
+    constexpr double kBelowHubs = 0.3;  // m, a drawing choice
+    const auto groundUnder = [&](const std::array<double, 3>& centre) {
+        if (std::isfinite(settings.groundHeight)) {
+            return settings.groundHeight;
+        }
+        double best = -std::numeric_limits<double>::infinity();
+        for (const RealisticDraw& d : items) {
+            const std::array<float, 6>* box = meshes.bounds(d.mesh);
+            if (d.ground) {
+                best = std::max(best, d.position[2]);
+                continue;
+            }
+            if (box == nullptr || d.water) {
+                continue;
+            }
+            const double x0 = d.position[0] + (*box)[0] * d.scale[0];
+            const double x1 = d.position[0] + (*box)[3] * d.scale[0];
+            const double y0 = d.position[1] + (*box)[1] * d.scale[1];
+            const double y1 = d.position[1] + (*box)[4] * d.scale[1];
+            const double top = d.position[2] + (*box)[5] * d.scale[2];
+            if (centre[0] >= std::min(x0, x1) && centre[0] <= std::max(x0, x1) &&
+                centre[1] >= std::min(y0, y1) && centre[1] <= std::max(y0, y1) &&
+                top < centre[2] - kBelowHubs) {
+                best = std::max(best, top);
+            }
+        }
+        return std::isfinite(best) ? best : 0.0;
+    };
+    const std::vector<AirJet> jets =
+        settings.rotors.empty() ? std::vector<AirJet>{} : groundJets(settings.rotors, groundUnder);
+    for (std::size_t k = 0; k < jets.size(); ++k) {
+        const AirJet& j = jets[k];
+        main.airJets[2 * k] = {f(j.hit[0] - eye[0]), f(j.hit[1] - eye[1]), f(j.hit[2] - eye[2]),
+                               f(j.speed)};
+        main.airJets[2 * k + 1] = {f(j.radius), 0.0F, 0.0F, 0.0F};
+    }
+    main.light = {f(daylight), static_cast<float>(lampCount), settings.linear ? 1.0F : 0.0F,
+                  static_cast<float>(jets.size())};
     main.mode[2] = season;
     main.mode[3] = textures_->complete() ? 1.0F : 0.0F;
     main.weather = {settings.rainMmPerH, settings.snowMmPerH, settings.wind[0], settings.wind[1]};
@@ -803,6 +880,97 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     const auto opaque = [&](std::size_t i) { return items[i].baseColor[3] >= 1.0F; };
     const std::size_t primCount = items.size();
 
+    // --- vegetation patches: a clump per cell of a world grid over each reeds or shrub surface's
+    // top (its bounds' top face, level and axis-aligned as water is), out to a fade distance;
+    // the whole frame's clumps capped so that the frame time stays bounded. A software device
+    // (Tier 0 raster, llvmpipe) draws a sixteenth as many, half as far.
+    vegPatches_.clear();
+    {
+        const bool software = device_.info().isSoftware;
+        const std::uint32_t budget = software ? kVegBudget / 16 : kVegBudget;
+        std::uint32_t used = 0;
+        for (std::size_t i = 0; i < primCount; ++i) {
+            const int kind = static_cast<int>(items[i].pattern + 0.5F);
+            if ((kind != kReedsKind && kind != kShrubKind) || !drawable(i)) {
+                continue;
+            }
+            const std::array<float, 6>* box = meshes.bounds(items[i].mesh);
+            if (box == nullptr) {
+                continue;
+            }
+            const RealisticDraw& at = items[i];
+            const bool reeds = kind == kReedsKind;
+            const double spacing = reeds ? kReedsSpacing : kShrubSpacing;
+            const double height = reeds ? kReedsHeight : kShrubHeight;
+            double reach = (reeds ? kReedsReach : kShrubReach) * (software ? 0.5 : 1.0);
+            std::array<double, 2> lo{};
+            std::array<double, 2> hi{};
+            for (std::size_t k = 0; k < 2; ++k) {
+                lo.at(k) = at.position.at(k) + box->at(k) * at.scale.at(k);
+                hi.at(k) = at.position.at(k) + box->at(k + 3) * at.scale.at(k);
+            }
+            const double top = at.position[2] + box->at(5) * at.scale[2];
+            if (std::abs(top - eye[2]) > reach) {
+                continue;
+            }
+            std::array<std::int64_t, 2> first{};
+            std::array<std::int64_t, 2> count{};
+            // Shrink the reach until the patch's cells fit what is left of the budget.
+            for (int tries = 0; tries < 12; ++tries) {
+                std::int64_t cells = 1;
+                for (std::size_t k = 0; k < 2; ++k) {
+                    const double a = std::max(lo.at(k), eye.at(k) - reach);
+                    const double b = std::min(hi.at(k), eye.at(k) + reach);
+                    first.at(k) = static_cast<std::int64_t>(std::floor(a / spacing));
+                    count.at(k) =
+                        b > a ? static_cast<std::int64_t>(std::floor(b / spacing)) - first.at(k) + 1
+                              : 0;
+                    cells *= count.at(k);
+                }
+                if (cells <= static_cast<std::int64_t>(budget - used)) {
+                    break;
+                }
+                reach *= 0.8;
+            }
+            const std::int64_t cells = count[0] * count[1];
+            if (cells <= 0 || cells > static_cast<std::int64_t>(budget - used)) {
+                continue;
+            }
+            Push push{};
+            push.model = {f(static_cast<double>(first[0]) * spacing - eye[0]),
+                          f(static_cast<double>(first[1]) * spacing - eye[1]),
+                          f(top - eye[2]),
+                          f(spacing),
+                          static_cast<float>(first[0]),
+                          static_cast<float>(first[1]),
+                          static_cast<float>(count[0]),
+                          static_cast<float>(count[1]),
+                          static_cast<float>(kind),
+                          f(height),
+                          f(reach),
+                          kNotMirrored};
+            push.baseColor = at.baseColor;
+            push.surface = {f(lo[0] - eye[0]), f(lo[1] - eye[1]), f(hi[0] - eye[0]),
+                            f(hi[1] - eye[1])};
+            auto& [bytes, instances] = vegPatches_.emplace_back();
+            std::memcpy(bytes.data(), &push, sizeof(push));
+            instances = static_cast<std::uint32_t>(cells);
+            used += instances;
+        }
+    }
+    const auto drawVegetation = [&](float mirrorPlane) {
+        if (vegPatches_.empty()) {
+            return;
+        }
+        bind(vegPipe_, mirrorPlane < kNotMirrored ? mirrorSet_ : mainSet_);
+        for (auto [bytes, instances] : vegPatches_) {
+            bytes[11] = mirrorPlane;
+            vkCmdPushConstants(commands, vegPipe_.layout, stages, 0, sizeof(bytes), bytes.data());
+            vkCmdDraw(commands, kVegVertices, instances, 0, 0);
+            ++draws;
+        }
+    };
+
     // Bounding balls, relative to the eye, for leaving out what a pass cannot see (the meshes'
     // bounds come from their vertices, in MeshSet).
     balls_.resize(primCount);
@@ -929,6 +1097,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                 ++draws;
             }
         }
+        drawVegetation(plane);
     }
     vkCmdEndRendering(commands);
     transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -982,6 +1151,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             ++draws;
         }
     }
+    drawVegetation(kNotMirrored);
     bind(sky_, mainSet_);
     vkCmdDraw(commands, 3, 1, 0, 0);
     vkCmdEndRendering(commands);
