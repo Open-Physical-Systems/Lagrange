@@ -6,7 +6,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
+#include <tuple>
+#include <utility>
 
 namespace lagrange::server {
 
@@ -135,7 +138,86 @@ std::vector<std::pair<const SchemaInstance*, std::size_t>> flownRotors(const Wor
     return out;
 }
 
+// Roll and pitch integral: bounded to this much attitude error, rad.
+constexpr double kIntegralLimitRad = 0.3;
+// While yaw is saturated the held heading stays this close to the drone's, rad (20°).
+constexpr double kSaturatedYawErrorRad = 0.35;
+// Idle in the air: 20 % of the top speed, (0.2)² of the top thrust (PX4's MPC_THR_MIN-like
+// floor; ESCs idle near this).
+constexpr double kIdleThrustShare = 0.04;
+// Bisection steps for the share of roll and pitch the rotors can give (2⁻³⁰ of it).
+constexpr int kShareSteps = 30;
+
 }  // namespace
+
+MulticopterController::Mix MulticopterController::mix(
+    const std::vector<std::array<double, 4>>& mixer, double thrust,
+    const std::array<double, 3>& torque, const std::vector<double>& thrustMax, bool airborne) {
+    const std::size_t n = mixer.size();
+    const auto top = [&](std::size_t i) {
+        return i < thrustMax.size() && thrustMax[i] > 0.0 ? thrustMax[i]
+                                                          : std::numeric_limits<double>::infinity();
+    };
+    // In the air no rotor goes below idle, as an autopilot's motors never stop in flight: a
+    // stopped rotor takes too long to spin back up to hold roll and pitch.
+    const auto idle = [&](std::size_t i) {
+        return airborne && i < thrustMax.size() && thrustMax[i] > 0.0
+                   ? kIdleThrustShare * thrustMax[i]
+                   : 0.0;
+    };
+    // The collective thrust shift [lo, hi] that keeps every rotor in [0, top] with roll and
+    // pitch at `share`.
+    const auto shiftRange = [&](double share, std::vector<double>& u) {
+        double lo = -std::numeric_limits<double>::infinity();
+        double hi = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::array<double, 4>& m = mixer[i];
+            u[i] = m[0] * thrust + share * (m[1] * torque[0] + m[2] * torque[1]);
+            if (m[0] > 0.0) {
+                lo = std::max(lo, (idle(i) - u[i]) / m[0]);
+                hi = std::min(hi, (top(i) - u[i]) / m[0]);
+            }
+        }
+        return std::pair{lo, hi};
+    };
+    Mix out;
+    out.thrust.assign(n, 0.0);
+    std::vector<double> u(n);
+    auto [lo, hi] = shiftRange(1.0, u);
+    if (lo > hi) {
+        // Roll and pitch together ask more than the rotors span: give the largest share of them
+        // that fits.
+        double fits = 0.0;
+        double fails = 1.0;
+        for (int k = 0; k < kShareSteps; ++k) {
+            const double mid = 0.5 * (fits + fails);
+            const auto [l, h] = shiftRange(mid, u);
+            (l <= h ? fits : fails) = mid;
+        }
+        out.rollPitchShare = fits;
+        std::tie(lo, hi) = shiftRange(fits, u);
+    }
+    // Keep the thrust asked for when it fits; else the nearest collective that does (more, so
+    // that no rotor stops while it turns; or less, so that none is past its top).
+    const double shift = lo > hi ? 0.0 : std::clamp(0.0, lo, hi);
+    for (std::size_t i = 0; i < n; ++i) {
+        u[i] += mixer[i][0] * shift;
+    }
+    // Yaw last, as much of it as keeps every rotor in range: losing heading never brings it down.
+    for (std::size_t i = 0; i < n; ++i) {
+        const double y = mixer[i][3] * torque[2];
+        if (y > 0.0 && u[i] + y > top(i)) {
+            out.yawShare = std::min(out.yawShare, std::max(0.0, (top(i) - u[i]) / y));
+        } else if (y < 0.0 && u[i] + y < idle(i)) {
+            out.yawShare = std::min(out.yawShare, std::max(0.0, (idle(i) - u[i]) / y));
+        }
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+        out.thrust[i] = std::clamp(u[i] + out.yawShare * mixer[i][3] * torque[2],
+                                   std::min(idle(i), top(i)), top(i));
+    }
+    return out;
+}
 
 bool MulticopterController::canFly(const WorldView& world) {
     const auto rotors = flownRotors(world);
@@ -209,6 +291,14 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
                               " %, at most " + std::to_string(std::lround(r.speedLimit)) +
                               " rad/s of " + std::to_string(std::lround(top.speed)) + " (" +
                               top.from + ")");
+        }
+        {
+            // The most thrust the mixer may give it: at its speed limit, else at its loaded top
+            // speed (its motor and battery), so a torque it cannot give is cut, not a rotor
+            // stopped (MulticopterController::mix).
+            const double top =
+                r.speedLimit > 0.0 ? r.speedLimit : mavlink::rotorTopSpeed(world, *s, *rho).speed;
+            r.thrustMax = r.thrustPerOmega2 * top * top;
         }
         if (config.get<bool>(kIdealMotorsKey).value_or(false)) {
             // No motor model stands between the command and the rotor: bound the command by the
@@ -357,6 +447,7 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     }
     const Mat3 rot = rotation({p[3], p[4], p[5], p[6]});  // world from body
     const auto grounded = [&]() {
+        attitudeIntegral_ = {};
         for (const Rotor& r : rotors_) {
             bus.write(r.command, 0.0);
         }
@@ -553,9 +644,20 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     }
     const Vec3 errorR{0.5 * e[2][1], 0.5 * e[0][2], 0.5 * e[1][0]};
     const double wa = 2.0 * std::numbers::pi * settings_.attitudeHz;
+    // The PD of Lee et al. as a cascade: the error asks for a body rate, capped as an autopilot
+    // caps it (PX4's MC_ROLLRATE_MAX and kin), and the rate loop damps towards it. Within the caps
+    // it is the same law; past them a large error (a cable jerking it, the rotors at their
+    // limits and slow to follow) no longer winds the frame up to rates it cannot stop. Roll and
+    // pitch may add an integral (Settings::attitudeIntegralRatio) for a steady torque.
+    const double ki = settings_.attitudeIntegralRatio * wa;  // 1/s
     Vec3 torque{};
     for (std::size_t i = 0; i < 3; ++i) {
-        torque[i] = inertia_[i] * (-wa * wa * errorR[i] - 2.0 * settings_.damping * wa * omega[i]);
+        const double integral = i < 2 ? ki * attitudeIntegral_[i] : 0.0;
+        // −ωa²·e − 2ζωa·ω = −2ζωa·(ω − ω_d), ω_d = −ωa/(2ζ)·e: the rate it asks for, capped.
+        const double kd = 2.0 * settings_.damping * wa;
+        const double cap = i < 2 ? settings_.maxRollPitchRateRadps : settings_.maxYawRateRadps;
+        const double wanted = std::clamp(-wa * wa * (errorR[i] + integral) / kd, -cap, cap);
+        torque[i] = inertia_[i] * kd * (wanted - omega[i]);
     }
 
     // Mixer and each rotor's speed loop, for the air the rotors are in.
@@ -565,11 +667,32 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
             airShare = rho / designDensity_;
         }
     }
+    std::vector<double> thrustMax(rotors_.size());
+    for (std::size_t i = 0; i < rotors_.size(); ++i) {
+        thrustMax[i] = rotors_[i].thrustMax * airShare;
+    }
+    const Mix mixed = mix(mixer_, thrust, torque, thrustMax, true);
+    // The integral grows only while the rotors can give what roll and pitch ask; it is bounded
+    // to kIntegralLimitRad of attitude error.
+    if (mixed.rollPitchShare >= 1.0 && ki > 0.0) {
+        for (std::size_t i = 0; i < 2; ++i) {
+            attitudeIntegral_[i] = std::clamp(attitudeIntegral_[i] + errorR[i] * dt,
+                                              -kIntegralLimitRad / ki, kIntegralLimitRad / ki);
+        }
+    }
+    if (mixed.yawShare < 1.0) {
+        // Yaw saturated (a cable or the wind turns it harder than the propellers can): the held
+        // heading follows within kSaturatedYawErrorRad, so the error does not wind up and it
+        // turns back smoothly once it can.
+        const double yaw = std::atan2(rot[1][0], rot[0][0]);
+        const double off = std::remainder(heading_ - yaw, 2.0 * std::numbers::pi);
+        if (std::abs(off) > kSaturatedYawErrorRad) {
+            heading_ = yaw + std::copysign(kSaturatedYawErrorRad, off);
+        }
+    }
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
         const Rotor& r = rotors_[i];
-        const std::array<double, 4>& m = mixer_[i];
-        const double f =
-            std::max(0.0, m[0] * thrust + m[1] * torque[0] + m[2] * torque[1] + m[3] * torque[2]);
+        const double f = mixed.thrust[i];
         double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
         if (r.speedLimit > 0.0) {
             speed = std::clamp(speed, -r.speedLimit, r.speedLimit);
@@ -606,6 +729,9 @@ Status MulticopterController::saveState(StateWriter& writer) const {
     }
     for (const bool h : held_) {
         writer.put(h);
+    }
+    for (const double i : attitudeIntegral_) {
+        writer.put(i);
     }
     return {};
 }
@@ -648,6 +774,13 @@ Status MulticopterController::restoreState(StateReader& reader) {
     }
     for (bool& h : held_) {
         ok = ok && reader.get(h);
+    }
+    attitudeIntegral_ = {};
+    if (ok && reader.remaining() > 0) {
+        // Saved by Lagrange 1.4 or later; before, there was no attitude integral.
+        for (double& i : attitudeIntegral_) {
+            ok = ok && reader.get(i);
+        }
     }
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "controller state truncated");
 }

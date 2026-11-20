@@ -14,6 +14,7 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
 #include "lagrange/services/WrenchSum.hpp"
+#include "lagrange/tether/Tethers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -724,6 +725,193 @@ TEST(Multicopter, HoversWithTheElectricalDomainOff) {
             torque.at(i) = now;
         }
     }
+}
+
+}  // namespace
+}  // namespace lagrange::server
+
+namespace lagrange::server {
+namespace {
+
+using namespace literals;
+
+// An X quadcopter's mixer: arms `l` from the centre, yaw `c` N·m per N of a rotor's thrust,
+// f_i = T/4 + τx·y_i/(4l²) − τy·x_i/(4l²) + τz·c_i/(4c²).
+std::vector<std::array<double, 4>> xMixer(double l, double c) {
+    const std::array<std::array<double, 3>, 4> rotors{
+        {{l, -l, c}, {-l, l, c}, {l, l, -c}, {-l, -l, -c}}};  // x, y, yaw per N
+    std::vector<std::array<double, 4>> m;
+    for (const auto& [x, y, k] : rotors) {
+        m.push_back({0.25, y / (4.0 * l * l), -x / (4.0 * l * l), k / (4.0 * c * c)});
+    }
+    return m;
+}
+
+std::array<double, 4> sums(const std::vector<std::array<double, 4>>& mixer,
+                           const std::vector<double>& f, double l, double c) {
+    const std::array<std::array<double, 3>, 4> rotors{
+        {{l, -l, c}, {-l, l, c}, {l, l, -c}, {-l, -l, -c}}};
+    std::array<double, 4> out{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        out[0] += f[i];
+        out[1] += rotors[i][1] * f[i];
+        out[2] += -rotors[i][0] * f[i];
+        out[3] += rotors[i][2] * f[i];
+    }
+    (void)mixer;
+    return out;
+}
+
+constexpr double kArm = 0.18;   // m
+constexpr double kYaw = 0.016;  // N·m per N, a 7-inch propeller's CP·D/(2π·CT)
+constexpr double kTop = 12.0;   // N per rotor
+
+// Within reach the mixer gives exactly what was asked.
+TEST(MulticopterMix, GivesWhatIsAskedWithinReach) {
+    const auto m = xMixer(kArm, kYaw);
+    const std::vector<double> top(4, kTop);
+    const MulticopterController::Mix mix =
+        MulticopterController::mix(m, 20.0, {0.2, -0.1, 0.05}, top);
+    const auto got = sums(m, mix.thrust, kArm, kYaw);
+    EXPECT_NEAR(got[0], 20.0, 1e-9);
+    EXPECT_NEAR(got[1], 0.2, 1e-9);
+    EXPECT_NEAR(got[2], -0.1, 1e-9);
+    EXPECT_NEAR(got[3], 0.05, 1e-9);
+    EXPECT_DOUBLE_EQ(mix.rollPitchShare, 1.0);
+    EXPECT_DOUBLE_EQ(mix.yawShare, 1.0);
+}
+
+// A yaw torque five times what the propellers can give (a cable turning it): the thrust and
+// roll are kept, yaw is cut, and no rotor stops. (The old mixer clamped two rotors to zero and
+// lost a third of the lift.)
+TEST(MulticopterMix, YawPastReachIsCutAndNoRotorStops) {
+    const auto m = xMixer(kArm, kYaw);
+    const std::vector<double> top(4, kTop);
+    const double thrust = 20.0;
+    const double reach = 4.0 * kYaw * thrust / 4.0;  // all the yaw two rotors at 0 would give
+    const MulticopterController::Mix mix =
+        MulticopterController::mix(m, thrust, {0.3, 0.0, 5.0 * reach}, top);
+    const auto got = sums(m, mix.thrust, kArm, kYaw);
+    EXPECT_NEAR(got[0], thrust, 1e-9);
+    EXPECT_NEAR(got[1], 0.3, 1e-9);
+    EXPECT_LT(mix.yawShare, 0.25);
+    EXPECT_GT(got[3], 0.0);
+    for (const double f : mix.thrust) {
+        EXPECT_GE(f, 0.0);
+        EXPECT_LE(f, kTop);
+    }
+    EXPECT_NEAR(*std::ranges::min_element(mix.thrust), 0.0, 1e-9);  // yaw takes what is left
+}
+
+// Roll past what the rotors span is scaled down (all within range); low thrust with a roll that
+// would drive a rotor below zero raises the collective instead of losing roll.
+TEST(MulticopterMix, RollPastSpanIsScaledAndLowThrustIsRaised) {
+    const auto m = xMixer(kArm, kYaw);
+    const std::vector<double> top(4, kTop);
+    const MulticopterController::Mix big =
+        MulticopterController::mix(m, 20.0, {10.0, 0.0, 0.0}, top);
+    EXPECT_LT(big.rollPitchShare, 1.0);
+    EXPECT_GT(big.rollPitchShare, 0.3);
+    for (const double f : big.thrust) {
+        EXPECT_GE(f, -1e-9);
+        EXPECT_LE(f, kTop + 1e-9);
+    }
+    const MulticopterController::Mix low = MulticopterController::mix(m, 2.0, {0.5, 0.0, 0.0}, top);
+    const auto got = sums(m, low.thrust, kArm, kYaw);
+    EXPECT_DOUBLE_EQ(low.rollPitchShare, 1.0);
+    EXPECT_NEAR(got[1], 0.5, 1e-9);
+    EXPECT_GT(got[0], 2.0);  // raised so that no rotor goes below zero
+}
+
+// Flying sideways at 2.5 m/s and back on a tether tied off centre (0.15 m ahead of the middle,
+// under the frame) from a tension winch on the ground (4 N, paying out and reeling in at up to
+// 3 m/s): the cable pulled aside turns it harder than its propellers can turn it back (0.6 N·m
+// against about 0.3 N·m), so its heading is lost, but it holds its height, stays upright and no
+// rotor stops. With the old controller (each rotor clamped at zero and nothing more, body rates
+// uncapped) yaw took two rotors to zero and it turned over and fell. Past about two and a half
+// times the propellers' reach (5 N at this lever, or 0.2 m) it still turns over no more, but sinks
+// up to 1.8 m before it recovers: a cable that steers it is a limit of the frame, not the
+// controller (docs/physics/tether.md).
+TEST(Multicopter, TurnedByItsTetherItStillFlies) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    World& world = robot->world;
+    const auto base = std::ranges::find(world.bodies.names, "base_link");
+    ASSERT_NE(base, world.bodies.names.end());
+    const auto b = static_cast<std::size_t>(base - world.bodies.names.begin());
+    const std::array<double, 3> at = world.bodies.poseInParent[b].position;
+    SchemaInstance cable;
+    cable.schema = "TetherAPI_1";
+    cable.prim = world.addPrim("/tethers/tether_0", "tether_0");
+    cable.realArrays["tether:anchorPoint"] = {at[0] - 3.0, at[1], 0.2};
+    cable.relationships["tether:attach"] = {world.bodies.prim[b]};
+    cable.realArrays["tether:attachPoint"] = {at[0] + 0.15, at[1], at[2] - 0.05};
+    cable.reals["tether:length"] = 3.5;
+    cable.reals["tether:maxLength"] = 40.0;
+    cable.tokens["tether:winch"] = "tension";
+    cable.reals["tether:winchTension"] = 4.0;
+    cable.reals["tether:winchSpeed"] = 3.0;
+    world.schemaInstances.push_back(std::move(cable));
+
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    scheduler.add(std::make_unique<MulticopterController>(MulticopterController::Settings{},
+                                                          [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<tether::Tethers>(), ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    const SignalId tension = bus.find("tether/tether_0/tension_attach");
+    double t = 6.0;
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());
+    const double hover = bus.readN(pose)[2];
+    const auto yawOf = [](std::span<const double> q) {
+        return std::atan2(2.0 * (q[3] * q[6] + q[4] * q[5]),
+                          1.0 - 2.0 * (q[5] * q[5] + q[6] * q[6]));
+    };
+    double lowest = 1e9;
+    double slowest = 1e9;
+    double turned = 0.0;
+    double hardest = 0.0;
+    double leastUpright = 1.0;
+    for (const double left : {2.5, -2.5, 2.5, -2.5}) {
+        command = MulticopterController::FlightCommand{0.0, left, 0.0, 0.0};
+        for (int k = 0; k < 200; ++k) {  // 2 s each way
+            t += 0.01;
+            const Status stepped = scheduler.stepUntil(SimTime{std::llround(t * 1e9)});
+            ASSERT_TRUE(stepped.ok()) << stepped.message;
+            const std::span<const double> q = bus.readN(pose);
+            lowest = std::min(lowest, q[2]);
+            turned = std::max(turned, std::abs(yawOf(q)));
+            hardest = std::max(hardest, bus.read(tension));
+            leastUpright = std::min(leastUpright, 1.0 - 2.0 * (q[4] * q[4] + q[5] * q[5]));
+            for (int i = 1; i <= 4; ++i) {
+                slowest = std::min(slowest,
+                                   std::abs(bus.read(bus.find("joint/rotor_" + std::to_string(i) +
+                                                              "_joint/velocity"))));
+            }
+        }
+    }
+    command.reset();
+    std::printf(
+        "on its tether: turned up to %.0f deg, lowest %.2f m below hover, slowest rotor "
+        "%.0f rad/s, least upright %.2f, hardest pull %.1f N\n",
+        turned * 180.0 / std::numbers::pi, hover - lowest, slowest, leastUpright, hardest);
+    EXPECT_GT(turned, 0.3) << "the cable did not turn it: the test is too gentle";
+    EXPECT_GT(lowest, hover - 0.3) << "it fell";
+    EXPECT_GT(slowest, 50.0) << "a rotor stopped";
+    EXPECT_GT(leastUpright, std::cos(40.0 * std::numbers::pi / 180.0)) << "tipped past 40°";
 }
 
 }  // namespace

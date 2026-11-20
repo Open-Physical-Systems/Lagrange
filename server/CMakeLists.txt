@@ -273,6 +273,7 @@ if(BUILD_TESTING)
         lagrange_server
         lagrange_electrical::lagrange_electrical
         lagrange_rotor_aero::lagrange_rotor_aero
+        lagrange_tether::lagrange_tether
         lagrange_aerodynamics::lagrange_aerodynamics
         lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco

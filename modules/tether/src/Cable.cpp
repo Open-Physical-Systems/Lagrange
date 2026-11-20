@@ -24,6 +24,7 @@ constexpr double kMaxDepenetrationMps = 1.0;
 constexpr double kWinchGain = 0.5;       // (m/s)/N
 constexpr double kWinchIntegral = 2.0;   // (m/s)/(N·s): a tension winch keeps its set point
 constexpr double kFreeDrumN = 0.2;       // N
+constexpr double kLengthGain = 5.0;      // (m/s)/m: a length command's winch, 0.2 m to full speed
 constexpr double kAnchorFilterS = 0.05;  // s, the winch's view of the anchor tension
 constexpr double kMinLengthM = 0.05;     // m, the shortest a one-segment cable reels in to
 constexpr int kLayoutSamples = 400;      // polyline points of the starting sag
@@ -359,22 +360,36 @@ double Cable::length() const {
 void Cable::reelWinch(double dt) {
     double rate = 0.0;
     const double t = anchorFilter_;
-    switch (params_.winch) {
+    const double now = length();
+    // What it does this step: a length or tension command (command()) over the parameters.
+    const double top = command_.speed > 0.0 ? command_.speed : params_.winchSpeed;
+    Winch mode = params_.winch;
+    double tension = params_.winchTension;
+    if (command_.length > 0.0) {
+        mode = Winch::Fixed;
+    } else if (command_.tension > 0.0) {
+        mode = Winch::Tension;
+        tension = command_.tension;
+    }
+    if (mode != Winch::Tension) {
+        winchIntegral_ = 0.0;  // a tension command taken up later starts afresh
+    }
+    switch (mode) {
         case Winch::Fixed:
+            if (command_.length > 0.0) {
+                rate = std::clamp(kLengthGain * (command_.length - now), -top, top);
+            }
             break;
         case Winch::Tension: {
-            const double error = t - params_.winchTension;
-            winchIntegral_ = std::clamp(winchIntegral_ + kWinchIntegral * error * dt,
-                                        -params_.winchSpeed, params_.winchSpeed);
-            rate = std::clamp(kWinchGain * error + winchIntegral_, -params_.winchSpeed,
-                              params_.winchSpeed);
+            const double error = t - tension;
+            winchIntegral_ = std::clamp(winchIntegral_ + kWinchIntegral * error * dt, -top, top);
+            rate = std::clamp(kWinchGain * error + winchIntegral_, -top, top);
             break;
         }
         case Winch::Free:
-            rate = std::clamp(kWinchGain * (t - kFreeDrumN), 0.0, params_.winchSpeed);
+            rate = std::clamp(kWinchGain * (t - kFreeDrumN), 0.0, top);
             break;
     }
-    const double now = length();
     if (rate > 0.0) {
         rate = std::min(rate, std::max(0.0, (maxLength_ - now) / dt));
     } else if (rate < 0.0 && count_ == 2) {

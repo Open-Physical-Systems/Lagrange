@@ -122,6 +122,23 @@ below 0.5. `tension` holds `winchTension` at the anchor (proportional and integr
 anchor's tension, filtered over 50 ms). `free` pays out whatever pulls over 0.2 N and reels
 nothing in. `fixed` holds the length. Paying out stops at `maxLength`.
 
+**Commanding the winch while it runs.** Three inputs, each optional and ignored at 0 or below,
+let a plugin, or ROS through `--ros-topics`, run the winch like an operator or a feeder:
+`tether/<n>/length_command` (m) pays out or reels in to that length; else
+`tether/<n>/tension_command` (N) holds that tension at the anchor, as `tension` does; else it does
+what `tether:winch` says. `tether/<n>/winch_speed_command` (m/s) replaces `winchSpeed` as the
+most it reels at. For example, to hold a tension sent on a topic:
+
+```yaml
+# --ros-topics winch.yaml
+subscribe:
+  - {signal: tether/tether_0/tension_command, topic: /winch/tension, type: std_msgs/msg/Float64}
+  - {signal: tether/tether_0/winch_speed_command, topic: /winch/speed, type: std_msgs/msg/Float64}
+```
+
+Until a message comes the input reads 0, so the winch does what its parameters say. A winch
+slower than the drone flies away jerks it, so give it at least the drone's top speed.
+
 ## What it writes
 
 | Signal | Unit | |
@@ -134,6 +151,7 @@ nothing in. `fixed` holds the length. Paying out stops at `maxLength`.
 | `tether/<n>/nodes` | m | x, y, z of each mass, world; unused entries NaN |
 | `tether/<n>/downwash` | m/s | read, written by the aerodynamics domain: the rotors' air at each mass, world, same layout |
 | `body/<b>/wrench/tether` | N, N·m | for each body it is tied to or touches |
+| `tether/<n>/length_command`, `tension_command`, `winch_speed_command` | m, N, m/s | read, optional: the winch's commands (≤ 0: none) |
 
 ## Seeing it
 
@@ -157,9 +175,17 @@ connects and shows no cable.
 | The sample quad's tether 0.32 m under rotor 3, across its slipstream | the actuator disc's closed form (rotor_aero.md §2.9) | 0.0529 N held up for 0.0537 N, 1.5 % | `TetherRun.TheDronesDownwashPushesItsTetherDown` |
 | Laid out through a slab | comes out at 1 m/s | 1.26 m/s, at most 14 N | `Cable.LaidThroughABoxItComesOutSlowly` |
 | Over a slab's edge, out, down and back in under it | the centre line stays out of the slab | at worst 1.3 mm in, within its 2.5 mm radius (centimetres with contacts at the masses alone) | `Cable.BendsOverAnEdgeWithoutCuttingIntoIt` |
+| A fixed winch commanded to 5 m at 2 m/s, then 3 m, then a 3 N tension | each length and its speed, then the tension | 5.00 m and 3.00 m at 2 and 1 m/s, 3.00 N | `Cable.TheWinchFollowsCommandsWhileItRuns` |
+| The sample quad flying sideways at 2.5 m/s and back, tied 0.15 m off centre to a 4 N tension winch | turned by the cable but flying (built-in controller) | flying, upright within 33°; the controller before 1.4 turned over and fell | `Multicopter.TurnedByItsTetherItStillFlies` |
 | Lifted off a pad on a slab by a drone, tension winch at 2.5 N | pays out, tension near its set point | 2.6 m out, 2.9 N mean | `Cable.LiftedOffAPadTheWinchPaysOut` |
 
 **Limits.**
+
+- A cable tied off the drone's centre steers its yaw, and the propellers answer yaw only weakly
+  (a few tenths of a N·m on a 500 mm quad). The built-in controller then gives up heading and
+  keeps lift and attitude, but past about two and a half times what the propellers can answer
+  (on the sample quad, 5 N pulled 0.15 m off centre) it sinks up to 1.8 m before it recovers.
+  Tie the cable near the centre, or through a joint that lets the frame turn under it.
 - The downwash is taken at the masses. A wake column narrower than a segment (a rotor's near
   wake is 0.18 m across under the sample quad; the default segment is 0.2 m) pushes only the
   masses that sit in it, so more or less than it should depending on where they fall (right
