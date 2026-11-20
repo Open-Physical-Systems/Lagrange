@@ -145,6 +145,9 @@ Numbers and their status:
 - Not modelled: blades bending in the wind, multiple returns per beam (only the first), the
   blades' own reflectivity differing from the preset's, and grass seen from the side above its
   top (the canopy is only a layer on the collider's surface).
+- The lidar uses the shaped canopy of "The canopy's shape" below (heights by place, leaf area by
+  height). The closed forms in this section are those of its even-layer limit, which
+  `CanopyReturn.*` still checks.
 
 References: T. Nilson (1971), "A theoretical analysis of the frequency of gaps in plant stands",
 Agricultural Meteorology 8, 25–38. J. Ross (1981), *The Radiation Regime and Architecture of
@@ -210,6 +213,58 @@ quadratic in speed, opposite the motion, zero at rest, outside the layer and at 
 - Ross, J. (1981). *The Radiation Regime and Architecture of Plant Stands*. Junk, The Hague.
 - Nilson, T. (1971). A theoretical analysis of the frequency of gaps in plant stands.
   *Agricultural Meteorology* 8, 25–38.
+
+## The canopy's shape
+
+The even layer above is right on average but wrong in shape: a lidar sees it as a box, with a top
+flat at exactly h, walls straight up the collider's edges and points spread evenly inside. Every
+canopy (lawns, tall grass, reeds, shrubs) therefore has a shape that the lidar uses on every tier
+(`canopyShapedStop`, `canopyShapedShortening` in `modules/sensors/src/ShapeCaster.cpp`).
+
+**Height by place.** The local height is h(x, y) = H · f · j · g · e:
+
+- f = 1 + spread · (2 n₁ − 1): tufts, clumps or bushes of different heights, from a smooth value
+  noise n₁ ∈ [0, 1] at the form's patch size;
+- j = 1 + jitter · (2 n₄ − 1): the same at the size of single stems, so the top is ragged, not a
+  smooth dome;
+- g: bare ground where a second noise is below the form's gap level;
+- e: a box's border, which ends the plants at a distance from the edge that wanders with a third
+  noise, up to the form's edge length, so it is ragged and not a wall.
+
+The noise depends only on the position in the collider's frame, so every run and every tier sees
+the same plants. The leaf area per ground area scales with the height (LAI · f · j · g · e), so a tall
+tuft holds more leaf and the density inside the plants stays G · LAI / H. The tallest plants reach
+H · (1 + spread) · (1 + jitter), which is the height of the volume a beam can stop in.
+
+**Leaf area by height.** The leaf area density at a relative height ζ = z / h(x, y) is
+(LAI_local / h) · p(ζ), where p integrates to 1 over [0, 1]:
+
+| Form (`SurfaceMaterial::canopyForm`) | Presets | p(ζ) | patch | spread | gap | edge | stem | jitter |
+|---|---|---|---|---|---|---|---|---|
+| Grass | `grass`, `wet_grass`, `tall_grass` | 1.5 (1 − ζ²): dense at the base, thin at the tips | 0.25 m | 0.35 | 0.08 | 0.15 m | 0.04 m | 0.25 |
+| Reeds | `reeds` | 0.3 + 0.7 · 12 ζ² (1 − ζ): stems all the way, leaf peaking at ⅔ | 1.2 m | 0.35 | 0.12 | 0.6 m | 0.12 m | 0.25 |
+| Shrub | `shrub` | 0.1 + 0.9 · 20 ζ³ (1 − ζ): a crown at ¾ over bare stems | 1.5 m | 0.3 | 0.3 | 0.5 m | 0.2 m | 0.15 |
+
+A beam's optical depth ∫ G · a ds is summed along it in midpoint steps of a twelfth of the
+tallest height up or down, or half a stem across, whichever is shorter for its slope. The
+beam stops where the sum reaches −ln(1 − u), for its own Philox draw u. Straight down through a
+point with height factor f, it reaches the soil with Nilson's gap fraction exp(−G · LAI · f).
+
+Tests in `modules/sensors/test/test_shape_caster.cpp`, `CanopyShape.*`:
+
+- the profiles integrate to 1;
+- heights vary by place within their bounds and leave some bare ground;
+- returns from above a reed bank are not one plane, and its border is ragged;
+- a vertical beam's share of soil returns matches exp(−G · LAI · f) for each form;
+- the same beam always stops in the same place.
+
+Every number in the table is TODO(verify). The patch sizes come from photographs of the plants,
+not from measurements. The profile shapes are simple polynomials, of the kind measured in stands
+(e.g. Lalic and Mihailovic 2004, *J. Appl. Meteor.* 43, a leaf area density with its maximum in
+the upper canopy). They are not fitted to these plants.
+
+The realistic view draws its own reeds and shrubs (`vsVeg`), which are not yet the same plants
+the lidar sees. The `vegetation` domain's drag still uses the even layer.
 
 ## Grass in the rotor downwash
 

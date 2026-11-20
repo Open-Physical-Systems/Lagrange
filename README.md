@@ -197,7 +197,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (21)</summary>
+<details><summary>Physics reference (22)</summary>
 
 - [Actuators: grippers, lead screws, nozzles, tanks and servos](docs/physics/actuators.md)
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
@@ -206,6 +206,7 @@ recorded to MCAP and replayed.
 - [The electrical network: buses, converters and the parts between them](docs/physics/electrical-network.md)
 - [EMI and radio links](docs/physics/emi-and-radio.md)
 - [Fire](docs/physics/fire.md)
+- [The ground under wheels, beams and contacts](docs/physics/ground.md)
 - [Heat conduction in solids](docs/physics/heat-conduction.md)
 - [Humans: people who walk](docs/physics/humans.md)
 - [Physics reference](docs/physics/index.md)
@@ -351,7 +352,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (22)</summary>
+<details><summary>Design proposals (RFCs) (23)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -375,6 +376,7 @@ recorded to MCAP and replayed.
 - [RFC 0020: Actuators: what Lagrange has, and which to add](rfcs/0020-actuators.md)
 - [RFC 0021: Lights on robots and in scenes](rfcs/0021-lights.md)
 - [RFC 0022: Fire, smoke and putting fires out](rfcs/0022-fire.md)
+- [RFC 0023: Joint springs](rfcs/0023-joint-springs.md)
 
 </details>
 

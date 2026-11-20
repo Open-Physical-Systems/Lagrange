@@ -716,12 +716,14 @@ public:
                     double enter = 0.0;
                     double leave = 0.0;
                     if (!canopyVolumeSpan(canopy.type, canopy.size, placed_[k], from.position, dir,
-                                          canopy.material->canopyHeight, reach, enter, leave)) {
+                                          canopyTallest(*canopy.material), reach, enter, leave)) {
                         continue;
                     }
+                    // The shaped canopy (ShapeCaster.hpp "The canopy's shape"): plants of
+                    // varying height, gaps, a ragged border, leaf area by height.
                     const double at =
-                        canopyVolumeStop(enter, leave, canopy.material->canopyHeight,
-                                         canopy.material->leafAreaIndex, rng.uniform());
+                        canopyShapedStop(*canopy.material, canopy.type, canopy.size, placed_[k],
+                                         from.position, dir, enter, leave, rng.uniform());
                     if (at < stop) {
                         stop = at;
                         stopShape = k;
@@ -762,9 +764,8 @@ public:
             if (shape.material != nullptr && shape.material->canopyHeight > 0.0 &&
                 shape.type != ShapeType::Box && shape.type != ShapeType::Plane) {
                 random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
-                nearest_[i] -=
-                    canopyShortening(shape.material->canopyHeight, shape.material->leafAreaIndex,
-                                     cosine, nearest_[i], rng.uniform());
+                nearest_[i] -= canopyShapedShortening(*shape.material, at[0], at[1], cosine,
+                                                      nearest_[i], rng.uniform());
             }
             const LidarReturn back = lidarReturn(
                 shape.material != nullptr ? *shape.material : kDefault, shape.material != nullptr,
@@ -2097,10 +2098,10 @@ private:
     };
     std::vector<SeenRotor> rotors_;
     std::vector<gpu::AirRotor> drawnRotors_;  // this frame's
-    SignalId skyIlluminance_;                     // env/sky_illuminance, lx; NaN: the drawn day
-    gpu::PinholeCamera camera_;                   // the output's pinhole (before the sensor model)
-    std::unique_ptr<CameraModel> model_;          // null when no part of the sensor model is on
-    std::unique_ptr<FisheyeRemap> fisheye_;       // a fisheye's cube faces and remap; else null
+    SignalId skyIlluminance_;                 // env/sky_illuminance, lx; NaN: the drawn day
+    gpu::PinholeCamera camera_;               // the output's pinhole (before the sensor model)
+    std::unique_ptr<CameraModel> model_;      // null when no part of the sensor model is on
+    std::unique_ptr<FisheyeRemap> fisheye_;   // a fisheye's cube faces and remap; else null
     std::vector<std::unique_ptr<gpu::RasterCamera>> faceRenderers_;
     std::vector<gpu::RasterImages> faceImages_;
     gpu::RasterImages rendered_;  // the render the sensor model remaps
