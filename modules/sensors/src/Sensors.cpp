@@ -9,6 +9,7 @@
 #include "lagrange/sensors/Fisheye.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Kinds.hpp"
+#include "lagrange/sensors/MovingWater.hpp"
 #include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
@@ -317,6 +318,68 @@ SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame 
     return out;
 }
 
+/// The bodies of water whose surface moves (config "water_surface", with "surface_cells" and
+/// "surface_cell": the hydrodynamics domain's patch, water.md), each with its inputs
+/// water/<w>/surface and surface_origin (feedback, optional: still until they come), in the
+/// order of world.instancesOf("WaterAPI_1").
+struct MovingWaterInputs {
+    std::vector<MovingWater> water;
+    std::vector<SignalId> heights, origins;
+
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
+        water.clear();
+        heights.clear();
+        origins.clear();
+        if (!config.get<bool>("water_surface").value_or(false)) {
+            return {};
+        }
+        const auto cells = config.get<std::int64_t>("surface_cells").value_or(0);
+        const double cell = config.get<double>("surface_cell").value_or(0.0);
+        if (cells < 2 || !(cell > 0.0)) {
+            return {};
+        }
+        for (const SchemaInstance* w : world.instancesOf("WaterAPI_1")) {
+            constexpr double kDefaultSize = 10.0;  // m, as the water domain reads it
+            const Vec3 middle = world.raw().prims.poseInBody.at(w->prim.index).position;
+            const double halfX = w->real("water:sizeX").value_or(kDefaultSize) / 2.0;
+            const double halfY = w->real("water:sizeY").value_or(kDefaultSize) / 2.0;
+            MovingWater m;
+            m.level = middle[2];
+            m.lo = {middle[0] - halfX, middle[1] - halfY};
+            m.hi = {middle[0] + halfX, middle[1] + halfY};
+            m.cell = cell;
+            water.push_back(m);
+            const std::string base =
+                "water/" + world.raw().prims.instanceNames.at(w->prim.index) + "/";
+            SignalSpec surface =
+                spec(base + "surface", SignalType::ScalarArray, units::m, "world_local");
+            surface.arrayLength = static_cast<std::uint32_t>(cells * cells);
+            surface.optional = surface.feedback = true;
+            SignalSpec origin = surface;
+            origin.name = base + "surface_origin";
+            origin.arrayLength = 2;
+            origin.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            heights.push_back(d.input(surface));
+            origins.push_back(d.input(origin));
+        }
+        return {};
+    }
+    /// Reads this step's surfaces; false when none moves.
+    bool read(const SignalBus& bus) {
+        bool any = false;
+        for (std::size_t k = 0; k < water.size(); ++k) {
+            MovingWater& m = water[k];
+            m.heights = bus.readN(heights[k]);
+            const std::span<const double> corner = bus.readN(origins[k]);
+            m.cells = static_cast<std::uint32_t>(std::lround(std::sqrt(m.heights.size())));
+            m.corner = corner.size() == 2 ? std::array<double, 2>{corner[0], corner[1]}
+                                          : std::array<double, 2>{std::nan(""), std::nan("")};
+            any = m.prepare() || any;
+        }
+        return any;
+    }
+};
+
 double setting(const World::Sensors& sensors, std::uint32_t sensor, const char* key,
                double fallback) {
     const auto& map = sensors.settings[sensor];
@@ -493,6 +556,10 @@ public:
                     setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
             }
         }
+        // The water's moving surface (water.md): beams meet it at η, not at the still level.
+        if (!groundTruth_) {
+            return movingWater_.declare(world, config, d);
+        }
         return {};
     }
 
@@ -525,6 +592,7 @@ public:
         // Water is no collider, but a lidar sees its surface: a mirror (or a box of depth below it,
         // from under water). What enters it is absorbed: no return from the bottom.
         waterMaterials_.clear();
+        firstWaterShape_ = shapes_.size();
         const std::vector<const SchemaInstance*> waters = world.instancesOf("WaterAPI_1");
         waterMaterials_.reserve(waters.size());
         for (const SchemaInstance* w : waters) {
@@ -606,6 +674,25 @@ public:
         } else {
             castOnCpu(context);
         }
+        // The water's moving surface: the casts met its box at the still level; each beam is
+        // moved onto η (or onto a crest in front of what it hit), in double on either tier.
+        const bool movingWater = movingWater_.read(bus);
+        if (movingWater) {
+            tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
+                const Pose& from = columnPose_[i % layout_.horizontal];
+                const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
+                for (std::size_t w = 0; w < movingWater_.water.size(); ++w) {
+                    const std::size_t shape = firstWaterShape_ + w;
+                    bool on = false;
+                    const double t = rayOntoWater(movingWater_.water[w], from.position, dir,
+                                                  nearest_[i], hitShape_[i] == shape, &on);
+                    if (on) {
+                        nearest_[i] = t;
+                        hitShape_[i] = static_cast<std::uint32_t>(shape);
+                    }
+                }
+            });
+        }
         // What each hit returns, from its surface; a surface too faint for the lidar drops out.
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
             intensity_[i] = 0.0;
@@ -618,8 +705,13 @@ public:
             const Vec3 at{from.position[0] + dir[0] * nearest_[i],
                           from.position[1] + dir[1] * nearest_[i],
                           from.position[2] + dir[2] * nearest_[i]};
-            const Vec3 n = surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
-                                         shape.hull, shape.field);
+            const std::size_t water = hitShape_[i] - firstWaterShape_;
+            const Vec3 n = movingWater && hitShape_[i] >= firstWaterShape_ &&
+                                   water < movingWater_.water.size() &&
+                                   movingWater_.water[water].cells >= 2
+                               ? movingWater_.water[water].normalAt(at[0], at[1])
+                               : surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
+                                               shape.hull, shape.field);
             const double cosine = -(dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2]);
             static const SurfaceMaterial kDefault{};
             const LidarReturn back = lidarReturn(
@@ -974,6 +1066,8 @@ private:
     std::vector<std::array<float, 3>> beamDirections_, beamOrigins_;
     SignalId intensities_;
     std::vector<SurfaceMaterial> waterMaterials_;  // reserved before shapes_ point into it
+    std::size_t firstWaterShape_{0};               // shapes_ from here on are the water's boxes
+    MovingWaterInputs movingWater_;
     std::vector<std::uint32_t> hitShape_;
     std::vector<double> intensity_;
     bool wavelength1550_{false};
@@ -1304,6 +1398,12 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        // The water's moving surface (water.md): the depth meets it at η.
+        if (!groundTruth_) {
+            if (Status ok = movingWater_.declare(world, config, d); !ok.ok()) {
+                return ok;
+            }
+        }
         if (setting(sensors, sensor_, "thermal", 0.0) != 0.0 && !groundTruth_) {
             if (Status ok = declareThermal(world, config, d); !ok.ok()) {
                 return ok;
@@ -1434,6 +1534,19 @@ public:
         sensorPose_ = sensor;
         frameContext_ = context;
         light(bus, context.t.seconds());
+        // The realistic look draws the water's moving surface (the first body of water's).
+        if (renderer_ && !movingWater_.water.empty()) {
+            gpu::RealisticWaterSurface surface;
+            if (movingWater_.read(bus) && movingWater_.water.front().cells >= 2) {
+                const MovingWater& w = movingWater_.water.front();
+                waterHeights_.assign(w.heights.begin(), w.heights.end());
+                surface.cells = w.cells;
+                surface.cell = w.cell;
+                surface.first = {w.corner[0] + w.cell / 2.0, w.corner[1] + w.cell / 2.0};
+                surface.heights = waterHeights_;
+            }
+            renderer_->setWaterSurface(surface);
+        }
         if (fisheye_) {
             // Each face of the cube from the camera's place, turned to look through it.
             for (std::size_t f = 0; f < faceRenderers_.size(); ++f) {
@@ -1511,6 +1624,9 @@ private:
     /// What follows the render: the far clip, the weather's veil, the thermal image, and the
     /// images out.
     Status finishFrame(SignalBus& bus) {
+        if (!fisheye_ && movingWater_.read(bus)) {
+            waterDepth();
+        }
         for (float& depth : images_.depth) {
             if (depth > far_) {
                 depth = std::numeric_limits<float>::infinity();
@@ -1877,6 +1993,43 @@ private:
     std::vector<gpu::RasterInstance> instances_;
     gpu::RasterImages images_;
     SignalId image_, depth_, instance_;
+    /// The depth image on the water's moving surface: a pixel that met the still level inside
+    /// the water goes on to η, and one whose ray passes a crest first stops on it. Rays in the
+    /// optical frame have z 1, so the distance along them is the depth.
+    void waterDepth() {
+        constexpr double kOnLevel = 2e-3;  // m: a depth this near the still level is the water's
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        if (images_.depth.size() != static_cast<std::size_t>(w) * h) {
+            return;
+        }
+        const Vec3 eye = camera_.position;
+        tbb::parallel_for(std::uint32_t{0}, h, [&](std::uint32_t v) {
+            for (std::uint32_t u = 0; u < w; ++u) {
+                float& depth = images_.depth[static_cast<std::size_t>(v) * w + u];
+                const Vec3 ray = rotate(camera_.orientation, {(u - camera_.cx) / camera_.fx,
+                                                              (v - camera_.cy) / camera_.fy, 1.0});
+                const double z = std::isfinite(depth) ? static_cast<double>(depth)
+                                                      : std::numeric_limits<double>::infinity();
+                for (const MovingWater& water : movingWater_.water) {
+                    if (water.cells < 2) {
+                        continue;
+                    }
+                    const Vec3 at{eye[0] + ray[0] * z, eye[1] + ray[1] * z, eye[2] + ray[2] * z};
+                    const bool onLevel = std::isfinite(z) &&
+                                         std::abs(at[2] - water.level) < kOnLevel &&
+                                         at[0] >= water.lo[0] && at[0] <= water.hi[0] &&
+                                         at[1] >= water.lo[1] && at[1] <= water.hi[1];
+                    bool on = false;
+                    const double t = rayOntoWater(water, eye, ray, z, onLevel, &on);
+                    if (on) {
+                        depth = static_cast<float>(t);
+                    }
+                }
+            }
+        });
+    }
+
     /// The optical depth of a fog field and the smoke (either may be null) along each pixel's
     /// ray up to its depth (the far clip for the sky), integrated once per kFieldBlock² pixels
     /// and shared across the block.
@@ -1913,6 +2066,8 @@ private:
         });
     }
 
+    MovingWaterInputs movingWater_;
+    std::vector<float> waterHeights_;  // the surface for the realistic look, in float
     bool weather_{false};
     SignalId extinction_, contamination_, fogField_;
     fields::FieldSignal fogFieldSignal_;

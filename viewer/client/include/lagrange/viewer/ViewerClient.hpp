@@ -363,7 +363,8 @@ struct FieldSliceData {
 struct FieldVolumeData {
     std::int64_t simTimeNs{0};
     /// Non-empty: the box is in this scene prim's frame (thermal/cells, RFC 0012), one scalar per
-    /// cell (NaN outside the solid); else the region frame, a vector per cell.
+    /// cell (NaN outside the solid); else the region frame, a vector per cell (the air) or a
+    /// scalar (`components` 1: aero/spray, water/surface).
     std::string primPath;
     std::uint32_t components{3};
     std::uint32_t nx{0}, ny{0}, nz{0};
@@ -372,7 +373,8 @@ struct FieldVolumeData {
     float valueMax{0.0F};
     std::vector<float> values;  ///< x fastest, then y, then z; three per cell.
 
-    /// The vector at a point of the region frame, trilinear; false outside the box.
+    /// The vector at a point of the region frame, trilinear; false outside the box or for a
+    /// scalar volume.
     bool sample(const std::array<double, 3>& at, std::array<float, 3>& out) const;
 };
 

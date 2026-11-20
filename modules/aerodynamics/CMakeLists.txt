@@ -12,6 +12,7 @@ add_library(
     lagrange_aerodynamics
     drag/src/Aerodynamics.cpp
     drag/src/Downwash.cpp
+    drag/src/WaterAir.cpp
     lbm/src/Lbm.cpp
     lbm/src/LbmBox.cpp
     lbm/src/LiveAir.cpp
@@ -60,6 +61,14 @@ if(BUILD_TESTING)
     ament_add_gtest(test_downwash test/test_downwash.cpp)
     target_link_libraries(test_downwash lagrange_aerodynamics)
     lagrange_target_defaults(test_downwash)
+    find_package(lagrange_hydrodynamics REQUIRED)
+    ament_add_gtest(test_downwash_water test/test_downwash_water.cpp)
+    target_link_libraries(
+        test_downwash_water
+        lagrange_aerodynamics
+        lagrange_hydrodynamics::lagrange_hydrodynamics
+    )
+    lagrange_target_defaults(test_downwash_water)
     ament_add_gtest(test_lbm test/test_lbm.cpp TIMEOUT 300)
     target_link_libraries(
         test_lbm

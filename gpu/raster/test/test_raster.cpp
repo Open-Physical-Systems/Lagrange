@@ -3,7 +3,9 @@
 // calibration from the images recovers the intrinsics. Reprojection error < 0.1 px.
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Realistic.hpp"
+#include "lagrange/gpu/WaterOptics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -13,6 +15,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -443,7 +446,259 @@ TEST(RealisticLight, ALitPlaneReadsRhoEOverPi) {
     }
 }
 
+// The water's optics (water_optics, water.md "How the water looks"): Fresnel's reflectance of
+// water is 0.020 at normal incidence ((n−1)²/(n+1)²), about 0.021 at 30°, 0.058 at 60°
+// (Born and Wolf §1.5.2) and goes to 1 at grazing.
+TEST(WaterOptics, FresnelOfWater) {
+    using water_optics::fresnel;
+    const double n = water_optics::kRefractiveIndex;
+    EXPECT_NEAR(fresnel(1.0), (n - 1.0) * (n - 1.0) / ((n + 1.0) * (n + 1.0)), 1e-12);
+    EXPECT_NEAR(fresnel(1.0), 0.0204, 2e-4);
+    EXPECT_NEAR(fresnel(std::cos(60.0 * std::numbers::pi / 180.0)), 0.0596, 1e-3);
+    EXPECT_GT(fresnel(std::cos(89.9 * std::numbers::pi / 180.0)), 0.98);
+    EXPECT_DOUBLE_EQ(fresnel(0.0), 1.0);
+    for (double c = 0.05; c < 1.0; c += 0.05) {
+        EXPECT_GT(fresnel(c - 0.05), fresnel(c));  // more at more grazing incidence
+    }
+}
+
+// The ripples' slope variance: Cox and Munk's clean minus slick at the wind a friction velocity
+// makes at 12.5 m; none below the onset (u* ≈ 4.5 cm/s, Kahma and Donelan 1988), rising with u*,
+// and at the wind of a 10 m/s sea, under Cox and Munk's whole clean-sea 0.054.
+TEST(WaterOptics, RippleSlopeVarianceFollowsTheWind) {
+    using namespace water_optics;
+    EXPECT_DOUBLE_EQ(rippleSlopeVariance(0.0), 0.0);
+    EXPECT_DOUBLE_EQ(rippleSlopeVariance(0.03), 0.0);  // under the onset: still, a mirror
+    EXPECT_GT(rippleSlopeVariance(0.06), 0.0);
+    // The onset: where clean and slick meet, U12.5 = 0.005/3.56e-3 = 1.40 m/s.
+    double onset = 0.0;
+    for (double u = 0.01; u < 0.2; u += 1e-4) {
+        if (rippleSlopeVariance(u) > 0.0) {
+            onset = u;
+            break;
+        }
+    }
+    EXPECT_NEAR(windAt(onset, kCoxMunkHeight), 0.005 / 3.56e-3, 0.01);
+    EXPECT_GT(onset, 0.035);
+    EXPECT_LT(onset, 0.10);
+    for (double u = 0.06; u < 0.6; u += 0.02) {
+        EXPECT_GT(rippleSlopeVariance(u + 0.02), rippleSlopeVariance(u));
+    }
+    // A 10 m/s wind at 10 m: u* by the log law and Charnock is about 0.35 m/s (Smith 1988's
+    // drag coefficient 1.2e-3 gives 0.35), and the ripples hold under the whole clean sea's.
+    const double u = frictionVelocityOf(10.0);
+    EXPECT_NEAR(u, 0.35, 0.04);
+    EXPECT_NEAR(windAt(u, 10.0), 10.0, 1e-6);
+    const double clean = coxMunkClean(windAt(u, kCoxMunkHeight));
+    EXPECT_NEAR(clean, 0.003 + 5.12e-3 * 10.2, 0.003);
+    EXPECT_GT(rippleSlopeVariance(u), 0.3 * clean);
+    EXPECT_LT(rippleSlopeVariance(u), clean);
+}
+
+// Cox and Munk's anisotropy: the short waves' upwind share rises as 2.38e-3·U, the crosswind as
+// 1.08e-3·U (clean minus slick of each), so σ_u²/σ_c² = 2.2, and the two add to the total.
+TEST(WaterOptics, RipplesAreSteeperAlongTheWindThanAcross) {
+    using namespace water_optics;
+    for (const double u : {0.08, 0.2, 0.5}) {
+        const auto [up, cross] = rippleSlopeVariances(u);
+        EXPECT_NEAR(up + cross, rippleSlopeVariance(u), 1e-15) << u;
+        EXPECT_NEAR(up / cross, 2.38 / 1.08, 1e-9) << u;
+    }
+    const auto calm = rippleSlopeVariances(0.03);
+    EXPECT_EQ(calm[0], 0.0);
+    EXPECT_EQ(calm[1], 0.0);
+}
+
+// The ripple of least phase speed: 1.71 cm, 0.231 m/s (Lamb §267). The air grows it only above
+// u* = √(100·ν·k·c) ≈ 9 cm/s, where Plant's growth passes viscous decay.
+TEST(WaterOptics, RipplesGrowOnlyWhereTheAirOutrunsViscosity) {
+    using namespace water_optics;
+    EXPECT_NEAR(2.0 * std::numbers::pi / rippleWavenumber(), 0.0171, 2e-4);
+    EXPECT_NEAR(ripplePhaseSpeed(), 0.231, 2e-3);
+    const double threshold =
+        std::sqrt(100.0 * kWaterViscosity * rippleWavenumber() * ripplePhaseSpeed());
+    EXPECT_EQ(rippleGrowthRate(0.99 * threshold), 0.0);
+    EXPECT_GT(rippleGrowthRate(1.01 * threshold), 0.0);
+    EXPECT_GT(fetchRate(0.4), fetchRate(0.2));
+}
+
+// A jet's outwash on the grid: u* rising as (ρ/ρ_p)^0.8 to a peak at ρ_p and falling as
+// (ρ_p/ρ)^1.1 (Tanner et al. 2015, as the aerodynamics domain's), outward. The ripples are
+// calm where the air leaves the stagnation point (no fetch, too weak to grow them), grow over
+// the annulus to near their equilibrium, and the stress's direction is radial.
+TEST(WaterOptics, TheFetchLeavesACalmCentreUnderAJet) {
+    using namespace water_optics;
+    constexpr std::size_t n = 128;
+    constexpr double cell = 0.03;
+    constexpr double peakU = 0.5;    // m/s
+    constexpr double peakAt = 0.45;  // m
+    const double mid = 0.5 * static_cast<double>(n - 1);
+    std::vector<float> friction(2 * n * n);
+    const auto uStar = [&](double r) {
+        return peakU * (r < peakAt ? std::pow(r / peakAt, 0.8) : std::pow(peakAt / r, 1.1));
+    };
+    for (std::size_t y = 0; y < n; ++y) {
+        for (std::size_t x = 0; x < n; ++x) {
+            const double dx = (static_cast<double>(x) - mid) * cell;
+            const double dy = (static_cast<double>(y) - mid) * cell;
+            const double r = std::hypot(dx, dy);
+            friction[y * n + x] = static_cast<float>(uStar(r) * dx / r);
+            friction[n * n + y * n + x] = static_cast<float>(uStar(r) * dy / r);
+        }
+    }
+    std::vector<double> variance;
+    std::vector<double> direction;
+    fetchLimitedRipples(n, cell, friction, {0.0, 0.0}, variance, direction);
+    const auto along = [&](double r) {  // on the +x axis, r from the centre
+        const auto x = static_cast<std::size_t>(std::lround(mid + r / cell));
+        const auto y = static_cast<std::size_t>(std::lround(mid));
+        return std::pair{variance[y * n + x], direction[y * n + x]};
+    };
+    EXPECT_EQ(along(0.05).first, 0.0);  // calm: u* under the growth threshold
+    const double inner = along(0.15).first / rippleSlopeVariance(uStar(0.15));
+    const double ring = along(peakAt).first / rippleSlopeVariance(peakU);
+    EXPECT_LT(inner, 0.6);  // the fetch lags
+    EXPECT_GT(ring, 0.6);   // grown by the peak
+    EXPECT_LT(ring, 1.0 + 1e-9);
+    EXPECT_NEAR(along(peakAt).second, 1.0, 1e-3);  // runs outward
+    // The roughest water is in the annulus, not under the jet.
+    double best = 0.0;
+    double bestAt = 0.0;
+    for (double r = 0.0; r < 1.8; r += cell) {
+        if (along(r).first > best) {
+            best = along(r).first;
+            bestAt = r;
+        }
+    }
+    EXPECT_GT(bestAt, 0.6 * peakAt);
+    EXPECT_LT(bestAt, 2.0 * peakAt);
+    // Without air the water stays a mirror.
+    fetchLimitedRipples(n, cell, {}, {0.0, 0.0}, variance, direction);
+    EXPECT_EQ(*std::ranges::max_element(variance), 0.0);
+}
+
+// Whitecaps: Monahan and O'Muircheartaigh's 3.84e-6·U10^3.41 (1 % at about 10 m/s); in a
+// rotor's wall jet none below the Kelvin–Helmholtz onset of its speed (6.7 m/s, where its spray
+// starts), Monahan's above.
+TEST(WaterOptics, WhitecapsOnlyWhereTheOutwashTearsTheSurface) {
+    using namespace water_optics;
+    EXPECT_NEAR(kelvinHelmholtzOnset(), 6.7, 0.1);
+    EXPECT_NEAR(whitecapFraction(10.0), 3.84e-6 * std::pow(10.0, 3.41), 1e-12);
+    EXPECT_NEAR(whitecapFraction(10.0), 0.01, 1e-3);
+    EXPECT_EQ(whitecapFraction(0.0), 0.0);
+    const double onset = kelvinHelmholtzOnset() * kWallJetFriction;  // u* there
+    EXPECT_EQ(whitecapOf(0.99 * onset, 0.0), 0.0);
+    EXPECT_GT(whitecapOf(1.01 * onset, 0.0), 0.0);
+    EXPECT_NEAR(whitecapOf(0.6, 0.0), whitecapFraction(windAt(0.6, 10.0)), 1e-12);
+    EXPECT_GT(whitecapOf(0.6, 0.0), whitecapOf(0.4, 0.0));
+}
+
 // At night with no lamp the picture is black, and a lamp lights a pool on the plane.
+// The water's moving surface (RealisticWaterSurface, water.md): a dimple in the patch changes the
+// water's colour where it lies and nowhere else; the same surface twice draws the same image.
+// Seen at 45°, where its slopes turn what it reflects (from straight down a dimple over a pale
+// floor just under it barely shows, as on real water).
+TEST(RealisticWater, TheMovingSurfaceShadesTheWaterWhereItLies) {
+    const std::vector<float> positions{-3, -3, 0, 3, -3, 0, 3, 3, 0, -3, 3, 0};
+    const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::vector<std::uint32_t> indices{0, 1, 2, 0, 2, 3};
+    const std::vector<MeshSource> meshes{{positions, normals, indices}};
+    std::string error;
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    auto scene = RasterScene::create(gpu != nullptr ? gpu : "", meshes, error, {.realistic = true});
+    ASSERT_TRUE(scene) << error;
+    if (!scene->realistic()) {
+        GTEST_SKIP() << "a software device keeps the simple shading";
+    }
+    PinholeCamera camera;  // 1.5 m over the water, looking along +x 45° down
+    camera.width = 240;
+    camera.height = 240;
+    camera.fx = camera.fy = 120.0;
+    camera.cx = camera.cy = 119.5;
+    camera.position = {-0.2, 0.0, 1.5};
+    // Straight down (180° about x), then turned −45° about world y: q = qy(−45°)·qx(180°).
+    const double half = -std::numbers::pi / 8.0;
+    camera.orientation = {0.0, std::cos(half), 0.0, -std::sin(half)};
+    RasterInstance water;
+    water.water = true;
+    water.box = {-3.0F, -3.0F, -1.0F, 3.0F, 3.0F, 0.0F};
+    const std::vector<RasterInstance> instances{water};
+    RasterCamera renderer(scene, camera.width, camera.height);
+    // A 1.92 m patch in the +x half (x 0.3 to 2.22 m), a 30 mm dimple with rings in its middle.
+    constexpr std::uint32_t kCells = 64;
+    constexpr double kCell = 0.03;
+    const std::array<double, 2> first{0.3 + kCell / 2.0, -0.96 + kCell / 2.0};
+    std::vector<float> heights(kCells * kCells);
+    for (std::uint32_t y = 0; y < kCells; ++y) {
+        for (std::uint32_t x = 0; x < kCells; ++x) {
+            const double dx = (x - 31.5) * kCell;
+            const double dy = (y - 31.5) * kCell;
+            const double r = std::hypot(dx, dy);
+            heights[y * kCells + x] =
+                static_cast<float>(-0.03 * std::exp(-r * r / 0.04) + 0.002 * std::cos(r / 0.02));
+        }
+    }
+    const auto shoot = [&](bool moving) {
+        RealisticWaterSurface surface;
+        if (moving) {
+            surface.cells = kCells;
+            surface.cell = kCell;
+            surface.first = first;
+            surface.heights = heights;
+        }
+        renderer.setWaterSurface(surface);
+        RasterImages out;
+        renderer.render(instances, camera, out, 1.0);
+        return out;
+    };
+    const RasterImages still = shoot(false);
+    const RasterImages moved = shoot(true);
+    const RasterImages again = shoot(true);
+    EXPECT_EQ(moved.rgba, again.rgba);
+    // Pixel of a world point on the water (z 0): into the camera's frame, Ry(45°) then Rx(180°).
+    const auto difference = [&](double x0, double x1, double y0, double y1) {
+        double sum = 0.0;
+        int count = 0;
+        const double c45 = std::sqrt(0.5);
+        for (double x = x0; x <= x1; x += 0.05) {
+            for (double y = y0; y <= y1; y += 0.05) {
+                const double dx = x - camera.position[0];
+                const double dy = y - camera.position[1];
+                const double dz = -camera.position[2];
+                const double cx = dx * c45 + dz * c45;
+                const double cy = -dy;
+                const double cz = -(-dx * c45 + dz * c45);
+                const long pu = std::lround(camera.cx + camera.fx * cx / cz);
+                const long pv = std::lround(camera.cy + camera.fy * cy / cz);
+                if (cz <= 0.0 || pu < 0 || pv < 0 || pu >= static_cast<long>(camera.width) ||
+                    pv >= static_cast<long>(camera.height)) {
+                    continue;
+                }
+                const auto u = static_cast<std::size_t>(pu);
+                const auto v = static_cast<std::size_t>(pv);
+                for (std::size_t c = 0; c < 3; ++c) {
+                    const std::size_t i = 4 * (v * camera.width + u) + c;
+                    sum +=
+                        std::abs(static_cast<int>(moved.rgba[i]) - static_cast<int>(still.rgba[i]));
+                }
+                ++count;
+            }
+        }
+        EXPECT_GT(count, 20);
+        return sum / (3.0 * std::max(count, 1));
+    };
+    // The dimple: its rings shift what the water reflects by a level or two, and its slopes
+    // break up the sun's reflection (the image's largest change, far over 8-bit noise).
+    EXPECT_GT(difference(0.96, 1.56, -0.3, 0.3), 0.3);  // 8-bit levels on average
+    EXPECT_LT(difference(0.6, 1.6, 1.3, 1.9), 0.05);    // beside the patch: untouched
+    int largest = 0;
+    for (std::size_t i = 0; i < moved.rgba.size(); ++i) {
+        largest = std::max(
+            largest, std::abs(static_cast<int>(moved.rgba[i]) - static_cast<int>(still.rgba[i])));
+    }
+    EXPECT_GT(largest, 100);
+}
+
 TEST(RealisticLight, NightIsDarkButForTheLamp) {
     const std::vector<float> positions{-50, -50, 0, 50, -50, 0, 50, 50, 0, -50, 50, 0};
     const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};

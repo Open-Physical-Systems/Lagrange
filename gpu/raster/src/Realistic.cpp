@@ -1,6 +1,7 @@
 #include "SurfaceTextures.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Realistic.hpp"
+#include "lagrange/gpu/WaterOptics.hpp"
 #include "shaders/kRealCompositeFragment.hpp"
 #include "shaders/kRealMeshFragment.hpp"
 #include "shaders/kRealMeshVertex.hpp"
@@ -47,8 +48,13 @@ struct Frame {
     std::array<float, 4> mode;
     std::array<float, 4> weather;  // rain mm/h, snow mm/h, wind x, y m/s
     std::array<float, 4> light;    // daylight share, lamps, linear output, unused
+    std::array<float, 4> surface;  // first cell's centre relative to the eye, cell, cells a side
+    std::array<float, 4> surfaceLook;  // relief, the wind's ripple slope variance, its direction
+    std::array<float, 4> sprayBox;     // first cell's centre relative to the eye, cell
+    std::array<float, 4> sprayDims;    // cells, extinction per kg/m³
+    std::array<float, 4> waterOptics;  // CDOM absorption at 620, 550, 465 nm (1/m), unused
 };
-static_assert(sizeof(Frame) == 352);
+static_assert(sizeof(Frame) == 432);
 
 // Must match Lamp in realistic.slang.
 struct GpuLamp {
@@ -323,13 +329,14 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
-        bindings.at(b).descriptorType = b == 0   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                        : b == 7 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-                                                 : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings.at(b).descriptorType = b == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                        : b >= 7 && b <= 9
+                                            ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                            : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings.at(b).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -339,8 +346,8 @@ RealisticRenderer::RealisticRenderer(const Device& device,
 
     const std::array<VkDescriptorPoolSize, 3> sizes{
         {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
-         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
-         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3}}};
+         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 21},
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -359,6 +366,12 @@ RealisticRenderer::RealisticRenderer(const Device& device,
 
     frames_ = createBuffer(device_, 2 * kFrameStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
     lamps_ = createBuffer(device_, kMaxRealisticLamps * sizeof(GpuLamp),
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    surface_ = createBuffer(device_,
+                            static_cast<VkDeviceSize>(kMaxRealisticSurfaceCells) *
+                                kMaxRealisticSurfaceCells * 8 * sizeof(float),
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    spray_ = createBuffer(device_, kMaxRealisticSprayCells * sizeof(float),
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
@@ -382,6 +395,8 @@ RealisticRenderer::~RealisticRenderer() {
     vkDestroySampler(d, nearest_, nullptr);
     destroy(device_, frames_);
     destroy(device_, lamps_);
+    destroy(device_, surface_);
+    destroy(device_, spray_);
     destroy(device_, shadow_);
     destroy(device_, hdr_);
     destroy(device_, hdrCopy_);
@@ -457,7 +472,8 @@ void RealisticRenderer::resize(VkExtent2D extent, const Image& depth) {
                           std::max<std::uint32_t>(extent.height / 2, 1)};
     mirror_ = createImage2D(device_, half, kHdrFormat, attachment, VK_IMAGE_ASPECT_COLOR_BIT);
     mirrorDepth_ =
-        createImage2D(device_, half, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        createImage2D(device_, half, kDepthFormat,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                       VK_IMAGE_ASPECT_DEPTH_BIT);
     descriptors(depth);
 }
@@ -466,6 +482,8 @@ void RealisticRenderer::descriptors(const Image& depth) {
     const auto write = [&](VkDescriptorSet set, VkDeviceSize offset, const Image& scene) {
         const VkDescriptorBufferInfo uniform{frames_.buffer, offset, sizeof(Frame)};
         const VkDescriptorBufferInfo lampData{lamps_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo surfaceData{surface_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo sprayData{spray_.buffer, 0, VK_WHOLE_SIZE};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
         const std::array<VkDescriptorImageInfo, 6> images{{
@@ -476,7 +494,9 @@ void RealisticRenderer::descriptors(const Image& depth) {
             {repeat_, textures_->albedo_.view, read},
             {repeat_, textures_->normal_.view, read},
         }};
-        std::array<VkWriteDescriptorSet, 8> writes{};
+        // How far what the water reflects stands from it (realistic.slang, mirrorDepth).
+        const VkDescriptorImageInfo mirrorDepthInfo{nearest_, mirrorDepth_.view, readDepth};
+        std::array<VkWriteDescriptorSet, 11> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -486,9 +506,12 @@ void RealisticRenderer::descriptors(const Image& depth) {
             if (b == 0) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 w.pBufferInfo = &uniform;
-            } else if (b == 7) {
+            } else if (b >= 7 && b <= 9) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                w.pBufferInfo = &lampData;
+                w.pBufferInfo = b == 7 ? &lampData : b == 8 ? &surfaceData : &sprayData;
+            } else if (b == 10) {
+                w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo = &mirrorDepthInfo;
             } else {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &images.at(b - 1);
@@ -613,6 +636,89 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         main.water = {f(water->top), settings.windSpeed, 1.0F, f(water->bottom)};
         main.waterRect = {f(water->center[0]), f(water->center[1]), f(water->half[0]),
                           f(water->half[1])};
+    }
+    // The ripples the wind raises below what any grid holds (water_optics): their slope
+    // variance and the way it blows, everywhere on the water.
+    const double windSpeed = std::max(static_cast<double>(settings.windSpeed), 0.0);
+    const double windFriction = water_optics::frictionVelocityOf(windSpeed);
+    const double windNorm = std::hypot(settings.wind[0], settings.wind[1]);
+    const std::array<double, 2> windTo =
+        windNorm > 1e-6
+            ? std::array<double, 2>{settings.wind[0] / windNorm, settings.wind[1] / windNorm}
+            : std::array<double, 2>{1.0, 0.0};
+    main.surfaceLook = {1.0F, f(water_optics::rippleSlopeVariance(windFriction)), f(windTo[0]),
+                        f(windTo[1])};
+    {
+        // CDOM's absorption a(λ) = a(440)·exp(−S·(λ − 440)), S = 0.014 /nm (Bricaud et al.).
+        const auto cdom = [&](double nm) {
+            return f(std::max(settings.waterCdom, 0.0F) * std::exp(-0.014 * (nm - 440.0)));
+        };
+        main.waterOptics = {cdom(620.0), cdom(550.0), cdom(465.0), 0.0F};
+    }
+    if (water) {
+        const RealisticWaterSurface& moving = settings.waterSurface;
+        const std::size_t n = moving.cells;
+        if (n >= 2 && n <= kMaxRealisticSurfaceCells && moving.cell > 0.0 &&
+            moving.heights.size() == n * n) {
+            // Per cell: η, its slope by central differences (one-sided at the rim), the
+            // whitecaps; then the ripples' slope variance the fetch has grown under the air's
+            // friction there and the wind's (water_optics::fetchLimitedRipples), and the way
+            // the stress runs.
+            auto* cells = static_cast<std::array<float, 4>*>(surface_.mapped);
+            const bool rubbed = moving.friction.size() == 2 * n * n;
+            const std::array<double, 2> windU{windFriction * windTo[0], windFriction * windTo[1]};
+            water_optics::fetchLimitedRipples(n, moving.cell, moving.friction, windU,
+                                              rippleVariance_, rippleDirection_);
+            const double onset = water_optics::kelvinHelmholtzOnset();
+            const auto eta = [&](std::size_t x, std::size_t y) {
+                const float v = moving.heights[y * n + x];
+                return std::isfinite(v) ? v : 0.0F;
+            };
+            const auto cell = static_cast<float>(moving.cell);
+            for (std::size_t y = 0; y < n; ++y) {
+                for (std::size_t x = 0; x < n; ++x) {
+                    const std::size_t i = y * n + x;
+                    const std::size_t x0 = x == 0 ? 0 : x - 1;
+                    const std::size_t x1 = x + 1 == n ? x : x + 1;
+                    const std::size_t y0 = y == 0 ? 0 : y - 1;
+                    const std::size_t y1 = y + 1 == n ? y : y + 1;
+                    float foam =
+                        moving.foam.size() == n * n ? std::clamp(moving.foam[i], 0.0F, 1.0F) : 0.0F;
+                    double outwash = 0.0;
+                    if (rubbed && std::isfinite(moving.friction[i]) &&
+                        std::isfinite(moving.friction[n * n + i])) {
+                        outwash = std::hypot(moving.friction[i], moving.friction[n * n + i]);
+                    }
+                    foam =
+                        std::max(foam, f(water_optics::whitecapOf(outwash, windFriction, onset)));
+                    cells[2 * i] = {
+                        eta(x, y), (eta(x1, y) - eta(x0, y)) / (static_cast<float>(x1 - x0) * cell),
+                        (eta(x, y1) - eta(x, y0)) / (static_cast<float>(y1 - y0) * cell), foam};
+                    cells[2 * i + 1] = {f(rippleVariance_[i]), f(rippleDirection_[i]),
+                                        f(rippleDirection_[n * n + i]), 0.0F};
+                }
+            }
+            flush(device_, surface_);
+            main.surface = {f(moving.first[0] - eye[0]), f(moving.first[1] - eye[1]), cell,
+                            static_cast<float>(n)};
+            main.surfaceLook[0] = moving.relief;
+        }
+    }
+    {
+        const RealisticSpray& spray = settings.spray;
+        const std::size_t count =
+            static_cast<std::size_t>(spray.cells[0]) * spray.cells[1] * spray.cells[2];
+        if (spray.cells[0] >= 2 && spray.cells[1] >= 2 && spray.cells[2] >= 2 &&
+            count <= kMaxRealisticSprayCells && spray.water.size() == count && spray.cell > 0.0 &&
+            spray.extinctionPerKg > 0.0) {
+            std::memcpy(spray_.mapped, spray.water.data(), count * sizeof(float));
+            flush(device_, spray_);
+            main.sprayBox = {f(spray.first[0] - eye[0]), f(spray.first[1] - eye[1]),
+                             f(spray.first[2] - eye[2]), f(spray.cell)};
+            main.sprayDims = {static_cast<float>(spray.cells[0]),
+                              static_cast<float>(spray.cells[1]),
+                              static_cast<float>(spray.cells[2]), f(spray.extinctionPerKg)};
+        }
     }
     main.screen = {static_cast<float>(extent.width), static_cast<float>(extent.height),
                    1.0F / static_cast<float>(extent.width),
@@ -828,6 +934,9 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionImage(commands, mirrorDepth_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 
     // --- the scene ---------------------------------------------------------------------------
     // The opaque meshes' pushes, made once for both passes.

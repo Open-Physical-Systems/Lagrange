@@ -2,6 +2,7 @@
 
 #include "lagrange/aerodynamics/Downwash.hpp"
 #include "lagrange/aerodynamics/LiveAir.hpp"
+#include "lagrange/aerodynamics/WaterAir.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/module/IModule.hpp"
@@ -65,6 +66,10 @@ struct RotorSource {
 [[nodiscard]] std::vector<RotorSource> rotorSources(const WorldView& world);
 /// Every body's rotor group (Downwash::kNoGroup when its robot has no rotors), as rotorSources.
 [[nodiscard]] std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world);
+/// The bodies of water of the stage (WaterAPI_1: the prim's position is the still surface's
+/// middle, water:sizeX and water:sizeY its size, 10 m without them as the water domain reads
+/// them), for the downwash and the rotors' ground effect.
+[[nodiscard]] std::vector<Downwash::WaterSurface> waterSurfaces(const WorldView& world);
 /// The fixed boxes of the scenery (static Box colliders: buildings, walls), for the downwash.
 [[nodiscard]] std::vector<Downwash::Box> downwashObstacles(const World& world);
 
@@ -107,9 +112,7 @@ inline constexpr double kFountainLowest = 1.0;     // diagonals: 0.5 m for the s
 /// A = kBagnoldA (Bagnold, The Physics of Blown Sand and Desert Dunes, 1941).
 inline constexpr double kBagnoldA = 0.1;
 inline constexpr double kGrainDensity = 2650.0;  // kg/m³, quartz
-/// u*/u_m of a wall jet: √(c_f/2) with c_f ≈ 0.005 (TODO(verify): the radial wall jet's skin
-/// friction, e.g. Poreh et al. 1967).
-inline constexpr double kWallJetFriction = 0.05;
+/// u* = kWallJetFriction·u_peak (Downwash.hpp).
 [[nodiscard]] double dustThreshold(double diameter, double rho, double gravity);
 [[nodiscard]] double liftedDust(double peakOutwash, double diameter, double most, double rho,
                                 double gravity);
@@ -161,6 +164,11 @@ inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop
 /// (config "ground_dust_diameter", m, and "ground_dust_concentration", kg/m³: the most the
 /// outwash keeps in the air there; site parameters, no defaults) it writes env/dust/downwash
 /// (kg/m³) once the outwash's friction velocity passes Bagnold's threshold for those grains.
+///
+/// Water (config "downwash_water", default true; downwash.md §5a): a wake stops on a body of
+/// water's surface (WaterAPI_1) as on the ground. With config "water_surface" (the server sets
+/// it when the water domain moves its surface) it writes the load on each body of water's
+/// surface patch, water/<w>/patch, air_pressure and air_stress (WaterAir).
 ///
 /// Tethers (config "tether_nodes", a list of "<tether>=<nodes>" the server fills when the tether
 /// domain runs; rotor_aero.md §2.7): with rotors and the downwash on, it reads each cable's
@@ -238,6 +246,8 @@ private:
     SignalId windVelocity_;
     SignalId densityIn_, rainIn_, snowIn_;  // the weather's, when it runs
     bool downwashOn_{true};
+    bool waterOn_{true};  // config "downwash_water": wakes on water, its surface and spray
+    WaterAir waterAir_;   // the load on the water's surface
     std::vector<RotorLink> rotors_;
     std::vector<TetherNodes> cables_;
     std::vector<FireBase> fires_;

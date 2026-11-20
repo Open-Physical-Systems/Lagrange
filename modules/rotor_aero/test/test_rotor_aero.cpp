@@ -209,6 +209,35 @@ TEST(RotorAero, NearTheGroundThrustRisesAsCheesemanBennettSays) {
     EXPECT_NEAR(rig.read("rotor/prop_joint/thrust") / free, 1.0 / (1.0 - 1.0 / 16.0), 1e-9);
 }
 
+TEST(RotorAero, OverWaterTheGroundEffectIsTakenFromItsSurface) {
+    // A pond whose surface is 1 m over the ground plane: Cheeseman–Bennett with z measured to
+    // the water, R above it; beside the pond, to the ground.
+    World world = propellerRig();
+    world.schemaInstances.push_back({});
+    SchemaInstance& water = world.schemaInstances.back();
+    water.schema = "WaterAPI_1";
+    water.prim = world.addPrim("/pond", "pond");
+    world.prims.poseInBody.at(water.prim.index).position = {0.0, 0.0, 1.0};
+    water.reals = {{"water:sizeX", 4.0}, {"water:sizeY", 4.0}, {"water:depth", 1.0}};
+    const double free = staticLoad({kRadius, kCt, kCp, 1.0}, 600.0, kRho).thrust;
+    for (const double zOverR : {0.5, 1.0, 2.0}) {
+        Rig rig = makeRig(world, withDensity());
+        ASSERT_TRUE(rig.scheduler->wire(WorldView(world)));
+        rig.plant->omega = 600.0;
+        rig.plant->pose = {{0.0, 0.0, 1.0 + zOverR * kRadius}, {1.0, 0.0, 0.0, 0.0}};
+        ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{5'000'000}).ok());
+        const double ratio = 1.0 / (4.0 * zOverR);
+        EXPECT_NEAR(rig.read("rotor/prop_joint/thrust") / free, 1.0 / (1.0 - ratio * ratio), 1e-9)
+            << zOverR;
+    }
+    Rig beside = makeRig(world, withDensity());
+    ASSERT_TRUE(beside.scheduler->wire(WorldView(world)));
+    beside.plant->omega = 600.0;
+    beside.plant->pose = {{3.0, 0.0, kRadius}, {1.0, 0.0, 0.0, 0.0}};
+    ASSERT_TRUE(beside.scheduler->stepUntil(SimTime{5'000'000}).ok());
+    EXPECT_NEAR(beside.read("rotor/prop_joint/thrust") / free, 1.0 / (1.0 - 1.0 / 16.0), 1e-9);
+}
+
 // Hsiao and Chirarattananon (2019): the momentum balance under a ceiling (their eq. 5 with
 // eq. 9's α0) solved for γ, and the thrust at the same power γ^(2/3) of the free thrust.
 TEST(RotorAero, CeilingEffectFollowsHsiaoAndChirarattananon) {

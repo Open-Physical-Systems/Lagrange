@@ -37,6 +37,8 @@ struct Options {
     std::string shading;       ///< Viewport shading at start-up: lit, unlit or thermal.
     std::string overlays;      ///< --overlays: grid,axes,sensors,airflow shown from the start.
     std::string slice;         ///< --slice: the Slice 2D panel's field and plane.
+    float waterCdom{0.0F};     ///< --water-cdom: its CDOM absorption at 440 nm, 1/m.
+    float waterRelief{1.0F};  ///< --water-relief: the moving water's heights drawn this many times.
     std::optional<std::array<double, 6>> camera;  ///< --camera: target, distance, yaw, pitch.
     double followDistance{0.0};  ///< > 0: start with the follow camera this far (m) away.
     double followPitchDeg{0.0};  ///< With followDistance: the camera's elevation; 0: default.
