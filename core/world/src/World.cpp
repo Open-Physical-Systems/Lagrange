@@ -185,8 +185,8 @@ bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
         // its TODO(verify) NIR plateau); frictionScale and rollingResistance TODO(verify).
         // tall_grass: canopy 0.4 m and the default LAI 3 (TODO(verify)). The stems' drag on a
         // body pushing through is lagrange_vegetation's, from canopyHeight and leafAreaIndex.
-        {"reeds", {0.5, 0.3, 0.0, 0.0, false, 0.8, 0.15, 1.5, 4.0}},
-        {"shrub", {0.5, 0.3, 0.0, 0.0, false, 0.9, 0.15, 0.8, 3.0}},
+        {"reeds", {0.5, 0.3, 0.0, 0.0, false, 0.8, 0.15, 1.5, 4.0, CanopyForm::Reeds}},
+        {"shrub", {0.5, 0.3, 0.0, 0.0, false, 0.9, 0.15, 0.8, 3.0, CanopyForm::Shrub}},
     }};
     for (const Row& row : kPresets) {
         if (row.name == name) {

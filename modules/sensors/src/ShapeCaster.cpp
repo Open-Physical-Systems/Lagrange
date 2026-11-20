@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
@@ -528,6 +529,202 @@ double canopyVolumeStop(double enter, double leave, double canopyHeight, double 
     const double mu = kCanopyProjection * leafAreaIndex / canopyHeight;
     const double s = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16)) / mu;
     return enter + s < leave ? enter + s : std::numeric_limits<double>::infinity();
+}
+
+namespace {
+// Value noise on a unit lattice, smoothly interpolated, in [0, 1]: a pure function of the
+// position and a seed (no state), so the same plants stand on every run and every tier.
+double latticeValue(std::int64_t i, std::int64_t j, std::uint32_t seed) {
+    auto h = static_cast<std::uint32_t>(i) * 0x8DA6B343U ^
+             static_cast<std::uint32_t>(j) * 0xD8163841U ^ seed * 0xCB1AB31FU;
+    h ^= h >> 16U;  // a 32-bit finaliser (Wang/Jenkins style mix)
+    h *= 0x7FEB352DU;
+    h ^= h >> 15U;
+    h *= 0x846CA68BU;
+    h ^= h >> 16U;
+    return static_cast<double>(h) / 4294967295.0;
+}
+
+double valueNoise(double x, double y, std::uint32_t seed) {
+    const double fx = std::floor(x);
+    const double fy = std::floor(y);
+    const auto i = static_cast<std::int64_t>(fx);
+    const auto j = static_cast<std::int64_t>(fy);
+    const double tx = x - fx;
+    const double ty = y - fy;
+    const double sx = tx * tx * (3.0 - 2.0 * tx);
+    const double sy = ty * ty * (3.0 - 2.0 * ty);
+    const double a = latticeValue(i, j, seed);
+    const double b = latticeValue(i + 1, j, seed);
+    const double c = latticeValue(i, j + 1, seed);
+    const double d = latticeValue(i + 1, j + 1, seed);
+    return (a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sy;
+}
+
+// Two octaves, the second at 2.3x the frequency and half the weight, renormalised to [0, 1].
+double patchNoise(double x, double y, std::uint32_t seed) {
+    constexpr double kLacunarity = 2.3;
+    return (2.0 * valueNoise(x, y, seed) +
+            valueNoise(x * kLacunarity + 17.1, y * kLacunarity - 3.7, seed + 1U)) /
+           3.0;
+}
+
+double smoothstep(double a, double b, double x) {
+    const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+constexpr std::uint32_t kHeightSeed = 0x51U;
+constexpr std::uint32_t kGapSeed = 0x6BU;
+constexpr std::uint32_t kEdgeSeed = 0x7DU;
+constexpr std::uint32_t kStemSeed = 0x8FU;
+}  // namespace
+
+CanopyFormShape canopyFormOf(CanopyForm form) {
+    // TODO(verify) all: sizes of tufts, clumps and bushes and how much they vary, from field
+    // photographs, not measurements. Grass: tufts a few decimetres across, a few bare spots.
+    // Reeds: Phragmites stands in clumps about a metre across with lanes between. Shrubs:
+    // bushes a metre or two across with more ground between them.
+    switch (form) {
+        case CanopyForm::Reeds:
+            return {1.2, 0.35, 0.12, 0.6, 0.12, 0.25};
+        case CanopyForm::Shrub:
+            return {1.5, 0.3, 0.3, 0.5, 0.2, 0.15};
+        case CanopyForm::Grass:
+        default:
+            return {0.25, 0.35, 0.08, 0.15, 0.04, 0.25};
+    }
+}
+
+double canopyLeafProfile(CanopyForm form, double zeta) {
+    if (!(zeta >= 0.0) || !(zeta <= 1.0)) {
+        return 0.0;
+    }
+    // Leaf area density profiles of the kinds measured in crops and stands (e.g. Lalic and
+    // Mihailovic 2004, J. Appl. Meteor. 43, an empirical profile with its maximum in the upper
+    // part of the canopy); the shapes here are simple polynomials, TODO(verify) each against a
+    // measured profile of the plant.
+    switch (form) {
+        case CanopyForm::Reeds:  // stems throughout (0.3), leaves peaking at 2/3 of the height
+            return 0.3 + 0.7 * 12.0 * zeta * zeta * (1.0 - zeta);
+        case CanopyForm::Shrub:  // bare stems (0.1), a crown peaking at 3/4 of the height
+            return 0.1 + 0.9 * 20.0 * zeta * zeta * zeta * (1.0 - zeta);
+        case CanopyForm::Grass:  // dense at the base, thinning to the blade tips
+        default:
+            return 1.5 * (1.0 - zeta * zeta);
+    }
+}
+
+double canopyHeightFactor(const SurfaceMaterial& material, double x, double y,
+                          double edgeDistance) {
+    const CanopyFormShape f = canopyFormOf(material.canopyForm);
+    const double u = x / f.patch;
+    const double v = y / f.patch;
+    const double height =
+        (1.0 + f.spread * (2.0 * patchNoise(u, v, kHeightSeed) - 1.0)) *
+        (1.0 + f.jitter * (2.0 * valueNoise(x / f.stem, y / f.stem, kStemSeed) - 1.0));
+    constexpr double kGapRamp = 0.12;  // how sharply the plants end at a bare patch
+    const double ground = smoothstep(f.gap, f.gap + kGapRamp, patchNoise(u, v, kGapSeed));
+    double border = 1.0;
+    if (std::isfinite(edgeDistance)) {
+        constexpr double kBorderRamp = 0.3;  // of the edge length: how soft the border is
+        const double limit = f.edge * patchNoise(u * 1.7, v * 1.7, kEdgeSeed);
+        border = smoothstep(0.0, kBorderRamp * f.edge, edgeDistance - limit);
+    }
+    return height * ground * border;
+}
+
+double canopyTallest(const SurfaceMaterial& material) {
+    const CanopyFormShape f = canopyFormOf(material.canopyForm);
+    return material.canopyHeight * (1.0 + f.spread) * (1.0 + f.jitter);
+}
+
+double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
+                        const std::array<double, 3>& size, const Pose& placed,
+                        const std::array<double, 3>& origin, const std::array<double, 3>& direction,
+                        double enter, double leave, double u) {
+    constexpr double kNever = std::numeric_limits<double>::infinity();
+    const double big = material.canopyHeight;
+    if (!(big > 0.0) || !(material.leafAreaIndex > 0.0) || !(leave > enter)) {
+        return kNever;
+    }
+    const std::array<double, 4> back = conjugate(placed.orientation);
+    const std::array<double, 3> o =
+        rotate(back, {origin[0] - placed.position[0], origin[1] - placed.position[1],
+                      origin[2] - placed.position[2]});
+    const std::array<double, 3> d = rotate(back, direction);
+    const bool box = type == ShapeType::Box;
+    const double soil = box ? size[2] : 0.0;
+    const CanopyFormShape form = canopyFormOf(material.canopyForm);
+    // Steps: a twelfth of the height up or down, half a stem across, at most 4096.
+    constexpr double kVerticalSteps = 12.0;
+    constexpr double kAcrossSteps = 2.0;
+    constexpr double kMaxSteps = 4096.0;
+    const double across = std::hypot(d[0], d[1]);
+    double dt = std::numeric_limits<double>::infinity();
+    if (std::abs(d[2]) > 1e-12) {
+        dt = std::min(dt, canopyTallest(material) / kVerticalSteps / std::abs(d[2]));
+    }
+    if (across > 1e-12) {
+        dt = std::min(dt, form.stem / kAcrossSteps / across);
+    }
+    dt = std::max(dt, (leave - enter) / kMaxSteps);
+    const double target = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16));
+    const double density = kCanopyProjection * material.leafAreaIndex / big;  // G LAI / H
+    double depth = 0.0;
+    for (double t = enter; t < leave; t += dt) {
+        const double step = std::min(dt, leave - t);
+        const double m = t + 0.5 * step;
+        const double x = o[0] + d[0] * m;
+        const double y = o[1] + d[1] * m;
+        const double edgeDistance =
+            box ? std::min(size[0] - std::abs(x), size[1] - std::abs(y)) : kNever;
+        const double factor = canopyHeightFactor(material, x, y, edgeDistance);
+        if (!(factor > 0.0)) {
+            continue;
+        }
+        // Leaf area density here: (LAI f / (H f)) p(zeta) = (LAI / H) p(zeta).
+        const double zeta = (o[2] + d[2] * m - soil) / (big * factor);
+        const double a = density * canopyLeafProfile(material.canopyForm, zeta);
+        if (a > 0.0 && depth + a * step >= target) {
+            return t + (target - depth) / a;
+        }
+        depth += a * step;
+    }
+    return kNever;
+}
+
+double canopyShapedShortening(const SurfaceMaterial& material, double x, double y,
+                              double cosIncidence, double range, double u) {
+    const double big = material.canopyHeight;
+    if (!(big > 0.0) || !(material.leafAreaIndex > 0.0) || !std::isfinite(range)) {
+        return 0.0;
+    }
+    const double h =
+        big * canopyHeightFactor(material, x, y, std::numeric_limits<double>::infinity());
+    if (!(h > 0.0)) {
+        return 0.0;
+    }
+    constexpr double kMinCosine = 1e-3;
+    const double c = std::max(std::abs(cosIncidence), kMinCosine);
+    const double path = std::min(h / c, std::max(range, 0.0));
+    // Along the beam from where it enters the canopy (zeta = 1 when the path is the full h / c);
+    // the profile is integrated in 32 midpoint steps.
+    constexpr int kSteps = 32;
+    const double dt = path / kSteps;
+    const double target = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16));
+    const double density = kCanopyProjection * material.leafAreaIndex / big;
+    const double top = path * c;  // the height over the soil where the path starts
+    double depth = 0.0;
+    for (int k = 0; k < kSteps; ++k) {
+        const double s = (k + 0.5) * dt;
+        const double a = density * canopyLeafProfile(material.canopyForm, (top - s * c) / h);
+        if (a > 0.0 && depth + a * dt >= target) {
+            return path - (k * dt + (target - depth) / a);
+        }
+        depth += a * dt;
+    }
+    return 0.0;
 }
 
 double distanceToShape(ShapeType type, const std::array<double, 3>& size, const Pose& pose,

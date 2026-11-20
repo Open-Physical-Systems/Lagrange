@@ -470,5 +470,166 @@ TEST(CanopyVolume, SlabOverAPlane) {
     EXPECT_NEAR(enter, 2.0 / c, 1e-12);
 }
 
+// The canopy's shape (ShapeCaster.hpp): leaf profiles integrate to one, heights vary by place
+// within their bounds with some bare ground, the top a lidar sees from above is not flat, the
+// border is ragged, a vertical beam reaches the soil with the gap fraction of its local leaf area
+// index, and the same beam always stops at the same place.
+SurfaceMaterial canopyOf(CanopyForm form, double height, double lai) {
+    SurfaceMaterial m;
+    m.canopyHeight = height;
+    m.leafAreaIndex = lai;
+    m.canopyForm = form;
+    return m;
+}
+
+constexpr std::array<CanopyForm, 3> kForms{CanopyForm::Grass, CanopyForm::Reeds, CanopyForm::Shrub};
+
+TEST(CanopyShape, LeafProfilesIntegrateToOne) {
+    constexpr int kSteps = 100000;
+    for (const CanopyForm form : kForms) {
+        double sum = 0.0;
+        for (int k = 0; k < kSteps; ++k) {
+            sum += canopyLeafProfile(form, (k + 0.5) / kSteps) / kSteps;
+        }
+        EXPECT_NEAR(sum, 1.0, 1e-6) << static_cast<int>(form);
+        EXPECT_EQ(canopyLeafProfile(form, -0.01), 0.0);
+        EXPECT_EQ(canopyLeafProfile(form, 1.01), 0.0);
+    }
+    // Grass is densest at its base, reeds and shrubs in their upper part.
+    EXPECT_GT(canopyLeafProfile(CanopyForm::Grass, 0.1), canopyLeafProfile(CanopyForm::Grass, 0.9));
+    EXPECT_GT(canopyLeafProfile(CanopyForm::Reeds, 0.7), canopyLeafProfile(CanopyForm::Reeds, 0.1));
+    EXPECT_GT(canopyLeafProfile(CanopyForm::Shrub, 0.75),
+              canopyLeafProfile(CanopyForm::Shrub, 0.2));
+}
+
+TEST(CanopyShape, HeightVariesByPlace) {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    for (const CanopyForm form : kForms) {
+        const SurfaceMaterial m = canopyOf(form, 1.0, 3.0);
+        const CanopyFormShape shape = canopyFormOf(form);
+        double sum = 0.0;
+        double sumSq = 0.0;
+        int bare = 0;
+        constexpr int kSide = 200;
+        for (int i = 0; i < kSide; ++i) {
+            for (int j = 0; j < kSide; ++j) {
+                const double f =
+                    canopyHeightFactor(m, i * shape.patch * 0.37, j * shape.patch * 0.41, kInf);
+                EXPECT_GE(f, 0.0);
+                EXPECT_LE(f, (1.0 + shape.spread) * (1.0 + shape.jitter) + 1e-12);
+                EXPECT_LE(f * m.canopyHeight, canopyTallest(m) + 1e-12);
+                sum += f;
+                sumSq += f * f;
+                bare += f < 0.05 ? 1 : 0;
+            }
+        }
+        const double n = kSide * kSide;
+        const double mean = sum / n;
+        const double sd = std::sqrt(sumSq / n - mean * mean);
+        EXPECT_GT(sd, 0.1) << static_cast<int>(form);    // not one flat height
+        EXPECT_GT(mean, 0.6) << static_cast<int>(form);  // mostly plants
+        EXPECT_GT(bare, 0) << static_cast<int>(form);    // with some bare ground
+        EXPECT_LT(bare / n, 0.5) << static_cast<int>(form);
+    }
+}
+
+TEST(CanopyShape, TopIsNotFlatAndBorderIsRagged) {
+    const SurfaceMaterial reeds = canopyOf(CanopyForm::Reeds, 1.5, 4.0);
+    const std::array<double, 3> half{10.0, 10.0, 0.5};  // a 20 m bank, its top at z = 0.5
+    const Pose bank{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    const std::array<double, 3> down{0.0, 0.0, -1.0};
+    // Straight down from 5 m over a grid of points inside the bank.
+    std::vector<double> tops;
+    for (int i = 0; i < 60; ++i) {
+        for (int j = 0; j < 60; ++j) {
+            const std::array<double, 3> from{-8.0 + i * 0.27, -8.0 + j * 0.27, 5.0};
+            double enter = 0.0;
+            double leave = 0.0;
+            ASSERT_TRUE(canopyVolumeSpan(ShapeType::Box, half, bank, from, down,
+                                         canopyTallest(reeds), 100.0, enter, leave));
+            random::Stream rng(3, 1, static_cast<std::uint32_t>(i * 60 + j));
+            const double at = canopyShapedStop(reeds, ShapeType::Box, half, bank, from, down, enter,
+                                               leave, rng.uniform());
+            if (std::isfinite(at)) {
+                const double z = from[2] - at;
+                EXPECT_GE(z, 0.5 - 1e-9);
+                EXPECT_LE(z, 0.5 + canopyTallest(reeds) + 1e-9);
+                tops.push_back(z - 0.5);
+            }
+        }
+    }
+    ASSERT_GT(tops.size(), 1000U);
+    double mean = 0.0;
+    for (const double z : tops) {
+        mean += z / static_cast<double>(tops.size());
+    }
+    double var = 0.0;
+    for (const double z : tops) {
+        var += (z - mean) * (z - mean) / static_cast<double>(tops.size());
+    }
+    EXPECT_GT(std::sqrt(var), 0.15 * reeds.canopyHeight);  // the returns are not one plane
+    // Along the border the plants end at different distances in from the edge.
+    double nearest = 1e9;
+    double farthest = 0.0;
+    for (int k = 0; k < 200; ++k) {
+        const double y = -9.0 + k * 0.09;
+        double in = 0.0;
+        while (in < 2.0 && canopyHeightFactor(reeds, 10.0 - in, y, in) < 0.5) {
+            in += 0.01;
+        }
+        nearest = std::min(nearest, in);
+        farthest = std::max(farthest, in);
+    }
+    EXPECT_GT(farthest - nearest, 0.2);
+}
+
+TEST(CanopyShape, VerticalBeamGapFractionAndDeterminism) {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    for (const CanopyForm form : kForms) {
+        const SurfaceMaterial m = canopyOf(form, 1.0, 3.0);
+        const Pose ground{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+        // A point with plants on it.
+        double x = 0.0;
+        while (canopyHeightFactor(m, x, 0.3, kInf) < 0.8) {
+            x += 0.05;
+        }
+        const double f = canopyHeightFactor(m, x, 0.3, kInf);
+        const std::array<double, 3> from{x, 0.3, 4.0};
+        const std::array<double, 3> down{0.0, 0.0, -1.0};
+        double enter = 0.0;
+        double leave = 0.0;
+        ASSERT_TRUE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, from, down,
+                                     canopyTallest(m), 100.0, enter, leave));
+        constexpr int kBeams = 100000;
+        int through = 0;
+        for (int i = 0; i < kBeams; ++i) {
+            random::Stream rng(9, 4, static_cast<std::uint32_t>(i));
+            const double u = rng.uniform();
+            const double at = canopyShapedStop(m, ShapeType::Plane, {1.0, 1.0, 1.0}, ground, from,
+                                               down, enter, leave, u);
+            through += std::isfinite(at) ? 0 : 1;
+            if (i < 100) {
+                const double again = canopyShapedStop(m, ShapeType::Plane, {1.0, 1.0, 1.0}, ground,
+                                                      from, down, enter, leave, u);
+                EXPECT_EQ(std::memcmp(&at, &again, sizeof at), 0);
+            }
+        }
+        // Nilson's gap fraction with the local leaf area index LAI f, G = 0.5.
+        const double p = std::exp(-kCanopyProjection * m.leafAreaIndex * f);
+        EXPECT_NEAR(static_cast<double>(through) / kBeams, p,
+                    0.01 + 5.0 * std::sqrt(p * (1.0 - p) / kBeams))
+            << static_cast<int>(form);
+        // The same through a hit on a surface without a volume.
+        int soil = 0;
+        for (int i = 0; i < kBeams; ++i) {
+            random::Stream rng(9, 5, static_cast<std::uint32_t>(i));
+            soil += canopyShapedShortening(m, x, 0.3, 1.0, 20.0, rng.uniform()) == 0.0 ? 1 : 0;
+        }
+        EXPECT_NEAR(static_cast<double>(soil) / kBeams, p,
+                    0.01 + 5.0 * std::sqrt(p * (1.0 - p) / kBeams))
+            << static_cast<int>(form);
+    }
+}
+
 }  // namespace
 }  // namespace lagrange::sensors

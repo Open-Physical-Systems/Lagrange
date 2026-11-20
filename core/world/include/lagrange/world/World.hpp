@@ -100,6 +100,14 @@ enum class SensorType : std::uint8_t {
     Custom
 };
 
+/// How the plants of a canopy stand (docs/physics/ground.md "The canopy's shape"): how their leaf
+/// area is spread over height and how big their patches are.
+enum class CanopyForm : std::uint8_t {
+    Grass,  // leaves mostly low, thinning to the tips; small tufts
+    Reeds,  // stems from the soil, most leaf in the upper half; clumps about a metre across
+    Shrub   // bare stems under a crown; bushes a metre or two across with gaps between
+};
+
 /// What a lidar sees of a surface (SensorMaterialAPI_1; docs/design/domains/sensors.md §2).
 struct SurfaceMaterial {
     double reflectivity905{0.5};   // of the diffuse and specular parts together, at 905 nm
@@ -114,6 +122,7 @@ struct SurfaceMaterial {
                                     // of the tyre's own: the work of pressing the ground down
     double canopyHeight{0.0};       // m, blades standing over the soil that a beam can hit first
     double leafAreaIndex{3.0};      // m² of leaf per m² of ground in that canopy (when height > 0)
+    CanopyForm canopyForm{CanopyForm::Grass};  // how that canopy stands (when height > 0)
 };
 inline constexpr std::uint32_t kNoMaterial = 0xFFFF'FFFFU;
 

@@ -143,6 +143,56 @@ inline constexpr double kCanopyLeafAreaIndex = 3.0;
 /// angle distribution, which is G (Ross 1981), stands for the incidence cosine of its return.
 inline constexpr double kCanopyLeafCosine = kCanopyProjection;
 
+/// The canopy's shape (docs/physics/ground.md "The canopy's shape"). The functions above treat a
+/// canopy as an even layer of one height, which a lidar sees as a box: a flat top at exactly
+/// canopyHeight, walls straight up the collider's edges, points spread evenly through it. Real
+/// plants are not like that, so the lidar uses the following instead:
+///
+/// 1. Height by place. The local height is h(x, y) = H f j g e: f = 1 + spread (2 n1 - 1) from a
+///    smooth value noise n1 in [0, 1] at the form's patch size (tufts of grass, clumps of reeds,
+///    bushes), j = 1 + jitter (2 n4 - 1) the same at the size of single stems (a ragged top, not
+///    a smooth dome), g a bare-ground mask from a second noise (gaps between plants), e a taper at
+///    a box's edges whose inner limit wanders with a third noise (a ragged border, not a wall). The
+///    noise is a function of the collider-frame position only, so every run and every tier sees the
+///    same plants. The leaf area per ground area scales with the height, LAI f j g e, so a taller
+///    tuft holds more leaf and the bulk density stays G LAI / H.
+/// 2. Leaf area by height. The leaf area density at height zeta = z / h(x, y) is
+///    (LAI_local / h) p(zeta), with p integrating to 1 over [0, 1] (canopyLeafProfile): grass
+///    dense low and thinning to the tips, reeds stems all the way with most leaf in the upper
+///    half, shrubs a crown over bare stems. The beam's optical depth G a(x) ds is integrated
+///    along it (midpoint steps a twelfth of the height or half a stem across, whichever is
+///    shorter for the beam's slope), and it stops where it reaches -ln(1 - u).
+/// Every number of the forms is TODO(verify) (canopyFormOf).
+struct CanopyFormShape {
+    double patch;   // m, the size of a tuft, clump or bush
+    double spread;  // relative height variation of the patches, f in [1 - spread, 1 + spread]
+    double gap;     // noise level below which the ground is bare (about the bare share)
+    double edge;    // m, how far a box's border wanders inward
+    double stem;    // m, the scale of single stems and blades within a patch
+    double jitter;  // relative height variation from stem to stem, [1 - jitter, 1 + jitter]
+};
+[[nodiscard]] CanopyFormShape canopyFormOf(CanopyForm form);
+/// The share of the leaf area at relative height zeta in [0, 1]; integrates to 1.
+[[nodiscard]] double canopyLeafProfile(CanopyForm form, double zeta);
+/// The plants' local height factor f j g e at (x, y) in the collider's frame; `edgeDistance` is how
+/// far (x, y) lies inside the box's top face (+inf for a plane or a surface without edges).
+[[nodiscard]] double canopyHeightFactor(const SurfaceMaterial& material, double x, double y,
+                                        double edgeDistance);
+/// The tallest plants: canopyHeight (1 + spread) (1 + jitter); the volume a beam can stop in is
+/// this high.
+[[nodiscard]] double canopyTallest(const SurfaceMaterial& material);
+/// Where a beam crossing the canopy volume over [enter, leave] (canopyVolumeSpan with
+/// canopyTallest) stops in the shaped canopy, for a uniform draw u: +inf when it goes through.
+[[nodiscard]] double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
+                                      const std::array<double, 3>& size, const Pose& placed,
+                                      const std::array<double, 3>& origin,
+                                      const std::array<double, 3>& direction, double enter,
+                                      double leave, double u);
+/// canopyShortening in the shaped canopy, for a hit at (x, y) on a surface without a volume
+/// (meshes, height fields): the local height and the form's leaf profile.
+[[nodiscard]] double canopyShapedShortening(const SurfaceMaterial& material, double x, double y,
+                                            double cosIncidence, double range, double u);
+
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);
 
