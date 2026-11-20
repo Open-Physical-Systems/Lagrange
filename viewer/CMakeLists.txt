@@ -404,7 +404,12 @@ if(BUILD_TESTING)
     find_package(lagrange_core REQUIRED)
     # The design's font sizes are CSS em sizes (app/theme/src/Fonts.cpp).
     ament_add_gtest(test_viewer_fonts app/theme/test/test_fonts.cpp TIMEOUT 60)
-    target_link_libraries(test_viewer_fonts lagrange_viewer_widgets)
+    # lagrange_core for the unit texts (lagrange::symbol) whose glyphs the fonts must have.
+    target_link_libraries(
+        test_viewer_fonts
+        lagrange_viewer_widgets
+        lagrange_core::lagrange_core
+    )
     target_compile_definitions(
         test_viewer_fonts
         PRIVATE LAGRANGE_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"

@@ -24,6 +24,11 @@ void step(std::int64_t dtNs, char* buffer, std::size_t size);
 void domainDetail(const DomainView& view, char* buffer, std::size_t size);
 /// One of the eight physics domains (as opposed to an additional module such as comms).
 [[nodiscard]] bool isPhysicsDomain(std::string_view name);
+/// A domain beside the physics ones that this run has: running, being edited, or named in the
+/// server's profile and available (the stage gives it work: fire, lights, actuators, ...). The
+/// domain strip and the Domains table list these after the physics domains; the rest stay in
+/// Additional modules. `info` is the server's report of it (nullptr when it has none).
+[[nodiscard]] bool isRunDomain(const DomainView& view, const DomainInfo* info);
 
 }  // namespace lagrange::viewer::format
 

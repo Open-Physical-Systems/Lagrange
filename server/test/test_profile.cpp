@@ -166,6 +166,35 @@ TEST(Profile, TheSchemaCatchesTyposAndMissingSubstitutes) {
     EXPECT_FALSE(check.valid) << issues(check);
 }
 
+// A server newer than its installed schema (an overlay that rebuilt lagrange_server but not
+// lagrange_profiles): its own profile names a domain the schema does not know. That is said as
+// what it is, at the domain, instead of the schema's "Additional property 'fire' not allowed".
+TEST(Profile, ASchemaOlderThanTheServerIsNamed) {
+    std::string old = schema();
+    const std::string fireEntry = "\"fire\":";
+    const std::size_t at = old.find(fireEntry);
+    ASSERT_NE(at, std::string::npos);
+    old.replace(at, fireEntry.size(), "\"fire_unknown_to_this_schema\":");
+    ProfileContext c = context();
+    c.substitutes["fire"] = {"zero", "constant"};
+    c.modules.insert("fire");
+    const std::string withFire = profile() + "  fire: {enabled: true}\n";
+
+    ProfileCheck check = checkProfile(withFire, old, c);
+    EXPECT_FALSE(check.valid);
+    ASSERT_EQ(check.issues.size(), 1U) << issues(check);
+    EXPECT_TRUE(hasIssue(check, "/domains/fire")) << issues(check);
+    EXPECT_NE(check.issues.front().message.find("lagrange_profiles"), std::string::npos)
+        << issues(check);
+    // With the schema of the same source, the same profile is valid.
+    check = checkProfile(withFire, schema(), c);
+    EXPECT_TRUE(check.valid) << issues(check);
+    // A name that is no domain of this server stays the schema's error.
+    check = checkProfile(profile() + "  fyre: {enabled: true}\n", schema(), c);
+    EXPECT_FALSE(check.valid);
+    EXPECT_EQ(issues(check).find("lagrange_profiles"), std::string::npos) << issues(check);
+}
+
 TEST(Profile, AppliesTheRealTimeFactorAndWarnsAboutWhatItIgnores) {
     const ProfileCheck check = checkProfile(
         profile("{enabled: true}", "{enabled: true}",

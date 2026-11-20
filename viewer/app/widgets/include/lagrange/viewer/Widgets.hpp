@@ -17,7 +17,8 @@ namespace lagrange::viewer::widgets {
 
 /// The identity colour of a physics domain ("rigid_body", ...). Grey for other modules.
 [[nodiscard]] ImVec4 domainColor(std::string_view domain);
-/// The name of a domain as the user reads it ("Rigid body"). Unknown names are returned as is.
+/// The name of a domain as the user reads it ("Rigid body"). A domain the design does not name
+/// reads as its key in words ("vehicle_dynamics": "Vehicle dynamics").
 [[nodiscard]] std::string_view domainLabel(std::string_view domain);
 /// The short name used on the domain strip ("Aero").
 [[nodiscard]] std::string_view domainShortLabel(std::string_view domain);
