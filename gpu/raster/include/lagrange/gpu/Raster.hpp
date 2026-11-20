@@ -16,6 +16,7 @@ namespace lagrange::gpu {
 class Device;
 struct RealisticLamp;
 struct RealisticWaterSurface;
+struct AirRotor;
 
 // --- the mesh pipeline shared by the viewer's viewport and the camera sensor ----------------
 // (invariant 13: one shader, gpu/kernels/camera/mesh.slang, draws both)
@@ -244,6 +245,10 @@ public:
     /// default value: the still level again). Depth and instance ids keep the still level: the
     /// sensor moves its depth onto the surface in double (sensors::rayOntoWater).
     void setWaterSurface(const RealisticWaterSurface& surface);
+
+    /// The rotors whose outwash bends grass and vegetation in the realistic look from now on
+    /// (GroundAir.hpp); the simple look draws no grass.
+    void setAir(std::span<const AirRotor> rotors);
 
     /// Whether colour is drawn (the default). Without, render() draws only depth and instance
     /// ids, and the colour reads back as zeros: for a camera that needs no colour, as a thermal

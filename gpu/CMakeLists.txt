@@ -231,6 +231,20 @@ lagrange_add_slang_shader(
     STAGE fragment
     SYMBOL kRealWaterFragment
 )
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY vsVeg
+    STAGE vertex
+    SYMBOL kRealVegVertex
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsVeg
+    STAGE fragment
+    SYMBOL kRealVegFragment
+)
 
 install(
     DIRECTORY assets_textures/

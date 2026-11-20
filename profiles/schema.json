@@ -38,6 +38,7 @@
         "rotor_aero":       { "$ref": "#/$defs/rotor_aero" },
         "hydrodynamics":    { "$ref": "#/$defs/generic_domain" },
         "tether":           { "$ref": "#/$defs/generic_domain" },
+        "vegetation":       { "$ref": "#/$defs/generic_domain" },
         "fire":             { "$ref": "#/$defs/generic_domain" },
         "lights":           { "$ref": "#/$defs/generic_domain" },
         "actuators":        { "$ref": "#/$defs/generic_domain" },

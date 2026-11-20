@@ -1,5 +1,6 @@
 // The Tier 0 caster (ShapeCaster: Embree culls, the exact tests decide) must give exactly what
 // the brute-force reference gives, every shape against every ray, bit for bit (invariant 7).
+#include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
 
@@ -7,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <numbers>
 #include <random>
 #include <vector>
@@ -324,6 +326,148 @@ TEST(ShapeCaster, BoundingRadiusContainsEveryShape) {
     EXPECT_DOUBLE_EQ(boundingRadius(ShapeType::Cylinder, {0.3, 0.4, 0}), 0.5);
     EXPECT_DOUBLE_EQ(boundingRadius(ShapeType::Box, {1.0, 2.0, 2.0}), 3.0);
     EXPECT_TRUE(std::isinf(boundingRadius(ShapeType::Plane, {1, 1, 1})));
+}
+
+// Lidar over grass: the mean shortening over many beams is the closed form of the gap model,
+// grazing beams end nearer the blade tops than steep ones, no canopy changes nothing, and the
+// draws are the same on every run (counter-based streams).
+TEST(CanopyReturn, MeanShorteningMatchesTheGapModel) {
+    constexpr int kBeams = 200000;
+    for (const double h : {0.05, 0.4}) {
+        for (const double c : {1.0, 0.5, 0.1}) {
+            double sum = 0.0;
+            double sumSq = 0.0;
+            for (int i = 0; i < kBeams; ++i) {
+                random::Stream rng(7, 3, static_cast<std::uint32_t>(i));
+                const double d = canopyShortening(h, c, 20.0, rng.uniform());
+                EXPECT_GE(d, 0.0);
+                EXPECT_LE(d, h / c + 1e-12);
+                sum += d;
+                sumSq += d * d;
+            }
+            const double mean = sum / kBeams;
+            const double sd = std::sqrt(sumSq / kBeams - mean * mean);
+            const double mu = kCanopyProjection * kCanopyLeafAreaIndex / h;
+            const double path = h / c;
+            const double expected = path - (1.0 - std::exp(-mu * path)) / mu;
+            EXPECT_NEAR(canopyMeanShortening(h, c, 20.0), expected, 1e-12);
+            EXPECT_NEAR(mean, expected, 5.0 * sd / std::sqrt(kBeams)) << h << " " << c;
+        }
+    }
+    // A grazing beam's return is nearer the blade tops: the share of the path it goes into the
+    // canopy, (path - shortening) / path, is smaller than a steep beam's.
+    const double h = 0.05;
+    const double grazing = 1.0 - canopyMeanShortening(h, 0.1, 20.0) / (h / 0.1);
+    const double steep = 1.0 - canopyMeanShortening(h, 1.0, 20.0) / h;
+    EXPECT_LT(grazing, steep);
+    // The path is bounded by the range: a lidar inside the canopy.
+    EXPECT_LE(canopyMeanShortening(0.4, 0.01, 1.5), 1.5);
+}
+
+TEST(CanopyReturn, NoCanopyNoChangeAndDeterministic) {
+    for (int i = 0; i < 1000; ++i) {
+        random::Stream rng(1, 2, static_cast<std::uint32_t>(i));
+        EXPECT_EQ(canopyShortening(0.0, 0.3, 12.0, rng.uniform()), 0.0);
+    }
+    EXPECT_EQ(canopyMeanShortening(0.0, 0.3, 12.0), 0.0);
+    EXPECT_EQ(canopyShortening(0.05, 0.3, std::numeric_limits<double>::infinity(), 0.5), 0.0);
+    for (int i = 0; i < 1000; ++i) {
+        random::Stream a(11, 5, static_cast<std::uint32_t>(i));
+        random::Stream b(11, 5, static_cast<std::uint32_t>(i));
+        const double x = canopyShortening(0.05, 0.2, 9.0, a.uniform());
+        const double y = canopyShortening(0.05, 0.2, 9.0, b.uniform());
+        EXPECT_EQ(std::memcmp(&x, &y, sizeof x), 0);
+    }
+}
+
+// The surface's own leaf area index: denser canopies return nearer their top, and the default
+// overload is LAI 3.
+TEST(CanopyReturn, LeafAreaIndexOfTheSurface) {
+    const double h = 1.5;
+    for (const double lai : {1.0, 4.0, 6.0}) {
+        const double mu = kCanopyProjection * lai / h;
+        const double path = h / 0.5;
+        EXPECT_NEAR(canopyMeanShortening(h, lai, 0.5, 20.0),
+                    path - (1.0 - std::exp(-mu * path)) / mu, 1e-12);
+    }
+    EXPECT_LT(canopyMeanShortening(h, 1.0, 0.5, 20.0), canopyMeanShortening(h, 6.0, 0.5, 20.0));
+    EXPECT_EQ(canopyMeanShortening(0.4, 3.0, 0.3, 9.0), canopyMeanShortening(0.4, 0.3, 9.0));
+    EXPECT_EQ(canopyShortening(0.4, 0.0, 0.3, 9.0, 0.9), 0.0);
+}
+
+// Reeds and shrubs: a level beam over a reed bank (a box whose top is the soil, canopy 1.5 m
+// over it) crosses the canopy volume for the bank's width; the share of beams that stop in it is
+// 1 - exp(-mu L), mu = G LAI / h, and the mean depth of the stops is the closed form of a
+// truncated exponential. Above the canopy and beside the bank nothing stops.
+TEST(CanopyVolume, LevelBeamOverAReedBank) {
+    const std::array<double, 3> half{2.0, 5.0, 0.5};  // 4 m wide bank, top at z = 0.5
+    const Pose bank{{10.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    const double h = 1.5;
+    const double lai = 4.0;
+    double enter = 0.0;
+    double leave = 0.0;
+    // A drone's lidar 1 m over the soil, looking along +x at the bank.
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0}, h,
+                                 50.0, enter, leave));
+    EXPECT_NEAR(enter, 8.0, 1e-12);
+    EXPECT_NEAR(leave, 12.0, 1e-12);
+    // Clipped by the hit.
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0}, h,
+                                 9.0, enter, leave));
+    EXPECT_NEAR(leave, 9.0, 1e-12);
+    // Over the canopy's top, and beside the bank.
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 2.1}, {1.0, 0.0, 0.0}, h,
+                                  50.0, enter, leave));
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 6.0, 1.5}, {1.0, 0.0, 0.0}, h,
+                                  50.0, enter, leave));
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0}, 0.0,
+                                  50.0, enter, leave));
+    // A sphere has no canopy volume.
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Sphere, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0},
+                                  h, 50.0, enter, leave));
+
+    constexpr int kBeams = 200000;
+    const double mu = kCanopyProjection * lai / h;
+    const double length = 4.0;
+    int stopped = 0;
+    double depth = 0.0;
+    for (int i = 0; i < kBeams; ++i) {
+        random::Stream rng(5, 9, static_cast<std::uint32_t>(i));
+        const double at = canopyVolumeStop(8.0, 12.0, h, lai, rng.uniform());
+        if (std::isfinite(at)) {
+            EXPECT_GE(at, 8.0);
+            EXPECT_LT(at, 12.0);
+            ++stopped;
+            depth += at - 8.0;
+        }
+    }
+    const double p = 1.0 - std::exp(-mu * length);
+    const double share = static_cast<double>(stopped) / kBeams;
+    EXPECT_NEAR(share, p, 5.0 * std::sqrt(p * (1.0 - p) / kBeams));
+    // E[s | s < L] = 1/mu - L exp(-mu L) / (1 - exp(-mu L)).
+    const double expected = 1.0 / mu - length * std::exp(-mu * length) / p;
+    EXPECT_NEAR(depth / stopped, expected, 0.01);
+}
+
+// Over a plane the canopy is a slab: a level beam inside it is bounded by its range, a beam
+// from above crosses h / c of it.
+TEST(CanopyVolume, SlabOverAPlane) {
+    const Pose ground{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    double enter = 0.0;
+    double leave = 0.0;
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, {0.0, 0.0, 0.5},
+                                 {0.0, 1.0, 0.0}, 1.0, 30.0, enter, leave));
+    EXPECT_EQ(enter, 0.0);
+    EXPECT_EQ(leave, 30.0);
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, {0.0, 0.0, 0.5},
+                                  {0.0, 1.0, 0.0}, 1.0, std::numeric_limits<double>::infinity(),
+                                  enter, leave));
+    const double c = 0.5;
+    const std::array<double, 3> down{std::sqrt(1.0 - c * c), 0.0, -c};
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, {0.0, 0.0, 3.0}, down,
+                                 1.0, 100.0, enter, leave));
+    EXPECT_NEAR(leave - enter, 1.0 / c, 1e-12);
+    EXPECT_NEAR(enter, 2.0 / c, 1e-12);
 }
 
 }  // namespace

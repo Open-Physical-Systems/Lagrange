@@ -28,7 +28,7 @@ struct Frame
     float4 weather;           // x: rain, mm/h; y: snow, mm/h of water; zw: the wind, m/s, world
     float4 light;             // x: the daylight's share (1: the drawn day; the sky and the sun's
                               // light scale by it); y: lamps; z: 1 to write the linear HDR value
-                              // (calibration tests); w: unused
+                              // (calibration tests); w: rotor ground jets in airJets
     float4 surface;           // the water's moving surface (water.md): xy the first cell's centre
                               // relative to the eye; z: its cell, m; w: cells a side (0: none)
     float4 surfaceLook;       // x: relief, the slopes' scale (1: the physics' slopes as they are)
@@ -37,7 +37,10 @@ struct Frame
     float4 sprayDims;         // xyz: cells (0: none); w: extinction per kg/m³ of water, 1/m
     float4 waterOptics;       // xyz: dissolved organic matter's absorption at 620, 550, 465 nm,
                               // 1/m; w: unused
+    float4 airJets[16];       // per jet (GroundAir.hpp): xyz its ground hit relative to the eye,
+                              // w arriving speed m/s; then x its arriving radius m
 };
+static const int kAirJets = 8; // kMaxAirJets
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
 [[vk::binding(1)]] Sampler2D shadowMap;   // the sun's depth, two cascades side by side
@@ -512,6 +515,230 @@ float2 imageOf(int kind)
     }
 }
 
+
+// --- grass ----------------------------------------------------------------------------------
+// Kinds (surfacePatternOf): 6 lawn/grass, 12 tall grass, 13 wet grass, 14 dry grass. Near the eye
+// the blades stand up off the ground: the view ray is marched down through a canopy of the kind's
+// height (parallax, as in Tatarchuk's parallax occlusion mapping, 2006), only in colour and normal:
+// the depth and instance id stay those of the ground, so camera sensors' depth does not change.
+// Blades lean with the wind (`frame.weather.zw`, m/s, the way it blows) and gusts run over the
+// field as waves at the wind's speed; rain (`frame.weather.x`, mm/h) darkens and wets them and
+// bows them a little. The looks are drawn, not measured: TODO(verify) heights and leaning against
+// photographs; heights follow the surface presets' canopyHeight (core/world/src/World.cpp).
+// TODO(rotor downwash): the realistic renderer has no rotor or `aero/wind_speed` input; flattening
+// under a hovering drone needs a per-frame list of rotor discs (position, thrust) in Frame.
+
+int grassOf(int kind)
+{
+    if (kind == 6) return 1;   // lawn
+    if (kind == 12) return 2;  // tall grass
+    if (kind == 13) return 3;  // wet grass
+    if (kind == 14) return 4;  // dry grass
+    return 0;
+}
+
+struct GrassLook
+{
+    float height;   // m, of the tallest blades
+    float spacing;  // m, between blades
+    float width;    // of a blade at its root, as a share of the spacing
+    float stiff;    // how little the wind bends it: 1 stands, 0 lies down
+    float wet;      // 0..1 of its own, before the rain
+    float3 tint;    // on the material's colour
+};
+
+GrassLook grassLook(int grass)
+{
+    GrassLook g;
+    g.height = 0.05; g.spacing = 0.014; g.width = 0.55; g.stiff = 0.8; g.wet = 0.0;
+    g.tint = float3(1.0, 1.0, 1.0);
+    if (grass == 2) { g.height = 0.4; g.spacing = 0.03; g.width = 0.42; g.stiff = 0.35; g.tint = float3(1.08, 1.05, 0.82); }
+    if (grass == 3) { g.wet = 1.0; g.tint = float3(0.9, 0.95, 0.82); }
+    if (grass == 4) { g.height = 0.12; g.spacing = 0.02; g.width = 0.45; g.stiff = 0.55; g.tint = float3(1.45, 1.25, 0.72); }
+    return g;
+}
+
+// The air moving over the ground at `world` (the same coordinates as grassBend's), m/s in
+// world xy: the site wind, plus (to come) the outwash of hovering rotors. Grass and vegetation
+// read the air only through this, so the downwash reaches all of them in one place.
+// Rotor outwash (GroundAir.hpp's outwashProfile, the fit to Tanner et al. 2015 of
+// aerodynamics::Downwash): speed at radius rho and height z for a jet arriving at `arriving` m/s
+// with top-hat radius `jetRadius`.
+float outwashProfile(float arriving, float jetRadius, float rho, float z)
+{
+    const float calArriving = 1.70710678; // 1 + 1/sqrt(2)
+    float r = jetRadius * sqrt(calArriving);
+    float peakRadius = 1.7 * r;
+    float peak = arriving * 1.9 / calArriving;
+    float radial = rho < peakRadius ? pow(rho / peakRadius, 0.8) : pow(peakRadius / rho, 1.1);
+    float zPeak = 0.05 * r;
+    float layer = 0.15 * r + 0.073 * max(0.0, rho - peakRadius);
+    float vertical = z <= zPeak ? pow(max(z, 0.0) / zPeak, 1.0 / 7.0)
+                                : exp(-0.693147 * ((z - zPeak) / (layer - zPeak)) * ((z - zPeak) / (layer - zPeak)));
+    return peak * radial * vertical;
+}
+
+float2 groundAir(float3 world)
+{
+    float2 air = frame.weather.zw;
+    float3 relative = world - frame.worldWrap.xyz;
+    float t = frame.worldWrap.w;
+    int count = min(int(frame.light.w), kAirJets);
+    for (int i = 0; i < count; ++i)
+    {
+        float4 a = frame.airJets[2 * i];
+        float jetRadius = frame.airJets[2 * i + 1].x;
+        float2 d = relative.xy - a.xy;
+        float rho = length(d);
+        float z = relative.z - a.z;
+        if (rho < 1e-4 || z < -0.5)  // well below the surface it meets: under a roof
+            continue;
+        // The blades stand taller than the wall layer: they feel its peak (GroundAir.hpp).
+        float r = jetRadius * sqrt(1.70710678);
+        float v = outwashProfile(a.w, jetRadius, rho, max(z, 0.05 * r));
+        // The outwash is unsteady (Tanner et al. 2015 report fluctuations of the order of the
+        // mean): drawn as gusts running outward at about half its speed, rings broken by noise.
+        // Their size and strength are a drawing choice. TODO(verify): the measured spectrum.
+        float wave = rho / max(jetRadius, 0.05) - t * 0.5 * a.w / max(jetRadius, 0.05);
+        float angle = atan2(d.y, d.x);
+        float n = noise3(float3(cos(angle) * 3.0 + rho * 1.5, sin(angle) * 3.0, t * 1.7));
+        float pulse = 1.0 + 0.45 * sin(wave * 2.2) * (0.5 + n) + 0.25 * (n - 0.5);
+        air += d / rho * v * max(pulse, 0.0);
+    }
+    return air;
+}
+
+// How far air of `speed` m/s lays over vegetation of stiffness `stiff` (0 limp .. 1 stiff), 0..1.
+// Plants bend by the dynamic pressure q = ½ρv² against their stiffness (the Cauchy number,
+// de Langre, "Effects of wind on plants", Annu. Rev. Fluid Mech. 40, 2008, §3): the lean is
+// q / (q + q½), with q½ the pressure that lays them half over. q½ = 30·stiff² Pa is a drawing
+// gain, TODO(verify) against measured lodging of turf and reeds; ρ is ISA sea level.
+float airPush(float speed, float stiff)
+{
+    float q = 0.5 * 1.225 * speed * speed;
+    float half = 30.0 * stiff * stiff + 0.5;
+    return q / (q + half);
+}
+
+// How far the blades' tips are pushed, m per m of height, in world xy: lean, gusts, sway.
+float2 grassBend(float3 world, float stiff, float wetness)
+{
+    float2 wind = groundAir(world);
+    float speed = length(wind);
+    float t = frame.worldWrap.w;
+    float2 along = speed > 0.05 ? wind / speed : float2(1.0, 0.0);
+    float2 across = float2(-along.y, along.x);
+    // Gusts: a noise field carried with the wind, so bright and dark bands of bent blades run
+    // over the field at its speed.
+    float x = dot(world.xy, along) - speed * fmod(t, 600.0);
+    float y = dot(world.xy, across);
+    float gust = noise3(float3(x * 0.18, y * 0.18, 0.0)) * 0.7 + noise3(float3(x * 0.6, y * 0.6, 3.0)) * 0.3;
+    float push = airPush(speed, stiff);
+    // Most of the lean steady, the rest in the gusts; near flat (1.4: the tip at the root's
+    // height) when the pressure far exceeds the stiffness.
+    float lean = 1.4 * push * (0.6 + 0.4 * gust * 1.3);
+    // Each tuft sways at its own about 1-2 Hz, more in more wind.
+    float phase = hash2(floor(world.xy * 6.0)) * 6.283;
+    float sway = sin(t * (6.0 + 5.0 * push) + phase + x * 1.5) * (0.04 + 0.18 * push) * (1.0 - 0.5 * stiff);
+    float2 bend = along * min(lean, 1.1) + across * sway;
+    // Wet blades bow under their water, all round.
+    float2 droop = float2(hash2(floor(world.xy * 40.0)) - 0.5, hash2(floor(world.xy * 40.0) + 7.0) - 0.5);
+    return bend + droop * 0.5 * wetness;
+}
+
+void grassSurface(int kind, float3 world, float distance, float mid, float near, inout float3 N,
+                  inout float3 albedo, inout float roughness)
+{
+    GrassLook g = grassLook(grassOf(kind));
+    float rain = saturate(log2(1.0 + frame.weather.x) / 3.5);  // ~ soaked by 10 mm/h
+    float wetness = max(g.wet, rain);
+    float2 bend = grassBend(world, g.stiff, wetness);
+    float height = g.height * (1.0 - 0.15 * wetness);
+    // Far: the old flat lawn (or its photograph), bands of bent blades show lighter.
+    float2 image = imageOf(kind);
+    float3 base = albedo * g.tint;
+    float3 flat = base;
+    float3 Nflat = N;
+    if (frame.mode.w > 0.5 && image.y > 0.0)
+        imageSurface(image.x, image.y, 1.0, world, Nflat, flat);
+    else
+    {
+        float blades = noise3(float3(world.xy * float2(38.0, 44.0), 1.0));
+        float dry = smoothstep(0.45, 0.7, fbm(world * 0.17, 4)) * (grassOf(kind) == 4 ? 0.3 : 1.0);
+        flat = lerp(flat, flat * float3(1.75, 1.35, 0.8), dry);
+        flat *= 0.55 + 0.75 * mid + 0.55 * blades * near;
+        Nflat = normalize(N + float3(blades - 0.5, noise3(world * 31.0) - 0.5, 0.0) * 0.4 * near);
+    }
+    // Blades bent away show their pale backs and catch the sky.
+    // Pressed flat (the outwash, a gale), their backs and the sheen of the laid blades show as a
+    // lighter, greyer band that moves with the pulses of the air. Gains: TODO(verify).
+    float laid = saturate(length(bend) / 1.2);
+    laid = laid * laid;
+    flat *= 1.0 + 0.15 * saturate(length(bend)) * (grassOf(kind) == 2 ? 1.0 : 0.5);
+    flat = lerp(flat, flat * 1.9 + float3(0.05, 0.06, 0.04), 0.9 * laid);
+    roughness = lerp(roughness, 0.45, 0.6 * laid);
+    float3 outAlbedo = flat;
+    float3 outN = Nflat;
+    float up = smoothstep(0.6, 0.85, N.z);
+    // Fade the blades out before one is narrower than a pixel, where they would only shimmer.
+    float close = (1.0 - smoothstep(3.0, 6.0 + 30.0 * height, distance)) * up;
+    if (close > 0.01)
+    {
+        // March down from the canopy's top (the drawn ground) to the soil.
+        float3 d = normalize(world - frame.worldWrap.xyz);
+        float down = max(-d.z, 0.12);
+        static const int kSteps = 14;
+        float dz = height / float(kSteps);
+        float3 hitColor = base * 0.16 * float3(0.9, 0.75, 0.6);  // the soil, between the roots
+        float3 hitN = float3(0.0, 0.0, 1.0);
+        for (int i = 0; i < kSteps; ++i)
+        {
+            float z = height - (float(i) + 0.5) * dz;   // above the soil
+            float2 q = world.xy + d.xy * ((float(i) + 0.5) * dz / down);
+            float f = z / height;                        // 0 root .. 1 top
+            // Where this blade grew: undo its bend at this height (it curves, tips most).
+            float2 root = q - bend * height * f * f;
+            float2 cell = floor(root / g.spacing);
+            float2 local = root / g.spacing - cell;
+            float2 centre = float2(hash2(cell), hash2(cell + 17.0)) * 0.6 + 0.2;
+            float own = 0.55 + 0.45 * hash2(cell + 5.0);  // this blade's height share
+            float2 off = local - centre;
+            float r = length(off);
+            if (f < own && r < g.width * 0.5 * (1.0 - f / own * 0.85))
+            {
+                float tone = hash2(cell + 9.0);
+                float3 c = base * lerp(float3(0.7, 0.78, 0.6), float3(1.25, 1.15, 0.85), tone);
+                if (grassOf(kind) == 2 || grassOf(kind) == 4)
+                    c = lerp(c, base * float3(1.6, 1.35, 0.7), smoothstep(0.75, 1.0, tone) * 0.7);  // seed heads, straw
+                // Dark down in the canopy, where little light gets in.
+                c *= lerp(0.28, 1.15, pow(f / own, 0.8));
+                hitColor = c;
+                float2 side = r > 1e-4 ? off / r : float2(0.0);
+                hitN = normalize(float3(side * 0.35 + bend * 0.3, 1.0));
+                break;
+            }
+        }
+        // Filter by the pixel's footprint: where a pixel covers several blades, show their
+        // average (the flat look) instead of one blade picked at random, which sparkles.
+        float footprint = distance * 2.0 * frame.cameraUp.w * frame.screen.w / down;  // m per pixel
+        float resolved = 1.0 - smoothstep(0.25, 0.9, footprint / (g.spacing * g.width));
+        // (The average keeps the field's own colour: pulling it towards the bare material's
+        // colour desaturated the tall and wet strips.)
+        hitColor = lerp(flat * 0.85, hitColor, resolved);
+        hitN = normalize(lerp(Nflat, hitN, resolved));
+        outAlbedo = lerp(flat, hitColor, close);
+        outN = normalize(lerp(Nflat, hitN, close));
+    }
+    albedo = outAlbedo;
+    N = outN;
+    // Wet: darker (water fills the gaps of the surface), glossier, a sheen on the blades.
+    albedo *= lerp(1.0, 0.62, wetness);
+    // Blades are matte; water on them glosses them only so far (a sheen, not a mirror).
+    // At 0.55 the wet strip mirrored the sky as a pale bluish-white sheen; the canopy hides most
+    // of the sky from its own drops, so the sheen stays broad.
+    roughness = max(lerp(roughness, 0.75, wetness), lerp(0.85, 0.75, wetness));
+}
+
 void surfacePattern(float pattern, float3 world, float distance, inout float3 N, inout float3 albedo,
                     inout float metallic, inout float roughness)
 {
@@ -523,8 +750,12 @@ void surfacePattern(float pattern, float3 world, float distance, inout float3 N,
     float wall = 1.0 - smoothstep(0.3, 0.7, abs(N.z));
     int kind = int(pattern + 0.5);
     float2 image = imageOf(kind);
-    if (frame.mode.w > 0.5 && image.y > 0.0)
-        imageSurface(image.x, image.y, kind == 6 ? 1.0 : 0.7, world, N, albedo);
+    if (grassOf(kind) > 0)
+        grassSurface(kind, world, distance, mid, near, N, albedo, roughness);
+    else if (frame.mode.w > 0.5 && image.y > 0.0)
+        imageSurface(image.x, image.y, 0.7, world, N, albedo);
+    else if (kind == 15 || kind == 16)  // under reeds and shrubs: their dark litter and shade
+        albedo *= (0.35 + 0.35 * mid) * lerp(float3(0.8, 0.75, 0.6), float3(1.0), wide);
     else if (kind == 1)  // brick: running bond, 225 x 75 mm with a 10 mm joint
     {
         float2 size = float2(0.235, 0.085);
@@ -575,14 +806,6 @@ void surfacePattern(float pattern, float3 world, float distance, inout float3 N,
         albedo *= (0.76 + 0.3 * hash2(floor(cell)) * 0.5 + 0.34 * wide) * lerp(0.45, 1.0, face);
         albedo *= lerp(1.0, 0.55, tie * near);
     }
-    else if (kind == 6)  // grass: blades of many greens, with dry patches
-    {
-        float blades = noise3(float3(world.xy * float2(38.0, 44.0), 1.0));
-        float dry = smoothstep(0.45, 0.7, fbm(world * 0.17, 4));
-        albedo = lerp(albedo, albedo * float3(1.75, 1.35, 0.8), dry);
-        albedo *= 0.55 + 0.75 * mid + 0.55 * blades * near;
-        N = normalize(N + float3(blades - 0.5, noise3(world * 31.0) - 0.5, 0.0) * 0.8 * near);
-    }
     else if (kind == 7)  // leaves: clumps, light through the gaps
     {
         float clump = fbm(world * 3.1, 3);
@@ -621,7 +844,7 @@ void surfacePattern(float pattern, float3 world, float distance, inout float3 N,
         albedo *= (0.65 + 0.7 * noise3(world * 24.0) * near + 0.35 * wide) * lerp(0.5, 1.0, face);
     }
     // Dirt where walls meet the street, rain marks under what sticks out.
-    if (kind != 9 && kind != 6 && kind != 7 && wall > 0.5)
+    if (kind != 9 && grassOf(kind) == 0 && kind != 7 && wall > 0.5)
     {
         float foot = 1.0 - smoothstep(0.0, 0.9 + 0.5 * mid, world.z);
         albedo *= lerp(1.0, 0.62, foot);
@@ -651,7 +874,7 @@ void seasonOf(float pattern, float3 world, inout float3 N, inout float3 albedo, 
             turn = lerp(turn, float3(0.72, 0.5, 0.06), smoothstep(0.45, 0.72, tree));
             albedo = turn * (dot(albedo, float3(0.33)) * 3.2 + 0.12);
         }
-        else if (kind == 6)  // tired grass, leaves lying on it
+        else if (grassOf(kind) > 0)  // tired grass, leaves lying on it
         {
             albedo = lerp(albedo, albedo.ggg * float3(1.15, 0.85, 0.42), 0.65);
             float fallen = smoothstep(0.62, 0.66, noise3(world * 4.5));
@@ -692,7 +915,7 @@ void seasonOf(float pattern, float3 world, inout float3 N, inout float3 albedo, 
     else if (season == 3)
     {
         // Everything soaked: darker, and shining where it is level.
-        float porous = kind == 6 || kind == 7 ? 0.75 : 0.55;
+        float porous = grassOf(kind) > 0 || kind == 7 ? 0.75 : 0.55;
         albedo *= lerp(1.0, porous, 0.6 + 0.4 * up);
         roughness *= lerp(0.72, 0.32, up);
         if (up > 0.5 && (kind == 2 || kind == 3 || kind == 8))
@@ -730,7 +953,11 @@ float4 fsMesh(MeshOutput input, bool front : SV_IsFrontFace) : SV_Target
     float metallic = push.surface.x;
     if (push.surface.w > 0.5)
         surfacePattern(push.surface.w, world, length(input.relative), N, albedo, metallic, roughness);
-    surfaceDetail(world, N, albedo, roughness);
+    // Grass carries its own detail (blades, tufts): the stone-like grain on top of it only greys
+    // it and tilts its normals towards the sky's bluish reflection, which made the tall and wet
+    // strips look pale bluish-white and grainy near the eye.
+    if (grassOf(int(push.surface.w + 0.5)) == 0)
+        surfaceDetail(world, N, albedo, roughness);
     seasonOf(push.surface.w, world, N, albedo, metallic, roughness, dot(push.emissive.rgb, float3(1.0)));
     if (push.baseColor.a < 1.0)
         albedo *= push.baseColor.a;  // glass shows little of its own colour, mostly reflections
@@ -1514,4 +1741,204 @@ float4 fsWater(WaterOutput input) : SV_Target
         color = lerp(color, float3(0.78, 0.82, 0.84) * (0.45 + 0.65 * visibility * sunUp) * frame.light.x, foam * 0.85);
 
     return float4(fogged(color, input.relative), 1.0);
+}
+
+// --- vegetation: reeds and shrubs as real geometry ------------------------------------------
+// On a surface whose material names `reeds` or `shrub` (kinds 15, 16 of surfacePatternOf), the
+// renderer draws a clump in every cell of a world grid over its top (RealisticRenderer::record),
+// built here from the vertex and instance index alone: no buffers, the same clump in the same
+// cell every frame and on every machine. Reeds are 12 long, thin, curved, tapered blades, two of
+// them stems with seed heads; a shrub 60 leaves round a hidden stem. Each blade bends with the air
+// at its root (groundAir), tips most (the bend grows with the square of the height along it, as
+// a cantilever's under an even load does), each clump at its own stiffness and sway. Clumps fade
+// out (shrink to nothing) before `push.model[2].z` metres. The looks are drawn, not measured:
+// TODO(verify) clump spacing, blade counts and leaf sizes against photographs of reed beds.
+// Push (96 bytes, Push's layout): model[0] = first cell's corner relative to the eye (xyz),
+// spacing; model[1] = first cell index (i, j), cells (nx, ny); model[2] = kind (15, 16), height
+// (m), fade distance (m), mirror plane (relative z; 1e9 when not mirrored); baseColor = the
+// material's colour; surface = the patch's rectangle relative to the eye (x0, y0, x1, y1).
+
+static const uint kVegVertices = 360;  // per clump: reeds 12 blades x 5 segments x 6, shrubs 60 x 6
+
+uint vegHash(uint x)
+{
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float vegRandom(inout uint state)
+{
+    state = vegHash(state + 0x9e3779b9u);
+    return float(state & 0xffffffu) / 16777216.0;
+}
+
+struct VegOutput
+{
+    float4 position : SV_Position;
+    float3 relative;
+    float3 normal;
+    float3 color;
+    float rough;
+};
+
+VegOutput vegNothing()
+{
+    VegOutput o;
+    o.position = float4(0.0, 0.0, -1.0, 1.0);  // outside the clip volume: clipped away
+    o.relative = float3(0.0);
+    o.normal = float3(0.0, 0.0, 1.0);
+    o.color = float3(0.0);
+    o.rough = 1.0;
+    return o;
+}
+
+[shader("vertex")]
+VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
+{
+    uint nx = uint(push.model[1].z);
+    int2 cell = int2(int(push.model[1].x) + int(instance % nx), int(push.model[1].y) + int(instance / nx));
+    float spacing = push.model[0].w;
+    int kind = int(push.model[2].x + 0.5);
+    float H = push.model[2].y;
+    uint seed = vegHash(uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ uint(kind) * 83492791u);
+    uint s = seed;
+    // The clump's root, jittered in its cell; relative to the eye.
+    float2 lo = float2(instance % nx, instance / nx);
+    float2 jitter = float2(vegRandom(s), vegRandom(s)) * 0.8 + 0.1;
+    float3 root = float3(push.model[0].xy + (lo + jitter) * spacing, push.model[0].z);
+    if (root.x < push.surface.x || root.y < push.surface.y || root.x > push.surface.z || root.y > push.surface.w)
+        return vegNothing();
+    float distance = length(root);
+    float fade = 1.0 - smoothstep(push.model[2].z * 0.6, push.model[2].z, distance);
+    // Bare patches: about one cell in six has nothing.
+    if (fade <= 0.0 || vegRandom(s) < 0.15)
+        return vegNothing();
+    float3 world = root + frame.worldWrap.xyz;
+    float clumpH = H * (0.7 + 0.3 * vegRandom(s)) * (0.4 + 0.6 * fade);
+    float stiff = kind == 16 ? 0.75 + 0.2 * vegRandom(s) : 0.25 + 0.3 * vegRandom(s);
+    // The air at the clump: lean with it, gusts carried with it, a sway of the clump's own.
+    float2 wind = groundAir(world);
+    float speed = length(wind);
+    float t = frame.worldWrap.w;
+    float2 along = speed > 0.05 ? wind / speed : float2(1.0, 0.0);
+    float2 across = float2(-along.y, along.x);
+    float gx = dot(world.xy, along) - speed * fmod(t, 600.0);
+    float gust = noise3(float3(gx * 0.15, dot(world.xy, across) * 0.15, 0.0));
+    float pushAir = airPush(speed, stiff);
+    float lean = 1.3 * pushAir * (0.55 + 0.6 * gust);
+    float phase = vegRandom(s) * 6.283;
+    float freq = (kind == 16 ? 2.2 : 1.4) + 1.5 * vegRandom(s);  // Hz-ish: TODO(verify)
+    // Whipping in strong air: the sway grows and quickens with the push.
+    float sway = sin(t * freq * 6.283 / 3.0 * (1.0 + 1.5 * pushAir) + phase + gx * 0.8) * (0.02 + 0.35 * pushAir) * (1.0 - 0.6 * stiff);
+    float2 bend = along * min(lean, 1.0) + across * sway;
+
+    uint index = vertex;
+    VegOutput o;
+    float3 base = push.baseColor.rgb;
+    if (kind == 15)
+    {
+        // Reeds: blade b, segment g, corner c.
+        uint b = index / 30u;
+        uint r = index % 30u;
+        uint g = r / 6u;
+        static const uint level[6] = {0u, 0u, 1u, 1u, 0u, 1u};
+        static const float side[6] = {-1.0, 1.0, -1.0, -1.0, 1.0, 1.0};
+        uint bs = vegHash(seed + b * 2654435761u);
+        float azimuth = vegRandom(bs) * 6.283;
+        float2 out2 = float2(cos(azimuth), sin(azimuth));
+        // A seed head on about one clump in three, on one stem.
+        bool stem = b == 0u && (seed & 3u) == 0u;
+        if (distance > push.model[2].z * 0.35 && b >= 8u)
+            return vegNothing();  // far: fewer blades
+        float h = clumpH * (stem ? 1.0 + 0.1 * vegRandom(bs) : 0.55 + 0.45 * vegRandom(bs));
+        float curl = stem ? 0.05 : 0.15 + 0.35 * vegRandom(bs);  // how far the blade arcs out
+        float width = stem ? 0.006 : 0.010 + 0.006 * vegRandom(bs);  // m at the root
+        float2 at = out2 * vegRandom(bs) * 0.07;
+        float f = float(g + level[r % 6u]) / 5.0;  // 0 root .. 1 tip
+        float2 offset = at + out2 * curl * h * f * f + bend * h * f * f;
+        float lift = h * f * (1.0 - 0.5 * f * dot(offset - at, offset - at) / max(h * h * f * f, 1e-4) * f);
+        float2 widthDir = float2(-out2.y, out2.x);
+        float w = width * (1.0 - 0.9 * f);
+        bool head = stem && f > 0.84;
+        if (head)
+            w = 0.008;  // the seed head: a narrow plume at the top of the stem
+        float3 p = root + float3(offset + widthDir * w * side[r % 6u], lift);
+        float3 tangent = normalize(float3(out2 * (2.0 * curl * f) + bend * 2.0 * f, 1.0));
+        o.normal = normalize(cross(tangent, float3(widthDir, 0.0)));
+        o.relative = p;
+        float tone = vegRandom(bs);
+        float3 green = base * lerp(float3(0.75, 0.85, 0.6), float3(1.25, 1.2, 0.85), tone);
+        // Dark at the roots, paler and drier towards the tips.
+        float3 c = green * lerp(0.35, 1.0, saturate(f * 1.6));
+        c = lerp(c, base * float3(1.7, 1.45, 0.75), smoothstep(0.65, 1.0, f) * 0.45 * tone);
+        if (head)
+            c = float3(0.32, 0.22, 0.13);  // brown plume
+        o.color = c;
+        o.rough = 0.65;
+    }
+    else
+    {
+        // A shrub: leaf l, a kite of two triangles round its centre.
+        uint l = index / 6u;
+        uint c6 = index % 6u;
+        uint ls = vegHash(seed + l * 2246822519u);
+        if (distance > push.model[2].z * 0.4 && l >= 36u)
+            return vegNothing();
+        float radius = clumpH * 0.65;
+        // A point in the crown, a dome over the ground.
+        float u = vegRandom(ls), v = vegRandom(ls), q = vegRandom(ls);
+        float az = u * 6.283;
+        float el = asin(v * 0.95);  // 0 at the rim .. up
+        float rr = radius * (0.35 + 0.65 * sqrt(q));
+        float3 dir = float3(cos(el) * cos(az), cos(el) * sin(az), sin(el));
+        float3 centre = float3(dir.xy * rr, clumpH * 0.15 + dir.z * clumpH * 0.85 * (0.55 + 0.45 * sqrt(q)));
+        float3 nrm = normalize(dir + (float3(vegRandom(ls), vegRandom(ls), vegRandom(ls)) - 0.5) * 0.8);
+        float3 tu = normalize(cross(nrm, abs(nrm.z) < 0.9 ? float3(0, 0, 1) : float3(1, 0, 0)));
+        float3 tv = cross(nrm, tu);
+        float size = clumpH * (0.16 + 0.10 * vegRandom(ls));
+        static const float2 kite[6] = {float2(-1, 0), float2(0, -0.45), float2(0, 0.45),
+                                       float2(0, 0.45), float2(0, -0.45), float2(1, 0)};
+        float2 k = kite[c6];
+        float hf = saturate(centre.z / max(clumpH, 0.01));
+        float flutter = sin(t * 9.0 + float(l) * 1.7 + phase) * 0.15 * pushAir;
+        float3 p = centre + (tu * k.x + tv * k.y * (1.0 + flutter)) * size;
+        p.xy += bend * clumpH * hf * hf * 0.6;
+        o.relative = root + p;
+        o.normal = nrm;
+        float tone = vegRandom(ls);
+        // Outer leaves lit, inner ones in the crown's shade.
+        float3 c = base * lerp(float3(0.65, 0.8, 0.55), float3(1.3, 1.2, 0.8), tone);
+        c *= lerp(0.45, 1.05, sqrt(q)) * lerp(0.7, 1.0, hf);
+        o.color = c;
+        o.rough = 0.5;
+    }
+    if (push.model[2].w < 1e8)
+    {
+        o.relative.z = 2.0 * push.model[2].w - o.relative.z;  // the mirror pass
+        o.normal.z = -o.normal.z;
+    }
+    o.position = project(o.relative);
+    return o;
+}
+
+[shader("fragment")]
+float4 fsVeg(VegOutput input) : SV_Target
+{
+    float3 N = normalize(input.normal);
+    float3 V = normalize(-input.relative);
+    if (dot(N, V) < 0.0)
+        N = -N;  // leaves and blades have two sides
+    if (frame.mode.x > 0.5 && input.relative.z > frame.mode.y)
+        discard;
+    float3 albedo = input.color;
+    float3 color = shadeSurface(input.relative, N, albedo, 0.0, input.rough, float3(0.0));
+    // Sun through the leaf from behind: thin leaves pass on part of what falls on their far side
+    // (TODO(verify) share; about 10-20 % for green leaves, Jacquemoud & Ustin 2019, ch. 2).
+    float3 L = frame.sunDirection.xyz;
+    float back = saturate(dot(-N, L)) * saturate(dot(-V, L) * 0.5 + 0.5);
+    if (frame.sunDirection.w > 0.0)
+        color += albedo * float3(0.9, 1.0, 0.45) * 0.15 * back * frame.sunColor.rgb * frame.sunDirection.w *
+                 sunLight(input.relative, -N);
+    if (frame.mode.x < 0.5)
+        color = fogged(color, input.relative);
+    return float4(color, 1.0);
 }

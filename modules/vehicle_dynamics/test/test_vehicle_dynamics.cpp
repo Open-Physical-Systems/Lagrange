@@ -164,8 +164,15 @@ struct Run {
     }
 };
 
+/// The ground: its friction (collider friction × surface frictionScale) and its surface's
+/// rolling-resistance coefficient (SurfaceMaterial::rollingResistance).
+struct Ground {
+    double friction{1.0};
+    double rolling{0.0};
+};
+
 std::unique_ptr<Run> drive(World world, Driver::Command command, bool ideal = false,
-                           double slope = 0.0) {
+                           double slope = 0.0, Ground surface = {}) {
     auto r = std::make_unique<Run>();
     r->world = std::move(world);
     r->ground = std::make_shared<sensors::ShapeCaster>();
@@ -176,7 +183,8 @@ std::unique_ptr<Run> drive(World world, Driver::Command command, bool ideal = fa
     r->scheduler->add(std::make_unique<Driver>(std::move(command)));
     ModuleConfigData config;
     config.values["tire_model"] = std::string("linear");
-    r->scheduler->add(std::make_unique<VehicleDynamics>(ideal, r->ground, std::vector{1.0}),
+    r->scheduler->add(std::make_unique<VehicleDynamics>(ideal, r->ground, std::vector{surface.friction},
+                                                         std::vector{surface.rolling}),
                       ModuleConfig(config));
     r->scheduler->add(std::make_unique<electrical::IdealTorqueSource>());
     r->scheduler->add(std::make_unique<services::WrenchSum>());
@@ -359,6 +367,122 @@ TEST(VehicleDynamics, AckermannTurnsTheInnerWheelMore) {
     EXPECT_LT(outer, 0.2);
     // Both wheels' axes meet on the rear axle's line: L/tan δ ∓ y are the turn radii.
     EXPECT_NEAR(2.7 / std::tan(inner) + 0.78, 2.7 / std::tan(outer) - 0.78, 1e-9);
+}
+
+}  // namespace
+}  // namespace lagrange::vehicle_dynamics
+
+namespace lagrange::vehicle_dynamics {
+namespace {
+
+// Wheels on grass (docs/physics/ground.md "Wheels on grass").
+constexpr double kGrassRolling = 0.08;  // the grass preset's rollingResistance
+
+/// Up to `speed`, then coasting: the speed after `coast` s of coasting and when it began.
+std::pair<double, double> coastFrom(double speed, double coast, Ground ground) {
+    double releaseAt = -1.0;
+    auto r = drive(
+        car(),
+        [&](double t, double v) {
+            if (releaseAt < 0.0 && v >= speed) {
+                releaseAt = t;
+            }
+            return releaseAt < 0.0 ? std::array<double, 3>{1.0, 0.0, 0.0}
+                                   : std::array<double, 3>{};
+        },
+        false, 0.0, ground);
+    EXPECT_TRUE(r);
+    if (!r) {
+        return {0.0, 0.0};
+    }
+    double v0 = -1.0;
+    double t0 = 0.0;
+    for (int i = 1; i <= 30000; ++i) {
+        EXPECT_TRUE(stepTo(*r, i * 1e-3));
+        const double t = i * 1e-3;
+        if (releaseAt > 0.0 && v0 < 0.0 && t > releaseAt + 0.5) {
+            v0 = r->read("vehicle/car/speed");  // after the tyres have let go of the drive
+            t0 = t;
+        }
+        if (v0 > 0.0 && t >= t0 + coast) {
+            return {v0, r->read("vehicle/car/speed")};
+        }
+    }
+    ADD_FAILURE() << "never coasted";
+    return {0.0, 0.0};
+}
+
+TEST(VehicleDynamics, CoastingOnGrassDeceleratesAtGTimesItsRollingResistance) {
+    // F = Crr m g on level ground: dv/dt = -Crr g (the wheels' spin inertia aside, ~1 %).
+    constexpr double kCoast = 2.0;
+    const auto [v0, v1] = coastFrom(10.0, kCoast, {1.0, kGrassRolling});
+    const double decel = (v0 - v1) / kCoast;
+    EXPECT_NEAR(decel, kGrassRolling * kGravity, 0.05 * kGrassRolling * kGravity)
+        << v0 << " -> " << v1 << " m/s";
+    RecordProperty("grass_coast_deceleration",
+                   std::to_string(decel) + " m/s², expected " +
+                       std::to_string(kGrassRolling * kGravity));
+    // On the default ground the car barely slows (no rolling resistance in the tyre model).
+    const auto [u0, u1] = coastFrom(10.0, kCoast, {});
+    EXPECT_LT((u0 - u1) / kCoast, 0.05);
+}
+
+TEST(VehicleDynamics, BrakingOnGrassIsLimitedByItsFrictionScale) {
+    // Locked wheels on a surface of frictionScale 0.5 and no rolling resistance: v²/(2·0.5·μ·g).
+    constexpr double kSpeed = 15.0;
+    constexpr double kScale = 0.5;
+    double brakeAt = -1.0;
+    auto r = drive(
+        car(),
+        [&](double t, double v) {
+            if (brakeAt < 0.0 && v >= kSpeed) {
+                brakeAt = t;
+            }
+            // A gentle run-up (no wheelspin), so that the brakes start on rolling wheels.
+            return brakeAt < 0.0 ? std::array<double, 3>{0.3, 0.0, 0.0}
+                                 : std::array<double, 3>{0.0, 1.0, 0.0};
+        },
+        false, 0.0, {kScale, 0.0});
+    ASSERT_TRUE(r);
+    double start = 0.0;
+    double v0 = 0.0;
+    for (int i = 1; i <= 40000; ++i) {
+        ASSERT_TRUE(stepTo(*r, i * 1e-3));
+        const double v = r->read("vehicle/car/speed");
+        if (brakeAt > 0.0 && v0 == 0.0) {
+            start = r->readN("body/chassis/pose")[0];
+            v0 = v;
+        }
+        if (brakeAt > 0.0 && v < 0.05) {
+            break;
+        }
+    }
+    ASSERT_GT(v0, 0.0) << "never reached the speed";
+    const double distance = r->readN("body/chassis/pose")[0] - start;
+    const double expected = v0 * v0 / (2.0 * kScale * kMu * kGravity);
+    EXPECT_NEAR(distance, expected, 0.05 * expected) << "from " << v0 << " m/s";
+    // Traction too: the driven (rear) axle cannot push harder than frictionScale μ of its load,
+    // so the run-up from rest averages under frictionScale μ g.
+    EXPECT_LT(v0 / brakeAt, kScale * kMu * kGravity);
+}
+
+TEST(VehicleDynamics, AParkedCarDoesNotCreepOnLevelGrass) {
+    auto r = drive(
+        car(), [](double, double) { return std::array<double, 3>{}; }, false, 0.0,
+        {0.5, kGrassRolling});
+    ASSERT_TRUE(r);
+    ASSERT_TRUE(stepTo(*r, 2.0));
+    const double x0 = r->readN("body/chassis/pose")[0];
+    ASSERT_TRUE(stepTo(*r, 6.0));
+    EXPECT_NEAR(r->readN("body/chassis/pose")[0], x0, 1e-3);
+    EXPECT_LT(std::abs(r->read("vehicle/car/speed")), 1e-3);
+    // At rest the rolling resistance pushes nothing; loaded it is Crr Fz.
+    for (const char* w : {"front_left", "rear_right"}) {
+        const std::string wheel = std::string("wheel/") + w + "/";
+        EXPECT_NEAR(r->read(wheel + "rolling_resistance"),
+                    kGrassRolling * r->read(wheel + "normal_force"), 1e-6);
+        EXPECT_LT(std::abs(r->read(std::string("joint/") + w + "/velocity")), 1e-2);
+    }
 }
 
 }  // namespace

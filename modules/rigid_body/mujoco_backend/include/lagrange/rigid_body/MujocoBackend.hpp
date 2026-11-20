@@ -101,6 +101,7 @@ private:
     void writeOutputs(SignalBus& bus) const;
     void applyFixedWrenches();
     void sumContactForces();
+    void applyRollingResistance();
     void setupKinematicCulling();
     void cullKinematicContacts(bool all);
 
@@ -159,6 +160,10 @@ private:
     SignalId frictionScale_;
     double appliedFrictionScale_{1.0};
     std::vector<double> baseFriction_;  // per geom, sliding coefficient at scale 1
+    std::vector<double> geomRolling_;     // per geom, its surface's rollingResistance (1)
+    std::vector<double> rollingTorque_;   // per dof, rolling resistance for the next step
+    std::vector<double> appliedRolling_;  // per dof, what of it is in qfrc_applied now
+    bool rollingAny_{false};
     mjModel_* model_{nullptr};
     mjData_* data_{nullptr};
 };

@@ -53,6 +53,7 @@
 #include "lagrange/thermal/ThermalConduction.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
+#include "lagrange/vegetation/Vegetation.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
@@ -566,7 +567,7 @@ struct DomainRow {
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 18> kDomains{{
+constexpr std::array<DomainRow, 19> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -582,6 +583,7 @@ constexpr std::array<DomainRow, 18> kDomains{{
     {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
     {"tether", "zero", "constant"},
+    {"vegetation", "zero", "constant"},
     {"fire", "zero", "constant"},
     {"lights", "zero", "constant"},
     {"actuators", "zero", "constant"},  // never holds; `ideal` too (RFC 0020 §3.3)
@@ -1077,6 +1079,15 @@ struct Server::Impl {
             }
             next->add(std::make_unique<hydrodynamics::Water>(), ModuleConfig(water));
         }
+        // Reeds, shrubs and tall grass: their stems drag what pushes through them, in the site's
+        // air (no air density, no drag; ground.md "Reeds and shrubs"). Off: none.
+        if (hasVegetation() && !off("vegetation")) {
+            ModuleConfigData stems;
+            if (settings.airDensityKgM3) {
+                stems.values["density"] = *settings.airDensityKgM3;
+            }
+            next->add(std::make_unique<vegetation::Vegetation>(), ModuleConfig(stems));
+        }
         // Tethers (RFC 0011): cables from their anchors to bodies, against every collider. Drag
         // needs the site's air density; without it they hang in still, massless air.
         if (hasTethers()) {
@@ -1192,12 +1203,14 @@ struct Server::Impl {
         // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
         // their drive and steering commands into joint torques.
         if (hasVehicles()) {
-            auto [ground, friction] = groundQuery();
+            std::vector<double> rolling;
+            auto [ground, friction] = groundQuery(&rolling);
             ModuleConfigData vehicle;
             vehicle.values["tire_model"] = appliedTireModel.value_or("pacejka");
             if (!(off("vehicle_dynamics") && addPluginSubstitute("vehicle_dynamics", vehicle))) {
                 next->add(std::make_unique<vehicle_dynamics::VehicleDynamics>(
-                              off("vehicle_dynamics"), std::move(ground), std::move(friction)),
+                              off("vehicle_dynamics"), std::move(ground), std::move(friction),
+                              std::move(rolling)),
                           ModuleConfig(vehicle));
             }
         }
@@ -1969,6 +1982,7 @@ struct Server::Impl {
 
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
+    bool hasVegetation() const { return !vegetation::canopiesOf(robot.world).empty(); }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
     bool hasFires() const { return !WorldView(robot.world).instancesOf("FireAPI_1").empty(); }
     bool hasLamps() const { return !WorldView(robot.world).instancesOf("LampAPI_1").empty(); }
@@ -1998,9 +2012,10 @@ struct Server::Impl {
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
-    /// plane, with each shape's friction coefficient.
-    std::pair<std::shared_ptr<const services::SceneQuery>, std::vector<double>> groundQuery()
-        const {
+    /// plane, with each shape's friction coefficient (its surface material's frictionScale
+    /// applied) and, into `rolling` when given, its surface's rolling-resistance coefficient.
+    std::pair<std::shared_ptr<const services::SceneQuery>, std::vector<double>> groundQuery(
+        std::vector<double>* rolling = nullptr) const {
         const World& world = robot.world;
         const std::vector<Pose> rest = restPoses(world);
         const std::vector<bool> moving = movingBodies(world);
@@ -2024,7 +2039,13 @@ struct Server::Impl {
                               ? &world.heightfields.at(world.colliders.hull[c])
                               : nullptr;
             shapes.push_back(shape);
-            friction.push_back(world.colliders.friction[c]);
+            const std::uint32_t m = world.colliders.material[c];
+            const SurfaceMaterial surface =
+                m < world.surfaceMaterials.size() ? world.surfaceMaterials[m] : SurfaceMaterial{};
+            friction.push_back(world.colliders.friction[c] * surface.frictionScale);
+            if (rolling != nullptr) {
+                rolling->push_back(surface.rollingResistance);
+            }
         }
         auto caster = std::make_shared<sensors::ShapeCaster>();
         caster->update(shapes);
@@ -3696,12 +3717,17 @@ struct Server::Impl {
                 yaml += substituted("hydrodynamics")
                             ? "  hydrodynamics: {enabled: false, substitute: zero}\n"
                             : "  hydrodynamics: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "vegetation" && hasVegetation()) {
+                yaml += substituted("vegetation")
+                            ? "  vegetation: {enabled: false, substitute: zero}\n"
+                            : "  vegetation: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
                        std::string_view(row.domain) == "rotor_aero" ||
                        std::string_view(row.domain) == "hydrodynamics" ||
                        std::string_view(row.domain) == "tether" ||
+                       std::string_view(row.domain) == "vegetation" ||
                        std::string_view(row.domain) == "fire" ||
                        std::string_view(row.domain) == "lights" ||
                        std::string_view(row.domain) == "actuators") {
@@ -3797,7 +3823,10 @@ struct Server::Impl {
             : domain == "rotor_aero"    ? "not used by this robot (no RotorAPI_1)"
             : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
-            : domain == "fire"          ? "no fires in the stage (FireAPI_1)"
+            : domain == "vegetation"
+                ? "no reeds, shrubs or tall grass in the world (a canopy preset on a fixed box or "
+                  "plane)"
+            : domain == "fire" ? "no fires in the stage (FireAPI_1)"
             : domain == "actuators"
                 ? "no grippers, nozzles or servos in the stage (SuctionGripperAPI_1, "
                   "MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1)"
@@ -6008,6 +6037,9 @@ struct Server::Impl {
         }
         if (hasTethers()) {
             context.modules.insert("tether");
+        }
+        if (hasVegetation()) {
+            context.modules.insert("vegetation");
         }
         if (hasFires()) {
             context.modules.insert("fire");

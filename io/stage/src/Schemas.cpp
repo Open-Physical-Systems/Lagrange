@@ -279,7 +279,14 @@ void SchemaCollector::readProperty(const UsdPrim& prim, const UsdPrimDefinition&
     } else if (value.IsHolding<TfToken>()) {
         const TfToken token = value.UncheckedGet<TfToken>();
         VtTokenArray allowed;
-        if (definition.GetPropertyMetadata(property, SdfFieldKeys->AllowedTokens, &allowed) &&
+        // sensmat:preset also takes the presets added after the schema was frozen (grass,
+        // wet_grass, tall_grass, reeds, shrub: surfaceMaterialPreset), which the frozen 1.x
+        // schema's allowedTokens cannot list. TODO: list them in the schema by an RFC.
+        SurfaceMaterial known;
+        const bool laterPreset =
+            name.GetString() == "sensmat:preset" && surfaceMaterialPreset(token.GetString(), known);
+        if (!laterPreset &&
+            definition.GetPropertyMetadata(property, SdfFieldKeys->AllowedTokens, &allowed) &&
             !allowed.empty() && std::find(allowed.begin(), allowed.end(), token) == allowed.end()) {
             std::string list;
             for (const TfToken& a : allowed) {

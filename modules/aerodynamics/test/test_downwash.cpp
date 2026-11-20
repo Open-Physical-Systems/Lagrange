@@ -3,6 +3,7 @@
 // outwash measured by Tanner et al. (2015) and in flight tests they quote.
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/aerodynamics/Downwash.hpp"
+#include "lagrange/gpu/GroundAir.hpp"
 
 #include <array>
 #include <cmath>
@@ -329,4 +330,90 @@ TEST(Downwash, TheOutwashsFrictionVelocityOnWater) {
 }
 
 }  // namespace
+}  // namespace lagrange::aerodynamics
+
+namespace lagrange::aerodynamics {
+
+// The renderer's ground air (lagrange/gpu/GroundAir.hpp, realistic.slang's groundAir) is a port
+// of the outwash here: it must give the same horizontal air over level ground.
+namespace {
+
+std::vector<gpu::AirRotor> asAir(const std::vector<Downwash::Rotor>& rotors) {
+    std::vector<gpu::AirRotor> out;
+    for (const Downwash::Rotor& r : rotors) {
+        out.push_back({r.hub, r.thrustAxis, r.radius, r.induced, r.thrust, r.group});
+    }
+    return out;
+}
+
+void expectSameOutwash(const std::vector<Downwash::Rotor>& rotors, double groundZ) {
+    Downwash d;
+    d.setGround({0.0, 0.0, groundZ}, {0.0, 0.0, 1.0});
+    d.update(rotors);
+    const std::vector<gpu::AirRotor> air = asAir(rotors);
+    const std::vector<gpu::AirJet> jets = gpu::groundJets(air, groundZ);
+    ASSERT_EQ(jets.size(), d.groups().size());
+    for (std::size_t k = 0; k < jets.size(); ++k) {
+        EXPECT_NEAR(jets[k].speed, d.groups()[k].arriveSpeed, 1e-9);
+        EXPECT_NEAR(jets[k].radius, d.groups()[k].arriveRadius, 1e-9);
+    }
+    const double peak = gpu::outwashPeakHeight(jets.front().radius);
+    for (const double rho : {0.1, 0.3, 0.6, 1.0, 2.0, 4.0}) {
+        for (const double z : {peak, 2.0 * peak, 0.15, 0.3}) {
+            const Vec3 at{jets.front().hit[0] + rho, jets.front().hit[1], groundZ + z};
+            const Vec3 v = d.velocityAt(at);
+            const std::array<double, 2> g = gpu::groundOutwash(jets, at);
+            EXPECT_NEAR(g[0], v[0], 1e-9 + 1e-9 * std::abs(v[0])) << rho << " " << z;
+            EXPECT_NEAR(g[1], v[1], 1e-9) << rho << " " << z;
+        }
+    }
+}
+
+}  // namespace
+
+TEST(GroundAir, MatchesTheOutwashOfASingleRotor) {
+    Downwash::Rotor r;
+    r.hub = {0.0, 0.0, 1.0};
+    r.thrustAxis = {0.0, 0.0, 1.0};
+    r.radius = 1.0;
+    r.induced = 5.0;
+    r.thrust = 1.0;
+    expectSameOutwash({r}, 0.0);
+}
+
+TEST(GroundAir, MatchesTheOutwashOfAQuadcopterAtSeveralHeights) {
+    for (const double height : {0.3, 1.0, 2.5}) {
+        expectSameOutwash(offboard(height + 0.4), 0.4);
+    }
+}
+
+TEST(GroundAir, NoRotorsNoOutwash) {
+    const std::vector<gpu::AirJet> jets = gpu::groundJets({}, 0.0);
+    EXPECT_TRUE(jets.empty());
+    const std::array<double, 2> g = gpu::groundOutwash(jets, {1.0, 2.0, 0.0});
+    EXPECT_EQ(g[0], 0.0);
+    EXPECT_EQ(g[1], 0.0);
+    // Idle rotors: no wake.
+    Downwash::Rotor idle;
+    idle.hub = {0.0, 0.0, 1.0};
+    idle.thrustAxis = {0.0, 0.0, 1.0};
+    idle.radius = 0.12;
+    EXPECT_TRUE(gpu::groundJets(asAir({idle}), 0.0).empty());
+}
+
+TEST(GroundAir, BladesBelowThePeakFeelThePeak) {
+    Downwash::Rotor r;
+    r.hub = {0.0, 0.0, 1.0};
+    r.thrustAxis = {0.0, 0.0, 1.0};
+    r.radius = 0.2;
+    r.induced = 6.0;
+    r.thrust = 5.0;
+    const std::vector<gpu::AirJet> jets = gpu::groundJets(asAir({r}), 0.0);
+    ASSERT_EQ(jets.size(), 1U);
+    const double peak = gpu::outwashPeakHeight(jets[0].radius);
+    EXPECT_DOUBLE_EQ(gpu::groundOutwash(jets, {0.5, 0.0, 0.0})[0],
+                     gpu::groundOutwash(jets, {0.5, 0.0, peak})[0]);
+    EXPECT_GT(gpu::groundOutwash(jets, {0.5, 0.0, 0.0})[0], 0.5);
+}
+
 }  // namespace lagrange::aerodynamics

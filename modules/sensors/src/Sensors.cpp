@@ -587,6 +587,10 @@ public:
                 shape.pose = compose(rest_[owner.index], colliders.poseInBody[c]);
                 shape.body = -1;
             }
+            if (shape.material != nullptr && shape.material->canopyHeight > 0.0 &&
+                (shape.type == ShapeType::Box || shape.type == ShapeType::Plane)) {
+                canopyVolumes_.push_back(static_cast<std::uint32_t>(shapes_.size()));
+            }
             shapes_.push_back(shape);
         }
         // Water is no collider, but a lidar sees its surface: a mirror (or a box of depth below it,
@@ -696,12 +700,51 @@ public:
         // What each hit returns, from its surface; a surface too faint for the lidar drops out.
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
             intensity_[i] = 0.0;
-            if (hitShape_[i] == kNoShapeHit || !std::isfinite(nearest_[i])) {
+            const Pose& from = columnPose_[i % layout_.horizontal];
+            const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
+            // Reeds and shrubs (ShapeCaster.hpp canopyVolumeSpan): a beam can stop in a canopy
+            // volume before its hit, or with no hit at all; one draw per canopy crossed, in
+            // collider order, from the beam's own stream. The same post-step serves the GPU tier.
+            const bool hit = hitShape_[i] != kNoShapeHit && std::isfinite(nearest_[i]);
+            double stop = std::numeric_limits<double>::infinity();
+            std::uint32_t stopShape = kNoShapeHit;
+            if (!canopyVolumes_.empty()) {
+                random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
+                const double reach = hit ? nearest_[i] : maxRange_;
+                for (const std::uint32_t k : canopyVolumes_) {
+                    const Shape& canopy = shapes_[k];
+                    double enter = 0.0;
+                    double leave = 0.0;
+                    if (!canopyVolumeSpan(canopy.type, canopy.size, placed_[k], from.position, dir,
+                                          canopy.material->canopyHeight, reach, enter, leave)) {
+                        continue;
+                    }
+                    const double at =
+                        canopyVolumeStop(enter, leave, canopy.material->canopyHeight,
+                                         canopy.material->leafAreaIndex, rng.uniform());
+                    if (at < stop) {
+                        stop = at;
+                        stopShape = k;
+                    }
+                }
+            }
+            static const SurfaceMaterial kDefault{};
+            if (stopShape != kNoShapeHit) {
+                nearest_[i] = stop;
+                hitShape_[i] = stopShape;
+                const LidarReturn back =
+                    lidarReturn(*shapes_[stopShape].material, true, wavelength1550_,
+                                kCanopyLeafCosine, stop, maxRange_, referenceReflectivity_);
+                intensity_[i] = back.intensity;
+                if (!back.detected) {
+                    nearest_[i] = kNoHit;
+                }
+                return;
+            }
+            if (!hit) {
                 return;
             }
             const Shape& shape = shapes_[hitShape_[i]];
-            const Pose& from = columnPose_[i % layout_.horizontal];
-            const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
             const Vec3 at{from.position[0] + dir[0] * nearest_[i],
                           from.position[1] + dir[1] * nearest_[i],
                           from.position[2] + dir[2] * nearest_[i]};
@@ -713,7 +756,16 @@ public:
                                : surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
                                                shape.hull, shape.field);
             const double cosine = -(dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2]);
-            static const SurfaceMaterial kDefault{};
+            // Grass: the return comes from the blades over the soil (ShapeCaster.hpp), with the
+            // surface's own leaf area index. On the GPU tier too: the hit comes back from the ray
+            // scan and is shortened here, on the CPU. Boxes and planes did it above, as volumes.
+            if (shape.material != nullptr && shape.material->canopyHeight > 0.0 &&
+                shape.type != ShapeType::Box && shape.type != ShapeType::Plane) {
+                random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
+                nearest_[i] -=
+                    canopyShortening(shape.material->canopyHeight, shape.material->leafAreaIndex,
+                                     cosine, nearest_[i], rng.uniform());
+            }
             const LidarReturn back = lidarReturn(
                 shape.material != nullptr ? *shape.material : kDefault, shape.material != nullptr,
                 wavelength1550_, cosine, nearest_[i], maxRange_, referenceReflectivity_);
@@ -1051,6 +1103,7 @@ private:
 
     static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;       // + beam
     static constexpr std::uint32_t kTransmissionStream = 0x4000'0000U;  // + beam × passes + pass
+    static constexpr std::uint32_t kCanopyStream = 0x2000'0000U;        // + beam
     static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
     static constexpr std::uint32_t kMaxPasses = 6;
     static constexpr double kPastSurfaceM = 1e-4;
@@ -1069,6 +1122,7 @@ private:
     std::size_t firstWaterShape_{0};               // shapes_ from here on are the water's boxes
     MovingWaterInputs movingWater_;
     std::vector<std::uint32_t> hitShape_;
+    std::vector<std::uint32_t> canopyVolumes_;  // shapes_ with a canopy volume (boxes, planes)
     std::vector<double> intensity_;
     bool wavelength1550_{false};
     double referenceReflectivity_{0.1};
@@ -1389,6 +1443,44 @@ public:
             sky.optional = true;
             sky.defaultValue = std::numeric_limits<double>::quiet_NaN();
             skyIlluminance_ = d.input(sky);
+            // The rotors (RotorAPI_1), whose outwash bends the grass the camera sees
+            // (gpu/GroundAir.hpp): rotor_aero's thrust, induced velocity and axis, last step's.
+            rotors_.clear();
+            const World::Joints& joints = raw.joints;
+            const World::Bodies& bodies = raw.bodies;
+            for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
+                const auto j = static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) -
+                                                        joints.prim.begin());
+                const auto radius = s->real("aero:rotor:radius");
+                if (j >= joints.prim.size() || !radius || *radius <= 0.0) {
+                    continue;
+                }
+                SeenRotor& r = rotors_.emplace_back();
+                r.body = joints.child[j].index;
+                r.radius = *radius;
+                std::size_t root = r.body;
+                for (std::size_t guard = 0; guard < bodies.parent.size(); ++guard) {
+                    const BodyId p = bodies.parent[root];
+                    if (p == kWorldBody) {
+                        break;
+                    }
+                    root = p.index;
+                }
+                r.group = root;
+                watch(r.body);
+                const std::string base =
+                    "rotor/" + std::string(world.signalInstanceName(s->prim)) + "/";
+                const auto optional = [&](SignalSpec in) {
+                    in.feedback = true;
+                    in.optional = true;
+                    return d.input(in);
+                };
+                r.thrust = optional(spec(base + "thrust", SignalType::Scalar, units::N));
+                r.induced =
+                    optional(spec(base + "induced_velocity", SignalType::Scalar, units::m_per_s));
+                r.axis = optional(
+                    spec(base + "thrust_axis", SignalType::Vec3, units::one, "world_local"));
+            }
         }
         const auto image = [&](const char* what, Unit unit) {
             SignalSpec out =
@@ -1933,6 +2025,26 @@ private:
         for (const auto& face : faceRenderers_) {
             face->setLighting(drawnLamps_, sky);
         }
+        drawnRotors_.clear();
+        for (const SeenRotor& seen : rotors_) {
+            if (!seen.thrust.valid() || !seen.induced.valid() || !seen.axis.valid()) {
+                continue;
+            }
+            const std::span<const double> a = bus.readN(seen.axis);
+            gpu::AirRotor& r = drawnRotors_.emplace_back();
+            r.hub = bodyPose(bus, seen.body).position;
+            r.thrustAxis = {a[0], a[1], a[2]};
+            r.radius = seen.radius;
+            r.induced = bus.read(seen.induced);
+            r.thrust = bus.read(seen.thrust);
+            r.group = seen.group;
+        }
+        if (renderer_) {
+            renderer_->setAir(drawnRotors_);
+        }
+        for (const auto& face : faceRenderers_) {
+            face->setAir(drawnRotors_);
+        }
         // The render is brightened as the dark asks (gpu::realisticAdaptation): the sensor
         // model takes it out again, so its electrons stay those of the scene's light.
         if (model_ && renderer_ && scene_->raster->realistic()) {
@@ -1976,6 +2088,15 @@ private:
     };
     std::vector<SeenLamp> lamps_;
     std::vector<gpu::RealisticLamp> drawnLamps_;  // this frame's
+    /// A rotor whose outwash the camera draws in the grass (gpu/GroundAir.hpp).
+    struct SeenRotor {
+        std::uint32_t body{0};  // its link
+        double radius{0.0};     // m
+        std::size_t group{0};   // its robot's root body
+        SignalId thrust, induced, axis;
+    };
+    std::vector<SeenRotor> rotors_;
+    std::vector<gpu::AirRotor> drawnRotors_;  // this frame's
     SignalId skyIlluminance_;                     // env/sky_illuminance, lx; NaN: the drawn day
     gpu::PinholeCamera camera_;                   // the output's pinhole (before the sensor model)
     std::unique_ptr<CameraModel> model_;          // null when no part of the sensor model is on

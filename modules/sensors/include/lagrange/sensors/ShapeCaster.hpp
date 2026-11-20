@@ -98,6 +98,51 @@ struct LidarReturn {
                                       bool wavelength1550, double cosIncidence, double range,
                                       double maxRange, double referenceReflectivity);
 
+/// Lidar over grass (docs/physics/ground.md "Lidar over grass"): a surface with a canopy has
+/// blades standing `canopyHeight` over the collider, which is the soil. A beam that reaches the
+/// soil with incidence cosine c crossed L = min(h / c, range) of canopy. The blades are a turbid
+/// medium: the chance of a free path s into it is exp(-mu s), mu = G LAI / h, the gap fraction
+/// of Nilson (1971) per unit length (Beer-Lambert; G = 0.5 for a spherical leaf angle
+/// distribution, Ross 1981). The return comes from the first blade, L - s before the soil, or
+/// from the soil when s >= L. Grazing beams (long L) end in the blade tops, steep ones go deeper.
+/// The mean shortening is L - (1 - exp(-mu L)) / mu (canopyMeanShortening).
+inline constexpr double kCanopyProjection = 0.5;  // G, spherical leaf angles (Ross 1981)
+/// One-sided leaf area per ground area of the blades. TODO(verify): a lawn's LAI against turf
+/// measurements (e.g. Lee et al. 2011, Crop Sci.); 3 is an order of magnitude, not a measurement.
+inline constexpr double kCanopyLeafAreaIndex = 3.0;
+/// How far before the hit the return comes, for a uniform draw u in [0, 1): 0 when the beam
+/// reaches the soil or the surface has no canopy.
+[[nodiscard]] double canopyShortening(double canopyHeight, double cosIncidence, double range,
+                                      double u);
+/// The mean of canopyShortening over u, in closed form.
+[[nodiscard]] double canopyMeanShortening(double canopyHeight, double cosIncidence, double range);
+/// The same with the surface's own leaf area index (SurfaceMaterial::leafAreaIndex), mu =
+/// G LAI / h; the overloads above take kCanopyLeafAreaIndex.
+[[nodiscard]] double canopyShortening(double canopyHeight, double leafAreaIndex,
+                                      double cosIncidence, double range, double u);
+[[nodiscard]] double canopyMeanShortening(double canopyHeight, double leafAreaIndex,
+                                          double cosIncidence, double range);
+
+/// Reeds and shrubs (docs/physics/ground.md "Reeds and shrubs"): a canopy as a volume a beam can
+/// cross without reaching the soil, e.g. a drone's lidar sweeping level over a reed bank. In the
+/// collider's frame (z up) it is the box's top face extruded by the canopy height,
+/// [-hx, hx] x [-hy, hy] x [hz, hz + h], or the slab 0 <= z <= h over a plane. Other shapes have
+/// no volume here (they keep canopyShortening at their hit). canopyVolumeSpan gives the beam's
+/// path [enter, leave] through it within [0, range] (origin and unit direction in the world,
+/// `placed` the collider's pose), or false when it misses.
+[[nodiscard]] bool canopyVolumeSpan(ShapeType type, const std::array<double, 3>& size,
+                                    const Pose& placed, const std::array<double, 3>& origin,
+                                    const std::array<double, 3>& direction, double canopyHeight,
+                                    double range, double& enter, double& leave);
+/// Where a beam crossing a canopy over [enter, leave] stops in it, for a uniform draw u: the
+/// free path s has P(s > x) = exp(-mu x), mu = G LAI / h (the gap probability), so it stops at
+/// enter + s when that is before `leave`, else never (+inf).
+[[nodiscard]] double canopyVolumeStop(double enter, double leave, double canopyHeight,
+                                      double leafAreaIndex, double u);
+/// A leaf hit in a canopy volume faces the beam at random: the mean |cos| of a spherical leaf
+/// angle distribution, which is G (Ross 1981), stands for the incidence cosine of its return.
+inline constexpr double kCanopyLeafCosine = kCanopyProjection;
+
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);
 

@@ -107,6 +107,13 @@ struct SurfaceMaterial {
     double specular{0.0};          // fraction that is mirror-like: comes back only near normal
     double transmission{0.0};      // fraction of beams that go through (glass)
     bool retroreflective{false};   // comes back at any angle, strongly (road signs, vests)
+    // How the ground behaves under wheels and feet, and what stands on it (grass, soil). The
+    // defaults are hard, bare ground: nothing changes for surfaces that name none of these.
+    double frictionScale{1.0};      // multiplies the Coulomb friction of contacts on this surface
+    double rollingResistance{0.0};  // extra rolling-resistance coefficient (force / load), on top
+                                    // of the tyre's own: the work of pressing the ground down
+    double canopyHeight{0.0};       // m, blades standing over the soil that a beam can hit first
+    double leafAreaIndex{3.0};      // m² of leaf per m² of ground in that canopy (when height > 0)
 };
 inline constexpr std::uint32_t kNoMaterial = 0xFFFF'FFFFU;
 

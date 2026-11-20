@@ -1,0 +1,305 @@
+#usda 1.0
+(
+    defaultPrim = "reed_channel"
+    doc = "A generic drainage channel: 3 m of water between concrete walls, banks of reeds and shrubs, a lawn on top. Made by hand for trying out vegetation; no real place."
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "reed_channel"
+{
+    def Scope "looks"
+    {
+        def Material "concrete"
+        {
+            token outputs:surface.connect = </reed_channel/looks/concrete/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.52, 0.51, 0.48)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.85
+                token outputs:surface
+            }
+        }
+        def Material "reeds"
+        (
+            prepend apiSchemas = ["SensorMaterialAPI_1"]
+        )
+        {
+            uniform token sensmat:preset = "reeds"
+            token outputs:surface.connect = </reed_channel/looks/reeds/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.3, 0.38, 0.16)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+        def Material "shrub"
+        (
+            prepend apiSchemas = ["SensorMaterialAPI_1"]
+        )
+        {
+            uniform token sensmat:preset = "shrub"
+            token outputs:surface.connect = </reed_channel/looks/shrub/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.16, 0.3, 0.1)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.8
+                token outputs:surface
+            }
+        }
+        def Material "lawn"
+        {
+            token outputs:surface.connect = </reed_channel/looks/lawn/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.2, 0.36, 0.13)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.95
+                token outputs:surface
+            }
+        }
+    }
+    def Xform "channel_floor"
+    {
+        double3 xformOp:translate = (0.000, 0.000, 0.050)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.52, 0.51, 0.48)]
+            rel material:binding = </reed_channel/looks/concrete>
+            float3 xformOp:scale = (60.000, 3.000, 0.100)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/concrete>
+            float3 xformOp:scale = (60.000, 3.000, 0.100)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "wall_north"
+    {
+        double3 xformOp:translate = (0.000, 1.650, 0.800)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.52, 0.51, 0.48)]
+            rel material:binding = </reed_channel/looks/concrete>
+            float3 xformOp:scale = (60.000, 0.300, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/concrete>
+            float3 xformOp:scale = (60.000, 0.300, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "reeds_north"
+    {
+        double3 xformOp:translate = (0.000, 3.000, 0.725)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.3, 0.38, 0.16)]
+            rel material:binding = </reed_channel/looks/reeds>
+            float3 xformOp:scale = (60.000, 2.400, 1.450)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/reeds>
+            float3 xformOp:scale = (60.000, 2.400, 1.450)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "shrub_north"
+    {
+        double3 xformOp:translate = (0.000, 5.100, 0.800)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.16, 0.3, 0.1)]
+            rel material:binding = </reed_channel/looks/shrub>
+            float3 xformOp:scale = (60.000, 1.800, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/shrub>
+            float3 xformOp:scale = (60.000, 1.800, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "lawn_north"
+    {
+        double3 xformOp:translate = (0.000, 11.000, 0.800)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.2, 0.36, 0.13)]
+            rel material:binding = </reed_channel/looks/lawn>
+            float3 xformOp:scale = (60.000, 10.000, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/lawn>
+            float3 xformOp:scale = (60.000, 10.000, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "wall_south"
+    {
+        double3 xformOp:translate = (0.000, -1.650, 0.800)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.52, 0.51, 0.48)]
+            rel material:binding = </reed_channel/looks/concrete>
+            float3 xformOp:scale = (60.000, 0.300, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/concrete>
+            float3 xformOp:scale = (60.000, 0.300, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "reeds_south"
+    {
+        double3 xformOp:translate = (0.000, -3.000, 0.725)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.3, 0.38, 0.16)]
+            rel material:binding = </reed_channel/looks/reeds>
+            float3 xformOp:scale = (60.000, 2.400, 1.450)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/reeds>
+            float3 xformOp:scale = (60.000, 2.400, 1.450)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "shrub_south"
+    {
+        double3 xformOp:translate = (0.000, -5.100, 0.800)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.16, 0.3, 0.1)]
+            rel material:binding = </reed_channel/looks/shrub>
+            float3 xformOp:scale = (60.000, 1.800, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/shrub>
+            float3 xformOp:scale = (60.000, 1.800, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "lawn_south"
+    {
+        double3 xformOp:translate = (0.000, -11.000, 0.800)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.2, 0.36, 0.13)]
+            rel material:binding = </reed_channel/looks/lawn>
+            float3 xformOp:scale = (60.000, 10.000, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </reed_channel/looks/lawn>
+            float3 xformOp:scale = (60.000, 10.000, 1.600)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "water" (
+        prepend apiSchemas = ["WaterAPI_1"]
+    )
+    {
+        double3 xformOp:translate = (0, 0, 0.7)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double water:sizeX = 60
+        double water:sizeY = 3
+        double water:depth = 0.6
+    }
+}

@@ -131,6 +131,24 @@ flowchart LR
   `--water-relief` scales only the slopes; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
+  Vegetation: on a surface whose material names `reeds` or `shrub` the realistic renderer draws
+  real geometry, a clump per cell of a world grid over the surface's top (0.22 m for reeds, 0.7 m
+  for shrubs; its bounds' top face, level and axis-aligned like water): reeds as 12 curved, tapered
+  blades (a seed head on about one clump in three), a shrub as 60 leaves in a dome, both made in
+  the vertex shader from the vertex and instance index (`vsVeg`, no buffers; the same clump in the
+  same cell on every machine). Every blade and leaf bends with `groundAir` (the site wind, and the
+  rotor outwash when it reaches it), tips most (with the square of the height along it), each
+  clump at its own stiffness and sway; it is lit and shadowed like the meshes (it receives the
+  sun's shadow, it does not cast one yet), with some sun through the leaves from behind, and
+  reflects in the water. Clumps shrink away before 70 m (reeds) and 110 m (shrubs), far ones with
+  fewer blades, and at most 60 000 clumps a frame are drawn (the reach shrinks to fit): about
+  1.5 ms of GPU (3.3 ms in an 8 m/s wind's view) for the `reed_channel` sample at 1280x800 on an
+  RTX 4060 Laptop. Tiers: Tier 0 has no realistic view (Lit), so no vegetation; a software device
+  asked for the realistic view draws a sixteenth of the clumps out to half the distance; Tier 1 and
+  2 draw it all. It writes the realistic pass's depth (so it hides what is behind it in the image),
+  but a camera sensor's depth and instance ids come from its own raster pass of the scene's
+  meshes, which has no vegetation: depth, ids, lidar and the CPU reference stay as they were.
+  Sample world `assets/worlds/reed_channel/reed_channel.usda`.
   Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
   I/d²) in a storage buffer, each adding E = I·f(θ)·cos/d² through the same GGX as the sun, its
   colour from its colour temperature (Planck through the CIE 1931 functions,

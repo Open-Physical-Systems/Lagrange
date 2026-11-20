@@ -92,8 +92,12 @@ class VehicleDynamics final : public IModule {
 public:
     explicit VehicleDynamics(bool ideal = false,
                              std::shared_ptr<const services::SceneQuery> ground = nullptr,
-                             std::vector<double> groundFriction = {})
-        : ideal_(ideal), ground_(std::move(ground)), groundFriction_(std::move(groundFriction)) {}
+                             std::vector<double> groundFriction = {},
+                             std::vector<double> groundRolling = {})
+        : ideal_(ideal)
+        , ground_(std::move(ground))
+        , groundFriction_(std::move(groundFriction))
+        , groundRolling_(std::move(groundRolling)) {}
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
@@ -107,7 +111,7 @@ public:
 private:
     struct WheelState {
         SignalId velocity, loadTorque, driveCommand, slipRatio, slipAngle, normalForce,
-            steerAngleOut;
+            steerAngleOut, rollingResistance;
         SignalId steerPosition, steerVelocity, steerCommand;
         double longDeflection{0.0}, latDeflection{0.0};  // m, the relaxation states
         double compression{0.0};
@@ -129,6 +133,9 @@ private:
     bool ideal_;
     std::shared_ptr<const services::SceneQuery> ground_;
     std::vector<double> groundFriction_;
+    // Per ground shape, the surface's rolling-resistance coefficient (force / load) on top of the
+    // tyre's own (SurfaceMaterial::rollingResistance; grass, docs/physics/ground.md).
+    std::vector<double> groundRolling_;
     bool pacejka_{true};
     std::vector<VehicleState> vehicles_;
 };

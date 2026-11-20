@@ -396,6 +396,7 @@ struct RasterCamera::Impl {
     std::vector<RealisticLamp> lamps;  // setLighting
     RealisticWaterSurface water;       // setWaterSurface, its spans into these:
     std::vector<float> waterHeights, waterFoam, waterFriction;
+    std::vector<AirRotor> rotors;      // setAir
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
     bool linear{false};
     bool colour{true};  // false: only depth and ids are drawn (setColour)
@@ -542,6 +543,10 @@ void RasterCamera::setWaterSurface(const RealisticWaterSurface& surface) {
     impl_->water.heights = impl_->waterHeights;
     impl_->water.foam = impl_->waterFoam;
     impl_->water.friction = impl_->waterFriction;
+}
+
+void RasterCamera::setAir(std::span<const AirRotor> rotors) {
+    impl_->rotors.assign(rotors.begin(), rotors.end());
 }
 
 void RasterCamera::setColour(bool drawn) {
@@ -872,6 +877,7 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
             settings.season = scene.season;
             settings.seconds = seconds;
             settings.lamps = impl_->lamps;
+            settings.rotors = impl_->rotors;
             settings.skyIlluminance = impl_->skyIlluminance;
             settings.linear = impl_->linear;
             settings.waterSurface = impl_->water;
