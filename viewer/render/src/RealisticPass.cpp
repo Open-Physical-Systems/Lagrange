@@ -115,6 +115,13 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         settings.waterSurface.friction = moving->friction;
         settings.waterSurface.relief = options.waterRelief;
     }
+    if (const auto& cut = options.cutPlants) {
+        settings.cutPlants.cells = cut->cells;
+        settings.cutPlants.cell = cut->cell;
+        settings.cutPlants.first = cut->first;
+        settings.cutPlants.level = cut->level;
+        settings.cutPlants.tops = cut->tops;
+    }
     if (const auto& spray = options.spray3d) {
         // The drops' extinction per kg/m³ of water: Q_ext = 2 for drops much larger than the
         // wavelength (van de Hulst 1957, §8.42), 3/(ρ_w·D) per kg/m³, over the aerodynamics
