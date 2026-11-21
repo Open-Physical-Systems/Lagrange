@@ -73,8 +73,12 @@ struct Frame {
     // Rotor outwash (GroundAir.hpp): per jet, its hit point relative to the eye and arriving
     // speed, then its arriving radius.
     std::array<std::array<float, 4>, 2 * kMaxAirJets> airJets;
+    // Plants cut by propellers (RealisticCutPlants): the first cell's centre relative to the eye,
+    // the cell, cells along x; then the tops' reference height relative to the eye, cells along y.
+    std::array<float, 4> cutGrid;
+    std::array<float, 4> cutLevel;
 };
-static_assert(sizeof(Frame) == 432 + 32 * kMaxAirJets);
+static_assert(sizeof(Frame) == 464 + 32 * kMaxAirJets);
 static_assert(sizeof(Frame) <= kFrameStride);
 
 // Must match Lamp in realistic.slang.
@@ -358,12 +362,12 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
         bindings.at(b).descriptorType = b == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                        : b >= 7 && b <= 9
+                                        : (b >= 7 && b <= 9) || b == 11
                                             ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                                             : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings.at(b).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -376,7 +380,7 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     const std::array<VkDescriptorPoolSize, 3> sizes{
         {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 21},
-         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9}}};
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -402,6 +406,10 @@ RealisticRenderer::RealisticRenderer(const Device& device,
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     spray_ = createBuffer(device_, kMaxRealisticSprayCells * sizeof(float),
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    cut_ = createBuffer(device_,
+                        static_cast<VkDeviceSize>(kMaxRealisticCutSide) * kMaxRealisticCutSide *
+                            sizeof(float),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -426,6 +434,7 @@ RealisticRenderer::~RealisticRenderer() {
     destroy(device_, lamps_);
     destroy(device_, surface_);
     destroy(device_, spray_);
+    destroy(device_, cut_);
     destroy(device_, shadow_);
     destroy(device_, hdr_);
     destroy(device_, hdrCopy_);
@@ -521,6 +530,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
         const VkDescriptorBufferInfo lampData{lamps_.buffer, 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo surfaceData{surface_.buffer, 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo sprayData{spray_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo cutData{cut_.buffer, 0, VK_WHOLE_SIZE};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
         const std::array<VkDescriptorImageInfo, 6> images{{
@@ -533,7 +543,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
         }};
         // How far what the water reflects stands from it (realistic.slang, mirrorDepth).
         const VkDescriptorImageInfo mirrorDepthInfo{nearest_, mirrorDepth_.view, readDepth};
-        std::array<VkWriteDescriptorSet, 11> writes{};
+        std::array<VkWriteDescriptorSet, 12> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -546,6 +556,9 @@ void RealisticRenderer::descriptors(const Image& depth) {
             } else if (b >= 7 && b <= 9) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 w.pBufferInfo = b == 7 ? &lampData : b == 8 ? &surfaceData : &sprayData;
+            } else if (b == 11) {
+                w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w.pBufferInfo = &cutData;
             } else if (b == 10) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &mirrorDepthInfo;
@@ -795,6 +808,27 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             main.sprayDims = {static_cast<float>(spray.cells[0]),
                               static_cast<float>(spray.cells[1]),
                               static_cast<float>(spray.cells[2]), f(spray.extinctionPerKg)};
+        }
+    }
+    {
+        // Plants cut by propellers: their tops, uploaded when they change.
+        const RealisticCutPlants& cut = settings.cutPlants;
+        const std::size_t count = static_cast<std::size_t>(cut.cells[0]) * cut.cells[1];
+        if (cut.cells[0] >= 1 && cut.cells[1] >= 1 && cut.cells[0] <= kMaxRealisticCutSide &&
+            cut.cells[1] <= kMaxRealisticCutSide && cut.tops.size() == count && cut.cell > 0.0) {
+            if (cut.tops.data() != cutUploaded_ || count != cutUploadedCount_) {
+                auto* out = static_cast<float*>(cut_.mapped);
+                for (std::size_t i = 0; i < count; ++i) {
+                    // Where nothing is cut, a top far above anything (realistic.slang cutTopAt).
+                    out[i] = std::isfinite(cut.tops[i]) ? cut.tops[i] : 1e30F;
+                }
+                flush(device_, cut_);
+                cutUploaded_ = cut.tops.data();
+                cutUploadedCount_ = count;
+            }
+            main.cutGrid = {f(cut.first[0] - eye[0]), f(cut.first[1] - eye[1]), f(cut.cell),
+                            static_cast<float>(cut.cells[0])};
+            main.cutLevel = {f(cut.level - eye[2]), static_cast<float>(cut.cells[1]), 0.0F, 0.0F};
         }
     }
     main.screen = {static_cast<float>(extent.width), static_cast<float>(extent.height),

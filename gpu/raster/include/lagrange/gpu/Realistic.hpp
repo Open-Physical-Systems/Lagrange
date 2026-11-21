@@ -94,6 +94,20 @@ struct RealisticWaterSurface {
     float relief{1.0F};
 };
 
+/// The most cells a side of the cut plants' grid the renderer takes (RealisticCutPlants).
+inline constexpr std::uint32_t kMaxRealisticCutSide = 512;
+
+/// Plants cut by propellers as the physics has them (docs/physics/ground.md "Cutting the
+/// plants"): a world grid of the plants' cut tops. Grass, reeds and shrubs are drawn no taller
+/// than the top over the cell they stand in; the cut ends show pale.
+struct RealisticCutPlants {
+    std::array<std::uint32_t, 2> cells{};  ///< along x and y; 0 in either (or over the most): none
+    double cell{0.0};                      ///< m
+    std::array<double, 2> first{};         ///< world x and y of the first cell's centre
+    double level{0.0};                     ///< m, world z the tops are given over
+    std::span<const float> tops;           ///< m over `level`, x fastest; NaN where not cut
+};
+
 /// The renderer's units per lux (RFC 0021 §4): the drawn sun, kSunStrength, is the IES clear-sky
 /// direct normal illuminance of the light_sensor (sensors.md §9) at the drawn sun's elevation on
 /// the March equinox, so a Lambertian surface of albedo ρ under E lx is drawn ρ·E/π times this.
@@ -155,6 +169,8 @@ struct RealisticSettings {
     /// (realistic.slang's groundAir), up to kMaxAirJets robots.
     std::span<const AirRotor> rotors;
     double groundHeight{std::numeric_limits<double>::quiet_NaN()};
+    /// Plants cut by propellers, when the run's plants have been cut.
+    RealisticCutPlants cutPlants;
 };
 
 /// The photographs of surfaces, shared by the renderers on a device.
@@ -213,6 +229,9 @@ private:
     Buffer lamps_;    // host-visible: up to kMaxRealisticLamps lamps (realistic.slang's Lamp)
     Buffer surface_;  // host-visible: the moving water surface's cells (η, ∂η/∂x, ∂η/∂y, foam)
     Buffer spray_;    // host-visible: the spray's water per cell (kg/m³)
+    Buffer cut_;      // host-visible: the cut plants' tops per cell (m, RealisticCutPlants)
+    const float* cutUploaded_{nullptr};  // what cut_ holds, to upload only a new grid
+    std::size_t cutUploadedCount_{0};
     VkSampler linear_{VK_NULL_HANDLE};
     VkSampler nearest_{VK_NULL_HANDLE};
     VkSampler repeat_{VK_NULL_HANDLE};

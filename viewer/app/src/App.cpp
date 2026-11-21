@@ -926,6 +926,7 @@ public:
         buildAirflow();
         buildSpray();  // after the airflow: its drops go in the same overlay slot
         followWaterSurface();
+        followCutPlants();
         buildCables();
         followWeather();
         followLamps();
@@ -1028,6 +1029,7 @@ public:
                    a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
                    a.waterSurface == b.waterSurface && a.waterRelief == b.waterRelief &&
                    a.waterCdom == b.waterCdom && a.spray3d == b.spray3d &&
+                   a.cutPlants == b.cutPlants &&
                    sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
                    a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
                    (a.skyIlluminance == b.skyIlluminance ||
@@ -1638,6 +1640,47 @@ public:
             }
         }
         renderOptions_.waterSurface = std::move(look);
+    }
+
+    /// Plants cut by propellers for the realistic view (ground.md "Cutting the plants"): the
+    /// server's vegetation/cut volume, the cut tops in a grid. Watched only while the realistic
+    /// view draws and the run has it; only through the protocol.
+    void followCutPlants() {
+        const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
+        const bool available =
+            info && std::ranges::any_of(info->fields, [&](const EnvironmentInfo::Field& f) {
+                return f.name == kCutField && f.available;
+            });
+        if (renderOptions_.shading != Shading::Realistic || !available) {
+            if (cutStream_) {
+                (void)client_.watchField(kCutField, 0.0, SliceOrientation::Horizontal, false);
+                cutStream_.reset();
+            }
+            cutOf_.reset();
+            renderOptions_.cutPlants.reset();
+            return;
+        }
+        if (!cutStream_) {
+            cutStream_ = client_.watchField(kCutField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = cutStream_->latestVolume();
+        if (!volume || volume == cutOf_) {
+            return;
+        }
+        cutOf_ = volume;
+        if (volume->components != 1U || volume->nz != 1U || volume->nx == 0U ||
+            volume->ny == 0U || volume->cellM <= 0.0 ||
+            volume->values.size() != static_cast<std::size_t>(volume->nx) * volume->ny) {
+            renderOptions_.cutPlants.reset();  // nothing cut (yet, or after a reset)
+            return;
+        }
+        auto cut = std::make_shared<RenderOptions::CutPlants>();
+        cut->cells = {volume->nx, volume->ny};
+        cut->cell = volume->cellM;
+        cut->first = {volume->origin[0], volume->origin[1]};
+        cut->level = volume->origin[2];
+        cut->tops = volume->values;
+        renderOptions_.cutPlants = std::move(cut);
     }
 
     /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
@@ -2565,6 +2608,9 @@ private:
     static constexpr const char* kSprayField = "aero/spray";
     std::shared_ptr<FieldStream> sprayStream_;
     static constexpr const char* kWaterSurfaceField = "water/surface";
+    static constexpr const char* kCutField = "vegetation/cut";
+    std::shared_ptr<FieldStream> cutStream_;           // the realistic view's cut plants
+    std::shared_ptr<const FieldVolumeData> cutOf_;     // what cutPlants was made of
     std::shared_ptr<FieldStream> surfaceStream_;  // the realistic view's moving water
     std::shared_ptr<FieldStream> foamStream_;     // the spray for its foam
     static constexpr const char* kWaterFrictionField = "water/friction_velocity";

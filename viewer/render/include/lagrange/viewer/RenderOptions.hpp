@@ -90,6 +90,16 @@ struct RenderOptions {
         std::vector<float> friction;
     };
     std::shared_ptr<const WaterSurface> waterSurface;
+    /// Plants cut by propellers (the server's vegetation/cut volume; ground.md "Cutting the
+    /// plants"), drawn by the realistic view no taller than their cut tops.
+    struct CutPlants {
+        std::array<std::uint32_t, 2> cells{};  ///< along x and y
+        double cell{0.0};                      ///< m
+        std::array<double, 2> first{};         ///< region frame: the first cell's centre, m
+        double level{0.0};                     ///< m, region z the tops are given over
+        std::vector<float> tops;               ///< m over `level`, x fastest; NaN: not cut
+    };
+    std::shared_ptr<const CutPlants> cutPlants;
     /// The spray's water per cell (aero/spray, kg/m³), drawn by the realistic view as mist.
     struct Spray {
         std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz

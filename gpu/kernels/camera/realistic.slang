@@ -39,6 +39,9 @@ struct Frame
                               // 1/m; w: unused
     float4 airJets[16];       // per jet (GroundAir.hpp): xyz its ground hit relative to the eye,
                               // w arriving speed m/s; then x its arriving radius m
+    float4 cutGrid;           // plants cut by propellers (RealisticCutPlants): xy the first cell's
+                              // centre relative to the eye; z its cell, m; w cells along x (0: none)
+    float4 cutLevel;          // x: the tops' reference height relative to the eye; y: cells along y
 };
 static const int kAirJets = 8; // kMaxAirJets
 
@@ -69,6 +72,8 @@ struct Lamp
 [[vk::binding(9)]] StructuredBuffer<float> sprayCells;
 // The mirror pass's depth: how far what the water reflects stands from it.
 [[vk::binding(10)]] Sampler2D mirrorDepth;
+// The cut plants' tops (m over frame.cutLevel.x), x fastest; 1e30 where nothing is cut.
+[[vk::binding(11)]] StructuredBuffer<float> cutTops;
 
 struct Push
 {
@@ -516,6 +521,35 @@ float2 imageOf(int kind)
 }
 
 
+// --- plants cut by propellers ---------------------------------------------------------------
+// ground.md "Cutting the plants": the physics' map of cut tops, a world grid. Where a cell is cut,
+// grass, reeds and shrubs stand no taller than its top; the cut ends show pale.
+
+static const float kUncut = 1e29;
+
+// The plants' cut top over `relative` (xy relative to the eye), as a height relative to the eye;
+// above kUncut where nothing is cut. `wobble` (m) moves the lookup a little, so the cells'
+// square edges do not show.
+float cutTopAt(float2 relative, float wobble)
+{
+    uint nx = uint(frame.cutGrid.w);
+    uint ny = uint(frame.cutLevel.y);
+    if (nx == 0u || ny == 0u)
+        return 1e30;
+    float2 at = relative;
+    if (wobble > 0.0)
+    {
+        float2 w = (frame.worldWrap.xy + relative) * 23.0;
+        at += (float2(noise3(float3(w, 3.0)), noise3(float3(w, 9.0))) - 0.5) * wobble;
+    }
+    float2 f = (at - frame.cutGrid.xy) / frame.cutGrid.z + 0.5;
+    int2 c = int2(floor(f));
+    if (c.x < 0 || c.y < 0 || c.x >= int(nx) || c.y >= int(ny))
+        return 1e30;
+    float top = cutTops[uint(c.y) * nx + uint(c.x)];
+    return top > kUncut ? 1e30 : frame.cutLevel.x + top;
+}
+
 // --- grass ----------------------------------------------------------------------------------
 // Kinds (surfacePatternOf): 6 lawn/grass, 12 tall grass, 13 wet grass, 14 dry grass. Near the eye
 // the blades stand up off the ground: the view ray is marched down through a canopy of the kind's
@@ -653,7 +687,14 @@ void grassSurface(int kind, float3 world, float distance, float mid, float near,
     float rain = saturate(log2(1.0 + frame.weather.x) / 3.5);  // ~ soaked by 10 mm/h
     float wetness = max(g.wet, rain);
     float2 bend = grassBend(world, g.stiff, wetness);
-    float height = g.height * (1.0 - 0.15 * wetness);
+    float full = g.height * (1.0 - 0.15 * wetness);
+    // Cut by a propeller: the blades end at the cut (the drawn ground is the soil, as in the
+    // physics), stiff stubble the air hardly bends.
+    float3 relative = world - frame.worldWrap.xyz;
+    float cutTop = cutTopAt(relative.xy, 0.03) - relative.z;
+    float height = clamp(cutTop, 0.004, full);
+    float cut = saturate(1.0 - height / max(full, 1e-4));  // 0 uncut .. 1 to the ground
+    bend *= 1.0 - 0.8 * cut;
     // Far: the old flat lawn (or its photograph), bands of bent blades show lighter.
     float2 image = imageOf(kind);
     float3 base = albedo * g.tint;
@@ -677,6 +718,17 @@ void grassSurface(int kind, float3 world, float distance, float mid, float near,
     flat *= 1.0 + 0.15 * saturate(length(bend)) * (grassOf(kind) == 2 ? 1.0 : 0.5);
     flat = lerp(flat, flat * 1.9 + float3(0.05, 0.06, 0.04), 0.9 * laid);
     roughness = lerp(roughness, 0.45, 0.6 * laid);
+    // Cut: the pale cut ends and the clippings over a shorter, sparser green; cut to the ground,
+    // the soil between the roots. Gains: a drawing choice, TODO(verify) against photographs.
+    if (cut > 0.0)
+    {
+        float3 stubble = base * float3(1.35, 1.3, 0.78) + float3(0.03, 0.03, 0.015);
+        float3 soil = base * 0.22 * float3(1.1, 0.85, 0.6) + float3(0.04, 0.03, 0.02);
+        float clippings = smoothstep(0.55, 0.8, noise3(float3(world.xy * 55.0, 5.0)));
+        float3 mown = lerp(stubble, base * float3(1.6, 1.45, 0.7), clippings * 0.5);
+        flat = lerp(flat, mown, saturate(cut * 1.6));
+        flat = lerp(flat, soil, smoothstep(0.75, 1.0, cut));
+    }
     float3 outAlbedo = flat;
     float3 outN = Nflat;
     float up = smoothstep(0.6, 0.85, N.z);
@@ -704,14 +756,20 @@ void grassSurface(int kind, float3 world, float distance, float mid, float near,
             float own = 0.55 + 0.45 * hash2(cell + 5.0);  // this blade's height share
             float2 off = local - centre;
             float r = length(off);
-            if (f < own && r < g.width * 0.5 * (1.0 - f / own * 0.85))
+            // A cut blade ends at the cut, blunt: its width there is what it had at that height.
+            float uncutTop = own * full / height;  // its own top, as a share of the drawn height
+            bool cutBlade = uncutTop > 1.0;
+            float shape = f / uncutTop;  // 0 root .. 1 its own (uncut) tip
+            if (f < min(uncutTop, 1.0) && r < g.width * 0.5 * (1.0 - shape * 0.85))
             {
                 float tone = hash2(cell + 9.0);
                 float3 c = base * lerp(float3(0.7, 0.78, 0.6), float3(1.25, 1.15, 0.85), tone);
                 if (grassOf(kind) == 2 || grassOf(kind) == 4)
                     c = lerp(c, base * float3(1.6, 1.35, 0.7), smoothstep(0.75, 1.0, tone) * 0.7);  // seed heads, straw
                 // Dark down in the canopy, where little light gets in.
-                c *= lerp(0.28, 1.15, pow(f / own, 0.8));
+                c *= lerp(0.28, 1.15, pow(saturate(shape), 0.8));
+                if (cutBlade && f > 0.85)
+                    c = base * float3(1.5, 1.4, 0.8) + float3(0.04, 0.04, 0.02);  // the cut end
                 hitColor = c;
                 float2 side = r > 1e-4 ? off / r : float2(0.0);
                 hitN = normalize(float3(side * 0.35 + bend * 0.3, 1.0));
@@ -1814,6 +1872,10 @@ VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
         return vegNothing();
     float3 world = root + frame.worldWrap.xyz;
     float clumpH = H * (0.7 + 0.3 * vegRandom(s)) * (0.4 + 0.6 * fade);
+    // Cut by a propeller (cutTopAt): nothing stands above the cut; cut to the ground, nothing.
+    float cap = cutTopAt(root.xy, 0.0) - root.z;
+    if (cap < 0.03)
+        return vegNothing();
     float stiff = kind == 16 ? 0.75 + 0.2 * vegRandom(s) : 0.25 + 0.3 * vegRandom(s);
     // The air at the clump: lean with it, gusts carried with it, a sway of the clump's own.
     float2 wind = groundAir(world);
@@ -1854,6 +1916,10 @@ VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
         float width = stem ? 0.006 : 0.010 + 0.006 * vegRandom(bs);  // m at the root
         float2 at = out2 * vegRandom(bs) * 0.07;
         float f = float(g + level[r % 6u]) / 5.0;  // 0 root .. 1 tip
+        // A cut blade ends at the cut, blunt (its width there kept), without its seed head.
+        float kept = saturate(cap / max(h, 1e-3));
+        bool cutBlade = kept < 1.0;
+        f *= kept;
         float2 offset = at + out2 * curl * h * f * f + bend * h * f * f;
         float lift = h * f * (1.0 - 0.5 * f * dot(offset - at, offset - at) / max(h * h * f * f, 1e-4) * f);
         float2 widthDir = float2(-out2.y, out2.x);
@@ -1872,6 +1938,8 @@ VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
         c = lerp(c, base * float3(1.7, 1.45, 0.75), smoothstep(0.65, 1.0, f) * 0.45 * tone);
         if (head)
             c = float3(0.32, 0.22, 0.13);  // brown plume
+        if (cutBlade && f > kept - 0.06)
+            c = base * float3(1.55, 1.45, 0.8) + float3(0.04, 0.04, 0.02);  // the pale cut end
         o.color = c;
         o.rough = 0.65;
     }
@@ -1892,6 +1960,9 @@ VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
         float3 dir = float3(cos(el) * cos(az), cos(el) * sin(az), sin(el));
         float3 centre = float3(dir.xy * rr, clumpH * 0.15 + dir.z * clumpH * 0.85 * (0.55 + 0.45 * sqrt(q)));
         float3 nrm = normalize(dir + (float3(vegRandom(ls), vegRandom(ls), vegRandom(ls)) - 0.5) * 0.8);
+        if (centre.z > cap)
+            return vegNothing();  // cut off
+        bool atCut = cap < clumpH && centre.z > cap - 0.06;  // just under the cut: torn twigs
         float3 tu = normalize(cross(nrm, abs(nrm.z) < 0.9 ? float3(0, 0, 1) : float3(1, 0, 0)));
         float3 tv = cross(nrm, tu);
         float size = clumpH * (0.16 + 0.10 * vegRandom(ls));
@@ -1908,6 +1979,8 @@ VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
         // Outer leaves lit, inner ones in the crown's shade.
         float3 c = base * lerp(float3(0.65, 0.8, 0.55), float3(1.3, 1.2, 0.8), tone);
         c *= lerp(0.45, 1.05, sqrt(q)) * lerp(0.7, 1.0, hf);
+        if (atCut)
+            c = lerp(c, base * float3(1.4, 1.15, 0.7), 0.6);  // pale torn leaves and twigs
         o.color = c;
         o.rough = 0.5;
     }

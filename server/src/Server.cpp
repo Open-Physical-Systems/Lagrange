@@ -54,6 +54,7 @@
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
 #include "lagrange/vegetation/Vegetation.hpp"
+#include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
@@ -125,6 +126,10 @@ constexpr const char* kThermalCellsField = "thermal/cells";
 // The water's moving surface under the downwash (water.md), one FieldVolume of nz 1 over the
 // first body of water's patch, and the spray off it (downwash.md §5b), its water per cell.
 constexpr const char* kWaterSurfaceField = "water/surface";
+// Plants cut by propellers (ground.md "Cutting the plants"): the cut tops in a world grid, for
+// the realistic view. Sent only when the cuts change.
+constexpr const char* kCutField = "vegetation/cut";
+constexpr std::uint32_t kMaxCutSide = 512;  // cells a side of the grid sent
 constexpr const char* kSprayField = "aero/spray";
 /// The air's friction velocity on the water (u* = τ/√(ρ·|τ|), m/s, x and y per cell of the
 /// moving surface's patch): what raises the ripples the realistic look draws (water.md).
@@ -503,6 +508,8 @@ struct Session {
     // The slices this viewer wants: per field and orientation (a viewer may watch the air both
     // from above and from the side).
     std::map<std::pair<std::string, int>, FieldWant> fields;
+    double cutVersion{-1.0};  // the vegetation/canopy_cut version last sent as kCutField
+    Clock::time_point cutSent{};  // when: sent again every few seconds (a rebuilt run restarts it)
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
     void send(const v1::Envelope& envelope) {
@@ -6493,6 +6500,8 @@ struct Server::Impl {
         field(kSprayField, "spray", "aerodynamics", units::kg_per_m3, 1,
               scheduler != nullptr && scheduler->bus().find("aero/spray_drops").valid(),
               "no spray: it needs the water's moving surface and aerodynamics.downwash_spray");
+        field(kCutField, "cut plants", "vegetation", units::m, 1, cutSignal().valid(),
+              "nothing cuts plants: it needs a canopy (grass, reeds, shrubs) and rotors");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -7013,7 +7022,114 @@ struct Server::Impl {
         return envelope;
     }
 
+    /// The vegetation domain's cut map (lagrange/world/CanopyCut.hpp), when it runs.
+    SignalId cutSignal() const {
+        return scheduler != nullptr ? scheduler->bus().find(std::string(kCanopyCutSignal))
+                                    : SignalId{};
+    }
+
+    /// The cut plants (kCutField) as a FieldVolume one cell high: per cell of a world grid over
+    /// the cut cells, the plants' cut top in world z less origin_z (the lowest soil), NaN where
+    /// nothing is cut. Cells of 4 cm, coarser (keeping the lowest top) when the cuts spread over
+    /// more than kMaxCutSide cells. `version` gets the map's version.
+    std::optional<v1::Envelope> cutVolume(double* version = nullptr) const {
+        const SignalId id = cutSignal();
+        if (!id.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> map = scheduler->bus().readN(id);
+        if (map.size() < kCanopyCutHeader) {
+            return std::nullopt;
+        }
+        if (version != nullptr) {
+            *version = map[0];
+        }
+        const World::Colliders& colliders = robot.world.colliders;
+        struct Top {
+            double x, y, z, soil;
+        };
+        std::vector<Top> tops;
+        const auto count = static_cast<std::size_t>(std::max(0.0, map[1]));
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::size_t at = kCanopyCutHeader + (4 * k);
+            if (at + 3 >= map.size()) {
+                break;
+            }
+            const auto c = static_cast<std::size_t>(map[at]);
+            if (c >= colliders.body.size() || colliders.body[c] != kWorldBody) {
+                continue;
+            }
+            const double soil = colliders.shape[c] == ShapeType::Box ? colliders.size[c][2] : 0.0;
+            const Pose& pose = colliders.poseInBody[c];
+            const std::array<double, 3> top =
+                compose(pose, Pose{{(map[at + 1] + 0.5) * kCanopyCutCell,
+                                    (map[at + 2] + 0.5) * kCanopyCutCell, soil + map[at + 3]},
+                                   {1.0, 0.0, 0.0, 0.0}})
+                    .position;
+            const double ground =
+                compose(pose, Pose{{0.0, 0.0, soil}, {1.0, 0.0, 0.0, 0.0}}).position[2];
+            tops.push_back({top[0], top[1], top[2], ground});
+        }
+        std::array<double, 2> lo{std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::infinity()};
+        std::array<double, 2> hi{-lo[0], -lo[1]};
+        double base = std::numeric_limits<double>::infinity();
+        for (const Top& t : tops) {
+            lo = {std::min(lo[0], t.x), std::min(lo[1], t.y)};
+            hi = {std::max(hi[0], t.x), std::max(hi[1], t.y)};
+            base = std::min(base, t.soil);
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(kCutField);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_components(1);
+        if (tops.empty()) {  // nothing cut yet (or after a reset): one cell, not cut
+            const float none = std::numeric_limits<float>::quiet_NaN();
+            volume.set_nx(1);
+            volume.set_ny(1);
+            volume.set_nz(1);
+            volume.set_cell_m(kCanopyCutCell);
+            std::string bytes(reinterpret_cast<const char*>(&none), sizeof(none));
+            volume.mutable_values()->set_size(bytes.size());
+            volume.mutable_values()->set_inline_(std::move(bytes));
+            return envelope;
+        }
+        const double extent = std::max(hi[0] - lo[0], hi[1] - lo[1]);
+        const double cell =
+            std::max(kCanopyCutCell, extent / static_cast<double>(kMaxCutSide - 1) * 1.0001);
+        const auto nx = static_cast<std::uint32_t>(std::floor((hi[0] - lo[0]) / cell)) + 1;
+        const auto ny = static_cast<std::uint32_t>(std::floor((hi[1] - lo[1]) / cell)) + 1;
+        std::vector<float> values(static_cast<std::size_t>(nx) * ny,
+                                  std::numeric_limits<float>::quiet_NaN());
+        float most = 0.0F;
+        for (const Top& t : tops) {
+            const auto ix = std::min(nx - 1, static_cast<std::uint32_t>((t.x - lo[0]) / cell + 0.5));
+            const auto iy = std::min(ny - 1, static_cast<std::uint32_t>((t.y - lo[1]) / cell + 0.5));
+            float& v = values[static_cast<std::size_t>(iy) * nx + ix];
+            const auto z = static_cast<float>(t.z - base);
+            v = std::isnan(v) ? z : std::min(v, z);
+            most = std::max(most, z);
+        }
+        volume.set_nx(nx);
+        volume.set_ny(ny);
+        volume.set_nz(1);
+        volume.set_cell_m(cell);
+        volume.set_origin_x(lo[0]);
+        volume.set_origin_y(lo[1]);
+        volume.set_origin_z(base);
+        volume.set_value_max(most);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
     std::optional<v1::Envelope> fieldVolume(const std::string& name) const {
+        if (name == kCutField) {
+            return cutVolume();
+        }
         if (name == kWaterSurfaceField) {
             return waterSurfaceVolume();
         }
@@ -9144,6 +9260,21 @@ void Server::runOnce(int timeoutMs) {
                     if (s.thermalVolumeTick % kThermalVolumeEvery == 0) {
                         for (const v1::Envelope& volume : s.thermalVolumes()) {
                             session->send(volume);
+                        }
+                    }
+                } else if (want.volume && key.first == kCutField) {
+                    // Only when the cuts changed (or to a viewer that has none yet).
+                    const SignalId cut = s.cutSignal();
+                    const double now = cut.valid() && !s.scheduler->bus().readN(cut).empty()
+                                           ? s.scheduler->bus().readN(cut)[0]
+                                           : -1.0;
+                    constexpr auto kCutRefresh = std::chrono::seconds(3);
+                    if (now != session->cutVersion || Clock::now() - session->cutSent > kCutRefresh) {
+                        double version = -1.0;
+                        if (auto volume = s.cutVolume(&version)) {
+                            session->send(*volume);
+                            session->cutVersion = version;
+                            session->cutSent = Clock::now();
                         }
                     }
                 } else if (want.volume) {
