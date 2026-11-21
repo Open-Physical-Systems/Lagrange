@@ -15,6 +15,8 @@
 #include "lagrange/server/Server.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/tether/Tethers.hpp"
+#include "lagrange/vegetation/Vegetation.hpp"
+#include "lagrange/world/CanopyCut.hpp"
 
 #include <algorithm>
 #include <array>
@@ -912,6 +914,91 @@ TEST(Multicopter, TurnedByItsTetherItStillFlies) {
     EXPECT_GT(lowest, hover - 0.3) << "it fell";
     EXPECT_GT(slowest, 50.0) << "a rotor stopped";
     EXPECT_GT(leastUpright, std::cos(40.0 * std::numbers::pi / 180.0)) << "tipped past 40°";
+}
+
+// Cutting (ground.md "Cutting the plants"): the sample quadcopter takes off from tall grass (0.4
+// m). Its propellers spin up inside the grass and cut a disc under each rotor down to the blades;
+// the cuts load the rotors for a moment, it still climbs to its 2 m hover, and the grass away from
+// it stands uncut.
+TEST(Multicopter, TakingOffFromTallGrassCutsItUnderTheRotors) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    World& world = robot->world;
+    SurfaceMaterial grass;
+    ASSERT_TRUE(surfaceMaterialPreset("tall_grass", grass));
+    world.surfaceMaterials.push_back(grass);
+    std::uint32_t ground = kNoMaterial;
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        if (world.colliders.body[c] == kWorldBody && world.colliders.shape[c] == ShapeType::Plane) {
+            world.colliders.material[c] =
+                static_cast<std::uint32_t>(world.surfaceMaterials.size() - 1);
+            ground = static_cast<std::uint32_t>(c);
+        }
+    }
+    ASSERT_NE(ground, kNoMaterial) << "the quadcopter's run has a ground plane";
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    MulticopterController::Settings flight;
+    flight.takeoffAfterS = 0.0;
+    scheduler.add(std::make_unique<MulticopterController>(flight), ModuleConfig(air));
+    ModuleConfigData stems;
+    stems.values["density"] = 1.225;
+    scheduler.add(std::make_unique<vegetation::Vegetation>(), ModuleConfig(stems));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId cut = bus.find(std::string(kCanopyCutSignal));
+    ASSERT_TRUE(cut.valid());
+    std::array<std::array<double, 3>, 4> hubs{};
+    std::array<SignalId, 4> cutting{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const std::string n = std::to_string(i + 1);
+        cutting.at(i) = bus.find("rotor/rotor_" + n + "_joint/cutting_power");
+        ASSERT_TRUE(cutting.at(i).valid());
+    }
+    const SignalId base = bus.find("body/base_link/pose");
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000}).ok());
+    const std::span<const double> start = bus.readN(base);
+    const std::array<double, 3> at{start[0], start[1], start[2]};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const std::span<const double> p =
+            bus.readN(bus.find("body/rotor_" + std::to_string(i + 1) + "_link/pose"));
+        ASSERT_EQ(p.size(), 7U);
+        hubs.at(i) = {p[0], p[1], p[2]};
+    }
+    double peak = 0.0;
+    double energy = 0.0;
+    for (int ms = 2; ms <= 5000; ++ms) {
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{ms * 1'000'000LL}).ok());
+        for (const SignalId s : cutting) {
+            peak = std::max(peak, bus.read(s));
+            energy += bus.read(s) * 0.001;
+        }
+    }
+    CanopyCuts cuts;
+    cuts.load(bus.readN(cut));
+    ASSERT_FALSE(cuts.empty());
+    for (const auto& hub : hubs) {
+        // Under the hub the grass is cut to about the blades' height on the ground.
+        const double top = cuts.top(ground, hub[0], hub[1]);
+        EXPECT_LT(top, 0.4) << hub[0] << ", " << hub[1];
+        EXPECT_NEAR(top, hub[2], 0.05);
+    }
+    EXPECT_TRUE(std::isinf(cuts.top(ground, at[0] + 3.0, at[1])));
+    EXPECT_GT(peak, 0.0);
+    // The energy it paid is the cut ground's: four discs of 10-inch propellers.
+    const double discs = 4.0 * std::numbers::pi * 0.127 * 0.127;
+    EXPECT_GT(energy, 0.8 * discs * vegetation::kCutEnergyPerArea);
+    EXPECT_LT(energy, 2.0 * discs * vegetation::kCutEnergyPerArea);
+    EXPECT_NEAR(bus.readN(base)[2] - at[2], 2.0, 0.15);
 }
 
 }  // namespace

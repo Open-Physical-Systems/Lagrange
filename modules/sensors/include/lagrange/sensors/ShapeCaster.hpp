@@ -3,10 +3,12 @@
 // Tier 0 ray casting against collision shapes (docs/design/domains/sensors.md §6).
 
 #include "lagrange/services/SceneQuery.hpp"
+#include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/world/World.hpp"
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <vector>
@@ -183,15 +185,21 @@ struct CanopyFormShape {
 [[nodiscard]] double canopyTallest(const SurfaceMaterial& material);
 /// Where a beam crossing the canopy volume over [enter, leave] (canopyVolumeSpan with
 /// canopyTallest) stops in the shaped canopy, for a uniform draw u: +inf when it goes through.
+/// With `cuts`, the plants of collider `collider` stand no taller than its cut map says
+/// (lagrange/world/CanopyCut.hpp; ground.md "Cutting the plants"): the stubble keeps the leaves
+/// it had under the cut.
 [[nodiscard]] double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
                                       const std::array<double, 3>& size, const Pose& placed,
                                       const std::array<double, 3>& origin,
                                       const std::array<double, 3>& direction, double enter,
-                                      double leave, double u);
+                                      double leave, double u, const CanopyCuts* cuts = nullptr,
+                                      std::uint32_t collider = 0);
 /// canopyShortening in the shaped canopy, for a hit at (x, y) on a surface without a volume
-/// (meshes, height fields): the local height and the form's leaf profile.
-[[nodiscard]] double canopyShapedShortening(const SurfaceMaterial& material, double x, double y,
-                                            double cosIncidence, double range, double u);
+/// (meshes, height fields): the local height and the form's leaf profile, under `cutTop` (m over
+/// the soil; +inf uncut).
+[[nodiscard]] double canopyShapedShortening(
+    const SurfaceMaterial& material, double x, double y, double cosIncidence, double range,
+    double u, double cutTop = std::numeric_limits<double>::infinity());
 
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);

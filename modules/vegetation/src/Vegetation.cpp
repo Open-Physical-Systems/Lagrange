@@ -106,23 +106,160 @@ std::vector<Canopy> canopiesOf(const World& world) {
         }
         const SurfaceMaterial& m = world.surfaceMaterials.at(c.material[i]);
         if (m.canopyHeight > 0.0) {
-            out.push_back(
-                {c.shape[i], c.size[i], c.poseInBody[i], m.canopyHeight, m.leafAreaIndex});
+            out.push_back({c.shape[i], c.size[i], c.poseInBody[i], m.canopyHeight, m.leafAreaIndex,
+                           static_cast<std::uint32_t>(i)});
         }
     }
     return out;
 }
 
-bool insideCanopy(const Canopy& canopy, const std::array<double, 3>& point) {
-    const std::array<double, 3> q =
-        rotate(conjugate(canopy.pose.orientation),
-               {point[0] - canopy.pose.position[0], point[1] - canopy.pose.position[1],
-                point[2] - canopy.pose.position[2]});
-    if (canopy.type == ShapeType::Plane) {
-        return q[2] >= 0.0 && q[2] <= canopy.height;
+namespace {
+
+std::array<double, 3> inCanopyFrame(const Canopy& canopy, const std::array<double, 3>& point) {
+    return rotate(conjugate(canopy.pose.orientation),
+                  {point[0] - canopy.pose.position[0], point[1] - canopy.pose.position[1],
+                   point[2] - canopy.pose.position[2]});
+}
+
+/// The soil's height in the canopy collider's frame: a box's top face, a plane's own.
+double soilOf(const Canopy& canopy) {
+    return canopy.type == ShapeType::Plane ? 0.0 : canopy.size[2];
+}
+
+bool overFace(const Canopy& canopy, const std::array<double, 3>& q) {
+    return canopy.type == ShapeType::Plane ||
+           (std::abs(q[0]) <= canopy.size[0] && std::abs(q[1]) <= canopy.size[1]);
+}
+
+}  // namespace
+
+bool insideCanopy(const Canopy& canopy, const std::array<double, 3>& point, const CutMap* cuts) {
+    const std::array<double, 3> q = inCanopyFrame(canopy, point);
+    if (!overFace(canopy, q)) {
+        return false;
     }
-    return std::abs(q[0]) <= canopy.size[0] && std::abs(q[1]) <= canopy.size[1] &&
-           q[2] >= canopy.size[2] && q[2] <= canopy.size[2] + canopy.height;
+    double top = canopy.height;
+    if (cuts != nullptr) {
+        top = std::min(top, cuts->top(canopy.collider, q[0], q[1]));
+    }
+    const double over = q[2] - soilOf(canopy);
+    return over >= 0.0 && over <= top;
+}
+
+double CutMap::top(std::uint32_t collider, double x, double y) const {
+    const auto it = index_.find(canopyCutKey(collider, canopyCutIndex(x), canopyCutIndex(y)));
+    if (it == index_.end()) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return values_[kCanopyCutHeader + (4 * static_cast<std::size_t>(it->second)) + 3];
+}
+
+double CutMap::sweep(const Canopy& canopy, const std::array<double, 3>& centre,
+                     const std::array<double, 3>& normal, double radius) {
+    if (!(radius > 0.0) || !(canopy.height > 0.0)) {
+        return 0.0;
+    }
+    const double soil = soilOf(canopy);
+    // The plants reach at most twice the preset height (the lidars' shaped canopy stands up to
+    // (1 + spread)(1 + jitter) of it, under 1.7 for every form): a disc above that cuts nothing.
+    const double reach = 2.0 * canopy.height;
+    const std::array<double, 3> c = inCanopyFrame(canopy, centre);
+    if (c[2] - radius > soil + reach) {
+        return 0.0;
+    }
+    if (canopy.type == ShapeType::Box &&
+        (std::abs(c[0]) > canopy.size[0] + radius || std::abs(c[1]) > canopy.size[1] + radius)) {
+        return 0.0;
+    }
+    const std::array<double, 3> n = rotate(conjugate(canopy.pose.orientation), normal);
+    // Two unit vectors across the disc.
+    const std::array<double, 3> pick = std::abs(n[0]) < 0.9 ? std::array<double, 3>{1.0, 0.0, 0.0}
+                                                            : std::array<double, 3>{0, 1, 0};
+    std::array<double, 3> e1 = cross(n, pick);
+    const double l1 = std::hypot(e1[0], e1[1], e1[2]);
+    if (!(l1 > 0.0)) {
+        return 0.0;
+    }
+    e1 = {e1[0] / l1, e1[1] / l1, e1[2] / l1};
+    const std::array<double, 3> e2 = cross(n, e1);
+    // Points on rings half a cell apart, so every cell under the disc is met.
+    const double spacing = 0.5 * kCanopyCutCell;
+    const int rings = std::max(1, static_cast<int>(std::ceil(radius / spacing)));
+    const double cellArea = kCanopyCutCell * kCanopyCutCell;
+    double area = 0.0;
+    bool changed = false;
+    for (int k = 0; k < rings; ++k) {
+        const double r = std::min(radius, (k + 0.5) * spacing);
+        const int around =
+            std::max(1, static_cast<int>(std::ceil(2.0 * std::numbers::pi * r / spacing)));
+        for (int a = 0; a < around; ++a) {
+            const double angle = 2.0 * std::numbers::pi * (a + 0.5) / around;
+            const double ca = r * std::cos(angle);
+            const double sa = r * std::sin(angle);
+            const std::array<double, 3> q{c[0] + ca * e1[0] + sa * e2[0],
+                                          c[1] + ca * e1[1] + sa * e2[1],
+                                          c[2] + ca * e1[2] + sa * e2[2]};
+            const double over = q[2] - soil;
+            if (over > reach || !overFace(canopy, q)) {
+                continue;
+            }
+            const double cut = std::max(over, 0.0);
+            const std::int32_t cellX = canopyCutIndex(q[0]);
+            const std::int32_t cellY = canopyCutIndex(q[1]);
+            const std::uint64_t key = canopyCutKey(canopy.collider, cellX, cellY);
+            const auto it = index_.find(key);
+            const double old =
+                it == index_.end()
+                    ? std::numeric_limits<double>::infinity()
+                    : values_[kCanopyCutHeader + (4 * static_cast<std::size_t>(it->second)) + 3];
+            if (!(cut < old - kMinCutPiece)) {
+                continue;
+            }
+            // The stems were standing over the cut only where the plants reached above it.
+            if (cut < std::min(old, canopy.height)) {
+                area += cellArea;
+            }
+            std::size_t slot = 0;
+            if (it == index_.end()) {
+                if (full()) {
+                    continue;
+                }
+                slot = index_.size();
+                index_.emplace(key, static_cast<std::uint32_t>(slot));
+                const std::size_t at = kCanopyCutHeader + (4 * slot);
+                values_[at] = canopy.collider;
+                values_[at + 1] = cellX;
+                values_[at + 2] = cellY;
+                values_[1] = static_cast<double>(index_.size());
+            } else {
+                slot = it->second;
+            }
+            values_[kCanopyCutHeader + (4 * slot) + 3] = cut;
+            changed = true;
+        }
+    }
+    if (changed) {
+        values_[0] += 1.0;
+    }
+    return area;
+}
+
+bool CutMap::assign(std::span<const double> values) {
+    if (values.size() != kCanopyCutLength) {
+        return false;
+    }
+    values_.assign(values.begin(), values.end());
+    index_.clear();
+    const auto count = static_cast<std::size_t>(
+        std::clamp(values_[1], 0.0, static_cast<double>(kCanopyCutCapacity)));
+    for (std::size_t k = 0; k < count; ++k) {
+        const std::size_t at = kCanopyCutHeader + (4 * k);
+        index_.emplace(canopyCutKey(static_cast<std::uint32_t>(values_[at]),
+                                    static_cast<std::int32_t>(values_[at + 1]),
+                                    static_cast<std::int32_t>(values_[at + 2])),
+                       static_cast<std::uint32_t>(k));
+    }
+    return true;
 }
 
 double frontalAreaDensity(double height, double leafAreaIndex) {
@@ -211,6 +348,54 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         body.inside = d.output(spec(base + "in_vegetation", SignalType::Scalar, units::one));
         bodies_.push_back(std::move(body));
     }
+    // Cutting: every rotor, while the run has canopies.
+    rotors_.clear();
+    cutOut_ = SignalId{};
+    cutEnergy_ = std::max(0.0, config.get<double>("cut_energy").value_or(kCutEnergyPerArea));
+    if (canopies_.empty() || !config.get<bool>("cutting").value_or(true)) {
+        return {};
+    }
+    const World::Joints& joints = world.joints();
+    const World::Bodies& bodies = world.bodies();
+    for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
+        const auto j =
+            static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) - joints.prim.begin());
+        const auto radius = s->real("aero:rotor:radius");
+        if (j >= joints.prim.size() || !radius || !(*radius > 0.0)) {
+            continue;  // the rotor domain says what is wrong with it
+        }
+        Rotor r;
+        r.radius = *radius;
+        const std::array<double, 3>& a = joints.axis[j];
+        const double norm = std::hypot(a[0], a[1], a[2]);
+        if (!(norm > 0.0)) {
+            continue;
+        }
+        r.axis = {a[0] / norm, a[1] / norm, a[2] / norm};
+        const std::size_t child = joints.child[j].index;
+        const std::array<double, 6>& in = bodies.inertiaLocal[child];  // xx yy zz xy xz yz
+        const std::array<double, 3>& u = r.axis;
+        r.inertia = in[0] * u[0] * u[0] + in[1] * u[1] * u[1] + in[2] * u[2] * u[2] +
+                    2.0 * (in[3] * u[0] * u[1] + in[4] * u[0] * u[2] + in[5] * u[1] * u[2]);
+        const std::string joint(world.signalInstanceName(s->prim));
+        const std::string link(world.signalInstanceName(bodies.prim[child]));
+        SignalSpec pose = spec("body/" + link + "/pose", SignalType::Pose, units::m, "world_local");
+        pose.feedback = true;
+        r.pose = d.input(pose);
+        SignalSpec velocity =
+            spec("joint/" + joint + "/velocity", SignalType::Scalar, units::rad_per_s);
+        velocity.feedback = true;
+        r.velocity = d.input(velocity);
+        r.wrench = d.output(
+            spec("body/" + link + "/wrench/cutting", SignalType::Wrench, units::N, "world_local"));
+        r.power = d.output(spec("rotor/" + joint + "/cutting_power", SignalType::Scalar, units::W));
+        rotors_.push_back(r);
+    }
+    if (!rotors_.empty()) {
+        SignalSpec out = spec(std::string(kCanopyCutSignal), SignalType::ScalarArray, units::m);
+        out.arrayLength = kCanopyCutLength;
+        cutOut_ = d.output(out);
+    }
     return {};
 }
 
@@ -219,10 +404,61 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         bus.writeN(body.wrench, std::array<double, 6>{});
         bus.write(body.inside, 0.0);
     }
+    for (const Rotor& r : rotors_) {
+        bus.writeN(r.wrench, std::array<double, 6>{});
+        bus.write(r.power, 0.0);
+    }
+    if (cutOut_.valid()) {
+        bus.writeN(cutOut_, cuts_.values());
+    }
     return {};
 }
 
-Status Vegetation::step(const StepContext&, SignalBus& bus) {
+Status Vegetation::step(const StepContext& context, SignalBus& bus) {
+    const double dt = context.dt.seconds();
+    const double version = cuts_.values()[0];
+    for (Rotor& r : rotors_) {
+        const std::span<const double> p = bus.readN(r.pose);
+        const double omega = bus.read(r.velocity);
+        std::array<double, 6> wrench{};
+        double power = 0.0;
+        if (p.size() == 7 && std::abs(omega) * r.radius >= kMinCutTipSpeed) {
+            const Pose hub{{p[0], p[1], p[2]}, {p[3], p[4], p[5], p[6]}};
+            const std::array<double, 3> axis = rotate(hub.orientation, r.axis);
+            double area = 0.0;
+            for (const Canopy& canopy : canopies_) {
+                area += cuts_.sweep(canopy, hub.position, axis, r.radius);
+            }
+            r.owed += area * cutEnergy_;
+            // The cut is paid by the spinning propeller, no faster than a twentieth of its
+            // kinetic energy per step, so a deep plunge slows it over steps instead of reversing
+            // it in one (a propeller without inertia pays at once).
+            double paid = r.owed;
+            if (r.inertia > 0.0) {
+                constexpr double kShare = 0.05;
+                paid = std::min(paid, kShare * 0.5 * r.inertia * omega * omega);
+            }
+            r.owed -= paid;
+            if (paid > 0.0 && dt > 0.0) {
+                power = paid / dt;
+                const double torque = -std::copysign(power / std::abs(omega), omega);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    wrench.at(k + 3) = torque * axis.at(k);
+                }
+            }
+        } else {
+            r.owed = 0.0;  // stopped: what it did not cut, it never will
+        }
+        bus.writeN(r.wrench, wrench);
+        bus.write(r.power, power);
+    }
+    if (cutOut_.valid()) {
+        if (cuts_.values()[0] != version) {
+            bus.writeN(cutOut_, cuts_.values());
+        } else {
+            bus.hold(cutOut_);
+        }
+    }
     for (const Body& body : bodies_) {
         const std::span<const double> p = bus.readN(body.pose);
         const std::span<const double> v = bus.readN(body.twist);
@@ -236,7 +472,7 @@ Status Vegetation::step(const StepContext&, SignalBus& bus) {
                 const std::array<double, 3> at =
                     compose(pose, Pose{cell.at, {1, 0, 0, 0}}).position;
                 for (const Canopy& canopy : canopies_) {
-                    if (!insideCanopy(canopy, at)) {
+                    if (!insideCanopy(canopy, at, &cuts_)) {
                         continue;
                     }
                     inside += cell.volume;
@@ -258,6 +494,25 @@ Status Vegetation::step(const StepContext&, SignalBus& bus) {
         }
         bus.writeN(body.wrench, wrench);
         bus.write(body.inside, body.volume > 0.0 ? inside / body.volume : 0.0);
+    }
+    return {};
+}
+
+Status Vegetation::saveState(StateWriter& writer) const {
+    writer.putDoubles(cuts_.values());
+    for (const Rotor& r : rotors_) {
+        writer.put(r.owed);
+    }
+    return {};
+}
+
+Status Vegetation::restoreState(StateReader& reader) {
+    std::vector<double> values(kCanopyCutLength, 0.0);
+    if (!reader.getDoubles(values) || !cuts_.assign(values)) {
+        return Status::error(StatusCode::Internal, "vegetation: the saved cut map is short");
+    }
+    for (Rotor& r : rotors_) {
+        reader.get(r.owed);
     }
     return {};
 }

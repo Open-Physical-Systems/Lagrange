@@ -556,6 +556,18 @@ public:
                     setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
             }
         }
+        // Plants cut by propellers (ground.md "Cutting the plants"): the vegetation domain's map,
+        // optional, so a run without it (or with vegetation off) sees them uncut.
+        canopyCut_ = SignalId{};
+        if (!groundTruth_ && std::ranges::any_of(raw.colliders.material, [&](std::uint32_t m) {
+                return m != kNoMaterial && raw.surfaceMaterials.at(m).canopyHeight > 0.0;
+            })) {
+            SignalSpec cut = spec(std::string(kCanopyCutSignal), SignalType::ScalarArray, units::m);
+            cut.arrayLength = kCanopyCutLength;
+            cut.optional = true;
+            cut.feedback = true;
+            canopyCut_ = d.input(cut);
+        }
         // The water's moving surface (water.md): beams meet it at η, not at the still level.
         if (!groundTruth_) {
             return movingWater_.declare(world, config, d);
@@ -661,6 +673,9 @@ public:
             bus.writeN(intensities_, intensity_);
             return {};
         }
+        if (canopyCut_.valid()) {
+            cuts_.load(bus.readN(canopyCut_));
+        }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
         sweep(sensor);
         // Place every shape once per scan, not once per beam.
@@ -721,9 +736,9 @@ public:
                     }
                     // The shaped canopy (ShapeCaster.hpp "The canopy's shape"): plants of
                     // varying height, gaps, a ragged border, leaf area by height.
-                    const double at =
-                        canopyShapedStop(*canopy.material, canopy.type, canopy.size, placed_[k],
-                                         from.position, dir, enter, leave, rng.uniform());
+                    const double at = canopyShapedStop(
+                        *canopy.material, canopy.type, canopy.size, placed_[k], from.position, dir,
+                        enter, leave, rng.uniform(), cuts_.empty() ? nullptr : &cuts_, k);
                     if (at < stop) {
                         stop = at;
                         stopShape = k;
@@ -1124,6 +1139,8 @@ private:
     MovingWaterInputs movingWater_;
     std::vector<std::uint32_t> hitShape_;
     std::vector<std::uint32_t> canopyVolumes_;  // shapes_ with a canopy volume (boxes, planes)
+    SignalId canopyCut_;                        // the vegetation domain's cut map, when it runs
+    CanopyCuts cuts_;
     std::vector<double> intensity_;
     bool wavelength1550_{false};
     double referenceReflectivity_{0.1};

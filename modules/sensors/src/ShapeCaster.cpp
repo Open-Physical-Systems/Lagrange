@@ -642,7 +642,8 @@ double canopyTallest(const SurfaceMaterial& material) {
 double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
                         const std::array<double, 3>& size, const Pose& placed,
                         const std::array<double, 3>& origin, const std::array<double, 3>& direction,
-                        double enter, double leave, double u) {
+                        double enter, double leave, double u, const CanopyCuts* cuts,
+                        std::uint32_t collider) {
     constexpr double kNever = std::numeric_limits<double>::infinity();
     const double big = material.canopyHeight;
     if (!(big > 0.0) || !(material.leafAreaIndex > 0.0) || !(leave > enter)) {
@@ -672,8 +673,30 @@ double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
     const double target = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16));
     const double density = kCanopyProjection * material.leafAreaIndex / big;  // G LAI / H
     double depth = 0.0;
-    for (double t = enter; t < leave; t += dt) {
-        const double step = std::min(dt, leave - t);
+    for (double t0 = enter; t0 < leave; t0 += dt) {
+        double t = t0;
+        double step = std::min(dt, leave - t0);
+        // Cut plants (ground.md "Cutting the plants"): only the part of the step under the cut
+        // at its middle counts, so no beam stops above the cut.
+        if (cuts != nullptr) {
+            const double mid = t0 + 0.5 * step;
+            const double top = cuts->top(collider, o[0] + d[0] * mid, o[1] + d[1] * mid);
+            if (std::isfinite(top) && std::abs(d[2]) > 1e-12) {
+                const double at = (soil + top - o[2]) / d[2];  // where the beam meets the cut
+                double lo = t0;
+                double hi = t0 + step;
+                if (d[2] < 0.0) {
+                    lo = std::max(lo, at);  // going down: under the cut after it
+                } else {
+                    hi = std::min(hi, at);  // going up: under it before it
+                }
+                if (!(hi > lo)) {
+                    continue;
+                }
+                t = lo;
+                step = hi - lo;
+            }
+        }
         const double m = t + 0.5 * step;
         const double x = o[0] + d[0] * m;
         const double y = o[1] + d[1] * m;
@@ -683,8 +706,12 @@ double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
         if (!(factor > 0.0)) {
             continue;
         }
-        // Leaf area density here: (LAI f / (H f)) p(zeta) = (LAI / H) p(zeta).
-        const double zeta = (o[2] + d[2] * m - soil) / (big * factor);
+        // Leaf area density here: (LAI f / (H f)) p(zeta) = (LAI / H) p(zeta); none above a cut.
+        const double over = o[2] + d[2] * m - soil;
+        if (cuts != nullptr && over > cuts->top(collider, x, y)) {
+            continue;
+        }
+        const double zeta = over / (big * factor);
         const double a = density * canopyLeafProfile(material.canopyForm, zeta);
         if (a > 0.0 && depth + a * step >= target) {
             return t + (target - depth) / a;
@@ -695,7 +722,7 @@ double canopyShapedStop(const SurfaceMaterial& material, ShapeType type,
 }
 
 double canopyShapedShortening(const SurfaceMaterial& material, double x, double y,
-                              double cosIncidence, double range, double u) {
+                              double cosIncidence, double range, double u, double cutTop) {
     const double big = material.canopyHeight;
     if (!(big > 0.0) || !(material.leafAreaIndex > 0.0) || !std::isfinite(range)) {
         return 0.0;
@@ -707,7 +734,11 @@ double canopyShapedShortening(const SurfaceMaterial& material, double x, double 
     }
     constexpr double kMinCosine = 1e-3;
     const double c = std::max(std::abs(cosIncidence), kMinCosine);
-    const double path = std::min(h / c, std::max(range, 0.0));
+    const double stand = std::min(h, std::max(cutTop, 0.0));  // the plants' top, cut or not
+    if (!(stand > 0.0)) {
+        return 0.0;
+    }
+    const double path = std::min(stand / c, std::max(range, 0.0));
     // Along the beam from where it enters the canopy (zeta = 1 when the path is the full h / c);
     // the profile is integrated in 32 midpoint steps.
     constexpr int kSteps = 32;
