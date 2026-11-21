@@ -631,5 +631,65 @@ TEST(CanopyShape, VerticalBeamGapFractionAndDeterminism) {
     }
 }
 
+// Cut plants (ground.md "Cutting the plants"): straight down into tall grass cut to 5 cm, beams
+// stop no higher than the cut, and the same draws stop deeper than in the uncut grass.
+TEST(CanopyShape, CutPlantsStopBeamsNoHigherThanTheCut) {
+    SurfaceMaterial grass;
+    ASSERT_TRUE(surfaceMaterialPreset("tall_grass", grass));
+    const std::array<double, 3> size{5.0, 5.0, 0.5};
+    const Pose placed{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    // The cut map of collider 3: every cell within 1 m of the centre at 5 cm.
+    std::vector<double> values(kCanopyCutLength, 0.0);
+    std::size_t count = 0;
+    for (int cellX = -25; cellX < 25; ++cellX) {
+        for (int cellY = -25; cellY < 25; ++cellY) {
+            const std::size_t at = kCanopyCutHeader + (4 * count++);
+            values[at] = 3;
+            values[at + 1] = cellX;
+            values[at + 2] = cellY;
+            values[at + 3] = 0.05;
+        }
+    }
+    values[0] = 1.0;
+    values[1] = static_cast<double>(count);
+    CanopyCuts cuts;
+    cuts.load(values);
+    const double top = 0.5 + canopyTallest(grass);
+    int cutStops = 0;
+    int uncutStops = 0;
+    double cutDepth = 0.0;
+    double uncutDepth = 0.0;
+    for (int k = 0; k < 400; ++k) {
+        const double x = -0.4 + 0.002 * k;
+        const std::array<double, 3> origin{x, 0.3, top + 1.0};
+        const double u = (k + 0.5) / 400.0;
+        const double cut = canopyShapedStop(grass, ShapeType::Box, size, placed, origin,
+                                            {0.0, 0.0, -1.0}, 1.0, top + 0.5, u, &cuts, 3);
+        const double uncut = canopyShapedStop(grass, ShapeType::Box, size, placed, origin,
+                                              {0.0, 0.0, -1.0}, 1.0, top + 0.5, u);
+        if (std::isfinite(cut)) {
+            EXPECT_GE(origin[2] - cut, 0.5 - 1e-9);
+            EXPECT_LE(origin[2] - cut, 0.5 + 0.05 + 1e-9);
+            ++cutStops;
+            cutDepth += cut;
+        }
+        if (std::isfinite(uncut)) {
+            ++uncutStops;
+            uncutDepth += uncut;
+        }
+        // Another collider's map is not this one's.
+        EXPECT_EQ(canopyShapedStop(grass, ShapeType::Box, size, placed, origin, {0.0, 0.0, -1.0},
+                                   1.0, top + 0.5, u, &cuts, 4),
+                  uncut);
+    }
+    EXPECT_GT(uncutStops, 200);
+    EXPECT_LT(cutStops, uncutStops);  // stubble lets more beams through to the soil
+    EXPECT_GT(cutStops, 0);
+    EXPECT_GT(cutDepth / cutStops, uncutDepth / uncutStops);
+    // On a mesh or a height field: the path starts at the cut.
+    EXPECT_LE(canopyShapedShortening(grass, 0.0, 0.0, 1.0, 10.0, 0.999, 0.05), 0.05 + 1e-12);
+    EXPECT_EQ(canopyShapedShortening(grass, 0.0, 0.0, 1.0, 10.0, 0.999, 0.0), 0.0);
+}
+
 }  // namespace
 }  // namespace lagrange::sensors

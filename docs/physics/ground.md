@@ -291,3 +291,54 @@ The outwash is unsteady (Tanner et al. report fluctuations of the order of the m
 as gusts running outward at half its speed, broken by noise. Their size and strength are a
 drawing choice (TODO(verify): the measured spectrum). `test_downwash`'s `GroundAir.*` check the
 port against `Downwash::velocityAt` (to 1e-9) and that no rotors leave the site wind alone.
+
+## Cutting the plants
+
+A spinning propeller that reaches into grass, reeds or shrubs cuts them. The `vegetation` domain
+(`modules/vegetation`, `CutMap`) does this for every rotor (`RotorAPI_1` joint) while the run has
+canopies. It needs no air density.
+
+- **Where it cuts.** Each millisecond, a rotor whose blade tips move at 5 m/s or faster sweeps its
+  disc: the hub at the rotor link's origin, the joint axis as normal, `aero:rotor:radius`. The disc
+  is sampled on rings half a cell apart. Every 4 cm cell of a canopy's top that the disc passes
+  over, with the blades below the plants (twice the preset height bounds the tallest), is cut to
+  the blades' height over the soil, or to the soil when the blades go into it. A tilted disc cuts
+  a slope.
+- **It stays cut.** A cell is cut again only when the blades go at least 1 cm (`kMinCutPiece`)
+  lower than before: a shorter stub bends away. The plants do not grow back.
+- **What it costs.** Each cell cut lower takes `kCutEnergyPerArea` (100 J per m² of ground) to
+  sever its stems. This is counted only where the plants stood above the cut. The rotor pays it as
+  a torque against its spin on the propeller's link (`body/<link>/wrench/cutting`), so the motor
+  sees the load. That torque is shown as `rotor/<j>/cutting_power` (W). A deep plunge is paid over
+  several steps, never more than a twentieth of the propeller's kinetic energy per step, so it
+  slows the propeller instead of reversing it.
+- **Who sees it.** The cut map is published as `vegetation/canopy_cut`, one array with the layout
+  in `lagrange/world/CanopyCut.hpp`: up to 16384 cells, 26 m² of cut ground; cells beyond that
+  are not kept. The lidars read it as an optional input and stop no beams above the cut in a box
+  or plane canopy. The stubble keeps the leaves it had below the cut, so a cut patch shows up as a
+  hollow in the point cloud. The stems' drag (`body/<b>/wrench/vegetation`) also stops at the cut.
+  The map is saved and restored with the run's state.
+
+The energy comes from cutting tests on forage stems: of the order of 10–60 mJ per mm² of stem cut
+(Persson 1987, *Principles, Design and Testing of Reaper Forage Harvesters*, ASAE). A lawn stands
+some 4000–10000 mm² of stem per m², which gives 40–600 J/m². 100 J/m² is one value in that range.
+The value, its spread between grass, reeds and shrubs, the 1 cm piece and the 5 m/s tip speed are
+all TODO(verify).
+
+Checks:
+
+- `test_vegetation`'s `Cutting.*`: a level disc cuts the cells under it and its area; the same
+  sweep again cuts nothing; a tilted disc cuts a slope; only the part over a box is cut; the drag
+  stops at the cut; a saved map comes back whole.
+- `test_shape_caster`'s `CanopyShape.CutPlantsStopBeamsNoHigherThanTheCut`.
+- `test_server`'s `Multicopter.TakingOffFromTallGrassCutsItUnderTheRotors`: the sample quadcopter
+  takes off from tall grass. Each rotor cuts a disc to its blades' height, the energy paid is four
+  discs' worth, the grass 3 m away stands, and it still climbs to its 2 m hover.
+
+Not modelled yet:
+
+- Other blades: a mower's or a robot's own cutters.
+- Meshes and height fields as canopies.
+- The clippings.
+- Damage to the propeller.
+- The viewer: it still draws the grass uncut. Camera depth does not see the stubble either.
