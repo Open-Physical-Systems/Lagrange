@@ -407,6 +407,9 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
     if (!treeError.empty()) {
         return Status::error(StatusCode::InvalidConfig, treeError);
     }
+    branches_.build(treeSpecs_);
+    branches_.breakEnergy =
+        std::max(0.0, config.get<double>("blade_break_energy").value_or(kBladeBreakEnergy));
     trees_.clear();
     for (const TreeSpec& t : treeSpecs_) {
         Tree tree;
@@ -559,6 +562,7 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
             r.induced = d.input(induced);
             r.thrustAxis = d.input(thrustAxis);
         }
+        branches_.addRotor(d, joint, bodies.comLocal[child]);
         rotors_.push_back(r);
     }
     if (!rotors_.empty() && !canopies_.empty()) {
@@ -570,6 +574,7 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         SignalSpec out = spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
         out.arrayLength = kTreeCutLength;
         treeCutOut_ = d.output(out);
+        branches_.declareTrees(treeSpecs_, d);
     }
     return {};
 }
@@ -589,6 +594,7 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     if (treeCutOut_.valid()) {
         bus.writeN(treeCutOut_, treeCuts_.values());
     }
+    branches_.init(bus);
     for (Tree& tree : trees_) {
         tree.state = Sway{};
         tree.cut = 0.0;
@@ -654,6 +660,10 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
                 trees_[k].cut += cut;
                 r.owed += cut * treeSpecs_[k].cutEnergy;
             }
+            const BranchHit hit =
+                branches_.sweep(static_cast<std::size_t>(&r - rotors_.data()), treeSpecs_, hub,
+                                axis, r.radius, sways, omega, r.inertia, dt);
+            r.owed += hit.cutEnergy;
             // The cut is paid by the spinning propeller, no faster than a twentieth of its
             // kinetic energy per step, so a deep plunge slows it over steps instead of reversing
             // it in one (a propeller without inertia pays at once).
@@ -670,12 +680,17 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
                     wrench.at(k + 3) = torque * axis.at(k);
                 }
             }
+            if (hit.strike) {  // a branch stops it: what it owed goes with the stop
+                wrench = hit.wrench;
+                r.owed = 0.0;
+            }
         } else {
             r.owed = 0.0;  // stopped: what it did not cut, it never will
         }
         bus.writeN(r.wrench, wrench);
         bus.write(r.power, power);
     }
+    branches_.publish(bus);
     if (cutOut_.valid()) {
         if (cuts_.values()[0] != version) {
             bus.writeN(cutOut_, cuts_.values());
@@ -835,6 +850,7 @@ Status Vegetation::saveState(StateWriter& writer) const {
         writer.put(r.owed);
     }
     writer.putDoubles(treeCuts_.values());
+    branches_.save(writer);
     for (const Tree& t : trees_) {
         for (const double v : {t.state.position[0], t.state.position[1], t.state.velocity[0],
                                t.state.velocity[1], t.cut}) {
@@ -859,6 +875,9 @@ Status Vegetation::restoreState(StateReader& reader) {
     std::vector<double> trees(kTreeCutLength, 0.0);
     if (!reader.getDoubles(trees) || !treeCuts_.assign(trees)) {
         return Status::error(StatusCode::Internal, "vegetation: the saved tree cuts are short");
+    }
+    if (!branches_.restore(reader)) {
+        return Status::error(StatusCode::Internal, "vegetation: the saved branches are short");
     }
     for (Tree& t : trees_) {
         for (double* v : {&t.state.position[0], &t.state.position[1], &t.state.velocity[0],

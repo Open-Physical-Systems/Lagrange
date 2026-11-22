@@ -392,7 +392,84 @@ Checked:
 | A 10-inch disc level through the centre | the cells under the disc, one cell thick | cut, the cells above and beside it not; nothing more on a second pass |
 | A beam through 6 m of crown, LAD 0.5 | passes with `exp(−G·LAD·6)` = 0.223; mean stop depth of the truncated exponential | within 0.002; within 1 % (`test_shape_caster` `Crown.*`) |
 | Cut cells and sway | the beam passes the cut line; the crown moves with its sway | `Crown.CutCellsLetTheBeamThroughAndTheSwayMovesTheCrown` |
-| The quadcopter taking off under the open field's tree_1 | its rotors in the crown | 0.118 m³ cut, 39 leaves, up to 41.6 W of cutting; bit for bit twice (`test_trees_run`) |
+| The quadcopter taking off under the open field's tree_1 | its rotors in the crown | 0.113 m³ cut, 37 leaves, up to 63.9 W of cutting (with the branches, below, it meets a limb and falls out); bit for bit twice (`test_trees_run`) |
+
+### Branches
+
+The crown also holds wood (`modules/vegetation/src/Branches.cpp`), which a propeller cuts when it
+is a twig and is stopped by when it is a branch. It is a pure function of the tree's parameters and
+its index, the same in every run.
+
+**Geometry.** The trunk goes on through the crown from `crownBase` to 70 % of the crown's height.
+`tree:branchCount` limbs (12) leave it at even steps of height, each turned by the golden angle
+from the last and rising at 30°, long enough to reach the crown's ellipsoid; the leader goes on
+from the trunk's top to the crown's top. Their thickness follows the pipe model (Shinozaki, Yoda,
+Hozumi and Kira 1964, "A quantitative analysis of plant form – the pipe model theory. I. Basic
+analyses", Japanese Journal of Ecology 14, 97–105): wood carries the leaves beyond it. With the
+leaves spread along the limbs, limb `k` of length `L_k` takes the share `L_k/Λ` of the trunk's
+cross-section, `Λ` the limbs' and the leader's lengths together:
+
+```
+d_k = D √(L_k / Λ)          D = tree:trunkDiameter
+```
+
+and the trunk above a limb keeps what the limbs below it did not take. Each limb then forks in
+two, again and again, down to 4 mm: by Leonardo's rule (as stated and argued by Eloy 2011,
+"Leonardo's rule, self-similarity, and wind-induced stresses in trees", Phys. Rev. Lett. 107,
+258101, doi:10.1103/PhysRevLett.107.258101) the children's cross-sections add up to their
+parent's, so generation `g` is
+
+```
+d_g = d_k 2^(−g/2)
+```
+
+Each generation is 0.8 as long as its parent (the first sized so that a straight line of forks
+would reach the limb's length), its two children turn 25° off it, the fork's plane rolled 90° each
+generation, and a branch that would leave the crown ends at its edge. Wood thinner than 4 mm is
+the leaves-and-twigs volume above. The open field's tree_1 (trunk 0.5 m) has 21 368 pieces of
+wood, limbs of 12–14 cm at their base.
+
+**A propeller meeting wood.** The blades sweep a disc 1 cm thick. Each step, every piece of wood
+that crosses it:
+
+- no thicker than `tree:maxCutDiameter` (1 cm) is cut there, and everything beyond falls (is
+  gone); the rotor pays `E = σ π d²/4`, `σ` = `tree:woodCutEnergy`, through its torque as for the
+  leaves (a 8.8 mm twig: 3.07 J). The count is `tree/<n>/twigs_cut`.
+- thicker is a **strike**: the blade stops on it. The branch pushes the blade at the contact,
+  square to the branch and against the blade's motion, as hard as it takes to remove the
+  propeller's angular momentum in the step: `F r Δt = I ω` about the axis, `I` the propeller
+  link's inertia about it and `r` the contact's distance from the axis. The same force reaches the
+  drone through the hub (`body/<link>/wrench/cutting`, about the link's centre of mass). The
+  propeller's kinetic energy `½ I ω²` is taken; `rotor/<j>/damage` adds it over
+  `kBladeBreakEnergy` (30 J, config `blade_break_energy`) and holds at 1, and
+  `rotor/<j>/branch_strikes` counts strikes. While the blade stays on the branch the motor spins it
+  up and it is stopped again as soon as its tips pass 5 m/s: the rotor stalls.
+
+Only a rotor whose tips move faster than 5 m/s meets the wood, as for the leaves. The trunk below
+the crown base is the stage's collider, unchanged.
+
+Checked:
+
+| Check | Reference | Result |
+|---|---|---|
+| tree_1's wood | `d_k = D √(L_k/Λ)`; cross-sections add up at every fork and junction, `d/√2` per fork | to 1e-12 (`test_branches` `Branches.ThePipeModelAndLeonardosRule`) |
+| Its wood twice, and for another index | a pure function | equal; differs; all within the crown |
+| A disc square to a twig | `E = σ π d²/4`, the twig cut where the sheet meets it, its subtree gone, nothing more on a second pass; saved and restored | exact (`ATwigIsCutForItsCrossSection`) |
+| A 10-inch propeller (I = 9·10⁻⁵ kg·m²) at 700 rad/s whose blade meets a 71 mm branch 10 cm out | `I ω + τ Δt = 0`, `F = I ω/(r Δt)` square to the branch, `½ I ω²` taken | 630 N for 1 ms, 22.1 J, damage 0.73; both spins (`ABranchStopsThePropeller`) |
+| The quadcopter taking off under tree_1 | — | at 2.28 s, its base link 2.86 m up, rotor_1's blade meets a limb: 139 → 2.5 rad/s in 2 ms; the kicks push the drone sideways at up to 0.25 m/s; rotors 2 and 4 stall on the wood (30 strikes, damage up to 0.047) and it falls out of the tree to the ground; the same run twice and a run restored from 2.2 s are bit for bit (`test_branches_run`) |
+
+**Numbers and sources.** The pipe model and Leonardo's rule are cited above; real trees follow the
+rule only roughly (Eloy 2011 gives exponents near 2, with scattered data). Every other number is
+TODO(verify): the 12 limbs, 70 % of the crown, 30° rise, 25° forks, length ratio 0.8, the 4 mm
+smallest wood, the 1 cm sheet, `tree:maxCutDiameter` 1 cm for a 10-inch propeller, the blades'
+30 J, and `σ` = 5·10⁴ J/m² (the top of the 10–60 mJ/mm² measured for grass stems; green wood's
+specific cutting energy is measured for willow stems in Applied Sciences 15(2), 696, 2025,
+"Impact of blade geometric parameters on the specific cutting energy of willow (Salix viminalis)
+stems", whose numbers we have not read). Left out: the wood does not sway on its own (it moves
+with the crown), cut-off wood does not fall as bodies, the leaves beyond a cut stay, the wood is
+not a collider for bodies (only the blades meet it), the lidars and the viewer do not see it, a
+damaged blade does not yet lose thrust (`rotor/<j>/damage` is for the rotor domain to read), and
+a strike's push has no bounce (restitution) of its own.
 
 ### Numbers and sources
 
@@ -405,7 +482,8 @@ a crown mass of 2 kg per m³ of crown, 2000 J to cut a m³ of crown, a leaf of 3
 one mode of the whole crown: branches do not sway on their own, and the crown does not bend
 (its top moves as its centre). The crown's air is sampled at its centre's height; rotors inside
 the crown under it give it their inflow, not their wake. Not yet: the realistic view's trees, the
-crown's shelter of the air behind it, branches that stop a propeller, trees broken by a vehicle.
+crown's shelter of the air behind it, trees broken by a vehicle (branches that stop a propeller:
+"Branches" above; flying leaves: below).
 
 ### Flying leaves
 

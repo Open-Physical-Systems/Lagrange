@@ -229,6 +229,11 @@ def test_tree_is_an_addition():
     assert (
         tree.GetAttributeDefinition("tree:leafAreaDensity").GetMetadata("lagrangeUnit") == "m2/m3"
     )
+    # Branches (ground.md "Branches"), added to TreeAPI_1 with fallbacks (approved 2026-11-22).
+    assert tree.GetAttributeDefinition("tree:branchCount").GetFallbackValue() == 12
+    assert tree.GetAttributeDefinition("tree:woodCutEnergy").GetFallbackValue() == 50000
+    assert tree.GetAttributeDefinition("tree:maxCutDiameter").GetFallbackValue() == 0.01
+    assert tree.GetAttributeDefinition("tree:woodCutEnergy").GetMetadata("lagrangeUnit") == "J/m2"
     with FROZEN.open() as f:
         assert "TreeAPI_1" not in json.load(f)
 

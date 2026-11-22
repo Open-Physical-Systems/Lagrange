@@ -108,4 +108,16 @@ class "TreeAPI_1" (
         lagrangeUnit = "m2"
         doc = "One leaf's area, to count the leaves a cut sheds."
     )
+    int tree:branchCount = 12 (
+        lagrangeUnit = "1"
+        doc = "Limbs leaving the trunk in the crown, besides its leader; each forks down to twigs (ground.md \"Branches\")."
+    )
+    double tree:woodCutEnergy = 50000 (
+        lagrangeUnit = "J/m2"
+        doc = "The energy a propeller spends severing a twig, per m2 of the twig's cross-section."
+    )
+    double tree:maxCutDiameter = 0.01 (
+        lagrangeUnit = "m"
+        doc = "The thickest wood a propeller cuts through; a thicker branch stops it (a strike)."
+    )
 }

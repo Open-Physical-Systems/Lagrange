@@ -28,6 +28,7 @@
 
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/vegetation/Leaves.hpp"
+#include "lagrange/vegetation/Branches.hpp"
 #include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"
@@ -159,7 +160,10 @@ void stepSway(const TreeSpec& tree, Sway& sway, const std::array<double, 2>& for
 ///
 /// With rotors (RotorAPI_1 joints) and cutting on, it also writes vegetation/canopy_cut (the cut
 /// map), rotor/<j>/cutting_power (W, the power the cuts take) and body/<link>/wrench/cutting (the
-/// torque that takes it, against the spin, on the propeller's link).
+/// torque that takes it, against the spin, on the propeller's link). With trees, the crowns' wood
+/// (Branches.hpp): twigs are cut and paid for like the leaves, thicker branches stop the rotor
+/// (rotor/<j>/damage, branch_strikes; tree/<n>/twigs_cut). Config "blade_break_energy" (J,
+/// default kBladeBreakEnergy).
 ///
 /// Flying leaves (Leaves.hpp, ground.md "Flying leaves"): with trees and config "leaves" (default
 /// true), the leaves a rotor cuts off and those the air strips from a crown fly as particles in
@@ -178,6 +182,7 @@ public:
 
     [[nodiscard]] const CutMap& cuts() const { return cuts_; }
     [[nodiscard]] const LeafField& leaves() const { return leaves_; }
+    [[nodiscard]] const Branches& branches() const { return branches_; }
 
 private:
     struct Cell {
@@ -206,6 +211,7 @@ private:
     std::vector<TreeSpec> treeSpecs_;
     std::vector<Tree> trees_;
     TreeCutMap treeCuts_;
+    Branches branches_;
     SignalId wind_, treeCutOut_;
     std::vector<Canopy> canopies_;
     std::vector<Body> bodies_;
