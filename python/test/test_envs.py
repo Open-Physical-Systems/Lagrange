@@ -116,12 +116,16 @@ def reference() -> tuple[np.ndarray, list[dict[str, list[Any]]]]:
     return actions, [alone(10 + i, actions[:, i]) for i in range(3)]
 
 
-@pytest.mark.parametrize("envs_per_worker", [1, 2])
+@pytest.mark.parametrize(("envs_per_worker", "worker_threads"), [(1, 1), (2, 1), (3, 3), (2, 2)])
 def test_parallel_trajectories_are_those_of_one_process(
-    reference: tuple[np.ndarray, list[dict[str, list[Any]]]], envs_per_worker: int
+    reference: tuple[np.ndarray, list[dict[str, list[Any]]]],
+    envs_per_worker: int,
+    worker_threads: int,
 ) -> None:
     actions, expected = reference
-    with ParallelEnvs(make_arm, 3, envs_per_worker=envs_per_worker) as envs:
+    with ParallelEnvs(
+        make_arm, 3, envs_per_worker=envs_per_worker, worker_threads=worker_threads
+    ) as envs:
         first = envs.reset(seed=10)
         for i in range(3):
             np.testing.assert_array_equal(first[i], expected[i]["first"][0])
@@ -295,6 +299,18 @@ def test_a_worker_that_dies_is_reported() -> None:
     with pytest.raises(WorkerError, match="died"):
         envs.step(np.zeros((2, 1)))
     assert gone(envs)
+
+
+def test_an_environment_that_raises_on_a_worker_thread_closes_all() -> None:
+    envs = ParallelEnvs(make_raising, 4, envs_per_worker=2, worker_threads=2)
+    envs.reset()
+    envs.step(np.zeros((4, 1)))
+    envs.step(np.zeros((4, 1)))
+    with pytest.raises(WorkerError, match="this environment fails here"):
+        envs.step(np.zeros((4, 1)))
+    assert gone(envs)
+    with pytest.raises(ValueError, match="worker_threads"):
+        ParallelEnvs(make_counter, 2, worker_threads=0)
 
 
 def test_an_environment_that_cannot_be_made_is_reported() -> None:
@@ -474,3 +490,71 @@ def test_a_world_goes_to_the_simulation() -> None:
     bare = LagrangeEnv(lagrange.sample_quadruped())
     with_world = LagrangeEnv(lagrange.sample_quadruped(), lagrange.sample_world())
     assert with_world.sim.colliders() > bare.sim.colliders()
+
+
+# --- Many environments in one process (v1.6.0 plan, A3) ----------------------------------------
+#
+# A threaded worker steps its simulations at once in one process. Each must still be its own run,
+# bit for bit: the reward here is the simulation's whole-state hash, so a difference anywhere
+# (physics, electrical network, lidar casts, ...) shows, not only in what is observed.
+
+HASH_STEPS = 14  # an episode of 10 steps and part of the next: one autoreset each
+
+
+def state_hash_reward(_observation: np.ndarray, _action: np.ndarray, sim: Any) -> float:
+    return float(sim.state_hash() % (1 << 52))  # exact in a float64
+
+
+def amr_with_lidars() -> LagrangeEnv:
+    overlay = (
+        get_package_share_directory("lagrange_assets")
+        + "/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
+    )
+    return LagrangeEnv(
+        lagrange.sample_robot(),
+        overlay=overlay,
+        signals=["sensor/front_lidar/ranges", "sensor/top_lidar/ranges"],
+        action_scale=5.0,
+        episode_seconds=0.2,
+        reward=state_hash_reward,
+        cameras=False,
+    )
+
+
+def hovering_quadcopter() -> LagrangeEnv:
+    return LagrangeEnv(
+        lagrange.sample_quadcopter(),
+        profile="quad_x500_hover",
+        signals=["sensor/imu/specific_force", "bus/dc_bus/voltage"],
+        episode_seconds=0.2,
+        reward=state_hash_reward,
+        cameras=False,
+    )
+
+
+@pytest.mark.parametrize("make", [amr_with_lidars, hovering_quadcopter])
+def test_an_environment_of_a_threaded_worker_is_the_same_seed_run_alone(make: Any) -> None:
+    count = 6
+    env = make()
+    rng = np.random.default_rng(3)
+    actions = rng.uniform(-1.0, 1.0, (HASH_STEPS, count, env.action_space.shape[0]))
+    expected = []
+    for k in range(count):
+        first, _ = env.reset(seed=40 + k)
+        run: list[tuple[np.ndarray, float]] = [(first, 0.0)]
+        for t in range(HASH_STEPS):
+            observation, reward, end, cut, _ = env.step(actions[t, k])
+            if end or cut:
+                observation, _ = env.reset()
+            run.append((observation, reward))
+        expected.append(run)
+    # Two processes of three simulations, each stepped on its own thread.
+    with ParallelEnvs(make, count, envs_per_worker=3, worker_threads=3) as envs:
+        first = envs.reset(seed=40)
+        for k in range(count):
+            np.testing.assert_array_equal(first[k], expected[k][0][0])
+        for t in range(HASH_STEPS):
+            observations, rewards, _ended = envs.step(actions[t])
+            for k in range(count):
+                np.testing.assert_array_equal(observations[k], expected[k][t + 1][0])
+                assert rewards[k] == expected[k][t + 1][1], f"env {k} step {t}: another state"

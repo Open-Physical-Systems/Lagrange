@@ -19,6 +19,11 @@ so a step costs no pickling and no pipe; a worker restarts an ended episode itse
 Gymnasium's VectorEnv interface (and is one when Gymnasium is installed), with the same-step
 autoreset; `ParallelEnvs` keeps the shorter interface of earlier releases and adds `send`/`recv`,
 which step some environments while others still run, so a slow one does not hold the rest.
+
+A worker can hold many environments (`envs_per_worker`) and step them on several threads
+(`worker_threads`): each simulation steps in C++ with Python's lock let go, so one process keeps
+several cores busy, and the process's own cost (the interpreter and libraries, 35 to 40 MB of its
+own and its start) is paid once for many environments instead of once for each.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ import time
 import traceback
 import weakref
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.shared_memory import SharedMemory
 from pathlib import Path
 from typing import Any
@@ -122,7 +128,9 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
     simulation profile (a path, or an example profile's name: domains on and off with their
     substitutes, the physics backend and step, ...), and a power system for the robot (an overlay
     YAML or a SPICE netlist, as lagrange_server --overlay). The profile and overlay used are
-    `self.profile` and `self.overlay`.
+    `self.profile` and `self.overlay`. `cameras=False` draws no camera images (they publish their
+    ground truth and no GPU device is made): deterministic, and what many environments in one
+    process want when they do not observe images.
     """
 
     metadata: dict[str, Any] = {"render_modes": []}  # noqa: RUF012
@@ -143,11 +151,17 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         reward: Reward | None = None,
         terminated: Terminated | None = None,
         randomize: dict[str, tuple[float, float]] | None = None,
+        cameras: bool = True,
     ) -> None:
         self.profile = profile_path(profile)
         self.overlay = os.fspath(overlay) if overlay is not None else None
         self.sim = Simulation(
-            robot, world=world, profile=self.profile, overlay=self.overlay, joint_control=True
+            robot,
+            world=world,
+            profile=self.profile,
+            overlay=self.overlay,
+            joint_control=True,
+            cameras=cameras,
         )
         self.joint_names = list(joints) if joints is not None else self._driven_joints()
         if not self.joint_names:
@@ -274,8 +288,13 @@ def _run_worker(
     go: Any,
     finished: Any,
     parent: int,
+    threads: int = 1,
 ) -> None:
-    """A worker process: builds `count` environments, then serves commands until told to close."""
+    """A worker process: builds `count` environments, then serves commands until told to close.
+
+    The environments are built one after another on this thread (loading touches process-wide
+    registries: plugins, substitutes, USD's); with `threads` > 1 they then step on that many
+    threads, each owning a fixed run of them."""
     try:
         envs = [make() for _ in range(count)]
         connection.send(("spaces", envs[0].observation_space, envs[0].action_space))
@@ -292,9 +311,17 @@ def _run_worker(
         return
     memory = SharedMemory(name=name, track=False)
     layout = _Layout(memory.buf, total, workers, observed, acted)
+    threads = max(1, min(threads, count))
+    pool = (
+        ThreadPoolExecutor(threads, thread_name_prefix=f"lagrange-env-{index}")
+        if threads > 1
+        else None
+    )
     try:
-        _serve(index, first, envs, layout, connection, go, finished, parent, spin)
+        _serve(index, first, envs, layout, connection, go, finished, parent, spin, pool, threads)
     finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
         del layout
         memory.close()
         for env in envs:
@@ -314,6 +341,8 @@ def _serve(
     finished: Any,
     parent: int,
     spin: float,
+    pool: ThreadPoolExecutor | None = None,
+    threads: int = 1,
 ) -> None:
     control = layout.control[index]
     seen = int(control[_NUMBER])
@@ -321,6 +350,29 @@ def _serve(
     actions, observations, final = layout.actions, layout.observations, layout.final_observations
     rewards, terminated, truncated = layout.rewards, layout.terminated, layout.truncated
     pairs = list(zip(rows, envs, strict=True))
+    # Each thread steps the same consecutive run of environments every time: an environment is
+    # only ever used by one thread at once, and each writes only its own rows.
+    groups = [list(part) for part in _split(pairs, threads)]
+
+    def step(group: list[tuple[int, Any]]) -> None:
+        for row, env in group:
+            observation, reward, end, cut, _info = env.step(actions[row].copy())
+            if end or cut:  # start the next episode, as vector environments do
+                final[row] = observation
+                observation, _info = env.reset()
+            observations[row] = observation
+            rewards[row] = reward
+            terminated[row] = end
+            truncated[row] = cut
+
+    def reset(group: list[tuple[int, Any, int | None]], options: Any) -> list[Any]:
+        infos = []
+        for row, env, seed in group:
+            observation, info = env.reset(seed=seed, options=options)
+            observations[row] = observation
+            infos.append(info)
+        return infos
+
     clock = time.perf_counter
     while True:
         if spin > 0.0:  # the next command often comes at once: watch for it before sleeping
@@ -335,22 +387,20 @@ def _serve(
         command = int(control[_COMMAND])
         try:
             if command == _STEP:
-                for row, env in pairs:
-                    observation, reward, end, cut, _info = env.step(actions[row].copy())
-                    if end or cut:  # start the next episode, as vector environments do
-                        final[row] = observation
-                        observation, _info = env.reset()
-                    observations[row] = observation
-                    rewards[row] = reward
-                    terminated[row] = end
-                    truncated[row] = cut
+                if pool is None:
+                    step(pairs)
+                else:  # list() waits for all, and raises the first failure in order
+                    list(pool.map(step, groups))
             elif command == _RESET:
                 seeds, options = connection.recv()
-                infos = []
-                for (row, env), seed in zip(pairs, seeds, strict=True):
-                    observation, info = env.reset(seed=seed, options=options)
-                    observations[row] = observation
-                    infos.append(info)
+                seeded = [(row, env, seed) for (row, env), seed in zip(pairs, seeds, strict=True)]
+                if pool is None:
+                    infos = reset(seeded, options)
+                else:
+                    parts = [list(part) for part in _split(seeded, threads)]
+                    infos = [
+                        i for part in pool.map(reset, parts, [options] * len(parts)) for i in part
+                    ]
                 connection.send(("infos", infos))
             else:
                 control[_FINISHED] = control[_NUMBER]
@@ -365,6 +415,18 @@ def _serve(
             return
         control[_FINISHED] = control[_NUMBER]
         finished.release()
+
+
+def _split(items: list[Any], parts: int) -> list[list[Any]]:
+    """`items` in `parts` consecutive runs of sizes differing by at most one (none empty)."""
+    parts = max(1, min(parts, len(items)))
+    size, extra = divmod(len(items), parts)
+    runs, start = [], 0
+    for p in range(parts):
+        end = start + size + (1 if p < extra else 0)
+        runs.append(items[start:end])
+        start = end
+    return runs
 
 
 def _stop(processes: list[Any], memory: SharedMemory | None) -> None:
@@ -396,9 +458,12 @@ class _Pool:
         envs_per_worker: int,
         start_timeout: float | None,
         spin_seconds: float = DEFAULT_SPIN_SECONDS,
+        worker_threads: int = 1,
     ) -> None:
         if count < 1 or envs_per_worker < 1:
             raise ValueError("count and envs_per_worker must be at least 1")
+        if worker_threads < 1:
+            raise ValueError("worker_threads must be at least 1")
         self.closed = False
         self.spin_seconds = max(0.0, spin_seconds)
         self._memory: SharedMemory | None = None
@@ -424,6 +489,7 @@ class _Pool:
                     self._go[w],
                     self._finished,
                     os.getpid(),
+                    worker_threads,
                 ),
                 daemon=True,
                 name=f"lagrange-env-{w}",
@@ -668,7 +734,12 @@ class ParallelEnvs:
     **env_options): env_options are LagrangeEnv's other options (mode, signals, reward, ...),
     whose functions must be at a module's top level too.
     `envs_per_worker` puts that many in each process, stepped one after another (fewer processes
-    for cheap environments). A worker that raises or dies raises WorkerError here and closes all.
+    for cheap environments), or on `worker_threads` threads at once: then one process steps several
+    simulations in parallel (each lets go of Python's lock while it steps), and many environments
+    cost one interpreter instead of one each. Every environment stays deterministic: environment k
+    of a threaded worker gives the trajectory it gives alone. What `make` builds must then be safe
+    to step on another thread beside its neighbours (LagrangeEnv is; so must a plugin's module be).
+    A worker that raises or dies raises WorkerError here and closes all.
 
     step() waits for every environment; step_async() and step_wait() are the same in two halves,
     so the caller can work while they step. send() and recv() step some environments while others
@@ -688,6 +759,7 @@ class ParallelEnvs:
         overlay: str | os.PathLike[str] | None = None,
         env_options: dict[str, Any] | None = None,
         envs_per_worker: int = 1,
+        worker_threads: int = 1,
         start_timeout: float | None = 300.0,
         step_timeout: float | None = None,
         spin_seconds: float = DEFAULT_SPIN_SECONDS,
@@ -698,6 +770,7 @@ class ParallelEnvs:
             envs_per_worker,
             start_timeout,
             spin_seconds,
+            worker_threads,
         )
         self.step_timeout = step_timeout
         self.observation_space = self._pool.observation_space
@@ -835,7 +908,8 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
     Per-step infos of the environments are not carried, only their numbers.
 
     `make` is a function that builds one environment, or a robot file with `world`, `profile`,
-    `overlay` and `env_options` for LagrangeEnv, as for ParallelEnvs.
+    `overlay` and `env_options` for LagrangeEnv, as for ParallelEnvs; so are `envs_per_worker`
+    and `worker_threads`.
     """
 
     metadata: dict[str, Any] = {"autoreset_mode": _SAME_STEP}  # noqa: RUF012
@@ -850,6 +924,7 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
         overlay: str | os.PathLike[str] | None = None,
         env_options: dict[str, Any] | None = None,
         envs_per_worker: int = 1,
+        worker_threads: int = 1,
         start_timeout: float | None = 300.0,
         step_timeout: float | None = None,
         spin_seconds: float = DEFAULT_SPIN_SECONDS,
@@ -862,6 +937,7 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
             overlay=overlay,
             env_options=env_options,
             envs_per_worker=envs_per_worker,
+            worker_threads=worker_threads,
             start_timeout=start_timeout,
             step_timeout=step_timeout,
             spin_seconds=spin_seconds,

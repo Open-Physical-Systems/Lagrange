@@ -39,9 +39,12 @@ public:
                const std::optional<std::vector<double>>& spawn,
                const std::optional<std::array<int, 3>>& traffic, bool jointControl,
                const std::vector<std::string>& sensorFaults,
-               const std::optional<std::string>& overlay) {
+               const std::optional<std::string>& overlay, bool cameras) {
         lagrange::server::ServerOptions options;
         options.jointControl = jointControl;
+        // False: cameras publish their ground truth and no GPU device is made for them, as for
+        // `lagrange determinism` (many environments in one process, deterministic runs).
+        options.cameras = cameras;
         options.sensorFaults = sensorFaults;     // checked by load(), as --sensor-fault
         options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
         // An overlay YAML or SPICE netlist on the robot (formats.md section 9), as --overlay.
@@ -244,7 +247,10 @@ public:
     }
 
     [[nodiscard]] nb::bytes saveState() const {
-        auto state = server_->saveState();
+        auto state = [&] {
+            const nb::gil_scoped_release release;  // pure C++, as stepUntil
+            return server_->saveState();
+        }();
         if (!state) {
             throw std::runtime_error(state.error().message);
         }
@@ -254,7 +260,13 @@ public:
     void restoreState(const nb::bytes& state) {
         const std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(state.c_str()),
                                                state.size());
-        if (const lagrange::Status status = server_->restoreState(bytes); !status.ok()) {
+        // Pure C++ on bytes the caller holds (immutable): other Python threads may run, so that
+        // a worker resets its environments on several threads at once.
+        const lagrange::Status status = [&] {
+            const nb::gil_scoped_release release;
+            return server_->restoreState(bytes);
+        }();
+        if (!status.ok()) {
             throw std::runtime_error(status.message);
         }
     }
@@ -381,15 +393,18 @@ NB_MODULE(_lagrange, m) {
                            "A run without ROS or viewers, stepped from Python. The robot and "
                            "world are URDF, SDFormat, MJCF or USD files; overlay= adds a power "
                            "system to the robot (an overlay YAML or a SPICE netlist, as "
-                           "--overlay).")
+                           "--overlay). cameras=False draws no camera images (their ground "
+                           "truth, no GPU device): deterministic, and cheap for many runs in "
+                           "one process.")
         .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&,
                       const std::optional<std::array<int, 3>>&, bool,
-                      const std::vector<std::string>&, const std::optional<std::string>&>(),
+                      const std::vector<std::string>&, const std::optional<std::string>&, bool>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
              "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false,
-             "sensor_faults"_a = std::vector<std::string>{}, "overlay"_a = nb::none())
+             "sensor_faults"_a = std::vector<std::string>{}, "overlay"_a = nb::none(),
+             "cameras"_a = true)
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
