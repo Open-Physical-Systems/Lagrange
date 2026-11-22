@@ -1,0 +1,73 @@
+# The gantry's steppers and supply (RFC 0020 §4.5; docs/physics/actuators.md "Steppers"): two
+# NEMA 17 steppers on chopper drivers at 1/16 microstepping from a 24 V supply (an 8S LFP pack
+# here), x on a GT2 belt (20-tooth pulley, 40 mm a turn: gearRatio 2π/0.04 = 157.08 rad/m), y on
+# a T8 lead screw (8 mm lead: 2π/0.008 = 785.40 rad/m). Applied to gantry.urdf by
+# `lagrange_server --overlay`.
+#   The motor is STEPPERONLINE's 17HS19-2004S1 as its drawing (A0842, rev. 0) gives it: 2.0 A,
+#   1.60 Ω, 3.00 mH, 0.59 N·m holding torque with two phases on, 1.8° (50 rotor teeth), rotor
+#   inertia 82 g·cm². torqueConstant is the torque per phase ampere, 0.59 / (2√2) = 0.2086 N·m/A
+#   (a microstepping driver's single current vector of 2 A then holds 0.417 N·m). Its detent
+#   torque is not on the drawing: 0 here. The 1.0 A hold current and the screw's efficiency are
+#   illustrative (0.66: an 8 mm lead on a 7.2 mm pitch diameter, 15° flanks, f = 0.15).
+#   At 24 V the chopper keeps 2 A up to about 2500 full steps/s, the corner where V/|Z| = I;
+#   the joints' velocity limits (x 0.2 m/s, y 0.04 m/s) are 1000 full steps/s, under it.
+# Under `lagrange` joint control moves them: /joint_commands' position (m) or velocity, or
+# `Server::commandJoint("x", "position", 0.1)`, through a trapezoidal profile at the joint's
+# velocity limit; joint/<j>/step_target and step_rate take microsteps directly.
+schema_version: 1
+apply:
+  - create: power/supply
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 8
+        elec:battery:capacity: 36000.0           # C (10 Ah)
+        elec:battery:initialSoc: 0.5             # OCV 26.2 V
+        elec:battery:ocvSoc: [0.0, 0.1, 0.5, 0.9, 1.0]
+        elec:battery:ocvVoltage: [2.80, 3.20, 3.28, 3.33, 3.45]   # V per cell
+        elec:battery:r0: 0.002                   # ohm per cell
+        elec:battery:cutoffVoltage: 22.4         # V, 2.8 V per cell
+        elec:battery:maxChargeCurrent: 10.0      # A
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 24.0    # V
+        elec:port:dc_out:maxCurrent: 10.0        # A
+        elec:port:dc_out:connectedTo: power/dc_24v
+  - create: power/dc_24v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.001              # F
+        elec:bus:undervoltageTrip: 18.0          # V
+        elec:bus:overvoltageTrip: 32.0           # V
+  - prim: x
+    create_child: x_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: stepper
+        elec:windingResistance: 1.6              # ohm per phase
+        elec:inductance: 0.003                   # H per phase
+        elec:torqueConstant: 0.2086              # N·m per phase ampere
+        elec:maxCurrent: 2.0                     # A, the run current
+        elec:stepper:holdCurrent: 1.0            # A at standstill
+        elec:stepper:microsteps: 16
+        elec:rotorInertia: 0.0000082             # kg·m²
+        elec:gearRatio: 157.08                   # rad/m: GT2 belt, 20-tooth pulley
+        elec:resistanceTempCoeff: 0.0            # 1/K: no thermal model here
+        elec:joint: x
+        elec:powerPort: power/dc_24v
+  - prim: y
+    create_child: y_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: stepper
+        elec:windingResistance: 1.6
+        elec:inductance: 0.003
+        elec:torqueConstant: 0.2086
+        elec:maxCurrent: 2.0
+        elec:stepper:holdCurrent: 1.0
+        elec:stepper:microsteps: 16
+        elec:rotorInertia: 0.0000082
+        elec:gearRatio: 785.40                   # rad/m: T8 lead screw, 8 mm lead
+        elec:gearEfficiency: 0.66
+        elec:resistanceTempCoeff: 0.0
+        elec:joint: y
+        elec:powerPort: power/dc_24v

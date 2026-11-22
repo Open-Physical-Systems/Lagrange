@@ -1,4 +1,4 @@
-# Actuators: grippers, lead screws, nozzles, tanks and servos
+# Actuators: grippers, lead screws, nozzles, tanks, servos and steppers
 
 Grippers that hold a part without fingers (RFC 0020, phase 1): a suction cup
 (`SuctionGripperAPI_1`) and an electromagnet or electropermanent magnet (`MagnetGripperAPI_1`).
@@ -452,6 +452,144 @@ protocol and error-status bits (open question 7), the motor's cogging and brush 
 board's own current draw. A hobby servo's board here samples every 1 ms; a real analog board is
 continuous.
 
+## Steppers
+
+A stepper turns by steps: its driver puts a pattern of currents on two phases, and the rotor's
+teeth line up with it (RFC 0020 §4.5). It needs no encoder, so nothing tells the driver when the
+rotor did not follow: an overload, too fast a start or too high a speed and the rotor slips to
+another equilibrium, a whole tooth away, and stays there, the position silently lost. That is
+the behaviour this model exists for. A stepper is an `ElectricalMotorAPI_1` with
+`elec:motorType = stepper`, so its current, bus load and `loss_power` heat stay the electrical
+domain's; there is no `actuators` module for it.
+
+```mermaid
+flowchart LR
+    CMD["joint/j/position_command (rad or m)<br/>(joint control's profile, ros2_control position)<br/>or step_target (microsteps) or step_rate"] --> COUNT["step count k"]
+    COUNT --> TAB["microstep table<br/>i* = I·(cos φ, sin φ), φ = k·(π/2)/μ"]
+    TAB --> CH["chopper: the voltage that reaches i*<br/>this step, held to ±V_bus"]
+    CH --> PH["phases: L di/dt = v − R i ± K_m ω (sin, cos) θe"]
+    PH --> TQ["τ = K_m (−i_a sin θe + i_b cos θe) − T_d sin 4θe"]
+    TQ --> ROT["rotor between physics updates<br/>(J_eff, load from the last window)"]
+    ROT --> PH
+    TQ --> OUT["joint/j/torque, motor/m/current_a, current_b,<br/>steps, lost_steps"]
+```
+
+Each electrical step (100 µs), for a two-phase hybrid stepper of `N_r` rotor teeth (50 for 1.8°
+steps) with rotor angle `θ`, `θe = N_r·θ`:
+
+```
+v_a = R·i_a + L·di_a/dt − K_m·ω·sin θe
+v_b = R·i_b + L·di_b/dt + K_m·ω·cos θe
+τ   = −K_m·i_a·sin θe + K_m·i_b·cos θe − T_d·sin 4θe
+```
+
+- **The driver's table.** Microstep `k` of `μ` per full step asks for `i_a* = I·cos φ`,
+  `i_b* = I·sin φ`, `φ = k·(π/2)/μ`: one current vector of length `I` whose equilibrium is
+  `θe = φ`. `I` is `elec:maxCurrent` while it steps and `elec:stepper:holdCurrent` once the count
+  has not changed for 0.2 s (a modelling choice; drivers make it a setting).
+- **The chopper.** Each phase gets the voltage that brings its current to the reference by the
+  end of the step, the exact solution of its R–L circuit with the back-EMF held, held to
+  `±V_bus`: a chopper averaged over its PWM period. At low speed the currents follow; past the
+  corner where `V_bus/|Z|` falls under `I` (`|Z| = √(R² + (N_r ω L)²)`) the bridge saturates,
+  the currents lag and shrink, and the torque falls with speed. The pull-out curve comes out of
+  the circuit; it is not a table.
+- **Holding torque.** `torqueConstant` is `K_m`, the torque per phase ampere, so a current vector
+  of `I` holds `K_m·I` a full step from equilibrium. A datasheet's holding torque is measured with
+  two phases on at the rated current, a vector of `√2·I`: `K_m = T_hold/(√2·I_rated)`, and a
+  microstepping driver holds `1/√2` of the datasheet figure.
+- **The rotor.** The torque–angle curve is stiff (`K_m·I·N_r`, 21 N·m/rad for the sample's
+  motor), stiffer than a 1 ms physics step can resolve on a light load. So between physics
+  updates the driver integrates the rotor itself on the joint's effective inertia, with the load
+  estimated from the last window, and takes the physics position and speed at each update, the
+  speed prediction of architecture.md §8 extended to the angle. Physics gets the window's mean
+  torque.
+- **Lost steps.** A load past the curve's peak (a load angle beyond a quarter tooth, one full
+  step) pulls the rotor to the next equilibrium, a whole electrical period (four full steps)
+  away. `motor/<m>/lost_steps` is how many full steps the rotor is behind the count, always a
+  multiple of four: ground truth for tests, which a real open-loop driver does not know, so
+  `motor/<m>/fault` stays 0.
+
+The count comes from `joint/<j>/position_command` (rad, or m on a slide, the joint's position;
+0 microsteps is where the joint starts) when it is written, read between the controller's
+updates by linear extrapolation; else `joint/<j>/step_target` (Int, microsteps); else
+`joint/<j>/step_rate` (microsteps/s, signed, a step/dir input). `joint/<j>/stepper_enable` (Bool,
+default on) is the enable pin: off, no current, and the rotor is free but for detent. A jump in
+the count is taken at once, as a burst of step pulses would be: more than about two full steps
+in one electrical step and the rotor cannot follow. A warning is logged once when the rotor turns
+faster than the electrical step resolves (fewer than 20 steps per electrical period).
+
+### Using it
+
+The sample is a two-axis gantry, `assets/robots/gantry`: x on a GT2 belt (40 mm a turn), y on a T8
+lead screw (8 mm lead), each a NEMA 17 at 1/16 microstepping from 24 V. The motor is
+STEPPERONLINE's 17HS19-2004S1 as its drawing gives it: 2.0 A, 1.60 Ω, 3.00 mH, 0.59 N·m holding
+torque (two phases on), 1.8°, 82 g·cm² (its detent torque is not on the drawing: 0 here):
+
+```bash
+lagrange assets/robots/gantry/gantry.urdf --world none \
+    --overlay assets/robots/gantry/gantry.overlay.yaml
+ros2 topic pub --once /joint_commands sensor_msgs/msg/JointState \
+    '{name: [x, y], position: [0.1, -0.03]}'
+```
+
+Joint control (the default for your own robot under `lagrange`) moves a stepper by a trapezoidal
+profile written to `position_command`, at the joint's URDF velocity limit (0.5 rad/s or 0.05 m/s
+without one), reaching it in 0.25 s, toward a position target or at a velocity target: a motion
+controller's job, since a stepper started at full speed loses steps. ros2_control's position
+interface goes to `position_command` unchanged.
+
+In an overlay (formats.md §9):
+
+```yaml
+  - prim: x
+    create_child: x_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: stepper
+        elec:windingResistance: 1.6     # ohm per phase
+        elec:inductance: 0.003          # H per phase
+        elec:torqueConstant: 0.2086     # N·m per phase ampere: 0.59 / (2√2)
+        elec:maxCurrent: 2.0            # A, the run current
+        elec:stepper:holdCurrent: 1.0   # A at standstill
+        elec:stepper:microsteps: 16
+        elec:stepper:rotorTeeth: 50     # 1.8° steps (the fallback)
+        elec:stepper:detentTorque: 0.0  # N·m
+        elec:rotorInertia: 0.0000082    # kg·m²
+        elec:gearRatio: 157.08          # rad per m: 2π / 0.04 m a turn
+        elec:joint: x
+        elec:powerPort: power/dc_24v
+```
+
+### Checked
+
+`test_stepper` (the motor and driver, and the network on a carriage stepped at 1 ms) and
+`test_steppers_run` (the gantry on MuJoCo), with the 17HS19-2004S1 at 24 V:
+
+| Check | Reference | Result |
+|---|---|---|
+| Static torque, ±2 full steps, at 0.5–2 A | `τ = −K_m·I·sin(N_r·Δθ)` | within 1 % of `K_m·I`; the peak, the holding torque, `K_m·I` within 1 % at every current |
+| Hold current | `K_m·I_hold` after 0.2 s still | 1e-3 N·m |
+| Pull-out torque with sine voltages of 24 V on the phases (a voltage-mode driver), 100–4000 full steps/s | the phase circuit's steady state: `τ_po = (K_m/|Z|)·(V − K_m·ω·R/|Z|)`, whose first term is the RFC's `K_m·V/√(R² + (N_r ω L)²)` | within 0.14 % at every speed |
+| Pull-out with the chopper, 100–6000 full steps/s | `K_m·I` below the corner (2524 full steps/s); the RFC's `K_m·min(I, V/|Z|)` above | 0.4170–0.4161 N·m against 0.4172 to 1000 full steps/s; 0.3486, 0.2824, 0.2346, 0.2017 N·m at 3000–6000 against 0.3519, 0.2646, 0.2120, 0.1768 (the saturated chopper's square wave beats a sine of `V`: up to 14 % over), falling monotonically |
+| A rotor and pulley run up to 1000 full steps/s with a load rising over 0.2 s | the pull-out torque there | at 0.95 of it no step lost; at 1.05 it falls out of step and stays out |
+| 1.3× the holding torque for 10 ms at standstill | a slip lands on another equilibrium | 52 full steps lost (a multiple of four), then 200 full steps forward land on the count less those 52, to 0.01 full step |
+| Microstep position, 1/16 | without detent: `θe = φ`; with `T_d` = 0.03 N·m: the root of `K_m·I·sin(φ − θe) = T_d·sin 4θe` | 0.000 microsteps off; with detent within 1 % of a microstep of the root, the worst microstep 0.73 microsteps from its table angle |
+| The network's stepper on a 1 kg carriage stepped at 1 ms, 1000 full steps/s on the belt with 0.25 s ramps | the step count | at 0.099988 m for 7999 microsteps, to the microstep; 0 lost; asked 3000 full steps/s at once, it loses 892 full steps |
+| The gantry, joint control to x = 0.1 m, y = −0.03 m | the count, the profile's time | GANTRY_RESULT |
+| A 150 kg beam asked for 0.8 m/s² | 120 N needed, 65 N available | LOST_RESULT, `fault` 0 |
+| The same run twice | | state hashes equal; the network alone bit-identical |
+
+What it leaves out: the chopper's own ripple and decay modes (it is averaged over its PWM
+period), the driver's stall detection (StallGuard-style, RFC 0020 open question 8), its
+resonance damping and current-reduction features beyond the hold current, the detent harmonic's
+phase on the real motor (here aligned with the start position), iron losses and saturation, the
+back-driven friction of a self-locking screw on a stepper axis (the lead screw's
+`gearBackEfficiency` applies to the other motor types only), and the ideal substitute that moves
+the joint exactly by the steps: with the electrical domain off, joint control drives a stepper
+joint as an ideal position servo. The pull-out curve is checked against the circuit, not against
+a measured motor (TODO(verify): no published measured curve with full motor parameters was found
+for this pass).
+
 ## References
 
 - J. Schmalz GmbH, "Theoretical holding force of a suction cup" (vacuum knowledge, system design
@@ -469,4 +607,11 @@ continuous.
   motors" (the linear torque–speed line; TODO(verify) the section, as RFC 0020 notes).
 - ROBOTIS e-Manual, XM430-W350 (specifications and control table, read 2026-11-17):
   https://emanual.robotis.com/docs/en/dxl/x/xm430-w350/
+- STEPPERONLINE, 17HS19-2004S1 drawing A0842 rev. 0 (2.0 A, 1.60 Ω, 3.00 mH, 0.59 N·m, 1.8°,
+  82 g·cm²; read 2026-11-17):
+  https://static.maritex.eu/file/display/5sXxpHH1SP-JwnhJEZ0lhfX-xdYKZRi3/17HS19-2004S1_Full_Datasheet.pdf
+- P. Acarnley, *Stepping Motors: a guide to theory and practice*, 4th ed., IET, 2002
+  (DOI 10.1049/PBCE063E), and T. Kenjo and A. Sugawara, *Stepping Motors and their Microprocessor
+  Controls*, 2nd ed., Oxford, 1994: the two-phase hybrid model (TODO(verify) the chapters and the
+  detent term's harmonic, as RFC 0020 notes).
 - The design: [RFC 0020](https://github.com/Open-Physical-Systems/Lagrange/blob/main/rfcs/0020-actuators.md).

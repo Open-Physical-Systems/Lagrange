@@ -204,6 +204,21 @@ def test_servo_and_position_mode_are_additions():
         assert "ServoAPI_1" not in json.load(f)
 
 
+def test_stepper_is_an_addition():
+    # RFC 0020 §4.5: `stepper` is appended to elec:motorType's tokens and the elec:stepper
+    # attributes are new, with fallbacks that change nothing for other motor types.
+    motor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    tokens = list(motor.GetAttributeDefinition("elec:motorType").GetMetadata("allowedTokens"))
+    assert tokens == ["pmsm", "bldc", "dc_brushed", "stepper"]
+    assert motor.GetAttributeDefinition("elec:stepper:rotorTeeth").GetFallbackValue() == 50
+    assert motor.GetAttributeDefinition("elec:stepper:microsteps").GetFallbackValue() == 1
+    assert motor.GetAttributeDefinition("elec:stepper:detentTorque").GetFallbackValue() == 0.0
+    assert motor.GetAttributeDefinition("elec:stepper:holdCurrent").GetFallbackValue() is None
+    with FROZEN.open() as f:
+        frozen = json.load(f)["ElectricalMotorAPI_1"]
+    assert not [name for name in frozen if name.startswith("elec:stepper:")]
+
+
 # RFC 0007: the schemas are frozen at 1.0. Every attribute of every schema at v1.0.0 is listed
 # in frozen_1_0.json with its type, fallback, unit and allowed tokens; within 1.x an attribute
 # may be added, and allowed tokens appended, but nothing listed may change or go.

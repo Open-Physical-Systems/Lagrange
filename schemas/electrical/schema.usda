@@ -142,8 +142,8 @@ class "ElectricalMotorAPI_1" (
 )
 {
     uniform token elec:motorType = "pmsm" (
-        allowedTokens = ["pmsm", "bldc", "dc_brushed"]
-        doc = "Machine type."
+        allowedTokens = ["pmsm", "bldc", "dc_brushed", "stepper"]
+        doc = "Machine type. stepper: a two-phase hybrid stepper on a chopper driver (RFC 0020 4.5), its phase windingResistance and inductance, torqueConstant the torque per phase ampere, with the elec:stepper attributes."
     )
     double elec:windingResistance (
         lagrangeUnit = "ohm"
@@ -232,6 +232,22 @@ class "ElectricalMotorAPI_1" (
     )
     rel elec:powerPort (
         doc = "The bus or port the drive draws from. Required."
+    )
+    int elec:stepper:rotorTeeth = 50 (
+        lagrangeUnit = "1"
+        doc = "A stepper's rotor teeth N_r: a full step is 90/N_r degrees (50: 1.8 degrees). Used when motorType = stepper."
+    )
+    double elec:stepper:detentTorque = 0 (
+        lagrangeUnit = "N.m"
+        doc = "A stepper's detent (cogging) torque amplitude with no current, T_d in -T_d sin(4 N_r theta)."
+    )
+    double elec:stepper:holdCurrent (
+        lagrangeUnit = "A"
+        doc = "A stepper driver's current at standstill (peak per phase); without it, maxCurrent."
+    )
+    int elec:stepper:microsteps = 1 (
+        lagrangeUnit = "1"
+        doc = "Microsteps per full step of the stepper driver (1, 2, 4 ... 256)."
     )
 }
 
