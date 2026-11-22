@@ -404,7 +404,88 @@ density of 1 m²/m³ (broadleaf crowns run from about 0.5 to 2), a crown drag co
 a crown mass of 2 kg per m³ of crown, 2000 J to cut a m³ of crown, a leaf of 30 cm². The sway is
 one mode of the whole crown: branches do not sway on their own, and the crown does not bend
 (its top moves as its centre). The crown's air is sampled at its centre's height; rotors inside
-the crown under it give it their inflow, not their wake. Not yet: leaves and twigs that fly
-from a cut or a gust, the realistic view's trees, the crown's shelter of the air behind it,
-branches that stop a propeller, trees broken by a vehicle.
+the crown under it give it their inflow, not their wake. Not yet: the realistic view's trees, the
+crown's shelter of the air behind it, branches that stop a propeller, trees broken by a vehicle.
 
+### Flying leaves
+
+The leaves a propeller cuts off a crown, and those a strong wind or a rotor's wake strips from it,
+fly as particles until they settle (`lagrange/vegetation/Leaves.hpp`). The vegetation domain
+publishes them as one array, `vegetation/leaves` (`lagrange/world/Leaves.hpp`: a version, the
+count, then x, y, z, yaw, pitch and size per particle, at most 2048, the oldest dropped first),
+whenever one moved, and `tree/<n>/leaves_flying` counts those of each tree still in the air. The
+viewer draws them; the lidars see them. Config `leaves: false` turns them off.
+
+**From a cut.** Each 10 cm cell a rotor cuts frees `cell volume × LAD / tree:leafArea` leaves, the
+fraction carried to the next cell, so the particles started equal `tree/<n>/leaves_shed` (at most
+256 a step; the rest of a bigger cut is not drawn). A leaf starts within the cell, with 0.3 of the
+blade's velocity there, `ω × r` at the cell's foot on the disc (r at most the blade's radius), plus
+the air there.
+
+**Stripped by the air.** Where the air at a crown (`env/wind/velocity` + `tree/<n>/downwash`) is
+faster than `u₀` = 10 m/s, the crown loses
+
+```
+dN/dt = k (|u|²/u₀² − 1) N,    k = 10⁻³ /s
+```
+
+of its remaining leaves `N` (its uncut volume × LAD / leaf area, less those already stripped), from
+points drawn uniformly over the directions of its ellipsoid's surface, at the air's velocity there.
+`|u|²/u₀²` is the dynamic pressure over its threshold's.
+
+**Flight.** Each particle is a small plate with its own terminal fall speed `v_t` (1.5 m/s ± 20 %),
+in the air `air(x)`:
+
+```
+u = v − air(x)
+a = g + a_glide − k |u| u,          k = |g| / v_t²
+a_glide = G |g| sin φ (cos ψ, sin ψ, 0),  G = 0.3,  φ' = 2π · 1.5 Hz,  ψ' = ±2 rad/s
+```
+
+In still air it falls at `v_t`; in a steady wind it drifts at the wind's speed. The drag is stepped
+implicitly, `v' = (v + dt (g + a_glide + k|u| air)) / (1 + dt k|u|)` with `|u|` at the start of the
+step: stable at any step (a leaf flung at 30 m/s slows within a few centimetres) and exact at the
+terminal speed. The tumbling is drawing level: the blade tilts by `0.6 sin φ` rad about the yaw
+`ψ`, and glides towards the side it tilts to, zero on average.
+
+**The air at a particle** is the site wind plus each rotor's wake. The vegetation domain cannot ask
+the aerodynamics domain for its wake at every particle (architecture invariant 1), so it rebuilds a
+simpler one from `rotor/<j>/induced_velocity` and `thrust_axis`: on the axis of an actuator disc
+the vortex cylinder's `w(s) = v_i (1 + s/√(s² + R²))` (Leishman 2006, §2.7, as the downwash model),
+a top hat of radius `R √(v_i/w)` below the disc (continuity) and `R` above it (inflow, to two radii
+up); past four radii a round jet that keeps its momentum flux, `w ∝ 1/s`, radius `∝ s`. The
+rotors' wake needs cutting on (it rides on the rotors the cutting reads).
+
+**Settling.** A particle that comes down to the highest surface under it that it was above (a fixed
+plane, an upright height field, the top of an upright fixed box or cylinder) stops there and lies
+flat (pitch π/2). It stays until it is dropped for a newer one.
+
+**Lidars** (`sensors::FlyingLeaves`): each listed particle is a disc of its size seen from any
+side; a beam passing within half its size of its centre, before its own hit and any crown stop,
+returns from it as from a crown's leaf.
+
+Checked (`test_leaves`, `test_shape_caster` `FlyingLeaves.*`, `test_trees_run`):
+
+| Check | Reference | Result |
+|---|---|---|
+| A leaf dropped in still air (no glide) | `v_t = √(|g|/k)` | 1.7141 m/s for its drawn `v_t`, to 1e-9; it lands at z = 0, flat |
+| The same, tumbling | no faster than `v_t`, sideways glide | 1.707 m/s against 1.714, sideways up to 0.33 m/s, pitch 0.97–1.57 rad |
+| A 5 m/s, −2 m/s wind | drifts at the wind's speed | (5.000, −2.000) m/s, to 1e-9 falling straight, within 0.05 m/s tumbling |
+| The rotor's wake | `v_i` at the disc, `w(s)`, continuity radius, inflow, momentum flux past 4 R | to 1e-12 |
+| A 10-inch disc stepped through a crown | `floor(volume × LAD / leaf area)` started, each within its cell at 0.3 of the blade's speed plus the air | 0.156 m³: 52 leaves for 52.00 |
+| 15 m/s on a 10 m crown for 1 s | `k (15²/10² − 1) N` | 54 for 55.0, within 1 |
+| A roof at 2 m over the ground | lands on the roof, beside it on the ground | exact |
+| Cuts, wake, breeze and stripping for 1.5 s, twice; saved and restored half way | bit for bit | equal |
+| The quadcopter taking off under the open field's tree_1 | the cut leaves fly and settle | 39 leaves cut off, 39 particles from 3.2 m, all 39 on the ground and flat within 12 s; bit for bit twice |
+
+Numbers and sources: every number of the flight and the shedding is TODO(verify). Broad leaves are
+said to fall at about 1–2 m/s (TODO(verify) against measured falling-leaf speeds of the species);
+the glide ratio, flutter frequency, tilt and spin are drawing choices that only make the fall look
+like a leaf's, not measurements; the share of the blade's speed a cut leaf keeps (0.3), the
+stripping threshold (10 m/s) and rate (10⁻³ /s) are guesses to be checked against observations of
+defoliation in wind. The jet's 4 R and its spread are a simplification of the aerodynamics domain's
+merged-jet model (Bauersfeld et al. 2024), which the leaves do not see. Left out: twigs as anything
+but small leaves, the leaves' own lift and the true dynamics of a tumbling plate, the ground's
+outwash and the wake's skew in wind (the aerodynamics domain has both), leaves lifted again from
+the ground, leaves stopped by colliders other than the surfaces above (walls, robots), and the
+camera sensors drawing them (the viewer draws them).
