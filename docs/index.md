@@ -255,6 +255,7 @@ guide/tutorial-cars
 guide/tutorial-humans
 guide/tutorial-heat-and-emi
 guide/tutorial-fire
+guide/training-a-policy
 guide/autoware
 guide/run-file
 guide/rl

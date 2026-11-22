@@ -16,6 +16,31 @@ Where to look: `scripts/train.py`, `python/lagrange/envs.py`.
 
 What it shows: `LagrangeEnv`, `ParallelEnvs`, `randomize=`.
 
+## PPO on the task library
+
+`task:=quad_hover`, `quad_waypoint` or `amr_goal` trains a task of `lagrange.tasks` by PPO with
+Stable-Baselines3 and torch on the CPU (`scripts/ppo.py`), from the Python they are installed in
+(a venv: they are not dependencies of Lagrange; without them the launch says so in its RESULT
+line and ends):
+
+```bash
+ros2 launch lagrange_example_rl train.launch.py task:=quad_hover workers:=8 steps:=1500000
+ros2 launch lagrange_example_rl train.launch.py task:=amr_goal workers:=6 steps:=400000
+```
+
+It writes the reward curve, the model and the policy as numpy arrays to
+`$XDG_STATE_HOME/lagrange/rl/<task>/`, then compares the policy over 20 seeded episodes with a
+random one and the built-in controller. `fly_policy` flies a trained policy through a run of
+targets and records it for `lagrange_server --replay`; `policies/` holds the trained ones.
+The whole walk-through, with the curves and the numbers: `docs/guide/training-a-policy.md`.
+
+On the machine it was checked on (shared, under load):
+
+```
+RESULT: QuadHover PPO 1501184 steps in 1354 s with 8 workers; success over 20 seeded episodes: PPO 20/20 (return 218.8), random 0/20 (return 1.4), built-in 20/20 (return 210.2)
+RESULT: AmrGoToGoal PPO 600576 steps in 1065 s with 6 workers; success over 20 seeded episodes: PPO 20/20 (return 20.5), random 0/20 (return -2.0), built-in 20/20 (return 20.2)
+```
+
 ## Environments in parallel
 
 `lagrange.envs` has two front ends over the same worker processes:
