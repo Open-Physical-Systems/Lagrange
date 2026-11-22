@@ -350,3 +350,54 @@ class "SolenoidAPI_1" (
         doc = "The voltage across the coil at a command of 1. Required."
     )
 }
+
+class "BrakeAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A holding brake (RFC 0020, "Also worth adding") on this revolute, continuous or
+    prismatic joint: spring-applied, power-off, released by a coil (an R-L circuit with a
+    freewheeling diode). The command act/<joint>/release (0 to 1) puts that share of ratedVoltage
+    on the coil; the armature lets go at releaseCurrent and is applied again at dropoutCurrent.
+    Applied, it holds the joint with up to holdingTorque at rest and dynamicTorque while it
+    slips (holdingForce and dynamicForce on a prismatic joint)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:brake:holdingTorque (
+        lagrangeUnit = "N.m"
+        doc = "Static holding torque. Required on a revolute or continuous joint."
+    )
+    double act:brake:dynamicTorque (
+        lagrangeUnit = "N.m"
+        doc = "Torque while the joint slips. No fallback: holdingTorque."
+    )
+    double act:brake:holdingForce (
+        lagrangeUnit = "N"
+        doc = "Static holding force. Required on a prismatic joint."
+    )
+    double act:brake:dynamicForce (
+        lagrangeUnit = "N"
+        doc = "Force while the joint slips. No fallback: holdingForce."
+    )
+    double act:brake:coilResistance (
+        lagrangeUnit = "ohm"
+        doc = "The coil's resistance. Required."
+    )
+    double act:brake:coilInductance = 0 (
+        lagrangeUnit = "H"
+        doc = "The coil's inductance. 0: the current follows the voltage at once."
+    )
+    double act:brake:ratedVoltage (
+        lagrangeUnit = "V"
+        doc = "The voltage on the coil at a command of 1. Required."
+    )
+    double act:brake:releaseCurrent (
+        lagrangeUnit = "A"
+        doc = "The coil current at which the armature pulls in. No fallback: 0.7 of the rated current."
+    )
+    double act:brake:dropoutCurrent (
+        lagrangeUnit = "A"
+        doc = "The coil current at which the springs apply it again. No fallback: 0.3 of the rated current."
+    )
+}

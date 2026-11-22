@@ -7,6 +7,8 @@ find_package(lagrange_core REQUIRED)
 
 add_library(
     lagrange_actuators
+    src/Brake.cpp
+    src/Brakes.cpp
     src/Gripper.cpp
     src/Grippers.cpp
     src/Nozzle.cpp
@@ -45,6 +47,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_servo test/test_servo.cpp TIMEOUT 120)
     target_link_libraries(test_servo lagrange_actuators)
     lagrange_target_defaults(test_servo)
+    ament_add_gtest(test_brake test/test_brake.cpp TIMEOUT 120)
+    target_link_libraries(test_brake lagrange_actuators)
+    lagrange_target_defaults(test_brake)
     ament_add_gtest(test_solenoid test/test_solenoid.cpp TIMEOUT 120)
     target_link_libraries(test_solenoid lagrange_actuators)
     lagrange_target_defaults(test_solenoid)

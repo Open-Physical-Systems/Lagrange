@@ -199,7 +199,7 @@ recorded to MCAP and replayed.
 
 <details><summary>Physics reference (22)</summary>
 
-- [Actuators: grippers, lead screws, nozzles, tanks, servos, steppers and solenoids](docs/physics/actuators.md)
+- [Actuators: grippers, lead screws, nozzles, tanks, servos, steppers, solenoids and brakes](docs/physics/actuators.md)
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)
