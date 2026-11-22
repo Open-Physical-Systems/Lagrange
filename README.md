@@ -352,7 +352,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (23)</summary>
+<details><summary>Design proposals (RFCs) (24)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -377,6 +377,7 @@ recorded to MCAP and replayed.
 - [RFC 0021: Lights on robots and in scenes](rfcs/0021-lights.md)
 - [RFC 0022: Fire, smoke and putting fires out](rfcs/0022-fire.md)
 - [RFC 0023: Joint springs](rfcs/0023-joint-springs.md)
+- [RFC 0024: Fluid power: pneumatic and hydraulic cylinders, valves, pumps and lines](rfcs/0024-fluid-power.md)
 
 </details>
 
