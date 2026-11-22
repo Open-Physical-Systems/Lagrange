@@ -471,9 +471,9 @@ specific cutting energy is measured for willow stems in Applied Sciences 15(2), 
 "Impact of blade geometric parameters on the specific cutting energy of willow (Salix viminalis)
 stems", whose numbers we have not read). Left out: the wood does not sway on its own (it moves
 with the crown), cut-off wood does not fall as bodies, the leaves beyond a cut stay, the wood is
-not a collider for bodies (only the blades meet it), the lidars and the viewer do not see it, a
-damaged blade does not yet lose thrust (`rotor/<j>/damage` is for the rotor domain to read), and
-a strike's push has no bounce (restitution) of its own.
+not a collider for bodies (only the blades meet it), the lidars and the viewer do not see it, and
+a strike's push has no bounce (restitution) of its own. A damaged blade loses thrust and shakes
+the drone ([rotors.md](rotors.md), "A damaged blade").
 
 ### Numbers and sources
 
