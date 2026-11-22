@@ -78,6 +78,9 @@ struct ServerOptions {
     /// --thrust-limit FRACTION: the share of each rotor's full thrust that the built-in controller
     /// and an autopilot's full output may ask for (an ESC limit), 0 < FRACTION <= 1.
     double thrustLimit{1.0};
+    /// --leaf-litter N: leaves lying under each tree's crown (TreeAPI_1) from the start, for the
+    /// wind and the rotors to lift again (ground.md "Leaves lifted again"); 0: none.
+    std::uint32_t leafLitter{0};
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

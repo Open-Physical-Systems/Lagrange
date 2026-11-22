@@ -111,8 +111,10 @@ TEST(TreesRun, TheCutLeavesFlyAndSettle) {
 
 TEST(TreesRun, SameRunTwiceIsBitForBit) {
     std::vector<double> traces[2];
+    ServerOptions o = underTheTree();
+    o.leafLitter = 100;  // and leaves lying under it, for the outwash to lift
     for (auto& trace : traces) {
-        Server server(underTheTree());
+        Server server(o);
         ASSERT_TRUE(server.load().ok());
         for (int k = 0; k < 30; ++k) {
             ASSERT_TRUE(server.stepUntil(SimTime{server.simTime().ns + 100'000'000}).ok());
@@ -128,6 +130,84 @@ TEST(TreesRun, SameRunTwiceIsBitForBit) {
         }
     }
     EXPECT_EQ(traces[0], traces[1]);
+}
+
+struct Litter {
+    std::size_t count{0}, lying{0};
+    double meanDistance{0.0};  // m, from (x, y)
+};
+
+// The leaves within 12 m of (x, y): tree_1's (the other trees stand over 25 m away).
+Litter litterAround(Server& server, double x, double y) {
+    constexpr double kNear = 12.0;
+    const std::vector<double> leaves = server.read(std::string(kLeavesSignal));
+    Litter l;
+    double sum = 0.0;
+    for (std::size_t n = 0; n < static_cast<std::size_t>(leaves.at(1)); ++n) {
+        const std::size_t base = kLeavesHeader + (kLeavesFields * n);
+        const double d = std::hypot(leaves[base] - x, leaves[base + 1] - y);
+        if (d > kNear) {
+            continue;
+        }
+        ++l.count;
+        sum += d;
+        l.lying += leaves[base + 2] < 0.01 ? 1U : 0U;
+    }
+    l.meanDistance = l.count > 0 ? sum / static_cast<double>(l.count) : 0.0;
+    return l;
+}
+
+// Leaves lying under tree_1 (--leaf-litter) and the quadcopter taking off beside its crown, out of
+// it, to hover 2 m up: its outwash along the ground lifts the leaves again (ground.md "Leaves
+// lifted again") and carries them away from under it. It cuts none.
+TEST(TreesRun, AHoveringDroneBlowsTheFallenLeavesAway) {
+    ServerOptions o = underTheTree();
+    o.spawn.position = {20.0, 8.0, 0.0};  // 2 m from the trunk, the crown's radius 1.8 m
+    o.leafLitter = 400;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    const Litter before = litterAround(server, 20.0, 8.0);
+    ASSERT_GT(before.count, 350U) << "the litter lies under the crown";
+    EXPECT_EQ(before.lying, before.count);
+    double most = 0.0;
+    for (int k = 0; k < 100; ++k) {  // 10 s
+        ASSERT_TRUE(server.stepUntil(SimTime{server.simTime().ns + 100'000'000}).ok());
+        most = std::max(most, at(server, "tree/tree_1/leaves_flying"));
+    }
+    const Litter after = litterAround(server, 20.0, 8.0);
+    const double lifted = at(server, "tree/tree_1/leaves_lifted");
+    std::printf(
+        "%zu leaves: %.0f lifts, up to %.0f in the air at once; mean distance from under "
+        "the drone %.2f m before, %.2f m after; %zu lying\n",
+        after.count, lifted, most, before.meanDistance, after.meanDistance, after.lying);
+    EXPECT_GT(lifted, 0.0) << "the outwash lifts them";
+    EXPECT_GT(most, 0.0);
+    EXPECT_GT(after.meanDistance, before.meanDistance + 0.5) << "and carries them away";
+    EXPECT_EQ(after.count, before.count) << "no leaf is cut: the drone is out of the crown";
+    EXPECT_EQ(at(server, "tree/tree_1/cut_volume"), 0.0);
+}
+
+// The wind alone, the quadcopter far away: a light wind leaves the litter where it lies, a gale
+// lifts it (its speed at the blade's height over the threshold).
+TEST(TreesRun, AGaleLiftsTheFallenLeavesALightWindDoesNot) {
+    for (const double speed : {3.0, 20.0}) {
+        ServerOptions o = underTheTree();
+        o.spawn.position = {0.0, 0.0, 0.0};
+        o.leafLitter = 200;
+        o.site["wind_speed"] = speed;
+        o.site["wind_from"] = 270.0;
+        Server server(o);
+        ASSERT_TRUE(server.load().ok());
+        ASSERT_TRUE(server.stepUntil(SimTime{5'000'000'000}).ok());
+        const double lifted = at(server, "tree/tree_1/leaves_lifted");
+        std::printf("wind %.0f m/s: %.0f lifts\n", speed, lifted);
+        if (speed < 5.0) {
+            EXPECT_EQ(lifted, 0.0);
+        } else {
+            EXPECT_GT(lifted, 0.0);
+        }
+    }
 }
 
 // A steady 12 m/s wind bends tree_1's crown by F/(m ω²): its sway mode (0.5 Hz, ζ 0.1, 2 kg per

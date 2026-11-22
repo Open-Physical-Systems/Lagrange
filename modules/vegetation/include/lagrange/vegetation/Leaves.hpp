@@ -23,7 +23,26 @@
 // s/√(s² + R²)), a top hat of radius R √(v_i/w) below the disc (R above it), and past 4 R a round
 // jet that keeps its momentum flux, w ∝ 1/s, radius ∝ s. The vegetation domain cannot ask the
 // aerodynamics domain for its wake at each particle (architecture invariant 1), so it rebuilds this
-// simpler one from rotor/<j>/induced_velocity and thrust_axis.
+// simpler one from rotor/<j>/induced_velocity and thrust_axis. When the aerodynamics domain runs,
+// it writes the air at each listed leaf (kLeavesAirSignal, a step late) and that is used instead:
+// the logarithmic wind at the leaf's height, the gust, the merged jet and the ground outwash.
+//
+// Leaves lifted again (ground.md "Leaves lifted again"): a leaf lying on the ground lifts when the
+// air along the ground under it, u (kLeavesAirSignal's ground air), carries its weight: the
+// pressure ½ ρ C u² on its blade against its weight per area m'' g, so
+//
+//     u_t = √(2 m'' g / (ρ C))
+//
+// (liftOffSpeed; with a flat plate's C this is also the speed a leaf falls at flat, so a leaf lifts
+// in air as fast as it falls), scaled by each particle's own drawn terminal speed. In the spirit of
+// Bagnold's threshold for sand (u*_t = A √(g d (ρ_s − ρ)/ρ)), the weight per area of the grain is
+// the leaf's m''; in friction velocity, under the logarithmic wind, u*_t = κ u_t / ln(z/z0) at the
+// blade's height z (liftOffFriction). A leaf that lifts leaves with the ground air's velocity and
+// the speed its excess lift gives it over its own length L, w = √(2 g L ((u/u_t)² − 1)).
+//
+// Walls (LeafWalls): a flying leaf that would pass into a fixed box (any orientation) or behind a
+// fixed wall plane is put back on the face it came through and loses its speed into it; along the
+// face it keeps going, so pressed by the wind it slides down the wall to the ground.
 
 #include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/Trees.hpp"
@@ -65,7 +84,28 @@ struct LeafParams {
     std::uint32_t maxSpawnPerStep{256};
     /// m/s², the gravity (the site's, 9.80665 standard by default).
     double gravity{9.80665};
+    /// kg/m², a fresh leaf's mass per area (m''): fresh broad leaves are some 0.05-0.15 kg/m²
+    /// (dry leaf mass per area mostly 0.03-0.15 kg/m², Poorter et al. 2009, New Phytol. 182:565,
+    /// over a dry matter content of some 0.2-0.4). TODO(verify) the fresh figure.
+    double arealDensity{0.1};
+    /// C in u_t = √(2 m'' g / (ρ C)): a flat plate's, broadside to the flow, 1.17 (Hoerner,
+    /// Fluid-Dynamic Drag, 1965, ch. 3, a square plate). TODO(verify) for a leaf lying on the
+    /// ground, whose lift comes from the flow over its curled edges.
+    double liftCoefficient{1.17};
+    /// kg/m³, the air's density (the site's; ISA sea level by default).
+    double airDensity{1.225};
 };
+
+/// The air speed along the ground that lifts a leaf of mass per area `arealDensity` (kg/m²):
+/// √(2 m'' g / (ρ C)), m/s.
+[[nodiscard]] double liftOffSpeed(double arealDensity, double coefficient, double airDensity,
+                                  double gravity);
+/// The same threshold as a friction velocity (m/s) under the logarithmic wind, u at height
+/// `height` (m) over roughness length `roughness` (m): κ u / ln(z/z0), κ = 0.41; infinite at or
+/// under z0, where the profile has no wind.
+[[nodiscard]] double liftOffFriction(double liftOff, double height, double roughness);
+/// von Kármán's constant (0.41, as the logarithmic profile is commonly written).
+inline constexpr double kVonKarman = 0.41;
 
 /// One particle. Plain doubles, so its state round-trips exactly.
 struct Leaf {
@@ -126,6 +166,31 @@ private:
     std::vector<HeightField> fields_;  // copies: the world may go
 };
 
+/// What flying leaves hit: the world's fixed boxes (any orientation) and its wall planes (a fixed
+/// plane less than some 84° from upright), bucketed on a horizontal grid like LandingSurfaces.
+class LeafWalls {
+public:
+    void build(const World& world);
+    /// Puts `position`, moved from `before`, back out of anything it went into, on the face it
+    /// came through, and takes the speed into that face out of `velocity`. Returns whether it hit.
+    bool resolve(std::array<double, 3>& position, std::array<double, 3>& velocity,
+                 const std::array<double, 3>& before) const;
+    [[nodiscard]] bool empty() const { return walls_.empty(); }
+
+private:
+    struct Wall {
+        ShapeType type{ShapeType::Box};
+        Pose pose{};
+        std::array<double, 3> size{};  // a box's half sizes
+    };
+    [[nodiscard]] static std::uint64_t bucketKey(std::int64_t x, std::int64_t y);
+    bool resolveOne(const Wall& wall, std::array<double, 3>& position,
+                    std::array<double, 3>& velocity, const std::array<double, 3>& before) const;
+    std::vector<Wall> walls_;
+    std::vector<std::uint32_t> everywhere_;
+    std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> buckets_;
+};
+
 /// A cut cell a leaf may fly from: its centre (world) and the blade's velocity there (m/s).
 struct CutCell {
     std::array<double, 3> centre{};
@@ -161,13 +226,25 @@ public:
     void add(std::uint32_t tree, const std::array<double, 3>& position,
              const std::array<double, 3>& velocity, double leafArea, double jitter,
              std::uint64_t seed, std::uint64_t step);
-    /// Moves every particle in the air by dt; returns whether any moved.
+    /// Lays one particle flat on the ground at `position` (the tests' and the leaf litter's way
+    /// in), drawn as add() draws.
+    void lay(std::uint32_t tree, const std::array<double, 3>& position, double leafArea,
+             std::uint64_t seed, std::uint64_t step);
+    /// Moves every particle in the air by dt; returns whether any moved. `walls` stop them;
+    /// `air` is the kLeavesAirSignal value (empty: none): its air in flight where its key matches
+    /// the particle, and its ground air under a settled one, which lifts it past liftOff().
     bool step(double dt, const std::array<double, 3>& wind, std::span<const RotorWake> rotors,
-              const LandingSurfaces& ground);
+              const LandingSurfaces& ground, const LeafWalls* walls = nullptr,
+              std::span<const double> air = {});
+    /// The ground air speed that lifts `leaf` (m/s): liftOffSpeed scaled by its own terminal
+    /// speed over the drawn mean.
+    [[nodiscard]] double liftOff(const Leaf& leaf) const;
 
     [[nodiscard]] const std::vector<Leaf>& leaves() const { return leaves_; }
     /// Particles in the air from tree `tree`.
     [[nodiscard]] std::uint32_t flying(std::uint32_t tree) const;
+    /// Times the ground air has lifted a leaf of tree `tree` again, since reset.
+    [[nodiscard]] double lifted(std::uint32_t tree) const;
     /// The kLeavesSignal value, version `version`.
     void write(std::vector<double>& out, double version) const;
     /// The state as doubles, and back (false when it does not fit).
@@ -180,6 +257,7 @@ private:
     std::vector<double> cutCarry_;    // leaves owed per tree, under 1
     std::vector<double> stripCarry_;  // the same for the air's stripping
     std::vector<double> stripped_;    // leaves stripped so far per tree
+    std::vector<double> lifted_;      // leaves lifted again per tree
     double nextId_{0.0};
     std::uint32_t spawnedThisStep_{0};
     std::uint64_t spawnStep_{~std::uint64_t{0}};

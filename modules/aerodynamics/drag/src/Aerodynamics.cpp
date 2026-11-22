@@ -3,6 +3,7 @@
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/random/Philox.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/PoseMath.hpp"
 #include "lagrange/world/Trees.hpp"
 
@@ -19,6 +20,9 @@ namespace lagrange::aerodynamics {
 using namespace literals;
 
 namespace {
+
+/// m: a leaf this near the surface a wake stops on lies in its outwash.
+constexpr double kLeafOnSurface = 0.05;
 
 using Vec3 = std::array<double, 3>;
 
@@ -495,6 +499,24 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
             crowns_.push_back(crown);
         }
     }
+    // Leaves (ground.md "Leaves lifted again"): the air at each one the vegetation domain lists,
+    // read a step late, with the wind and every robot's wake, whether rotors fly or not.
+    leavesIn_ = leavesAir_ = SignalId{};
+    {
+        std::string treeError;
+        if (!treesOf(world.raw(), treeError).empty()) {
+            SignalSpec in = spec(std::string(kLeavesSignal), SignalType::ScalarArray, units::one,
+                                 "world_local");
+            in.arrayLength = kLeavesLength;
+            in.optional = true;
+            in.feedback = true;
+            leavesIn_ = d.input(in);
+            SignalSpec out = spec(std::string(kLeavesAirSignal), SignalType::ScalarArray,
+                                  units::one, "world_local");
+            out.arrayLength = kLeavesAirLength;
+            leavesAir_ = d.output(out);
+        }
+    }
     if (hasGround_) {
         downwash_.setGround(groundPoint_, groundNormal_);
     } else {
@@ -631,6 +653,10 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     }
     for (const TreeCrown& crown : crowns_) {
         bus.writeN(crown.downwash, Vec3{});
+    }
+    if (leavesAir_.valid()) {
+        leafAir_.assign(kLeavesAirLength, 0.0);
+        bus.writeN(leavesAir_, leafAir_);
     }
     downwash_.update({});
     others_.update({});
@@ -1038,6 +1064,49 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             }
         }
         bus.writeN(rotors_[i].air, air);
+    }
+    // The air at each leaf and along the ground under it (Leaves.hpp kLeavesAirSignal): in flight
+    // the wind at its height, the gust and every robot's wake; lying, the mean wind at its blade's
+    // length above the ground and the outwash at the wall jet's peak, the most across its layer.
+    if (leavesAir_.valid()) {
+        const std::span<const double> in = bus.readN(leavesIn_);
+        std::ranges::fill(leafAir_, 0.0);
+        const std::size_t count =
+            in.size() >= kLeavesHeader
+                ? std::min<std::size_t>(
+                      static_cast<std::size_t>(std::clamp(in[1], 0.0, double{kLeavesCapacity})),
+                      (in.size() - kLeavesHeader) / kLeavesFields)
+                : 0;
+        leafAir_[0] = count > 0 ? in[0] : 0.0;
+        leafAir_[1] = static_cast<double>(count);
+        for (std::size_t n = 0; n < count; ++n) {
+            const double* leaf = in.data() + kLeavesHeader + (kLeavesFields * n);
+            const Vec3 x{leaf[0], leaf[1], leaf[2]};
+            double* out = leafAir_.data() + kLeavesHeader + (kLeavesAirFields * n);
+            std::copy(x.begin(), x.end(), out);
+            if (!std::isfinite(x[0]) || !std::isfinite(x[1]) || !std::isfinite(x[2])) {
+                continue;
+            }
+            const Vec3 mean = meanAir(x);
+            const Vec3 wake = wakeAt(x, Downwash::kNoGroup);
+            for (std::size_t k = 0; k < 3; ++k) {
+                out[3 + k] = mean[k] + firstGust[k] + wake[k];
+            }
+            const Vec3 low = meanAir(Vec3{x[0], x[1], x[2] + std::max(leaf[5], 0.0)});
+            // The outwash runs along the surface a wake stops on: a leaf on a roof the wake
+            // passes by has none.
+            const bool onSurface = std::ranges::any_of(downwash_.groups(), [&](const auto& g) {
+                return g.hits &&
+                       std::abs(((x[0] - g.hitPoint[0]) * g.hitNormal[0]) +
+                                ((x[1] - g.hitPoint[1]) * g.hitNormal[1]) +
+                                ((x[2] - g.hitPoint[2]) * g.hitNormal[2])) < kLeafOnSurface;
+            });
+            const Vec3 outwash = onSurface ? downwash_.surfaceOutwash(x) : Vec3{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                out[6 + k] = low[k] + outwash[k];
+            }
+        }
+        bus.writeN(leavesAir_, leafAir_);
     }
     if (dustOut_.valid()) {
         bus.write(dustOut_,

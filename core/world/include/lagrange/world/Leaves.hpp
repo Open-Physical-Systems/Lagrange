@@ -25,4 +25,20 @@ inline constexpr std::uint32_t kLeavesHeader = 2;
 inline constexpr std::uint32_t kLeavesFields = 6;
 inline constexpr std::uint32_t kLeavesLength = kLeavesHeader + (kLeavesFields * kLeavesCapacity);
 
+// The air at each listed leaf, from the aerodynamics domain, which reads kLeavesSignal a step late
+// (docs/physics/ground.md "Leaves lifted again"):
+//
+//     kLeavesAirSignal: [version, count, (x, y, z, ax, ay, az, gx, gy, gz) x count, unused...]
+//
+// version and count are those of the kLeavesSignal it read, (x, y, z) that leaf's centre as it
+// read it (m, the key the vegetation domain matches its particles by), (ax, ay, az) the air at the
+// centre (m/s: the mean wind at its height, the gust, every robot's rotors with their outwash) for
+// a leaf in flight, and (gx, gy, gz) the air along the ground under it (m/s: the mean wind at the
+// leaf's blade length above the ground plus the rotors' outwash at the wall jet's peak) for a leaf
+// lying there.
+inline constexpr std::string_view kLeavesAirSignal = "vegetation/leaves_air";
+inline constexpr std::uint32_t kLeavesAirFields = 9;
+inline constexpr std::uint32_t kLeavesAirLength =
+    kLeavesHeader + (kLeavesAirFields * kLeavesCapacity);
+
 }  // namespace lagrange

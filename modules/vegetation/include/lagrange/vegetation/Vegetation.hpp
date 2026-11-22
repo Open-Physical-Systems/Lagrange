@@ -176,6 +176,11 @@ void stepSway(const TreeSpec& tree, Sway& sway, const std::array<double, 2>& for
 /// true), the leaves a rotor cuts off and those the air strips from a crown fly as particles in
 /// the wind and the rotors' wake (rotor/<j>/induced_velocity and thrust_axis, optional) and settle
 /// on the ground; out vegetation/leaves (lagrange/world/Leaves.hpp) and tree/<n>/leaves_flying.
+/// Fixed boxes and wall planes stop them (LeafWalls). With the aerodynamics domain's
+/// vegetation/leaves_air (optional, a step late) they fly in its air, and a leaf on the ground
+/// lifts again when the air along the ground there carries its weight (ground.md "Leaves lifted
+/// again"); out tree/<n>/leaves_lifted (times so far). Config "leaf_litter" (leaves per tree,
+/// default 0): leaves lying under each crown from the start, uniform over its footprint.
 class Vegetation final : public IModule {
 public:
     [[nodiscard]] ModuleInfo info() const override;
@@ -215,7 +220,7 @@ private:
         double owed{0.0};              // J of cutting not yet paid by the rotor
     };
     struct Tree {
-        SignalId downwash, sway, force, cutVolume, leaves, flying;
+        SignalId downwash, sway, force, cutVolume, leaves, flying, lifted;
         Sway state;
         std::array<double, 2> push{};  // N, the bodies' push on its wood in the last step
         double cut{0.0};               // m³
@@ -238,11 +243,14 @@ private:
     /// velocity there.
     void collectCut(std::size_t tree, const std::array<double, 3>& hub,
                     const std::array<double, 3>& axis, double omega, double radius);
+    void layLitter();
     void stepLeaves(const StepContext& context, SignalBus& bus,
                     std::span<const std::array<double, 3>> sways, std::span<const double> wind);
     LeafField leaves_;
     LandingSurfaces landing_;
-    SignalId leavesOut_;
+    LeafWalls walls_;
+    SignalId leavesOut_, leavesAir_;
+    std::uint32_t litter_{0};  // leaves lying under each crown at the start
     double leafVersion_{0.0};
     std::vector<double> leafValues_;
     std::vector<std::vector<CutCell>> treeCells_;
