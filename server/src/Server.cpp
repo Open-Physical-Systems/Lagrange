@@ -957,7 +957,7 @@ struct Server::Impl {
                                                      options.jointLoopHz));
         } else if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
-            next->add(ros2_control::createControlModule(*controllers, controlJoints));
+            next->add(ros2_control::createControlModule(*controllers, controlJoints, controlGpios));
         } else if (robot.actuatedJoints.size() == 2 && servoJoints().empty()) {
             std::function<std::optional<VelocityCommand>()> external;
             if (bridge) {
@@ -6427,6 +6427,7 @@ struct Server::Impl {
     DriveCommand* driveCommand{nullptr};
     std::unique_ptr<ros2_control::ControllerHost> controllers;  // with --ros2-control
     std::vector<ros2_control::ControlJoint> controlJoints;
+    std::vector<ros2_control::ControlGpio> controlGpios;  // RFC 0020 §5
 
     /// The World workspace: the robot as the one agent, at its simulated position.
     /// The weather values the run uses: the command line's, then the applied profile's.
@@ -8841,6 +8842,20 @@ Status Server::load() {
                 add(maps.publish, act + "position", topic + "position", "std_msgs/msg/Float64", "");
             }
         }
+        // A GPIO of the <ros2_control> block (RFC 0020 §5) owns the signals its command
+        // interfaces write: their default topics would be a second writer.
+        if (!s.options.ros2ControlParams.empty() &&
+            importers::formatOf(s.options.robotPath) == importers::Format::Urdf) {
+            if (auto gpios = ros2_control::controlGpios(readFile(s.options.robotPath))) {
+                for (const ros2_control::ControlGpio& gpio : *gpios) {
+                    for (const ros2_control::ControlGpio::Interface& command : gpio.commands) {
+                        std::erase_if(
+                            settings.signalTopics.subscribe,
+                            [&](const ros2::TopicMap& m) { return m.signal == command.signal; });
+                    }
+                }
+            }
+        }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
@@ -8855,6 +8870,11 @@ Status Server::load() {
             if (!joints) {
                 return Status::error(StatusCode::InvalidConfig, joints.error());
             }
+            auto gpios = ros2_control::controlGpios(urdf);
+            if (!gpios) {
+                return Status::error(StatusCode::InvalidConfig, gpios.error());
+            }
+            s.controlGpios = std::move(*gpios);
             auto host = ros2_control::ControllerHost::start(urdf, s.options.ros2ControlParams);
             if (!host) {
                 return Status::error(StatusCode::InvalidConfig, host.error());

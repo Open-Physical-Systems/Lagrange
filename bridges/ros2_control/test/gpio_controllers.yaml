@@ -1,0 +1,15 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+    plunger_gpio:
+      type: gpio_controllers/GpioCommandController
+
+plunger_gpio:
+  ros__parameters:
+    gpios: [plunger]
+    command_interfaces:
+      plunger:
+        interfaces: [command]
+    state_interfaces:
+      plunger:
+        interfaces: [current, held]

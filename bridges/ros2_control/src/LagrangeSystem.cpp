@@ -5,8 +5,10 @@
 #include "lagrange/ros2_control/Encoder.hpp"
 #include "lagrange/ros2_control/JointTable.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <random>
 #include <string>
@@ -54,6 +56,18 @@ public:
             }
             encoders_.push_back(encoder);
         }
+        // GPIOs (RFC 0020 §5): their interfaces go through the table as they are.
+        for (const hardware_interface::ComponentInfo& gpio : info_.gpios) {
+            Gpio entry;
+            entry.name = gpio.name;
+            for (const hardware_interface::InterfaceInfo& state : gpio.state_interfaces) {
+                entry.states.push_back(state.name);
+            }
+            for (const hardware_interface::InterfaceInfo& command : gpio.command_interfaces) {
+                entry.commands.push_back(command.name);
+            }
+            gpios_.push_back(std::move(entry));
+        }
         return CallbackReturn::SUCCESS;
     }
 
@@ -76,8 +90,8 @@ public:
         }
         for (const std::string& name : start) {
             const std::size_t slash = name.rfind('/');
-            if (slash == std::string::npos) {
-                continue;
+            if (slash == std::string::npos || isGpio(name.substr(0, slash))) {
+                continue;  // a GPIO's interfaces have no mode
             }
             const std::string joint = name.substr(0, slash);
             const std::string kind = name.substr(slash + 1);
@@ -121,6 +135,15 @@ public:
                 }
             }
         }
+        for (const Gpio& gpio : gpios_) {
+            const GpioSlot& slot = table.gpio(gpio.name);
+            for (const std::string& state : gpio.states) {
+                const auto value = slot.states.find(state);
+                set_state(gpio.name + "/" + state, value != slot.states.end()
+                                                       ? value->second
+                                                       : std::numeric_limits<double>::quiet_NaN());
+            }
+        }
         return hardware_interface::return_type::OK;
     }
 
@@ -144,10 +167,26 @@ public:
                 }
             }
         }
+        for (const Gpio& gpio : gpios_) {
+            GpioSlot& slot = table.gpio(gpio.name);
+            for (const std::string& command : gpio.commands) {
+                slot.commands[command] = get_command<double>(gpio.name + "/" + command);
+            }
+        }
         return hardware_interface::return_type::OK;
     }
 
 private:
+    struct Gpio {
+        std::string name;
+        std::vector<std::string> states, commands;
+    };
+    [[nodiscard]] bool isGpio(const std::string& name) const {
+        return std::any_of(gpios_.begin(), gpios_.end(),
+                           [&](const Gpio& g) { return g.name == name; });
+    }
+
+    std::vector<Gpio> gpios_;
     std::vector<std::string> joints_;
     std::vector<std::vector<std::string>> states_;
     std::vector<std::vector<std::string>> commands_;
