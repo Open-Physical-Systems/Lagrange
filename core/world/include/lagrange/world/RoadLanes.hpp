@@ -50,4 +50,25 @@ struct RoadLanes {
 /// The driving and sidewalk lanes of `world`, linked.
 [[nodiscard]] RoadLanes roadLanesOf(const WorldView& world);
 
+/// A traffic light (RoadSignalAPI_1, an OpenDRIVE dynamic signal), resolved to the lanes it
+/// governs.
+struct RoadSignal {
+    std::string id;
+    std::string controller;  // empty: none
+    int road{0};
+    double s{0.0};
+    int junction{-1};    // the OpenDRIVE junction whose controller list names its controller
+    int sequence{-1};    // its controller's turn there; -1: none given
+    double height{0.0};  // m, its head; 0: not given
+    Pose face;           // the middle of its face, x out of it (region-local)
+    /// The driving lanes it governs (index in RoadLanes::lanes) and, along each, where vehicles
+    /// stop for it (m from the lane's start).
+    std::vector<std::pair<std::size_t, double>> lanes;
+};
+
+/// The traffic lights of `world` on `lanes` (roadLanesOf's): each signal's lanes are those of
+/// its validity (fromLane to toLane), else every driving lane of its orientation's side (right
+/// lanes for "+", left for "-", both for "none"), at its s.
+[[nodiscard]] std::vector<RoadSignal> roadSignalsOf(const WorldView& world, const RoadLanes& lanes);
+
 }  // namespace lagrange

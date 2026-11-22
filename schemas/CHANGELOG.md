@@ -8,6 +8,10 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Road library**: `RoadSignalAPI_1`, a traffic light (an OpenDRIVE dynamic signal): its id,
+  road, s and t, orientation, type and subtype, the lanes it governs (`signal:fromLane`,
+  `toLane`), its controller, that controller's junction and sequence, and its head's height.
+  Addition (approved by the owner on 2026-11-22), nothing to migrate.
 - **Aero library** (hydrodynamics.md, "thrusters as rotors in water"): `aero:rotor:advanceRatios`,
   `thrustCoeffs` and `torqueCoeffs` on `RotorAPI_1`, an open-water chart K_T(J), K_Q(J) that
   replaces the static coefficients when given. Additions, nothing to migrate.

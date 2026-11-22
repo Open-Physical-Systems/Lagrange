@@ -141,9 +141,151 @@ Tilt tiltAt(const LaneGraph& graph, std::size_t index, double along) {
     return tilt;
 }
 
+namespace {
+
+constexpr double kHousingHalfDepth = 0.1;  // m, a vehicle signal's face from its middle
+constexpr double kLampSpacing = 0.33;      // m between a vehicle signal's lamps
+
+/// Whether controller (or signal) id `a` comes before `b`: by number when both are numbers.
+bool idBefore(const std::string& a, const std::string& b) {
+    const auto number = [](const std::string& text) -> std::optional<long long> {
+        if (text.empty() || text.size() > 18) {
+            return std::nullopt;
+        }
+        char* end = nullptr;
+        const long long value = std::strtoll(text.c_str(), &end, 10);
+        return end == text.c_str() + text.size() ? std::optional(value) : std::nullopt;
+    };
+    const auto na = number(a);
+    const auto nb = number(b);
+    if (na && nb) {
+        return *na < *nb;
+    }
+    return a < b;
+}
+
+/// A signal group: its controller (or, without one, the signal alone) within a junction.
+struct Group {
+    int sequence;
+    bool alone;
+    std::string id;
+    friend bool operator<(const Group& a, const Group& b) {
+        const auto rank = [](int seq) { return seq < 0 ? std::numeric_limits<int>::max() : seq; };
+        if (rank(a.sequence) != rank(b.sequence)) {
+            return rank(a.sequence) < rank(b.sequence);
+        }
+        if (a.alone != b.alone) {
+            return !a.alone;
+        }
+        return idBefore(a.id, b.id);
+    }
+    friend bool operator==(const Group& a, const Group& b) {
+        return a.alone == b.alone && a.id == b.id;
+    }
+};
+
+/// The lights of RoadSignalAPI_1 signals: per governed lane its junction (the one it leads
+/// into; a signal before none gets a junction of its own per controller), its group (its
+/// controller's turn there), its stop line and its head.
+void lightsFromSignals(LaneGraph& g, const std::vector<RoadSignal>& signals,
+                       const std::vector<int>& junctionOfLane) {
+    g.fromSignals = true;
+    // Per lane, the signal that governs it, the nearest stop line first.
+    std::vector<std::optional<std::pair<double, const RoadSignal*>>> governed(g.lanes.size());
+    for (const RoadSignal& signal : signals) {
+        for (const auto& [lane, stop] : signal.lanes) {
+            if (!governed[lane] || stop < governed[lane]->first) {
+                governed[lane] = std::pair{stop, &signal};
+            }
+        }
+    }
+    // The junction a lane leads into, through its successors.
+    const auto junctionAhead = [&](std::size_t start) {
+        if (g.lanes[start].junction) {
+            return junctionOfLane[start];
+        }
+        std::vector<bool> seen(g.lanes.size(), false);
+        std::vector<std::size_t> frontier{start};
+        constexpr int kDepth = 8;  // lanes looked through
+        for (int depth = 0; depth < kDepth && !frontier.empty(); ++depth) {
+            std::vector<std::size_t> next;
+            for (const std::size_t l : frontier) {
+                for (const std::size_t s : g.lanes[l].successors) {
+                    if (junctionOfLane[s] >= 0) {
+                        return junctionOfLane[s];
+                    }
+                    if (!seen[s]) {
+                        seen[s] = true;
+                        next.push_back(s);
+                    }
+                }
+            }
+            frontier = std::move(next);
+        }
+        return -1;
+    };
+    const auto groupOf = [](const RoadSignal& s) {
+        return s.controller.empty() ? Group{s.sequence, true, s.id}
+                                    : Group{s.sequence, false, s.controller};
+    };
+    std::map<std::string, int> own;  // a signal before no junction: its controller's junction
+    std::vector<int> junction(g.lanes.size(), -1);
+    std::map<int, std::vector<Group>> groupsIn;
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (!governed[i]) {
+            continue;
+        }
+        const RoadSignal& signal = *governed[i]->second;
+        int j = junctionAhead(i);
+        if (j < 0) {
+            const std::string key = signal.controller.empty() ? "signal " + signal.id
+                                                              : "controller " + signal.controller;
+            const auto [it, added] = own.try_emplace(key, g.junctions);
+            if (added) {
+                ++g.junctions;
+                g.signalled.push_back(false);
+                g.groups.push_back(1);
+            }
+            j = it->second;
+        }
+        junction[i] = j;
+        std::vector<Group>& groups = groupsIn[j];
+        const Group group = groupOf(signal);
+        if (std::ranges::find(groups, group) == groups.end()) {
+            groups.push_back(group);
+        }
+    }
+    for (auto& [j, groups] : groupsIn) {
+        std::sort(groups.begin(), groups.end());
+        g.groups[static_cast<std::size_t>(j)] = static_cast<int>(groups.size());
+    }
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (!governed[i]) {
+            continue;
+        }
+        const auto [stop, signal] = *governed[i];
+        const std::vector<Group>& groups = groupsIn[junction[i]];
+        g.junctionOf[i] = junction[i];
+        g.signalGroup[i] =
+            static_cast<int>(std::ranges::find(groups, groupOf(*signal)) - groups.begin());
+        g.stopAt[i] = stop;
+        const Vec3 out = rotate(signal->face.orientation, {1.0, 0.0, 0.0});
+        LaneGraph::SignalHead head;
+        head.yaw = std::atan2(out[1], out[0]);
+        head.at = signal->face.position;
+        head.at[0] -= kHousingHalfDepth * std::cos(head.yaw);
+        head.at[1] -= kHousingHalfDepth * std::sin(head.yaw);
+        head.spacing = signal->height > 0.0 ? signal->height / 3.0 : kLampSpacing;
+        g.head[i] = head;
+    }
+}
+
+}  // namespace
+
 LaneGraph lanesOf(const WorldView& world) {
     LaneGraph g;
-    g.lanes = roadLanesOf(world).lanes;
+    const RoadLanes network = roadLanesOf(world);
+    g.lanes = network.lanes;
     // The lane beside each, for the bank: the same road section, kind and junction, the next
     // OpenDRIVE lane id inwards (across the centre: -1 and 1), else outwards.
     g.beside.assign(g.lanes.size(), std::nullopt);
@@ -253,10 +395,13 @@ LaneGraph lanesOf(const WorldView& world) {
             }
         }
     }
-    for (int j = 0; j < g.junctions; ++j) {
-        if (!g.signalled[static_cast<std::size_t>(j)]) {
-            continue;
-        }
+    g.groups.assign(static_cast<std::size_t>(g.junctions), 2);
+    g.stopAt.resize(g.lanes.size());
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        g.stopAt[i] = g.lanes[i].length();
+    }
+    g.head.assign(g.lanes.size(), std::nullopt);
+    const auto byGeometry = [&](int j) {
         // Approaches into junction j and their headings at the stop line.
         std::vector<std::pair<std::size_t, double>> approaches;
         for (std::size_t i = 0; i < g.lanes.size(); ++i) {
@@ -273,14 +418,39 @@ LaneGraph lanesOf(const WorldView& world) {
         }
         // Group 0: approaches heading like the first one or the opposite way; group 1: across.
         if (approaches.empty()) {
-            continue;
+            return;
         }
         const double reference = approaches.front().second;
         for (const auto& [lane, heading] : approaches) {
             const double d = std::abs(std::remainder(heading - reference, std::numbers::pi));
             g.signalGroup[lane] = d < std::numbers::pi / 4.0 ? 0 : 1;
         }
+    };
+    const std::vector<RoadSignal> signals = roadSignalsOf(world, network);
+    if (signals.empty()) {
+        for (int j = 0; j < g.junctions; ++j) {
+            if (g.signalled[static_cast<std::size_t>(j)]) {
+                byGeometry(j);
+            }
+        }
+        return g;
     }
+    lightsFromSignals(g, signals, junctionOfLane);
+    // A junction with crossings but no signals keeps the lights its geometry gives.
+    std::vector<bool> lit(static_cast<std::size_t>(g.junctions), false);
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (g.signalGroup[i] >= 0) {
+            lit[static_cast<std::size_t>(g.junctionOf[i])] = true;
+        }
+    }
+    for (const LaneGraph::Crossing& crossing : g.crossings) {
+        const auto j = static_cast<std::size_t>(crossing.junction);
+        if (!lit[j]) {
+            byGeometry(crossing.junction);
+            lit[j] = true;
+        }
+    }
+    g.signalled = lit;
     return g;
 }
 
@@ -329,6 +499,16 @@ Head vehicleHead(const Lane& lane) {
     const auto [end, yaw] = lane.at(lane.length());
     return {plus(end, along(yaw, 0.0, -(lane.width / 2.0 + 0.6), kLampHeight)),
             yaw + std::numbers::pi};
+}
+/// The head of approach lane `i`: its RoadSignalAPI_1 signal's, else on the right of its end.
+Head headOf(const LaneGraph& g, std::size_t i) {
+    if (i < g.head.size() && g.head[i]) {
+        return {g.head[i]->at, g.head[i]->yaw};
+    }
+    return vehicleHead(g.lanes[i]);
+}
+double spacingOf(const LaneGraph& g, std::size_t i) {
+    return i < g.head.size() && g.head[i] ? g.head[i]->spacing : kLampSpacing;
 }
 /// A crossing's end (0 start, 1 end): the signal there faces those about to come from the other.
 Head walkHead(const Lane& lane, int end) {
@@ -578,17 +758,17 @@ std::vector<SignalLamp> signalLamps(const LaneGraph& g) {
         out.dark.orientation = out.lit.orientation;
         lamps.push_back(std::move(out));
     };
-    constexpr double kSpacing = 0.33;  // m between a vehicle signal's lamps
-    constexpr double kFront = 0.112;   // m, a lit lamp from the housing's middle
+    constexpr double kFront = 0.112;  // m, a lit lamp from the housing's middle
     for (std::size_t i = 0; i < g.lanes.size(); ++i) {
         if (g.signalGroup[i] < 0) {
             continue;
         }
-        const Head head = vehicleHead(g.lanes[i]);
+        const Head head = headOf(g, i);
+        const double spacing = spacingOf(g, i);
         const std::string base = "traffic_lamp_" + std::to_string(i);
-        lamp(base + "_red", LampKind::Red, i, head, kSpacing, kFront);
+        lamp(base + "_red", LampKind::Red, i, head, spacing, kFront);
         lamp(base + "_yellow", LampKind::Yellow, i, head, 0.0, kFront);
-        lamp(base + "_green", LampKind::Green, i, head, -kSpacing, kFront);
+        lamp(base + "_green", LampKind::Green, i, head, -spacing, kFront);
     }
     for (std::size_t c = 0; c < g.crossings.size(); ++c) {
         const Lane& lane = g.lanes[g.crossings[c].lane];
@@ -899,13 +1079,16 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
         if (g.signalGroup[i] < 0) {
             continue;
         }
-        const Head head = vehicleHead(g.lanes[i]);
+        const Head head = headOf(g, i);
+        const double spacing = spacingOf(g, i);
         const std::string base = "signal_" + std::to_string(i);
-        pole(base + "_pole", {head.at[0], head.at[1], 0.0}, kLampHeight - 0.4);
-        scenery(base + "_housing", housingMesh, housingMaterial, facing(head, 0.0, 0.0));
-        scenery(base + "_lens_r", lensDisc, redDark, discPose(head, 0.33, 0.105));
+        if (!g.head[i]) {  // a RoadSignalAPI_1 signal's pole and housing are the world's
+            pole(base + "_pole", {head.at[0], head.at[1], 0.0}, kLampHeight - 0.4);
+            scenery(base + "_housing", housingMesh, housingMaterial, facing(head, 0.0, 0.0));
+        }
+        scenery(base + "_lens_r", lensDisc, redDark, discPose(head, spacing, 0.105));
         scenery(base + "_lens_y", lensDisc, yellowDark, discPose(head, 0.0, 0.105));
-        scenery(base + "_lens_g", lensDisc, greenDark, discPose(head, -0.33, 0.105));
+        scenery(base + "_lens_g", lensDisc, greenDark, discPose(head, -spacing, 0.105));
     }
     for (std::size_t c = 0; c < g.crossings.size(); ++c) {
         for (int end = 0; end < 2; ++end) {
@@ -981,7 +1164,7 @@ Light Traffic::lightOf(std::size_t lane, double t) const {
     const int group = graph_.signalGroup[lane];
     const Controller* controller = controllerOf(graph_.junctionOf[lane]);
     if (controller == nullptr) {
-        return lightAt(group, 2, t);
+        return lightAt(group, graph_.groups[static_cast<std::size_t>(graph_.junctionOf[lane])], t);
     }
     if (group != controller->group) {
         return Light::Red;
@@ -1973,7 +2156,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         // Lights: stop at the line on red or yellow when there is room to.
         if (graph_.signalGroup[a.lane] >= 0) {
             const Light light = lightOf(a.lane, t);
-            const double toLine = current->length() - a.s - half;
+            const double toLine = graph_.stopAt[a.lane] - a.s - half;
             if (light != Light::Green && toLine > a.speed * a.speed / (2.0 * idm_.b) - 1.0) {
                 consider(std::max(toLine, 0.0), 0.0);
             }

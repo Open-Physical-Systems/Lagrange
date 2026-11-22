@@ -3,6 +3,7 @@
 // must meet their successors end to start.
 #include "lagrange/opendrive/OpenDrive.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/RoadLanes.hpp"
 
 #include <cmath>
 #include <map>
@@ -527,8 +528,95 @@ TEST_F(Objects, StandingObjectsCollideAndMarksDoNot) {
     }
     EXPECT_NE(mesh(*m, "road_1_objects_object_building_concrete"), nullptr);
     EXPECT_NE(mesh(*m, "road_1_objects_signal_head_housing"), nullptr);
+    // A traffic light's lamps are the traffic module's: none drawn here.
+    EXPECT_EQ(mesh(*m, "road_1_objects_signal_lamp_red"), nullptr);
     EXPECT_NE(mesh(*m, "road_1_objects_sign_board"), nullptr);
     EXPECT_NE(mesh(*m, "road_2_objects_object_concrete"), nullptr);
+}
+
+// Traffic lights (§14.3 validity, §14.6 controllers) on test/data/signals.xodr: a four-way
+// junction with a light on each arm, east-west on controller 1, north-south on controller 2,
+// which the junction lists first.
+TEST(Signals, AreReadWithTheirValidityAndControllers) {
+    const auto n = read(LAGRANGE_TEST_SIGNALS_XODR);
+    ASSERT_TRUE(n) << n.error();
+    const Signal& east = n->road(1)->signals.at(0);
+    EXPECT_EQ(east.id, "11");
+    EXPECT_TRUE(east.dynamic);
+    ASSERT_EQ(east.validity.size(), 1U);
+    EXPECT_EQ(east.validity[0], (std::pair{1, 1}));
+    EXPECT_TRUE(n->road(4)->signals.at(0).validity.empty());
+    ASSERT_EQ(n->controllers.size(), 2U);
+    EXPECT_EQ(n->controllers[0].id, "1");
+    EXPECT_EQ(n->controllers[0].name, "east_west");
+    EXPECT_EQ(n->controllers[0].signals, (std::vector<std::string>{"11", "13"}));
+    EXPECT_FALSE(n->controllers[0].sequence);
+    ASSERT_EQ(n->junctions.size(), 1U);
+    const auto& listed = n->junctions[0].controllers;
+    ASSERT_EQ(listed.size(), 2U);
+    EXPECT_EQ(listed[0].id, "2");
+    EXPECT_EQ(listed[0].sequence, 1);
+    EXPECT_EQ(listed[1].id, "1");
+    EXPECT_EQ(listed[1].sequence, 2);
+}
+
+TEST(Signals, BecomeRoadSignalPrimsAtTheirFaces) {
+    const auto n = read(LAGRANGE_TEST_SIGNALS_XODR);
+    ASSERT_TRUE(n) << n.error();
+    const auto m = toModel(*n);
+    ASSERT_TRUE(m) << m.error();
+    const WorldView world(m->world);
+    const auto instances = world.instancesOf("RoadSignalAPI_1");
+    ASSERT_EQ(instances.size(), 4U);
+    std::map<std::string, const SchemaInstance*> byId;
+    for (const SchemaInstance* s : instances) {
+        byId[std::string(s->token("signal:id").value_or(""))] = s;
+    }
+    const SchemaInstance& east = *byId.at("11");
+    EXPECT_EQ(world.primPath(east.prim), "/roads/signals/signal_11");
+    EXPECT_EQ(east.integer("signal:road"), 1);
+    EXPECT_EQ(east.real("signal:s"), 3.0);
+    EXPECT_EQ(east.token("signal:orientation"), "-");
+    EXPECT_EQ(east.token("signal:type"), "1000001");
+    EXPECT_EQ(east.integer("signal:fromLane"), 1);
+    EXPECT_EQ(east.integer("signal:toLane"), 1);
+    EXPECT_EQ(east.token("signal:controller"), "1");
+    EXPECT_EQ(east.integer("signal:junction"), 100);
+    EXPECT_EQ(east.integer("signal:sequence"), 2);
+    EXPECT_EQ(east.real("signal:height"), 0.9);
+    const SchemaInstance& south = *byId.at("14");
+    EXPECT_FALSE(south.integer("signal:fromLane"));  // no validity: the side it faces
+    EXPECT_EQ(south.token("signal:controller"), "2");
+    EXPECT_EQ(south.integer("signal:sequence"), 1);
+    // The face's middle: the board's bottom centre (13, 4.5, 2.5) on the east arm, facing along
+    // s (+x, towards the traffic coming in), half its depth (0.3 m) out and half its height up.
+    const Pose& face = world.primPoseInBody(east.prim);
+    EXPECT_NEAR(face.position[0], 13.15, 1e-9);
+    EXPECT_NEAR(face.position[1], 4.5, 1e-9);
+    EXPECT_NEAR(face.position[2], 2.95, 1e-9);
+    const auto out = rotate(face.orientation, {1.0, 0.0, 0.0});
+    EXPECT_NEAR(out[0], 1.0, 1e-12);
+    // A scene prim of the same path carries the pose into a written stage.
+    bool found = false;
+    for (const ScenePrim& p : m->scene.prims) {
+        if (p.path == "/roads/signals/signal_11") {
+            found = true;
+            EXPECT_NEAR(p.offset.position[0], 13.15, 1e-9);
+        }
+    }
+    EXPECT_TRUE(found);
+    // Resolved to the lanes they govern: each arm's lane 1, which comes in against s, stopping
+    // 3 m before its end (s = 3 of 50 is 47 m along it).
+    const RoadLanes lanes = roadLanesOf(world);
+    const std::vector<RoadSignal> signals = roadSignalsOf(world, lanes);
+    ASSERT_EQ(signals.size(), 4U);
+    for (const RoadSignal& g : signals) {
+        ASSERT_EQ(g.lanes.size(), 1U) << g.id;
+        const RoadLane& lane = lanes.lanes[g.lanes[0].first];
+        EXPECT_EQ(lane.road, g.road) << g.id;
+        EXPECT_EQ(lane.lane, 1) << g.id;
+        EXPECT_NEAR(g.lanes[0].second, lane.length() - 3.0, 1e-6) << g.id;
+    }
 }
 
 TEST(ObjectsNone, ARoadWithoutObjectsGainsNothing) {

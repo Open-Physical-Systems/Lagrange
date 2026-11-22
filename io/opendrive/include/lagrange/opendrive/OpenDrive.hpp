@@ -140,13 +140,28 @@ struct Object {
 
 /// A <signal> (§14.1): a sign or a traffic light at s and t, its origin (the bottom of the
 /// board) zOffset above the road surface there; it faces the traffic it applies to (orientation
-/// "+": travelling along s, "-": against it) turned by hOffset.
+/// "+": travelling along s, "-": against it) turned by hOffset. Its <validity> elements
+/// (§14.3) name the lanes it applies to, fromLane to toLane; none: every lane of its side.
 struct Signal {
     std::string id, name, type, subtype, country, orientation, text;
     double s{0.0}, t{0.0}, zOffset{0.0}, hOffset{0.0}, pitch{0.0}, roll{0.0};
     double height{0.0}, width{0.0}, length{0.0};
     double value{std::nan("")};
     bool dynamic{false};
+    std::vector<std::pair<int, int>> validity;  // fromLane, toLane
+};
+
+/// A <controller> (§14.6): the signals that switch together, each by its <control signalId>.
+struct Controller {
+    std::string id, name;
+    std::optional<int> sequence;
+    std::vector<std::string> signals;  // the signal ids it controls
+};
+
+/// A junction's <controller> entry: a controller of its signals, in `sequence` order.
+struct JunctionController {
+    std::string id, type;
+    std::optional<int> sequence;
 };
 
 struct Road {
@@ -177,11 +192,13 @@ struct Connection {
 struct Junction {
     int id{0};
     std::vector<Connection> connections;
+    std::vector<JunctionController> controllers;
 };
 
 struct Network {
     std::vector<Road> roads;
     std::vector<Junction> junctions;
+    std::vector<Controller> controllers;
     [[nodiscard]] const Road* road(int id) const;
 };
 
@@ -245,7 +262,10 @@ struct ConvertOptions {
 /// (scene; roads on the ground plane need no colliders, raised ones get slabs), and a
 /// RoadLaneAPI_1 prim per driving,
 /// biking, parking or sidewalk lane and lane section, linked to the lanes it continues into
-/// across sections, roads and junctions.
+/// across sections, roads and junctions; and a RoadSignalAPI_1 prim per dynamic signal (a
+/// traffic light: its validity, controller and that controller's sequence in its junction) at
+/// the middle of its face, under /<root>/signals. Dynamic signals are drawn as a dark housing
+/// on a pole: the traffic module lights their lamps.
 [[nodiscard]] Expected<Model, std::string> toModel(const Network& network,
                                                    const ConvertOptions& options = {});
 

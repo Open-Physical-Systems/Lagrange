@@ -3,6 +3,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -269,7 +270,19 @@ Signal readSignal(const tinyxml2::XMLElement* e) {
     g.length = attr(e, "length");
     g.value = attrOr(e, "value", std::numeric_limits<double>::quiet_NaN());
     g.dynamic = yes(e, "dynamic");
+    for (auto* v = e->FirstChildElement("validity"); v != nullptr;
+         v = v->NextSiblingElement("validity")) {
+        g.validity.emplace_back(v->IntAttribute("fromLane"), v->IntAttribute("toLane"));
+    }
     return g;
+}
+
+std::optional<int> optionalInt(const tinyxml2::XMLElement* e, const char* name) {
+    int value = 0;
+    if (e->QueryIntAttribute(name, &value) == tinyxml2::XML_SUCCESS) {
+        return value;
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -517,7 +530,25 @@ Expected<Network, std::string> parse(const std::string& xml) {
             }
             junction.connections.push_back(std::move(connection));
         }
+        for (auto* c = j->FirstChildElement("controller"); c != nullptr;
+             c = c->NextSiblingElement("controller")) {
+            junction.controllers.push_back(
+                {text(c, "id"), text(c, "type"), optionalInt(c, "sequence")});
+        }
         n.junctions.push_back(std::move(junction));
+    }
+    // Controllers (§14.6): the signals that switch together.
+    for (auto* c = top->FirstChildElement("controller"); c != nullptr;
+         c = c->NextSiblingElement("controller")) {
+        Controller controller;
+        controller.id = text(c, "id");
+        controller.name = text(c, "name");
+        controller.sequence = optionalInt(c, "sequence");
+        for (auto* k = c->FirstChildElement("control"); k != nullptr;
+             k = k->NextSiblingElement("control")) {
+            controller.signals.push_back(text(k, "signalId"));
+        }
+        n.controllers.push_back(std::move(controller));
     }
     if (n.roads.empty()) {
         return Unexpected{std::string("no roads")};
@@ -755,6 +786,7 @@ public:
         if (auto status = linkLanes(); !status) {
             return Unexpected{status.error()};
         }
+        buildSignals();
         return std::move(m_);
     }
 
@@ -1565,8 +1597,9 @@ private:
         }
     }
 
-    /// A signal: its board (a sign, or a traffic light's head with its three lamps, dark) on a
-    /// pole from the road surface, both colliding.
+    /// A signal: its board (a sign, or a traffic light's dark housing, whose lamps the traffic
+    /// module draws and lights at its RoadSignalAPI_1 prim) on a pole from the road surface,
+    /// both colliding.
     void signal(Meshes& meshes, const Road& road, const Signal& g) {
         const Pose board = signalPose(road, g);
         const double w = g.width > 0.0 ? g.width : (g.dynamic ? kHeadWidth : kSignSize);
@@ -1577,27 +1610,6 @@ private:
                       : material("sign_board", {0.9F, 0.9F, 0.88F, 1.0F});
         prism(meshes[face], ring(board, d, w, 0.0, 0.0), ring(board, d, w, 0.0, h));
         collideBox(board, d, w, h);
-        if (g.dynamic) {
-            // Lamps on the face (+x), red at the top: unlit, the traffic module lights its own.
-            const std::array<std::pair<const char*, std::array<float, 4>>, 3> lamps{
-                {{"signal_lamp_red", {0.35F, 0.05F, 0.04F, 1.0F}},
-                 {"signal_lamp_yellow", {0.35F, 0.26F, 0.04F, 1.0F}},
-                 {"signal_lamp_green", {0.04F, 0.3F, 0.1F, 1.0F}}}};
-            const double size = 0.6 * std::min(w, h / 3.0) / 2.0;
-            for (std::size_t i = 0; i < lamps.size(); ++i) {
-                const double z = h * (5.0 - 2.0 * static_cast<double>(i)) / 6.0;
-                const auto at = [&](double v, double up) {
-                    const P3 r = rotate(board.orientation, {d / 2.0 + 0.005, v, up});
-                    return P3{board.position[0] + r[0], board.position[1] + r[1],
-                              board.position[2] + r[2]};
-                };
-                const P3 out = rotate(board.orientation, {1.0, 0.0, 0.0});
-                fan(meshes[material(lamps[i].first, lamps[i].second)],
-                    {at(-size, z - size), at(size, z - size), at(size, z + size),
-                     at(-size, z + size)},
-                    out);
-            }
-        }
         // The pole: behind the board, from the road surface to the board's top.
         const P3 back = rotate(board.orientation, {-(d / 2.0 + kSignPoleRadius), 0.0, 0.0});
         const auto ground = surfacePoint(road, g.s, g.t, 0.0);
@@ -1609,6 +1621,93 @@ private:
             prism(meshes[steel], ring(pole, 0.0, 0.0, kSignPoleRadius, 0.0),
                   ring(pole, 0.0, 0.0, kSignPoleRadius, top));
             collideCylinder(pole, kSignPoleRadius, top);
+        }
+    }
+
+    /// A RoadSignalAPI_1 prim per dynamic signal, at the middle of its face, x out of it.
+    void buildSignals() {
+        std::uint32_t scope = kNoIndex;
+        std::map<std::string, int> taken;
+        for (const Road& road : n_.roads) {
+            for (const Signal& g : road.signals) {
+                if (!g.dynamic) {
+                    continue;
+                }
+                if (scope == kNoIndex) {
+                    ScenePrim prim;
+                    prim.name = "signals";
+                    prim.path = "/" + o_.root + "/signals";
+                    prim.parent = 0;
+                    prim.typeName = "Xform";
+                    m_.scene.prims.push_back(prim);
+                    scope = static_cast<std::uint32_t>(m_.scene.prims.size() - 1);
+                }
+                std::string name = "signal_";
+                for (const char c : g.id) {
+                    name += std::isalnum(static_cast<unsigned char>(c)) != 0 ? c : '_';
+                }
+                if (const int n = taken[name]++; n > 0) {
+                    name += "_" + std::to_string(n);
+                }
+                // The face's middle: the board's origin is its bottom centre.
+                const double h = g.height > 0.0 ? g.height : kHeadHeight;
+                const double d = g.length > 0.0 ? g.length : kHeadDepth;
+                Pose face = signalPose(road, g);
+                const auto r = rotate(face.orientation, {d / 2.0, 0.0, h / 2.0});
+                for (std::size_t k = 0; k < 3; ++k) {
+                    face.position.at(k) += r.at(k);
+                }
+                ScenePrim prim;
+                prim.name = name;
+                prim.path = m_.scene.prims[scope].path + "/" + name;
+                prim.parent = scope;
+                prim.typeName = "Xform";
+                prim.offset = face;
+                const PrimId id = m_.world.addPrim(prim.path, name);
+                m_.world.prims.poseInBody.at(id.index) = face;
+                m_.scene.prims.push_back(std::move(prim));
+
+                SchemaInstance s;
+                s.schema = "RoadSignalAPI_1";
+                s.prim = id;
+                s.tokens = {{"signal:id", g.id},
+                            {"signal:orientation", g.orientation == "+" || g.orientation == "-"
+                                                       ? g.orientation
+                                                       : std::string("none")},
+                            {"signal:type", g.type},
+                            {"signal:subtype", g.subtype}};
+                s.reals = {{"signal:s", g.s}, {"signal:t", g.t}, {"signal:height", h}};
+                s.integers = {{"signal:road", road.id}};
+                if (!g.validity.empty()) {
+                    // One range: the first validity's (several are rare, TODO(verify) whether
+                    // any published network uses more than one per signal).
+                    s.integers["signal:fromLane"] = g.validity.front().first;
+                    s.integers["signal:toLane"] = g.validity.front().second;
+                }
+                // Its controller, and that controller's place in its junction.
+                for (const Controller& c : n_.controllers) {
+                    if (std::ranges::count(c.signals, g.id) == 0) {
+                        continue;
+                    }
+                    s.tokens["signal:controller"] = c.id;
+                    std::optional<int> sequence = c.sequence;
+                    for (const Junction& j : n_.junctions) {
+                        const auto it = std::ranges::find_if(
+                            j.controllers,
+                            [&c](const JunctionController& jc) { return jc.id == c.id; });
+                        if (it != j.controllers.end()) {
+                            s.integers["signal:junction"] = j.id;
+                            sequence = it->sequence ? it->sequence : sequence;
+                            break;
+                        }
+                    }
+                    if (sequence) {
+                        s.integers["signal:sequence"] = *sequence;
+                    }
+                    break;
+                }
+                m_.world.schemaInstances.push_back(std::move(s));
+            }
         }
     }
 

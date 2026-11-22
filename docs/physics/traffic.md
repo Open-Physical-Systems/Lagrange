@@ -47,8 +47,12 @@ car nearer its line is about to take one: first come, first served, no priority 
 for anyone on a crossing ahead, and do not enter a junction without 9 m free beyond it, which keeps
 a road grid out of gridlock. At a lane's end a car takes a seeded random successor.
 
-**Lights.** Approaches facing each other share a group, and groups take turns at 20 s green, 3 s
-yellow and 2 s all red (illustrative timings). A junction with crossings is actuated: a button cuts
+**Lights.** Groups take turns at 20 s green, 3 s yellow and 2 s all red (illustrative timings).
+When the OpenDRIVE file has traffic lights (dynamic `<signal>`s, imported as `RoadSignalAPI_1`
+prims), they set the groups: the signals of one `<controller>` turn green together, a junction's
+controllers take turns in their `sequence` order, cars stop at each signal's place on the lanes
+its `<validity>` names, and the lamps light in the signal's own housing. Without them,
+approaches facing each other share a group and the heads stand at the lanes' ends. A junction with crossings is actuated: a button cuts
 the green to 8 s; after yellow and all red every car stops for an exclusive walk of 7 s and a
 flashing clearance as long as the longest crossing takes at 1.2 m/s, held while the crossing is
 not empty (at most 10 s). A lone crossing stays green for cars until someone presses.
@@ -94,6 +98,7 @@ Anything else in the file is refused by name.
 | The light cycle | green, yellow, red in turn | `Lights.TakeTurnsGreenYellowRed` |
 | Cars follow, keep their distance and stop on red; no entry on red over three minutes | met on the city block | `CityBlock.VehiclesFollowKeepDistanceAndStopOnRed`, `CityBlock.NoVehicleEntersTheJunctionOnRed` |
 | Lane changes without coming too close | met | `CityBlock.VehiclesChangeLanesWithoutComingTooClose` |
+| OpenDRIVE signals at a four-way junction over four minutes: two controllers never open together, each green every cycle, no car over its line after 0.2 s of red, queues' first cars 2.0 m short of the signal's line (the IDM's jam distance), lamps at the signals' faces | met | `OpenDriveSignals.*` |
 | Same seed, same tracks | identical | `CityBlock.TheSameSeedGivesTheSameTracks` |
 | The town over four simulated minutes: every light colour, no green straight to red, people on the road only after walk, no car within 0.3 m of a person, no car stopped over 90 s | met | `python/test/test_town.py` |
 | The cut-in scenario | lane change at 3.5 s, halfway at 5 s, in lane at 6.6 s, 8 m/s at 7.5 s, ended at 12 s | `CutIn.RunsToItsEndWithEventsWhereTheTriggersSay` |
