@@ -8,6 +8,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -114,6 +115,9 @@ public:
         noiseFloor_ = setting(s, sensor_, "noise_floor", 0.0);
         threshold_ = setting(s, sensor_, "detection_threshold", 10.0);
         frequency_ = setting(s, sensor_, "carrier_frequency", 77e9);
+        // Rain on the way (ITU-R P.838-3): the path level, the polarisation at its tilt (45°,
+        // between horizontal and vertical, unless the sensor says).
+        rainTilt_ = setting(s, sensor_, "polarization_tilt", std::numbers::pi / 4.0);
         if (maxRange_ <= 0.0 || azimuthFov_ <= 0.0 || elevationFov_ <= 0.0 || txPower_ <= 0.0 ||
             noiseFloor_ <= 0.0 || resolution_ <= 0.0) {
             return Status::error(StatusCode::InvalidConfig,
@@ -179,6 +183,11 @@ public:
         out.arrayLength = static_cast<std::uint32_t>(maxDetections_ * kRadarFields);
         detections_ = d.output(out);
         count_ = d.output(spec("sensor/" + name_ + "/count", SignalType::Int, units::one));
+        SignalSpec rain = spec("env/rain_rate", SignalType::Scalar, units::m_per_s);
+        rain.optional = true;
+        rain.defaultValue = 0.0;
+        rain.feedback = true;
+        rain_ = d.input(rain);
         return {};
     }
 
@@ -240,6 +249,7 @@ public:
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
+        rainNow_ = rainDbPerKm(bus);  // γ along the beams this scan, dB/km
         if (groundTruth_) {
             write(bus, {});
             return {};
@@ -316,11 +326,13 @@ public:
             cell.elevation += e.rcs * ray.elevation;
             cell.velocity += e.rcs * e.radial;
         }
+        const double rain = rainNow_;
         std::vector<std::array<double, kRadarFields>> found;
         for (const auto& [key, cell] : cells) {
             const double range = cell.range / cell.power;
             const double snr =
-                radarSnr(txPower_, gain_, frequency_, cell.power, range, noiseFloor_);
+                radarSnr(txPower_, gain_, frequency_, cell.power, range, noiseFloor_) *
+                rainRoundTrip(rain, range);
             if (snr < threshold_) {
                 continue;
             }
@@ -595,9 +607,11 @@ private:
             cells = std::move(peaks);
         }
         const double perSignal = radarSnr(txPower_, gain_, frequency_, 1.0, 1.0, noiseFloor_);
+        const double rain = rainNow_;
         std::vector<std::array<double, kRadarFields>> found;
         for (const auto& [key, cell] : cells) {
-            const double snr = perSignal * cell.signal;
+            const double snr =
+                perSignal * cell.signal * rainRoundTrip(rain, cell.range / cell.signal);
             if (snr < threshold_) {
                 continue;
             }
@@ -707,6 +721,16 @@ private:
     std::vector<gpu::CastHit> gpuHits_;
     std::vector<std::vector<std::array<double, 4>>> hullFaces_;
     SignalId detections_, count_;
+    SignalId rain_;         // env/rain_rate, m/s (the weather domain's)
+    double rainTilt_{0.0};  // rad, the polarisation's tilt from the horizontal
+    double rainNow_{0.0};   // dB/km, this scan's
+
+    /// γ (dB/km) of the rain falling now, at the carrier frequency, on a level path.
+    double rainDbPerKm(const SignalBus& bus) const {
+        constexpr double kMetresPerSecondToMmPerHour = 3.6e6;
+        const double rate = bus.read(rain_) * kMetresPerSecondToMmPerHour;
+        return rate > 0.0 ? rainAttenuation(frequency_, rate, 0.0, rainTilt_) : 0.0;
+    }
 };
 
 }  // namespace
@@ -728,6 +752,82 @@ std::unique_ptr<IModule> createImagingRadar(const World& world, std::uint32_t se
                                             bool groundTruth,
                                             std::shared_ptr<gpu::RayContext> rayContext) {
     return std::make_unique<Radar>(world, sensor, groundTruth, std::move(rayContext), true);
+}
+
+namespace {
+/// ITU-R P.838-3, Tables 1–4: a_j, b_j, c_j per row, then m and c.
+struct Fit {
+    std::array<std::array<double, 3>, 5> rows;
+    int count;
+    double m, c;
+};
+constexpr Fit kKH{{{{-5.33980, -0.10008, 1.13098},
+                    {-0.35351, 1.26970, 0.45400},
+                    {-0.23789, 0.86036, 0.15354},
+                    {-0.94158, 0.64552, 0.16817},
+                    {}}},
+                  4,
+                  -0.18961,
+                  0.71147};
+constexpr Fit kKV{{{{-3.80595, 0.56934, 0.81061},
+                    {-3.44965, -0.22911, 0.51059},
+                    {-0.39902, 0.73042, 0.11899},
+                    {0.50167, 1.07319, 0.27195},
+                    {}}},
+                  4,
+                  -0.16398,
+                  0.63297};
+constexpr Fit kAlphaH{{{{-0.14318, 1.82442, -0.55187},
+                        {0.29591, 0.77564, 0.19822},
+                        {0.32177, 0.63773, 0.13164},
+                        {-5.37610, -0.96230, 1.47828},
+                        {16.1721, -3.29980, 3.43990}}},
+                      5,
+                      0.67849,
+                      -1.95537};
+constexpr Fit kAlphaV{{{{-0.07771, 2.33840, -0.76284},
+                        {0.56727, 0.95545, 0.54039},
+                        {-0.20238, 1.14520, 0.26809},
+                        {-48.2991, 0.791669, 0.116226},
+                        {48.5833, 0.791459, 0.116479}}},
+                      5,
+                      -0.053739,
+                      0.83433};
+/// Σ a_j·exp(−((log10 f − b_j)/c_j)²) + m·log10 f + c: equation (2)'s log10 k, or (3)'s α.
+double fit(const Fit& f, double ghz) {
+    const double x = std::log10(ghz);
+    double sum = f.m * x + f.c;
+    for (int j = 0; j < f.count; ++j) {
+        const auto& [a, b, c] = f.rows.at(static_cast<std::size_t>(j));
+        const double z = (x - b) / c;
+        sum += a * std::exp(-z * z);
+    }
+    return sum;
+}
+}  // namespace
+
+RainCoefficients rainCoefficients(double frequency, double elevation, double tilt) {
+    const double ghz = frequency * 1e-9;
+    const double kH = std::pow(10.0, fit(kKH, ghz));
+    const double kV = std::pow(10.0, fit(kKV, ghz));
+    const double aH = fit(kAlphaH, ghz);
+    const double aV = fit(kAlphaV, ghz);
+    const double mix = std::cos(elevation) * std::cos(elevation) * std::cos(2.0 * tilt);
+    const double k = (kH + kV + (kH - kV) * mix) / 2.0;  // equation (4)
+    const double alpha = (kH * aH + kV * aV + (kH * aH - kV * aV) * mix) / (2.0 * k);  // (5)
+    return {k, alpha};
+}
+
+double rainAttenuation(double frequency, double rainRate, double elevation, double tilt) {
+    if (!(rainRate > 0.0)) {
+        return 0.0;
+    }
+    const RainCoefficients c = rainCoefficients(frequency, elevation, tilt);
+    return c.k * std::pow(rainRate, c.alpha);
+}
+
+double rainRoundTrip(double dbPerKm, double range) {
+    return std::pow(10.0, -2.0 * dbPerKm * range / 1e4);
 }
 
 double arrayAngleCell(double elements, double spacingWavelengths) {

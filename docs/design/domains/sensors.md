@@ -141,9 +141,11 @@ object in one range cell are one detection (power-weighted range, angles, radial
 the bodies' twists); SNR by the radar equation against the effective noise floor, a fixed
 threshold standing in for CFAR, noise of resolution/√(2·SNR); at most 64 detections, strongest
 first. Ground-plane hits are dropped as clutter. Checked in `test_radar`: a plate's σ = ρ·A
-within 3 %, a 10 m/s Doppler, the detection range from the radar equation. ROS:
+within 3 %, a 10 m/s Doppler, the detection range from the radar equation, ITU-R P.838-3's coefficients against its Table 5 and the two-way rain loss. ROS:
 `/<name>/detections` PointCloud2 (x, y, z, velocity, rcs, snr). The sample sedan has a front
-radar. Owed: rain attenuation, multipath and ghosts, a published RCS reference.
+radar. Rain takes the two-way path loss of ITU-R P.838-3 off each echo (`env/rain_rate`, the
+carrier frequency, `polarization_tilt`; docs/physics/sensors.md "Radar"). Owed: rain clutter,
+multipath and ghosts, a published RCS reference.
 
 Viewer: a viewer that subscribes to a radar's prim (`SubscribeSensor`; a `RadarAPI_1` radar or an
 `imaging_radar`) gets each new scan as a `SensorFrame` of points with fields x, y, z (sensor frame),
@@ -222,7 +224,7 @@ detections within 5 cm, 5 mrad, 0.1 m/s). `test_radar` pins the `RadarAPI_1` rad
 numbers bit for bit. Owed: speckle (a coherent sum per cell, which makes real point clouds of
 walls dense), sidelobes and the array's grating lobes, the one-bounce multipath paths, guard-rail
 ghosts, CA/OS-CFAR against the clutter around a cell (the threshold is fixed over the noise
-floor), rain attenuation, a published 4D-radar dataset to check against.
+floor), a published 4D-radar dataset to check against (rain attenuation is in, as for the radar).
 
 **IMU**: specific force and angular rate from `body/*/acceleration` and `body/*/twist` at the
 sensor frame, plus white noise (noise density), bias instability (first-order Gauss–Markov),

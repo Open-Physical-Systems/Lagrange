@@ -134,6 +134,19 @@ floor; a fixed threshold stands in for CFAR; range and angle get noise of
 resolution$/\sqrt{2\,\mathrm{SNR}}$. At most 64 detections, strongest first; ground hits are
 dropped as clutter.
 
+In rain (the weather domain's `env/rain_rate`) each echo loses the two-way path attenuation of
+Recommendation ITU-R P.838-3, $\gamma = k R^{\alpha}$ dB/km at rain rate $R$ in mm/h. $k$ and
+$\alpha$ come from its curve fits (equations 2 and 3, Tables 1–4) at the radar's
+`carrier_frequency`, combined for a level path and a polarisation tilted `polarization_tilt`
+from the horizontal (default 45°, between horizontal and vertical) by its equations 4 and 5. The
+SNR is multiplied by $10^{-2\gamma r/10^4}$, with $r$ in m. At 77 GHz that is about 11 dB/km in
+25 mm/h and 18 dB/km in 50 mm/h: a target at 40 m keeps 71 % of its echo in 50 mm/h, one at
+150 m 28 %. Checked against the Recommendation's own Table 5 (`test_radar`
+`RainCoefficientsAreItuRP838s`: k and α within 0.2 % at 10, 30, 60, 77, 79 and 100 GHz, both
+polarisations) and the two-way loss on a plate (`RainTakesTheTwoWayPathLossOffAnEcho`). Left
+out: the backscatter of the rain itself (clutter), snow and fog (much weaker at 77 GHz), wet
+radomes.
+
 ## IMU
 
 Specific force and angular rate at the sensor frame from the body's acceleration and twist, plus,
@@ -204,7 +217,7 @@ tier. Radar and the camera model run on the CPU on every tier.
 
 Not modelled: lidar beam divergence and multiple returns; camera motion blur, absolute radiance,
 colour filter array, translation in the rolling shutter; atmosphere, sun and sky reflection in the
-thermal image; radar rain attenuation, multipath and ghosts; IMU scale-factor and misalignment
+thermal image; radar multipath and ghosts, and rain clutter; IMU scale-factor and misalignment
 errors; GNSS outages, multipath and latency; the crustal magnetic field and hard- and soft-iron
 effects; the geoid (ellipsoidal height stands for altitude); sampling-instant jitter. The material
 presets' reflectivities are illustrative, not measured.

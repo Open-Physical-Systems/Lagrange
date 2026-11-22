@@ -371,7 +371,7 @@ fallback documented if Autoware is not available for Lyrical.
    `assets/scenarios/cut_in.xosc`. Owed: catalogs, routing and trajectories, the ASAM examples)
 8. Sensors: radar; camera model (exposure, noise, distortion, rolling shutter) (radar **done**
    2026-10-25: `RadarAPI_1`, `lagrange_sensors`' radar by ray launching, sensors.md §2, the
-   sedan's front radar, `/<name>/detections`. Owed: rain attenuation, multipath) (camera model
+   sedan's front radar, `/<name>/detections`; rain attenuation by ITU-R P.838-3 since 2026-11-22. Owed: multipath) (camera model
    **done** 2026-10-25: `CameraModel` (lens, vignetting, rotational rolling shutter, exposure and
    noise, auto exposure), sensors.md §2, the sedan's front camera. Owed: motion blur, a light
    model, demosaicing)
