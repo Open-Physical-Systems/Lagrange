@@ -32,6 +32,7 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ### Fixes
 
+- **MuJoCo's joint limits are stops**: a limited joint's solver reference is now two steps' time constant, critically damped, at the stiffest impedance (as a friction row with a writer), not MuJoCo's default 20 ms. A 20 g slider pushed onto its limit with 2.5 N sat 2.5 mm past it, and now 0.05 µm (Jolt: 0.002 µm); a 1 kg arm on its hinge's stop 7.4e-4 rad, now 1.3e-8 rad. New conformance check `AJointLimitIsAStop` for every backend. Runs on MuJoCo whose joints reach their limits differ from before
 - **The Jolt backend keeps a swinging joint's energy**: Jolt projects each hinge's turn over a step out of the velocities, which lost 16.4 % of a free pendulum's energy in 60 s at 1 ms (35 % from 2 rad). The backend now gives half of that impulse back after each step, solved together along a chain, so the pendulum loses 0.13 % and a double pendulum ends 30 s within 0.02 % of its start, with no sub-steps (`Jolt.APendulumKeepsItsEnergy`, `Jolt.ADoublePendulumKeepsItsEnergy`; rigid_body.md §8.1). Jolt runs have new state hashes; a saved Jolt state now also carries each hinge's last arms
 
 ## [1.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.3.0...v1.4.0) (2026-11-15)
