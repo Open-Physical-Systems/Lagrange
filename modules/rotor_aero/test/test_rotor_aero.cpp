@@ -238,6 +238,121 @@ TEST(RotorAero, OverWaterTheGroundEffectIsTakenFromItsSurface) {
     EXPECT_NEAR(beside.read("rotor/prop_joint/thrust") / free, 1.0 / (1.0 - 1.0 / 16.0), 1e-9);
 }
 
+// Marine thrusters (hydrodynamics.md, "thrusters as rotors in water"): the open-water chart's
+// T = K_T(J)·ρ·n²·D⁴ and Q = K_Q(J)·ρ·n²·D⁵ at J = V_a/(n·D), in the water's density over the
+// share of the disc under the surface (a circular segment).
+RotorParams charted() {
+    RotorParams p{kRadius, kCt, kCp, 1.0};
+    p.advance = {0.0, 0.4, 0.8};
+    p.thrustTable = {0.40, 0.28, 0.10};  // an illustrative chart, of a B-series' shape
+    p.torqueTable = {0.050, 0.040, 0.020};
+    return p;
+}
+
+TEST(Thruster, TheChartGivesThrustAndTorqueAtTheAdvanceRatio) {
+    const RotorParams p = charted();
+    constexpr double kWater = 1025.0;
+    const double omega = 2.0 * std::numbers::pi * 20.0;  // 20 rev/s
+    const double d = 2.0 * kRadius;
+    for (const double j : {0.0, 0.2, 0.6, 1.2}) {
+        const double axial = j * 20.0 * d;
+        const Load l = advanceLoad(p, omega, kWater, axial);
+        const double kt = j <= 0.4   ? 0.40 + (0.28 - 0.40) * j / 0.4
+                          : j <= 0.8 ? 0.28 + (0.10 - 0.28) * (j - 0.4) / 0.4
+                                     : 0.10;
+        const double kq = j <= 0.4   ? 0.050 + (0.040 - 0.050) * j / 0.4
+                          : j <= 0.8 ? 0.040 + (0.020 - 0.040) * (j - 0.4) / 0.4
+                                     : 0.020;
+        EXPECT_NEAR(advanceRatio(p, omega, axial), j, 1e-12);
+        EXPECT_NEAR(l.thrust, kt * kWater * 400.0 * std::pow(d, 4), 1e-9) << "J " << j;
+        EXPECT_NEAR(l.torque, -kq * kWater * 400.0 * std::pow(d, 5), 1e-9) << "J " << j;
+    }
+    // Without a chart, the static coefficients.
+    const RotorParams plain{kRadius, kCt, kCp, 1.0};
+    EXPECT_EQ(advanceLoad(plain, omega, kWater, 3.0).thrust,
+              staticLoad(plain, omega, kWater).thrust);
+}
+
+TEST(Thruster, TheWettedShareIsTheDiscsSegmentUnderTheSurface) {
+    EXPECT_NEAR(immersion(0.0, 0.1), 0.5, 1e-12);
+    EXPECT_NEAR(immersion(0.1, 0.1), 1.0, 1e-12);
+    EXPECT_NEAR(immersion(-0.1, 0.1), 0.0, 1e-12);
+    // Half the radius under: the segment (π − 2·acos(½) + 2·½·√(1 − ¼))/(2π)... from below.
+    const double s = 0.5;
+    EXPECT_NEAR(immersion(0.05, 0.1),
+                0.5 + (std::asin(s) + s * std::sqrt(1.0 - s * s)) / std::numbers::pi, 1e-12);
+    EXPECT_NEAR(immersion(0.05, 0.1), 0.8045, 1e-4);  // tabulated segment share
+    EXPECT_EQ(immersion(0.01, 0.0), 1.0);             // a horizontal disc: in or out
+    EXPECT_EQ(immersion(-0.01, 0.0), 0.0);
+}
+
+World pondRig(double density) {
+    World world = propellerRig();
+    world.schemaInstances.push_back({});
+    SchemaInstance& water = world.schemaInstances.back();
+    water.schema = "WaterAPI_1";
+    water.prim = world.addPrim("/pond", "pond");
+    world.prims.poseInBody.at(water.prim.index).position = {0.0, 0.0, 3.0};
+    water.reals = {{"water:sizeX", 6.0},
+                   {"water:sizeY", 6.0},
+                   {"water:depth", 3.0},
+                   {"water:density", density}};
+    return world;
+}
+
+TEST(Thruster, UnderWaterItPushesWithTheWatersDensity) {
+    constexpr double kSea = 1025.0;
+    World world = pondRig(kSea);
+    const double air = staticLoad({kRadius, kCt, kCp, 1.0}, 300.0, kRho).thrust;
+    Rig rig = makeRig(world, withDensity());
+    ASSERT_TRUE(rig.scheduler->wire(WorldView(world)));
+    rig.plant->omega = 300.0;
+    rig.plant->pose = {{0.0, 0.0, 1.5}, {1.0, 0.0, 0.0, 0.0}};  // 1.5 m down, the disc level
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{5'000'000}).ok());
+    EXPECT_NEAR(rig.read("rotor/prop_joint/thrust") / air, kSea / kRho, 1e-9);
+    EXPECT_EQ(rig.read("rotor/prop_joint/immersion"), 1.0);
+    // Its axis level (the disc upright) with the hub at the surface: half in.
+    Rig half = makeRig(world, withDensity());
+    ASSERT_TRUE(half.scheduler->wire(WorldView(world)));
+    half.plant->omega = 300.0;
+    const double c = std::sqrt(0.5);
+    half.plant->pose = {{0.0, 0.0, 3.0}, {c, 0.0, c, 0.0}};  // z axis turned onto x
+    ASSERT_TRUE(half.scheduler->stepUntil(SimTime{5'000'000}).ok());
+    EXPECT_NEAR(half.read("rotor/prop_joint/immersion"), 0.5, 1e-9);
+    EXPECT_NEAR(half.read("rotor/prop_joint/thrust") / air, (0.5 * kSea + 0.5 * kRho) / kRho, 1e-9);
+}
+
+TEST(Thruster, MovingThroughTheWaterItFollowsTheChart) {
+    constexpr double kFresh = 1000.0;
+    World world = pondRig(kFresh);
+    SchemaInstance* rotor = nullptr;
+    for (SchemaInstance& s : world.schemaInstances) {
+        if (s.schema == "RotorAPI_1") {
+            rotor = &s;
+        }
+    }
+    ASSERT_NE(rotor, nullptr);
+    rotor->realArrays = {{"aero:rotor:advanceRatios", {0.0, 0.4, 0.8}},
+                         {"aero:rotor:thrustCoeffs", {0.40, 0.28, 0.10}},
+                         {"aero:rotor:torqueCoeffs", {0.050, 0.040, 0.020}}};
+    Rig rig = makeRig(world, withDensity());
+    ASSERT_TRUE(rig.scheduler->wire(WorldView(world)));
+    const double n = 15.0;
+    const double d = 2.0 * kRadius;
+    rig.plant->omega = 2.0 * std::numbers::pi * n;
+    rig.plant->pose = {{0.0, 0.0, 1.0}, {1.0, 0.0, 0.0, 0.0}};
+    rig.plant->twist = {0.0, 0.0, 0.6 * n * d, 0.0, 0.0, 0.0};  // J = 0.6 along the thrust
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{5'000'000}).ok());
+    EXPECT_NEAR(rig.read("rotor/prop_joint/advance_ratio"), 0.6, 1e-9);
+    EXPECT_NEAR(rig.read("rotor/prop_joint/thrust"), 0.19 * kFresh * n * n * std::pow(d, 4), 1e-9);
+    EXPECT_NEAR(rig.read("rotor/prop_joint/aero_torque"), -0.030 * kFresh * n * n * std::pow(d, 5),
+                1e-9);
+    // A chart whose columns differ in length stops the start.
+    rotor->realArrays["aero:rotor:torqueCoeffs"] = {0.05, 0.04};
+    Rig bad = makeRig(world, withDensity());
+    EXPECT_FALSE(bad.scheduler->wire(WorldView(world)));
+}
+
 // Hsiao and Chirarattananon (2019): the momentum balance under a ceiling (their eq. 5 with
 // eq. 9's α0) solved for γ, and the thrust at the same power γ^(2/3) of the free thrust.
 TEST(RotorAero, CeilingEffectFollowsHsiaoAndChirarattananon) {

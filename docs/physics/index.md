@@ -45,7 +45,7 @@ inside one step. See [Concepts](../guide/concepts.md) for the scheduler and subs
 | [Rigid body](rigid-body.md) | MuJoCo and Jolt: joints with damping, friction and mimic, contacts and friction, mesh colliders as hulls, contact force and joint reaction |
 | [Vehicles and wheeled bases](vehicles.md) | A car's suspension, Magic Formula tyres, brakes, steering and powertrain; the diff-drive and swerve controllers |
 | [Water](water.md) | Buoyancy, drag, currents, waves, added mass and Fossen's model with a real vehicle's coefficients |
-| [Rotors](rotors.md) | Thrust and torque of each propeller: coefficients or blade elements, ground and ceiling effect, vortex ring state |
+| [Rotors](rotors.md) | Thrust and torque of each propeller: coefficients or blade elements, ground and ceiling effect, vortex ring state, and in water as marine thrusters (an open-water chart, the wetted share) |
 | [Downwash](downwash.md) | The air a drone pushes: the jet under it, the outwash on the ground, walls and roofs, the live lattice Boltzmann box |
 | [Aerodynamics and wind](aerodynamics.md) | Drag on links, the wind and its gusts, wind fields, rain pushing links; the wind tunnel and OpenFOAM |
 | [Motors](motors.md) | Motor currents and torque from the bus voltage: the dq-frame model and its current loops |

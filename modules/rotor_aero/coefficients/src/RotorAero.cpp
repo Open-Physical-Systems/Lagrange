@@ -66,6 +66,53 @@ Load staticLoad(const RotorParams& p, double omega, double rho) {
     return {std::copysign(thrust, p.spinSign * omega), -std::copysign(torque, omega)};
 }
 
+double advanceRatio(const RotorParams& p, double omega, double axial) {
+    const double n = std::abs(omega) / (2.0 * std::numbers::pi);
+    const double d = 2.0 * p.radius;
+    if (n * d * kMaxAdvance <= std::abs(axial)) {
+        return std::copysign(kMaxAdvance, axial);
+    }
+    return axial / (n * d);
+}
+
+namespace {
+/// y(x) on the table, linear between points, held at the ends.
+double onChart(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
+    if (x <= xs.front()) {
+        return ys.front();
+    }
+    if (x >= xs.back()) {
+        return ys.back();
+    }
+    const auto above = std::upper_bound(xs.begin(), xs.end(), x);
+    const auto k = static_cast<std::size_t>(above - xs.begin()) - 1;
+    return ys[k] + (x - xs[k]) / (xs[k + 1] - xs[k]) * (ys[k + 1] - ys[k]);
+}
+}  // namespace
+
+Load advanceLoad(const RotorParams& p, double omega, double rho, double axial) {
+    if (p.advance.size() < 2) {
+        return staticLoad(p, omega, rho);
+    }
+    const double n = omega / (2.0 * std::numbers::pi);  // rev/s
+    const double d = 2.0 * p.radius;
+    const double d4 = d * d * d * d;
+    const double j = advanceRatio(p, omega, axial);
+    // A chart is measured turning the right way; turned the other way the same chart, mirrored,
+    // stands in (a simplification, as staticLoad's).
+    const double thrust = onChart(p.advance, p.thrustTable, j) * rho * n * n * d4;
+    const double torque = onChart(p.advance, p.torqueTable, j) * rho * n * n * d4 * d;
+    return {std::copysign(1.0, p.spinSign * omega) * thrust, -std::copysign(torque, omega)};
+}
+
+double immersion(double depth, double extent) {
+    if (extent <= 1e-9) {
+        return depth > 0.0 ? 1.0 : 0.0;
+    }
+    const double s = std::clamp(depth / extent, -1.0, 1.0);
+    return 0.5 + (std::asin(s) + s * std::sqrt(1.0 - s * s)) / std::numbers::pi;
+}
+
 double groundEffect(double radius, double height) {
     const double z = std::max(height, kGroundEffectMinHeight * radius);
     const double ratio = radius / (4.0 * z);
@@ -144,10 +191,14 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
     for (const SchemaInstance* s : config.get<bool>("water_surface").value_or(true)
                                        ? world.instancesOf("WaterAPI_1")
                                        : std::vector<const SchemaInstance*>{}) {
-        constexpr double kDefaultSize = 10.0;  // m
+        constexpr double kDefaultSize = 10.0;       // m
+        constexpr double kDefaultDepth = 2.0;       // m, WaterAPI_1's fallback
+        constexpr double kDefaultDensity = 1000.0;  // kg/m³, WaterAPI_1's fallback
         Pond pond{world.raw().prims.poseInBody.at(s->prim.index).position,
                   s->real("water:sizeX").value_or(kDefaultSize) / 2.0,
                   s->real("water:sizeY").value_or(kDefaultSize) / 2.0,
+                  s->real("water:depth").value_or(kDefaultDepth),
+                  s->real("water:density").value_or(kDefaultDensity),
                   {},
                   {}};
         surfaceCells_ = static_cast<int>(config.get<std::int64_t>("surface_cells").value_or(0));
@@ -220,6 +271,27 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         r.joint = std::string(world.signalInstanceName(s->prim));
         r.params = {*radius, *ct, *cp, *direction == "ccw" ? 1.0 : -1.0};
         r.mountSign = s->token("aero:rotor:mount").value_or("puller") == "pusher" ? -1.0 : 1.0;
+        // An open-water chart (a marine thruster's, or any propeller's K_T(J), K_Q(J)).
+        {
+            const auto j0 = s->realArray("aero:rotor:advanceRatios");
+            const auto kt = s->realArray("aero:rotor:thrustCoeffs");
+            const auto kq = s->realArray("aero:rotor:torqueCoeffs");
+            if (!j0.empty() || !kt.empty() || !kq.empty()) {
+                bool rising = j0.size() >= 2;
+                for (std::size_t k = 1; k < j0.size(); ++k) {
+                    rising = rising && j0[k] > j0[k - 1];
+                }
+                if (!rising || kt.size() != j0.size() || kq.size() != j0.size()) {
+                    problems.push_back(where +
+                                       ": aero:rotor:advanceRatios (two or more, rising), "
+                                       "thrustCoeffs and torqueCoeffs must be as long");
+                    continue;
+                }
+                r.params.advance.assign(j0.begin(), j0.end());
+                r.params.thrustTable.assign(kt.begin(), kt.end());
+                r.params.torqueTable.assign(kq.begin(), kq.end());
+            }
+        }
         if (bem_) {
             const auto file = s->assetPath("aero:rotor:propeller");
             if (!file) {
@@ -279,7 +351,7 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         pose.frame = "world_local";
         pose.feedback = true;
         r.pose = d.input(pose);
-        if (bem_) {
+        if (bem_ || !r.params.advance.empty()) {
             SignalSpec twist = scalar("body/" + link + "/twist", units::m_per_s);
             twist.type = SignalType::Wrench;
             twist.frame = "world_local";
@@ -290,6 +362,12 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         r.thrustOut = d.output(scalar(rotor + "thrust", units::N));
         r.torqueOut = d.output(scalar(rotor + "aero_torque", units::N_m));
         r.inducedOut = d.output(scalar(rotor + "induced_velocity", units::m_per_s));
+        if (!water_.empty()) {
+            r.immersionOut = d.output(scalar(rotor + "immersion", units::one));
+        }
+        if (!r.params.advance.empty()) {
+            r.advanceOut = d.output(scalar(rotor + "advance_ratio", units::one));
+        }
         SignalSpec thrustAxis = scalar(rotor + "thrust_axis", units::one);
         thrustAxis.type = SignalType::Vec3;
         thrustAxis.frame = "world_local";
@@ -329,6 +407,11 @@ Status RotorAero::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         }
         bus.writeN(r.wrenchOut, std::array<double, 6>{});
         bus.writeN(r.axisOut, std::array<double, 3>{});
+        for (const SignalId id : {r.immersionOut, r.advanceOut}) {
+            if (id.valid()) {
+                bus.write(id, 0.0);
+            }
+        }
         if (r.folding) {
             // Stopped: as its weight hangs it, with the link as it rests (axis in the world's
             // frame, as robots are built).
@@ -359,6 +442,32 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
         // Thrust direction: along the joint axis for a puller, against it for a pusher.
         const std::array<double, 3> axis{r.mountSign * jointAxis[0], r.mountSign * jointAxis[1],
                                          r.mountSign * jointAxis[2]};
+        // In water (WaterAPI_1): the share of the disc under the surface, and the fluid's density
+        // over the disc (a thruster breaking the surface keeps that share of its water's thrust).
+        double wet = 0.0;
+        double rho = rho_;
+        for (const Pond& w : water_) {
+            if (std::abs(hub.position[0] - w.centre[0]) > w.halfX ||
+                std::abs(hub.position[1] - w.centre[1]) > w.halfY) {
+                continue;
+            }
+            double surface = w.centre[2];
+            if (w.heights.valid()) {
+                surface += surfaceHeight(bus.readN(w.heights), bus.readN(w.origin), surfaceCells_,
+                                         surfaceCell_, hub.position);
+            }
+            const double depth = surface - hub.position[2];
+            if (depth > w.depth + r.params.radius) {
+                continue;  // under the water's floor: not in it
+            }
+            const double extent =
+                r.params.radius * std::sqrt(std::max(0.0, 1.0 - jointAxis[2] * jointAxis[2]));
+            const double share = immersion(depth, extent);
+            if (share > wet) {
+                wet = share;
+                rho = share * w.density + (1.0 - share) * rho_;
+            }
+        }
         Load load;
         double induced = 0.0;
         std::array<double, 3> inPlane{};    // N, world: the rotor's in-plane force (bem)
@@ -381,7 +490,7 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
                                                through[1] - axial * axis[1],
                                                through[2] - axial * axis[2]};
             const double edgewise = std::hypot(across[0], across[1], across[2]);
-            BemLoad bem = r.propeller->at(spin, axial, {rho_, speedOfSound_}, edgewise);
+            BemLoad bem = r.propeller->at(spin, axial, {rho, speedOfSound_}, edgewise);
             if (edgewise > 0.0) {
                 // e1: the way the air moves across the disc; e2 = t × e1 in the propeller's hand.
                 const std::array<double, 3> e1{-across[0] / edgewise, -across[1] / edgewise,
@@ -409,7 +518,16 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             induced = bem.inducedVelocity;
         } else {
             // About the thrust direction, then back about the joint axis.
-            const Load l = staticLoad(r.params, r.mountSign * omega, rho_);
+            // The hub's speed into the fluid along the thrust direction, for the chart.
+            double axial = 0.0;
+            if (r.twist.valid()) {
+                const std::span<const double> hubTwist = bus.readN(r.twist);
+                axial = hubTwist[0] * axis[0] + hubTwist[1] * axis[1] + hubTwist[2] * axis[2];
+                if (r.advanceOut.valid()) {
+                    bus.write(r.advanceOut, advanceRatio(r.params, omega, axial));
+                }
+            }
+            const Load l = advanceLoad(r.params, r.mountSign * omega, rho, axial);
             load = {l.thrust, r.mountSign * l.torque};
             if (r.folding) {
                 // The coefficients have no thrust distribution: it acts at 0.75 R, the usual
@@ -425,7 +543,7 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             }
         }
         double target = load.thrust;
-        if (groundEffect_ && (hasGround_ || !water_.empty())) {
+        if (groundEffect_ && wet == 0.0 && (hasGround_ || !water_.empty())) {
             // The nearest surface under the hub: the ground, or a body of water's surface.
             double height = std::numeric_limits<double>::infinity();
             if (hasGround_) {
@@ -506,7 +624,10 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
         bus.write(r.torqueOut, load.torque);
         bus.write(r.loadOut, 0.0);  // in the wrench above instead
         bus.write(r.inducedOut,
-                  r.propeller ? induced : std::sqrt(std::abs(r.thrust) / (2.0 * rho_ * area)));
+                  r.propeller ? induced : std::sqrt(std::abs(r.thrust) / (2.0 * rho * area)));
+        if (r.immersionOut.valid()) {
+            bus.write(r.immersionOut, wet);
+        }
     }
     return {};
 }

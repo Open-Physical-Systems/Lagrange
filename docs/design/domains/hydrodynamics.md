@@ -15,7 +15,10 @@ adding it later does not change other domains. No implementation issues are plan
 | `buoyancy_mesh` | For surface vehicles without coefficients: per-triangle hydrostatic pressure on the submerged hull mesh against a wave height field; simple drag |
 
 Thrusters: thrust and torque from propeller coefficients as functions of advance ratio, the same
-form as `rotor_aero` with water density; the two modules share the coefficient code.
+form as `rotor_aero` with water density. Built as `rotor_aero` itself: a `RotorAPI_1` rotor whose
+hub is in a body of water takes the water's density over its wetted share, and an open-water
+chart (`aero:rotor:advanceRatios`, `thrustCoeffs`, `torqueCoeffs`) gives `K_T(J)`, `K_Q(J)`
+(docs/physics/rotors.md "In water: marine thrusters").
 
 Water density and gravity are scene parameters (fresh or sea water differ by about 2.5 %).
 
@@ -127,4 +130,5 @@ model's balance of damping and thrust (0.729, 0.626, 0.713 from Table A1), and t
 within about 10 % of the pool (Fig. 6), so ours is too to the same extent, for this vehicle. The
 coefficients belong on the vehicle in USD (a `HydrodynamicsAPI` schema, owed: a schema addition
 for the owner to approve); the file stands in until then. Not yet: off-diagonal added mass and
-damping, wave radiation and diffraction, thrusters as rotors in water.
+damping, wave radiation and diffraction, a thruster's wake fraction and ventilation (thrusters
+as rotors in water are in, docs/physics/rotors.md).

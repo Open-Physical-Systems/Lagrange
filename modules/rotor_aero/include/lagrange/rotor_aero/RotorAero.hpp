@@ -26,6 +26,10 @@ struct RotorParams {
     double thrustCoeff{0.0};  // CT, T = CT·ρ·n²·D⁴, n in rev/s
     double powerCoeff{0.0};   // CP, Q = CP·ρ·n²·D⁵ / (2π)
     double spinSign{1.0};     // +1 ccw: ω > 0 about the joint axis makes thrust; −1 cw
+    /// An open-water chart (aero:rotor:advanceRatios, thrustCoeffs, torqueCoeffs): K_T(J) and
+    /// K_Q(J) at advance ratios J = V_a/(n·D), T = K_T·ρ·n²·D⁴, Q = K_Q·ρ·n²·D⁵, linear between
+    /// points and held at the ends. Empty: the static CT and CP (K_T = CT, K_Q = CP/2π at J = 0).
+    std::vector<double> advance, thrustTable, torqueTable;
 };
 
 /// Static thrust (N, along the joint axis) and shaft torque (N·m, about the joint axis, opposing
@@ -36,6 +40,22 @@ struct Load {
     double torque{0.0};
 };
 [[nodiscard]] Load staticLoad(const RotorParams& p, double omega, double rho);
+
+/// Thrust and torque as staticLoad, from the open-water chart at the advance ratio of `axial`,
+/// the hub's speed through the fluid along the thrust direction (m/s; the fluid arriving from
+/// the front is positive). Without a chart, staticLoad's.
+[[nodiscard]] Load advanceLoad(const RotorParams& p, double omega, double rho, double axial);
+
+/// The advance ratio J = V_a/(n·D) at joint speed `omega` (rad/s), held to ±kMaxAdvance where
+/// the rotor hardly turns.
+inline constexpr double kMaxAdvance = 10.0;
+[[nodiscard]] double advanceRatio(const RotorParams& p, double omega, double axial);
+
+/// The share of a rotor's disc under a water surface (0 to 1): the circular segment below it,
+/// with the hub `depth` under the surface (negative above it) and the disc reaching `extent` up
+/// and down from the hub (R times the sine of its tilt from the horizontal; 0 for a horizontal
+/// disc, which is in or out whole).
+[[nodiscard]] double immersion(double depth, double extent);
 
 /// Cheeseman–Bennett ground effect (aerodynamics.md §2): T/T∞ = 1 / (1 − (R / 4z)²) at height
 /// z above the ground. Below z = kGroundEffectMinHeight·R the factor is held at its value there
@@ -127,6 +147,7 @@ private:
         double bladeAngle{0.0};                           // rad, last step's (folding)
         SignalId velocity, pose, twist, bladeAngleOut;
         SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut, axisOut, airIn;
+        SignalId immersionOut, advanceOut;  // marine thrusters
     };
 
     bool ideal_;
@@ -151,6 +172,8 @@ private:
     struct Pond {  // a body of water (WaterAPI_1): its still surface, world frame
         std::array<double, 3> centre{};
         double halfX{0.0}, halfY{0.0};
+        double depth{0.0};         // m, from the surface down
+        double density{0.0};       // kg/m³
         SignalId heights, origin;  // its moving surface, when the water domain runs one
     };
     std::vector<Pond> water_;

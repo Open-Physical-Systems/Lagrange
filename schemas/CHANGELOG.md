@@ -8,6 +8,10 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Aero library** (hydrodynamics.md, "thrusters as rotors in water"): `aero:rotor:advanceRatios`,
+  `thrustCoeffs` and `torqueCoeffs` on `RotorAPI_1`, an open-water chart K_T(J), K_Q(J) that
+  replaces the static coefficients when given. Additions, nothing to migrate.
+
 - **Fire library** (RFC 0022): `FireAPI_1`, a fuel item that can burn: its class, growth law
   (t², pool, or a measured `hrrCurve`), fuel mass and heat of combustion, radiative fraction, soot
   yield, ignition (time, temperature), blow-off speed, critical water rate, oxygen limit, decay

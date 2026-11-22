@@ -314,6 +314,8 @@ wrong way and gives little thrust, as on a real vehicle.
 | `aero:rotor:direction` | token | — | — (`cw`, `ccw`) |
 | `aero:rotor:propeller` | asset | — | none (propeller file, §3.3.1; required for the `bem` fidelity) |
 | `aero:rotor:mount` | token | — | `puller` (`puller`: thrust along the joint axis, which points from the motor to the propeller; `pusher`: against it) |
+| `aero:rotor:advanceRatios` | double[] | 1 | none: an open-water chart's J, rising (added after 1.0); with it `T = K_T(J)·ρ·n²·D⁴`, `Q = K_Q(J)·ρ·n²·D⁵` replace the static coefficients |
+| `aero:rotor:thrustCoeffs`, `torqueCoeffs` | double[] | 1 | none: K_T and K_Q at each J |
 
 ```usda
 class "AeroAPI_1" (

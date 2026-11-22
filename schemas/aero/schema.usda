@@ -92,6 +92,22 @@ class "RotorAPI_1" (
         section 3.3.1) with its blades' geometry, sections and hand. Required for the bem fidelity,
         where it replaces the coefficients, and for drawing the blades."""
     )
+    double[] aero:rotor:advanceRatios (
+        lagrangeUnit = "1"
+        doc = """An open-water chart (a marine thruster's, or any propeller's): the advance ratios
+        J = V_a/(n·D) of thrustCoeffs and torqueCoeffs, rising. With it, T = K_T(J)·rho·n²·D⁴ and
+        Q = K_Q(J)·rho·n²·D⁵, linear between points and held at the ends, in place of thrustCoeff
+        and powerCoeff (K_T = CT and K_Q = CP/(2·pi) at J = 0). In water (WaterAPI_1) rho is the
+        water's over the share of the disc under its surface."""
+    )
+    double[] aero:rotor:thrustCoeffs (
+        lagrangeUnit = "1"
+        doc = "K_T at each of advanceRatios."
+    )
+    double[] aero:rotor:torqueCoeffs (
+        lagrangeUnit = "1"
+        doc = "K_Q at each of advanceRatios (the shaft torque's coefficient, not the power's)."
+    )
     uniform token aero:rotor:mount = "puller" (
         allowedTokens = ["puller", "pusher"]
         doc = """Where the propeller sits on its motor, the joint axis pointing from the motor to
