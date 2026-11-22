@@ -549,6 +549,22 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_OPEN_FIELD="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/open_field/open_field.usda"
     )
     lagrange_target_defaults(test_trees_run)
+    # The orchard sample: 140 trees, run faster than the wall clock (ground.md "The orchard").
+    ament_add_gtest(
+        test_orchard_run
+        test/test_orchard_run.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether:${schemas_share}/usd/fire:${schemas_share}/usd/light:${schemas_share}/usd/actuator"
+        TIMEOUT 300
+    )
+    target_link_libraries(test_orchard_run lagrange_server)
+    target_compile_definitions(
+        test_orchard_run
+        PRIVATE
+            LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_SEDAN_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/sedan/sedan.usda"
+            LAGRANGE_TEST_ORCHARD="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/orchard/orchard.usda"
+    )
+    lagrange_target_defaults(test_orchard_run)
     # Branches in whole runs: the quadcopter's rotors meeting tree_1's wood.
     ament_add_gtest(
         test_branches_run

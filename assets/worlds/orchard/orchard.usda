@@ -1,0 +1,5163 @@
+#usda 1.0
+(
+    defaultPrim = "orchard"
+    doc = "A sample orchard for agricultural drone runs: 8 rows of 15 fruit trees (apple, pear, cherry), a forest edge, 140 TreeAPI_1 trees in all, mown alleys, tall grass, a landing pad. Written by make_orchard.py; no real place."
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "orchard"
+{
+    def Scope "looks"
+    {
+        def Material "lawn"
+        (
+            prepend apiSchemas = ["SensorMaterialAPI_1"]
+        )
+        {
+            uniform token sensmat:preset = "grass"
+            token outputs:surface.connect = </orchard/looks/lawn/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.22, 0.38, 0.14)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+        def Material "tall_grass"
+        (
+            prepend apiSchemas = ["SensorMaterialAPI_1"]
+        )
+        {
+            uniform token sensmat:preset = "tall_grass"
+            token outputs:surface.connect = </orchard/looks/tall_grass/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.36, 0.42, 0.18)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+        def Material "soil"
+        {
+            token outputs:surface.connect = </orchard/looks/soil/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.36, 0.29, 0.2)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+        def Material "pad"
+        {
+            token outputs:surface.connect = </orchard/looks/pad/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.95, 0.55, 0.15)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+        def Material "mark"
+        {
+            token outputs:surface.connect = </orchard/looks/mark/surface.outputs:surface>
+            def Shader "surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.96, 0.96, 0.94)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+    }
+    def Xform "alley_0"
+    {
+        double3 xformOp:translate = (0.000, -16.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_1"
+    {
+        double3 xformOp:translate = (0.000, -12.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_2"
+    {
+        double3 xformOp:translate = (0.000, -8.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_3"
+    {
+        double3 xformOp:translate = (0.000, -4.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_4"
+    {
+        double3 xformOp:translate = (0.000, 0.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_5"
+    {
+        double3 xformOp:translate = (0.000, 4.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_6"
+    {
+        double3 xformOp:translate = (0.000, 8.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_7"
+    {
+        double3 xformOp:translate = (0.000, 12.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "alley_8"
+    {
+        double3 xformOp:translate = (0.000, 16.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.22, 0.38, 0.14)]
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/lawn>
+            float3 xformOp:scale = (64.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_0"
+    {
+        double3 xformOp:translate = (0.000, -14.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_1"
+    {
+        double3 xformOp:translate = (0.000, -10.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_2"
+    {
+        double3 xformOp:translate = (0.000, -6.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_3"
+    {
+        double3 xformOp:translate = (0.000, -2.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_4"
+    {
+        double3 xformOp:translate = (0.000, 2.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_5"
+    {
+        double3 xformOp:translate = (0.000, 6.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_6"
+    {
+        double3 xformOp:translate = (0.000, 10.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "strip_7"
+    {
+        double3 xformOp:translate = (0.000, 14.000, 0.005)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.29, 0.2)]
+            rel material:binding = </orchard/looks/soil>
+            float3 xformOp:scale = (64.000, 1.000, 0.010)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "row1_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.503
+        double tree:crownRadius = 1.101
+        double tree:crownBase = 0.801
+        double tree:trunkDiameter = 0.120
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.598
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.386890, 0, 0, 0.922126)
+        double3 xformOp:translate = (-27.857, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_01_trunk"
+    {
+        double3 xformOp:translate = (-27.857, -14.000, 0.806)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.612
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row1_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.175
+        double tree:crownRadius = 0.998
+        double tree:crownBase = 0.726
+        double tree:trunkDiameter = 0.109
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.764
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.391395, 0, 0, 0.920223)
+        double3 xformOp:translate = (-23.950, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_02_trunk"
+    {
+        double3 xformOp:translate = (-23.950, -14.000, 0.730)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.461
+            uniform token purpose = "guide"
+            double radius = 0.054
+        }
+    }
+    def Xform "row1_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.270
+        double tree:crownRadius = 1.028
+        double tree:crownBase = 0.747
+        double tree:trunkDiameter = 0.112
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.713
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.006587, 0, 0, 0.999978)
+        double3 xformOp:translate = (-19.909, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_03_trunk"
+    {
+        double3 xformOp:translate = (-19.909, -14.000, 0.752)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.504
+            uniform token purpose = "guide"
+            double radius = 0.056
+        }
+    }
+    def Xform "row1_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.592
+        double tree:crownRadius = 1.129
+        double tree:crownBase = 0.821
+        double tree:trunkDiameter = 0.123
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.559
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.589876, 0, 0, 0.807494)
+        double3 xformOp:translate = (-16.002, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_04_trunk"
+    {
+        double3 xformOp:translate = (-16.002, -14.000, 0.826)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.652
+            uniform token purpose = "guide"
+            double radius = 0.062
+        }
+    }
+    def Xform "row1_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.808
+        double tree:crownRadius = 1.197
+        double tree:crownBase = 0.870
+        double tree:trunkDiameter = 0.131
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.470
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.598020, 0, 0, 0.801481)
+        double3 xformOp:translate = (-11.992, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_05_trunk"
+    {
+        double3 xformOp:translate = (-11.992, -14.000, 0.876)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.752
+            uniform token purpose = "guide"
+            double radius = 0.065
+        }
+    }
+    def Xform "row1_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.785
+        double tree:crownRadius = 1.190
+        double tree:crownBase = 0.865
+        double tree:trunkDiameter = 0.130
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.480
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.491108, 0, 0, 0.871099)
+        double3 xformOp:translate = (-7.995, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_06_trunk"
+    {
+        double3 xformOp:translate = (-7.995, -14.000, 0.871)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.741
+            uniform token purpose = "guide"
+            double radius = 0.065
+        }
+    }
+    def Xform "row1_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.424
+        double tree:crownRadius = 1.076
+        double tree:crownBase = 0.783
+        double tree:trunkDiameter = 0.117
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.636
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.058845, 0, 0, 0.998267)
+        double3 xformOp:translate = (-3.890, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_07_trunk"
+    {
+        double3 xformOp:translate = (-3.890, -14.000, 0.787)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.575
+            uniform token purpose = "guide"
+            double radius = 0.059
+        }
+    }
+    def Xform "row1_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.634
+        double tree:crownRadius = 1.142
+        double tree:crownBase = 0.831
+        double tree:trunkDiameter = 0.125
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.541
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.198335, 0, 0, 0.980134)
+        double3 xformOp:translate = (-0.039, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_08_trunk"
+    {
+        double3 xformOp:translate = (-0.039, -14.000, 0.836)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.672
+            uniform token purpose = "guide"
+            double radius = 0.062
+        }
+    }
+    def Xform "row1_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.593
+        double tree:crownRadius = 1.129
+        double tree:crownBase = 0.821
+        double tree:trunkDiameter = 0.123
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.558
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.641698, 0, 0, 0.766957)
+        double3 xformOp:translate = (3.917, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_09_trunk"
+    {
+        double3 xformOp:translate = (3.917, -14.000, 0.826)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.653
+            uniform token purpose = "guide"
+            double radius = 0.062
+        }
+    }
+    def Xform "row1_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.497
+        double tree:crownRadius = 1.099
+        double tree:crownBase = 0.799
+        double tree:trunkDiameter = 0.120
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.601
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.786214, 0, 0, 0.617954)
+        double3 xformOp:translate = (7.916, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_10_trunk"
+    {
+        double3 xformOp:translate = (7.916, -14.000, 0.804)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.609
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row1_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.334
+        double tree:crownRadius = 1.048
+        double tree:crownBase = 0.762
+        double tree:trunkDiameter = 0.114
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.680
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.982166, 0, 0, 0.188016)
+        double3 xformOp:translate = (12.032, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_11_trunk"
+    {
+        double3 xformOp:translate = (12.032, -14.000, 0.767)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.534
+            uniform token purpose = "guide"
+            double radius = 0.057
+        }
+    }
+    def Xform "row1_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.391
+        double tree:crownRadius = 1.066
+        double tree:crownBase = 0.775
+        double tree:trunkDiameter = 0.116
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.651
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.832041, 0, 0, 0.554714)
+        double3 xformOp:translate = (15.985, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_12_trunk"
+    {
+        double3 xformOp:translate = (15.985, -14.000, 0.780)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.560
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row1_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.682
+        double tree:crownRadius = 1.157
+        double tree:crownBase = 0.842
+        double tree:trunkDiameter = 0.126
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.521
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.964979, 0, 0, 0.262326)
+        double3 xformOp:translate = (20.016, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_13_trunk"
+    {
+        double3 xformOp:translate = (20.016, -14.000, 0.847)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.694
+            uniform token purpose = "guide"
+            double radius = 0.063
+        }
+    }
+    def Xform "row1_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.527
+        double tree:crownRadius = 1.108
+        double tree:crownBase = 0.806
+        double tree:trunkDiameter = 0.121
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.588
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.920209, 0, 0, 0.391427)
+        double3 xformOp:translate = (23.929, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_14_trunk"
+    {
+        double3 xformOp:translate = (23.929, -14.000, 0.811)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.622
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row1_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.552
+        double tree:crownRadius = 1.116
+        double tree:crownBase = 0.812
+        double tree:trunkDiameter = 0.122
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.577
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.774460, 0, 0, 0.632623)
+        double3 xformOp:translate = (27.977, -14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row1_15_trunk"
+    {
+        double3 xformOp:translate = (27.977, -14.000, 0.817)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.634
+            uniform token purpose = "guide"
+            double radius = 0.061
+        }
+    }
+    def Xform "row2_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.748
+        double tree:crownRadius = 1.178
+        double tree:crownBase = 0.857
+        double tree:trunkDiameter = 0.128
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.494
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.529829, 0, 0, 0.848104)
+        double3 xformOp:translate = (-28.125, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_01_trunk"
+    {
+        double3 xformOp:translate = (-28.125, -10.000, 0.862)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.724
+            uniform token purpose = "guide"
+            double radius = 0.064
+        }
+    }
+    def Xform "row2_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.471
+        double tree:crownRadius = 1.091
+        double tree:crownBase = 0.793
+        double tree:trunkDiameter = 0.119
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.613
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.195138, 0, 0, 0.980776)
+        double3 xformOp:translate = (-24.110, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_02_trunk"
+    {
+        double3 xformOp:translate = (-24.110, -10.000, 0.798)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.597
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row2_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.707
+        double tree:crownRadius = 1.165
+        double tree:crownBase = 0.847
+        double tree:trunkDiameter = 0.127
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.511
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.401987, 0, 0, 0.915645)
+        double3 xformOp:translate = (-20.041, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_03_trunk"
+    {
+        double3 xformOp:translate = (-20.041, -10.000, 0.853)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.705
+            uniform token purpose = "guide"
+            double radius = 0.064
+        }
+    }
+    def Xform "row2_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.430
+        double tree:crownRadius = 1.078
+        double tree:crownBase = 0.784
+        double tree:trunkDiameter = 0.118
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.633
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.206982, 0, 0, 0.978345)
+        double3 xformOp:translate = (-15.875, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_04_trunk"
+    {
+        double3 xformOp:translate = (-15.875, -10.000, 0.789)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.578
+            uniform token purpose = "guide"
+            double radius = 0.059
+        }
+    }
+    def Xform "row2_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.345
+        double tree:crownRadius = 1.051
+        double tree:crownBase = 0.765
+        double tree:trunkDiameter = 0.115
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.674
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.955544, 0, 0, 0.294849)
+        double3 xformOp:translate = (-12.101, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_05_trunk"
+    {
+        double3 xformOp:translate = (-12.101, -10.000, 0.769)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.539
+            uniform token purpose = "guide"
+            double radius = 0.057
+        }
+    }
+    def Xform "row2_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.235
+        double tree:crownRadius = 1.017
+        double tree:crownBase = 0.739
+        double tree:trunkDiameter = 0.111
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.731
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.839051, 0, 0, 0.544054)
+        double3 xformOp:translate = (-7.920, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_06_trunk"
+    {
+        double3 xformOp:translate = (-7.920, -10.000, 0.744)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.488
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row2_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.348
+        double tree:crownRadius = 1.052
+        double tree:crownBase = 0.765
+        double tree:trunkDiameter = 0.115
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.672
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.890340, 0, 0, 0.455297)
+        double3 xformOp:translate = (-4.003, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_07_trunk"
+    {
+        double3 xformOp:translate = (-4.003, -10.000, 0.770)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.540
+            uniform token purpose = "guide"
+            double radius = 0.057
+        }
+    }
+    def Xform "row2_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.316
+        double tree:crownRadius = 1.042
+        double tree:crownBase = 0.758
+        double tree:trunkDiameter = 0.114
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.689
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.859226, 0, 0, 0.511596)
+        double3 xformOp:translate = (-0.010, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_08_trunk"
+    {
+        double3 xformOp:translate = (-0.010, -10.000, 0.763)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.526
+            uniform token purpose = "guide"
+            double radius = 0.057
+        }
+    }
+    def Xform "row2_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.278
+        double tree:crownRadius = 1.030
+        double tree:crownBase = 0.749
+        double tree:trunkDiameter = 0.112
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.708
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.908314, 0, 0, 0.418288)
+        double3 xformOp:translate = (3.971, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_09_trunk"
+    {
+        double3 xformOp:translate = (3.971, -10.000, 0.754)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.508
+            uniform token purpose = "guide"
+            double radius = 0.056
+        }
+    }
+    def Xform "row2_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.614
+        double tree:crownRadius = 1.136
+        double tree:crownBase = 0.826
+        double tree:trunkDiameter = 0.124
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.550
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.969150, 0, 0, 0.246472)
+        double3 xformOp:translate = (7.994, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_10_trunk"
+    {
+        double3 xformOp:translate = (7.994, -10.000, 0.831)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.662
+            uniform token purpose = "guide"
+            double radius = 0.062
+        }
+    }
+    def Xform "row2_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.450
+        double tree:crownRadius = 1.084
+        double tree:crownBase = 0.789
+        double tree:trunkDiameter = 0.118
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.623
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.635449, 0, 0, 0.772143)
+        double3 xformOp:translate = (12.048, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_11_trunk"
+    {
+        double3 xformOp:translate = (12.048, -10.000, 0.794)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.587
+            uniform token purpose = "guide"
+            double radius = 0.059
+        }
+    }
+    def Xform "row2_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.210
+        double tree:crownRadius = 1.009
+        double tree:crownBase = 0.734
+        double tree:trunkDiameter = 0.110
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.744
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.341630, 0, 0, 0.939834)
+        double3 xformOp:translate = (15.917, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_12_trunk"
+    {
+        double3 xformOp:translate = (15.917, -10.000, 0.738)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.477
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row2_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.562
+        double tree:crownRadius = 1.119
+        double tree:crownBase = 0.814
+        double tree:trunkDiameter = 0.122
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.572
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.776548, 0, 0, 0.630058)
+        double3 xformOp:translate = (19.915, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_13_trunk"
+    {
+        double3 xformOp:translate = (19.915, -10.000, 0.819)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.638
+            uniform token purpose = "guide"
+            double radius = 0.061
+        }
+    }
+    def Xform "row2_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.394
+        double tree:crownRadius = 1.067
+        double tree:crownBase = 0.776
+        double tree:trunkDiameter = 0.116
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.650
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.339155, 0, 0, 0.940731)
+        double3 xformOp:translate = (24.060, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_14_trunk"
+    {
+        double3 xformOp:translate = (24.060, -10.000, 0.781)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.561
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row2_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.599
+        double tree:crownRadius = 1.131
+        double tree:crownBase = 0.823
+        double tree:trunkDiameter = 0.123
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.556
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.543992, 0, 0, 0.839090)
+        double3 xformOp:translate = (28.079, -10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row2_15_trunk"
+    {
+        double3 xformOp:translate = (28.079, -10.000, 0.828)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.655
+            uniform token purpose = "guide"
+            double radius = 0.062
+        }
+    }
+    def Xform "row3_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.435
+        double tree:crownRadius = 1.080
+        double tree:crownBase = 0.785
+        double tree:trunkDiameter = 0.118
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.630
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.610553, 0, 0, 0.791975)
+        double3 xformOp:translate = (-27.886, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_01_trunk"
+    {
+        double3 xformOp:translate = (-27.886, -6.000, 0.790)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.580
+            uniform token purpose = "guide"
+            double radius = 0.059
+        }
+    }
+    def Xform "row3_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.488
+        double tree:crownRadius = 1.096
+        double tree:crownBase = 0.797
+        double tree:trunkDiameter = 0.120
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.606
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.552928, 0, 0, 0.833229)
+        double3 xformOp:translate = (-24.133, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_02_trunk"
+    {
+        double3 xformOp:translate = (-24.133, -6.000, 0.802)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.604
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row3_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.198
+        double tree:crownRadius = 1.005
+        double tree:crownBase = 0.731
+        double tree:trunkDiameter = 0.110
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.751
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.362542, 0, 0, 0.931967)
+        double3 xformOp:translate = (-19.858, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_03_trunk"
+    {
+        double3 xformOp:translate = (-19.858, -6.000, 0.736)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.471
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row3_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.648
+        double tree:crownRadius = 1.147
+        double tree:crownBase = 0.834
+        double tree:trunkDiameter = 0.125
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.535
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.998554, 0, 0, 0.053759)
+        double3 xformOp:translate = (-15.955, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_04_trunk"
+    {
+        double3 xformOp:translate = (-15.955, -6.000, 0.839)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.678
+            uniform token purpose = "guide"
+            double radius = 0.063
+        }
+    }
+    def Xform "row3_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.834
+        double tree:crownRadius = 1.205
+        double tree:crownBase = 0.876
+        double tree:trunkDiameter = 0.131
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.461
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.146321, 0, 0, 0.989237)
+        double3 xformOp:translate = (-12.077, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_05_trunk"
+    {
+        double3 xformOp:translate = (-12.077, -6.000, 0.882)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.764
+            uniform token purpose = "guide"
+            double radius = 0.066
+        }
+    }
+    def Xform "row3_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.532
+        double tree:crownRadius = 1.110
+        double tree:crownBase = 0.807
+        double tree:trunkDiameter = 0.121
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.586
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.736201, 0, 0, 0.676763)
+        double3 xformOp:translate = (-8.087, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_06_trunk"
+    {
+        double3 xformOp:translate = (-8.087, -6.000, 0.812)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.625
+            uniform token purpose = "guide"
+            double radius = 0.061
+        }
+    }
+    def Xform "row3_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.838
+        double tree:crownRadius = 1.206
+        double tree:crownBase = 0.877
+        double tree:trunkDiameter = 0.132
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.459
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.278985, 0, 0, 0.960296)
+        double3 xformOp:translate = (-3.905, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_07_trunk"
+    {
+        double3 xformOp:translate = (-3.905, -6.000, 0.883)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.766
+            uniform token purpose = "guide"
+            double radius = 0.066
+        }
+    }
+    def Xform "row3_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.547
+        double tree:crownRadius = 1.115
+        double tree:crownBase = 0.811
+        double tree:trunkDiameter = 0.122
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.579
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.205487, 0, 0, 0.978660)
+        double3 xformOp:translate = (-0.139, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_08_trunk"
+    {
+        double3 xformOp:translate = (-0.139, -6.000, 0.816)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.632
+            uniform token purpose = "guide"
+            double radius = 0.061
+        }
+    }
+    def Xform "row3_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.724
+        double tree:crownRadius = 1.170
+        double tree:crownBase = 0.851
+        double tree:trunkDiameter = 0.128
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.504
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.479141, 0, 0, 0.877738)
+        double3 xformOp:translate = (4.127, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_09_trunk"
+    {
+        double3 xformOp:translate = (4.127, -6.000, 0.856)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.713
+            uniform token purpose = "guide"
+            double radius = 0.064
+        }
+    }
+    def Xform "row3_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.359
+        double tree:crownRadius = 1.056
+        double tree:crownBase = 0.768
+        double tree:trunkDiameter = 0.115
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.667
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.998389, 0, 0, 0.056746)
+        double3 xformOp:translate = (7.858, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_10_trunk"
+    {
+        double3 xformOp:translate = (7.858, -6.000, 0.773)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.545
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row3_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.440
+        double tree:crownRadius = 1.081
+        double tree:crownBase = 0.786
+        double tree:trunkDiameter = 0.118
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.628
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.982491, 0, 0, 0.186312)
+        double3 xformOp:translate = (11.866, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_11_trunk"
+    {
+        double3 xformOp:translate = (11.866, -6.000, 0.791)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.583
+            uniform token purpose = "guide"
+            double radius = 0.059
+        }
+    }
+    def Xform "row3_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.357
+        double tree:crownRadius = 1.055
+        double tree:crownBase = 0.767
+        double tree:trunkDiameter = 0.115
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.668
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.526889, 0, 0, 0.849934)
+        double3 xformOp:translate = (16.084, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_12_trunk"
+    {
+        double3 xformOp:translate = (16.084, -6.000, 0.772)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.544
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row3_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.488
+        double tree:crownRadius = 1.096
+        double tree:crownBase = 0.797
+        double tree:trunkDiameter = 0.120
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.605
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.791503, 0, 0, 0.611165)
+        double3 xformOp:translate = (19.932, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_13_trunk"
+    {
+        double3 xformOp:translate = (19.932, -6.000, 0.802)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.605
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row3_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.287
+        double tree:crownRadius = 1.033
+        double tree:crownBase = 0.751
+        double tree:trunkDiameter = 0.113
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.704
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.137514, 0, 0, 0.990500)
+        double3 xformOp:translate = (24.076, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_14_trunk"
+    {
+        double3 xformOp:translate = (24.076, -6.000, 0.756)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.512
+            uniform token purpose = "guide"
+            double radius = 0.056
+        }
+    }
+    def Xform "row3_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.594
+        double tree:crownRadius = 1.129
+        double tree:crownBase = 0.821
+        double tree:trunkDiameter = 0.123
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.558
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.715896, 0, 0, 0.698207)
+        double3 xformOp:translate = (27.955, -6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row3_15_trunk"
+    {
+        double3 xformOp:translate = (27.955, -6.000, 0.827)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.653
+            uniform token purpose = "guide"
+            double radius = 0.062
+        }
+    }
+    def Xform "row4_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.532
+        double tree:crownRadius = 1.110
+        double tree:crownBase = 0.807
+        double tree:trunkDiameter = 0.121
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.585
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.777589, 0, 0, 0.628773)
+        double3 xformOp:translate = (-28.034, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_01_trunk"
+    {
+        double3 xformOp:translate = (-28.034, -2.000, 0.812)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.625
+            uniform token purpose = "guide"
+            double radius = 0.061
+        }
+    }
+    def Xform "row4_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.354
+        double tree:crownRadius = 1.054
+        double tree:crownBase = 0.767
+        double tree:trunkDiameter = 0.115
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.669
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.976612, 0, 0, 0.215008)
+        double3 xformOp:translate = (-23.922, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_02_trunk"
+    {
+        double3 xformOp:translate = (-23.922, -2.000, 0.772)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.543
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row4_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.263
+        double tree:crownRadius = 1.026
+        double tree:crownBase = 0.746
+        double tree:trunkDiameter = 0.112
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.716
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.071792, 0, 0, 0.997420)
+        double3 xformOp:translate = (-20.006, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_03_trunk"
+    {
+        double3 xformOp:translate = (-20.006, -2.000, 0.751)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.501
+            uniform token purpose = "guide"
+            double radius = 0.056
+        }
+    }
+    def Xform "row4_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.544
+        double tree:crownRadius = 1.114
+        double tree:crownBase = 0.810
+        double tree:trunkDiameter = 0.121
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.580
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.987573, 0, 0, 0.157162)
+        double3 xformOp:translate = (-16.082, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_04_trunk"
+    {
+        double3 xformOp:translate = (-16.082, -2.000, 0.815)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.630
+            uniform token purpose = "guide"
+            double radius = 0.061
+        }
+    }
+    def Xform "row4_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.823
+        double tree:crownRadius = 1.201
+        double tree:crownBase = 0.874
+        double tree:trunkDiameter = 0.131
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.465
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.982026, 0, 0, 0.188745)
+        double3 xformOp:translate = (-11.901, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_05_trunk"
+    {
+        double3 xformOp:translate = (-11.901, -2.000, 0.879)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.758
+            uniform token purpose = "guide"
+            double radius = 0.066
+        }
+    }
+    def Xform "row4_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.152
+        double tree:crownRadius = 0.991
+        double tree:crownBase = 0.721
+        double tree:trunkDiameter = 0.108
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.777
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.038291, 0, 0, 0.999267)
+        double3 xformOp:translate = (-8.033, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_06_trunk"
+    {
+        double3 xformOp:translate = (-8.033, -2.000, 0.725)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.450
+            uniform token purpose = "guide"
+            double radius = 0.054
+        }
+    }
+    def Xform "row4_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.226
+        double tree:crownRadius = 1.014
+        double tree:crownBase = 0.737
+        double tree:trunkDiameter = 0.111
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.736
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.702518, 0, 0, 0.711666)
+        double3 xformOp:translate = (-3.885, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_07_trunk"
+    {
+        double3 xformOp:translate = (-3.885, -2.000, 0.742)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.484
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row4_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.220
+        double tree:crownRadius = 1.012
+        double tree:crownBase = 0.736
+        double tree:trunkDiameter = 0.110
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.739
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.514164, 0, 0, 0.857692)
+        double3 xformOp:translate = (0.060, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_08_trunk"
+    {
+        double3 xformOp:translate = (0.060, -2.000, 0.741)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.481
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row4_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.703
+        double tree:crownRadius = 1.164
+        double tree:crownBase = 0.846
+        double tree:trunkDiameter = 0.127
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.512
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.800432, 0, 0, 0.599424)
+        double3 xformOp:translate = (3.946, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_09_trunk"
+    {
+        double3 xformOp:translate = (3.946, -2.000, 0.852)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.703
+            uniform token purpose = "guide"
+            double radius = 0.063
+        }
+    }
+    def Xform "row4_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.361
+        double tree:crownRadius = 1.056
+        double tree:crownBase = 0.768
+        double tree:trunkDiameter = 0.115
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.666
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.632135, 0, 0, 0.774859)
+        double3 xformOp:translate = (7.985, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_10_trunk"
+    {
+        double3 xformOp:translate = (7.985, -2.000, 0.773)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.546
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row4_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.374
+        double tree:crownRadius = 1.060
+        double tree:crownBase = 0.771
+        double tree:trunkDiameter = 0.116
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.660
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.018084, 0, 0, 0.999836)
+        double3 xformOp:translate = (12.037, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_11_trunk"
+    {
+        double3 xformOp:translate = (12.037, -2.000, 0.776)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.552
+            uniform token purpose = "guide"
+            double radius = 0.058
+        }
+    }
+    def Xform "row4_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.227
+        double tree:crownRadius = 1.014
+        double tree:crownBase = 0.738
+        double tree:trunkDiameter = 0.111
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.735
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.932811, 0, 0, 0.360367)
+        double3 xformOp:translate = (16.063, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_12_trunk"
+    {
+        double3 xformOp:translate = (16.063, -2.000, 0.742)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.484
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row4_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.648
+        double tree:crownRadius = 1.147
+        double tree:crownBase = 0.834
+        double tree:trunkDiameter = 0.125
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.535
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.562502, 0, 0, 0.826796)
+        double3 xformOp:translate = (19.951, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_13_trunk"
+    {
+        double3 xformOp:translate = (19.951, -2.000, 0.839)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.678
+            uniform token purpose = "guide"
+            double radius = 0.063
+        }
+    }
+    def Xform "row4_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.203
+        double tree:crownRadius = 1.007
+        double tree:crownBase = 0.732
+        double tree:trunkDiameter = 0.110
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.749
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (-0.236948, 0, 0, 0.971522)
+        double3 xformOp:translate = (24.104, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_14_trunk"
+    {
+        double3 xformOp:translate = (24.104, -2.000, 0.737)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.473
+            uniform token purpose = "guide"
+            double radius = 0.055
+        }
+    }
+    def Xform "row4_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "apple"
+    )
+    {
+        double tree:height = 3.509
+        double tree:crownRadius = 1.103
+        double tree:crownBase = 0.802
+        double tree:trunkDiameter = 0.120
+        double tree:leafAreaDensity = 2.0
+        double tree:naturalFrequency = 1.596
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.0025
+        int tree:branchCount = 16
+        quatd xformOp:orient = (0.248197, 0, 0, 0.968710)
+        double3 xformOp:translate = (28.028, -2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row4_15_trunk"
+    {
+        double3 xformOp:translate = (28.028, -2.000, 0.807)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.614
+            uniform token purpose = "guide"
+            double radius = 0.060
+        }
+    }
+    def Xform "row5_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.648
+        double tree:crownRadius = 1.239
+        double tree:crownBase = 1.033
+        double tree:trunkDiameter = 0.155
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.259
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.168405, 0, 0, 0.985718)
+        double3 xformOp:translate = (-28.085, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_01_trunk"
+    {
+        double3 xformOp:translate = (-28.085, 2.000, 1.059)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.117
+            uniform token purpose = "guide"
+            double radius = 0.077
+        }
+    }
+    def Xform "row5_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.628
+        double tree:crownRadius = 1.234
+        double tree:crownBase = 1.028
+        double tree:trunkDiameter = 0.154
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.264
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.997311, 0, 0, 0.073286)
+        double3 xformOp:translate = (-23.925, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_02_trunk"
+    {
+        double3 xformOp:translate = (-23.925, 2.000, 1.054)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.108
+            uniform token purpose = "guide"
+            double radius = 0.077
+        }
+    }
+    def Xform "row5_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.927
+        double tree:crownRadius = 1.314
+        double tree:crownBase = 1.095
+        double tree:trunkDiameter = 0.164
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.187
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.110056, 0, 0, 0.993925)
+        double3 xformOp:translate = (-19.935, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_03_trunk"
+    {
+        double3 xformOp:translate = (-19.935, 2.000, 1.122)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.245
+            uniform token purpose = "guide"
+            double radius = 0.082
+        }
+    }
+    def Xform "row5_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.897
+        double tree:crownRadius = 1.306
+        double tree:crownBase = 1.088
+        double tree:trunkDiameter = 0.163
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.194
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.850013, 0, 0, 0.526762)
+        double3 xformOp:translate = (-16.137, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_04_trunk"
+    {
+        double3 xformOp:translate = (-16.137, 2.000, 1.116)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.231
+            uniform token purpose = "guide"
+            double radius = 0.082
+        }
+    }
+    def Xform "row5_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.150
+        double tree:crownRadius = 1.107
+        double tree:crownBase = 0.922
+        double tree:trunkDiameter = 0.138
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.410
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.454502, 0, 0, 0.890746)
+        double3 xformOp:translate = (-12.116, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_05_trunk"
+    {
+        double3 xformOp:translate = (-12.116, 2.000, 0.945)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.891
+            uniform token purpose = "guide"
+            double radius = 0.069
+        }
+    }
+    def Xform "row5_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.337
+        double tree:crownRadius = 1.156
+        double tree:crownBase = 0.964
+        double tree:trunkDiameter = 0.145
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.349
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.278592, 0, 0, 0.960410)
+        double3 xformOp:translate = (-8.092, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_06_trunk"
+    {
+        double3 xformOp:translate = (-8.092, 2.000, 0.988)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.976
+            uniform token purpose = "guide"
+            double radius = 0.072
+        }
+    }
+    def Xform "row5_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.536
+        double tree:crownRadius = 1.210
+        double tree:crownBase = 1.008
+        double tree:trunkDiameter = 0.151
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.290
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.901720, 0, 0, 0.432320)
+        double3 xformOp:translate = (-4.071, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_07_trunk"
+    {
+        double3 xformOp:translate = (-4.071, 2.000, 1.033)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.067
+            uniform token purpose = "guide"
+            double radius = 0.076
+        }
+    }
+    def Xform "row5_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.626
+        double tree:crownRadius = 1.234
+        double tree:crownBase = 1.028
+        double tree:trunkDiameter = 0.154
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.265
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.803295, 0, 0, 0.595581)
+        double3 xformOp:translate = (-0.097, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_08_trunk"
+    {
+        double3 xformOp:translate = (-0.097, 2.000, 1.054)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.107
+            uniform token purpose = "guide"
+            double radius = 0.077
+        }
+    }
+    def Xform "row5_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.758
+        double tree:crownRadius = 1.269
+        double tree:crownBase = 1.057
+        double tree:trunkDiameter = 0.159
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.229
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.971380, 0, 0, 0.237529)
+        double3 xformOp:translate = (4.080, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_09_trunk"
+    {
+        double3 xformOp:translate = (4.080, 2.000, 1.084)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.168
+            uniform token purpose = "guide"
+            double radius = 0.079
+        }
+    }
+    def Xform "row5_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.761
+        double tree:crownRadius = 1.270
+        double tree:crownBase = 1.058
+        double tree:trunkDiameter = 0.159
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.229
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.990927, 0, 0, 0.134399)
+        double3 xformOp:translate = (7.953, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_10_trunk"
+    {
+        double3 xformOp:translate = (7.953, 2.000, 1.085)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.169
+            uniform token purpose = "guide"
+            double radius = 0.079
+        }
+    }
+    def Xform "row5_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.871
+        double tree:crownRadius = 1.299
+        double tree:crownBase = 1.083
+        double tree:trunkDiameter = 0.162
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.201
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.747904, 0, 0, 0.663807)
+        double3 xformOp:translate = (12.001, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_11_trunk"
+    {
+        double3 xformOp:translate = (12.001, 2.000, 1.110)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.219
+            uniform token purpose = "guide"
+            double radius = 0.081
+        }
+    }
+    def Xform "row5_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.168
+        double tree:crownRadius = 1.112
+        double tree:crownBase = 0.926
+        double tree:trunkDiameter = 0.139
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.403
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.146356, 0, 0, 0.989232)
+        double3 xformOp:translate = (15.976, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_12_trunk"
+    {
+        double3 xformOp:translate = (15.976, 2.000, 0.949)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.899
+            uniform token purpose = "guide"
+            double radius = 0.069
+        }
+    }
+    def Xform "row5_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.518
+        double tree:crownRadius = 1.205
+        double tree:crownBase = 1.004
+        double tree:trunkDiameter = 0.151
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.295
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.151582, 0, 0, 0.988445)
+        double3 xformOp:translate = (20.048, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_13_trunk"
+    {
+        double3 xformOp:translate = (20.048, 2.000, 1.029)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.058
+            uniform token purpose = "guide"
+            double radius = 0.075
+        }
+    }
+    def Xform "row5_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.866
+        double tree:crownRadius = 1.298
+        double tree:crownBase = 1.081
+        double tree:trunkDiameter = 0.162
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.202
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.797055, 0, 0, 0.603907)
+        double3 xformOp:translate = (23.964, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_14_trunk"
+    {
+        double3 xformOp:translate = (23.964, 2.000, 1.108)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.217
+            uniform token purpose = "guide"
+            double radius = 0.081
+        }
+    }
+    def Xform "row5_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.297
+        double tree:crownRadius = 1.146
+        double tree:crownBase = 0.955
+        double tree:trunkDiameter = 0.143
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.362
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.437200, 0, 0, 0.899364)
+        double3 xformOp:translate = (27.941, 2.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row5_15_trunk"
+    {
+        double3 xformOp:translate = (27.941, 2.000, 0.979)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.957
+            uniform token purpose = "guide"
+            double radius = 0.072
+        }
+    }
+    def Xform "row6_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.092
+        double tree:crownRadius = 1.091
+        double tree:crownBase = 0.909
+        double tree:trunkDiameter = 0.136
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.430
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.716758, 0, 0, 0.697322)
+        double3 xformOp:translate = (-27.858, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_01_trunk"
+    {
+        double3 xformOp:translate = (-27.858, 6.000, 0.932)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.864
+            uniform token purpose = "guide"
+            double radius = 0.068
+        }
+    }
+    def Xform "row6_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.446
+        double tree:crownRadius = 1.185
+        double tree:crownBase = 0.988
+        double tree:trunkDiameter = 0.148
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.316
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.955300, 0, 0, 0.295637)
+        double3 xformOp:translate = (-24.014, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_02_trunk"
+    {
+        double3 xformOp:translate = (-24.014, 6.000, 1.013)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.025
+            uniform token purpose = "guide"
+            double radius = 0.074
+        }
+    }
+    def Xform "row6_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.918
+        double tree:crownRadius = 1.312
+        double tree:crownBase = 1.093
+        double tree:trunkDiameter = 0.164
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.189
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.298012, 0, 0, 0.954562)
+        double3 xformOp:translate = (-20.067, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_03_trunk"
+    {
+        double3 xformOp:translate = (-20.067, 6.000, 1.120)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.240
+            uniform token purpose = "guide"
+            double radius = 0.082
+        }
+    }
+    def Xform "row6_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.624
+        double tree:crownRadius = 1.233
+        double tree:crownBase = 1.028
+        double tree:trunkDiameter = 0.154
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.265
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.985694, 0, 0, 0.168543)
+        double3 xformOp:translate = (-16.004, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_04_trunk"
+    {
+        double3 xformOp:translate = (-16.004, 6.000, 1.053)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.107
+            uniform token purpose = "guide"
+            double radius = 0.077
+        }
+    }
+    def Xform "row6_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.292
+        double tree:crownRadius = 1.145
+        double tree:crownBase = 0.954
+        double tree:trunkDiameter = 0.143
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.363
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.126640, 0, 0, 0.991949)
+        double3 xformOp:translate = (-12.050, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_05_trunk"
+    {
+        double3 xformOp:translate = (-12.050, 6.000, 0.978)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.955
+            uniform token purpose = "guide"
+            double radius = 0.072
+        }
+    }
+    def Xform "row6_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.200
+        double tree:crownRadius = 1.120
+        double tree:crownBase = 0.933
+        double tree:trunkDiameter = 0.140
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.393
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.909526, 0, 0, 0.415646)
+        double3 xformOp:translate = (-8.063, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_06_trunk"
+    {
+        double3 xformOp:translate = (-8.063, 6.000, 0.957)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.913
+            uniform token purpose = "guide"
+            double radius = 0.070
+        }
+    }
+    def Xform "row6_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.716
+        double tree:crownRadius = 1.258
+        double tree:crownBase = 1.048
+        double tree:trunkDiameter = 0.157
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.240
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.741086, 0, 0, 0.671410)
+        double3 xformOp:translate = (-3.940, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_07_trunk"
+    {
+        double3 xformOp:translate = (-3.940, 6.000, 1.074)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.149
+            uniform token purpose = "guide"
+            double radius = 0.079
+        }
+    }
+    def Xform "row6_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.940
+        double tree:crownRadius = 1.317
+        double tree:crownBase = 1.098
+        double tree:trunkDiameter = 0.165
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.184
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.690938, 0, 0, 0.722914)
+        double3 xformOp:translate = (-0.020, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_08_trunk"
+    {
+        double3 xformOp:translate = (-0.020, 6.000, 1.125)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.250
+            uniform token purpose = "guide"
+            double radius = 0.082
+        }
+    }
+    def Xform "row6_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.857
+        double tree:crownRadius = 1.295
+        double tree:crownBase = 1.079
+        double tree:trunkDiameter = 0.162
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.204
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.049587, 0, 0, 0.998770)
+        double3 xformOp:translate = (3.937, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_09_trunk"
+    {
+        double3 xformOp:translate = (3.937, 6.000, 1.106)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.213
+            uniform token purpose = "guide"
+            double radius = 0.081
+        }
+    }
+    def Xform "row6_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.224
+        double tree:crownRadius = 1.126
+        double tree:crownBase = 0.939
+        double tree:trunkDiameter = 0.141
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.385
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.750921, 0, 0, 0.660392)
+        double3 xformOp:translate = (7.851, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_10_trunk"
+    {
+        double3 xformOp:translate = (7.851, 6.000, 0.962)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.924
+            uniform token purpose = "guide"
+            double radius = 0.070
+        }
+    }
+    def Xform "row6_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.595
+        double tree:crownRadius = 1.225
+        double tree:crownBase = 1.021
+        double tree:trunkDiameter = 0.153
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.273
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.550287, 0, 0, 0.834975)
+        double3 xformOp:translate = (12.121, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_11_trunk"
+    {
+        double3 xformOp:translate = (12.121, 6.000, 1.047)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.093
+            uniform token purpose = "guide"
+            double radius = 0.077
+        }
+    }
+    def Xform "row6_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.125
+        double tree:crownRadius = 1.100
+        double tree:crownBase = 0.917
+        double tree:trunkDiameter = 0.138
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.418
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.467038, 0, 0, 0.884237)
+        double3 xformOp:translate = (16.141, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_12_trunk"
+    {
+        double3 xformOp:translate = (16.141, 6.000, 0.940)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 1.879
+            uniform token purpose = "guide"
+            double radius = 0.069
+        }
+    }
+    def Xform "row6_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.610
+        double tree:crownRadius = 1.229
+        double tree:crownBase = 1.024
+        double tree:trunkDiameter = 0.154
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.269
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (0.015643, 0, 0, 0.999878)
+        double3 xformOp:translate = (20.140, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_13_trunk"
+    {
+        double3 xformOp:translate = (20.140, 6.000, 1.050)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.100
+            uniform token purpose = "guide"
+            double radius = 0.077
+        }
+    }
+    def Xform "row6_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.861
+        double tree:crownRadius = 1.296
+        double tree:crownBase = 1.080
+        double tree:trunkDiameter = 0.162
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.203
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.675362, 0, 0, 0.737486)
+        double3 xformOp:translate = (23.996, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_14_trunk"
+    {
+        double3 xformOp:translate = (23.996, 6.000, 1.107)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.214
+            uniform token purpose = "guide"
+            double radius = 0.081
+        }
+    }
+    def Xform "row6_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "pear"
+    )
+    {
+        double tree:height = 4.423
+        double tree:crownRadius = 1.179
+        double tree:crownBase = 0.983
+        double tree:trunkDiameter = 0.147
+        double tree:leafAreaDensity = 1.6
+        double tree:naturalFrequency = 1.323
+        double tree:dampingRatio = 0.15
+        double tree:leafArea = 0.003
+        int tree:branchCount = 14
+        quatd xformOp:orient = (-0.939621, 0, 0, 0.342217)
+        double3 xformOp:translate = (28.103, 6.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row6_15_trunk"
+    {
+        double3 xformOp:translate = (28.103, 6.000, 1.007)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.015
+            uniform token purpose = "guide"
+            double radius = 0.074
+        }
+    }
+    def Xform "row7_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.633
+        double tree:crownRadius = 1.483
+        double tree:crownBase = 1.112
+        double tree:trunkDiameter = 0.185
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.079
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.977179, 0, 0, 0.212419)
+        double3 xformOp:translate = (-27.940, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_01_trunk"
+    {
+        double3 xformOp:translate = (-27.940, 10.000, 1.084)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.168
+            uniform token purpose = "guide"
+            double radius = 0.093
+        }
+    }
+    def Xform "row7_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.677
+        double tree:crownRadius = 1.497
+        double tree:crownBase = 1.122
+        double tree:trunkDiameter = 0.187
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.069
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.702855, 0, 0, 0.711333)
+        double3 xformOp:translate = (-24.017, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_02_trunk"
+    {
+        double3 xformOp:translate = (-24.017, 10.000, 1.094)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.189
+            uniform token purpose = "guide"
+            double radius = 0.094
+        }
+    }
+    def Xform "row7_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.467
+        double tree:crownRadius = 1.750
+        double tree:crownBase = 1.312
+        double tree:trunkDiameter = 0.219
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.915
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.969157, 0, 0, 0.246443)
+        double3 xformOp:translate = (-19.952, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_03_trunk"
+    {
+        double3 xformOp:translate = (-19.952, 10.000, 1.279)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.559
+            uniform token purpose = "guide"
+            double radius = 0.109
+        }
+    }
+    def Xform "row7_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.699
+        double tree:crownRadius = 1.504
+        double tree:crownBase = 1.128
+        double tree:trunkDiameter = 0.188
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.064
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.456230, 0, 0, 0.889862)
+        double3 xformOp:translate = (-15.866, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_04_trunk"
+    {
+        double3 xformOp:translate = (-15.866, 10.000, 1.100)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.199
+            uniform token purpose = "guide"
+            double radius = 0.094
+        }
+    }
+    def Xform "row7_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.894
+        double tree:crownRadius = 1.566
+        double tree:crownBase = 1.175
+        double tree:trunkDiameter = 0.196
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.022
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.927617, 0, 0, 0.373532)
+        double3 xformOp:translate = (-11.864, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_05_trunk"
+    {
+        double3 xformOp:translate = (-11.864, 10.000, 1.145)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.290
+            uniform token purpose = "guide"
+            double radius = 0.098
+        }
+    }
+    def Xform "row7_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.930
+        double tree:crownRadius = 1.577
+        double tree:crownBase = 1.183
+        double tree:trunkDiameter = 0.197
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.014
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.985741, 0, 0, 0.168268)
+        double3 xformOp:translate = (-8.041, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_06_trunk"
+    {
+        double3 xformOp:translate = (-8.041, 10.000, 1.154)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.307
+            uniform token purpose = "guide"
+            double radius = 0.099
+        }
+    }
+    def Xform "row7_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.773
+        double tree:crownRadius = 1.527
+        double tree:crownBase = 1.146
+        double tree:trunkDiameter = 0.191
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.047
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.651536, 0, 0, 0.758618)
+        double3 xformOp:translate = (-3.877, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_07_trunk"
+    {
+        double3 xformOp:translate = (-3.877, 10.000, 1.117)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.234
+            uniform token purpose = "guide"
+            double radius = 0.095
+        }
+    }
+    def Xform "row7_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.732
+        double tree:crownRadius = 1.514
+        double tree:crownBase = 1.136
+        double tree:trunkDiameter = 0.189
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.057
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.991627, 0, 0, 0.129136)
+        double3 xformOp:translate = (-0.074, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_08_trunk"
+    {
+        double3 xformOp:translate = (-0.074, 10.000, 1.107)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.214
+            uniform token purpose = "guide"
+            double radius = 0.095
+        }
+    }
+    def Xform "row7_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.606
+        double tree:crownRadius = 1.474
+        double tree:crownBase = 1.105
+        double tree:trunkDiameter = 0.184
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.086
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.241144, 0, 0, 0.970489)
+        double3 xformOp:translate = (3.854, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_09_trunk"
+    {
+        double3 xformOp:translate = (3.854, 10.000, 1.078)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.155
+            uniform token purpose = "guide"
+            double radius = 0.092
+        }
+    }
+    def Xform "row7_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.602
+        double tree:crownRadius = 1.473
+        double tree:crownBase = 1.104
+        double tree:trunkDiameter = 0.184
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.087
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.427691, 0, 0, 0.903925)
+        double3 xformOp:translate = (7.853, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_10_trunk"
+    {
+        double3 xformOp:translate = (7.853, 10.000, 1.077)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.154
+            uniform token purpose = "guide"
+            double radius = 0.092
+        }
+    }
+    def Xform "row7_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.339
+        double tree:crownRadius = 1.709
+        double tree:crownBase = 1.281
+        double tree:trunkDiameter = 0.214
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.936
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.568742, 0, 0, 0.822516)
+        double3 xformOp:translate = (11.878, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_11_trunk"
+    {
+        double3 xformOp:translate = (11.878, 10.000, 1.249)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.499
+            uniform token purpose = "guide"
+            double radius = 0.107
+        }
+    }
+    def Xform "row7_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.346
+        double tree:crownRadius = 1.711
+        double tree:crownBase = 1.283
+        double tree:trunkDiameter = 0.214
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.935
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.489882, 0, 0, 0.871789)
+        double3 xformOp:translate = (16.123, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_12_trunk"
+    {
+        double3 xformOp:translate = (16.123, 10.000, 1.251)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.502
+            uniform token purpose = "guide"
+            double radius = 0.107
+        }
+    }
+    def Xform "row7_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.990
+        double tree:crownRadius = 1.597
+        double tree:crownBase = 1.198
+        double tree:trunkDiameter = 0.200
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.002
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.996281, 0, 0, 0.086164)
+        double3 xformOp:translate = (19.896, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_13_trunk"
+    {
+        double3 xformOp:translate = (19.896, 10.000, 1.168)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.335
+            uniform token purpose = "guide"
+            double radius = 0.100
+        }
+    }
+    def Xform "row7_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.253
+        double tree:crownRadius = 1.681
+        double tree:crownBase = 1.261
+        double tree:trunkDiameter = 0.210
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.952
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.749179, 0, 0, 0.662368)
+        double3 xformOp:translate = (24.115, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_14_trunk"
+    {
+        double3 xformOp:translate = (24.115, 10.000, 1.229)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.459
+            uniform token purpose = "guide"
+            double radius = 0.105
+        }
+    }
+    def Xform "row7_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.310
+        double tree:crownRadius = 1.699
+        double tree:crownBase = 1.274
+        double tree:trunkDiameter = 0.212
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.942
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.524834, 0, 0, 0.851204)
+        double3 xformOp:translate = (27.984, 10.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row7_15_trunk"
+    {
+        double3 xformOp:translate = (27.984, 10.000, 1.243)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.485
+            uniform token purpose = "guide"
+            double radius = 0.106
+        }
+    }
+    def Xform "row8_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.466
+        double tree:crownRadius = 1.749
+        double tree:crownBase = 1.312
+        double tree:trunkDiameter = 0.219
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.915
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.933162, 0, 0, 0.359456)
+        double3 xformOp:translate = (-28.019, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_01_trunk"
+    {
+        double3 xformOp:translate = (-28.019, 14.000, 1.279)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.558
+            uniform token purpose = "guide"
+            double radius = 0.109
+        }
+    }
+    def Xform "row8_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.039
+        double tree:crownRadius = 1.612
+        double tree:crownBase = 1.209
+        double tree:trunkDiameter = 0.202
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.992
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.140014, 0, 0, 0.990150)
+        double3 xformOp:translate = (-24.039, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_02_trunk"
+    {
+        double3 xformOp:translate = (-24.039, 14.000, 1.179)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.358
+            uniform token purpose = "guide"
+            double radius = 0.101
+        }
+    }
+    def Xform "row8_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.545
+        double tree:crownRadius = 1.455
+        double tree:crownBase = 1.091
+        double tree:trunkDiameter = 0.182
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.100
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.939265, 0, 0, 0.343192)
+        double3 xformOp:translate = (-20.123, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_03_trunk"
+    {
+        double3 xformOp:translate = (-20.123, 14.000, 1.064)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.127
+            uniform token purpose = "guide"
+            double radius = 0.091
+        }
+    }
+    def Xform "row8_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.696
+        double tree:crownRadius = 1.503
+        double tree:crownBase = 1.127
+        double tree:trunkDiameter = 0.188
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.065
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.324065, 0, 0, 0.946035)
+        double3 xformOp:translate = (-16.050, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_04_trunk"
+    {
+        double3 xformOp:translate = (-16.050, 14.000, 1.099)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.198
+            uniform token purpose = "guide"
+            double radius = 0.094
+        }
+    }
+    def Xform "row8_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.248
+        double tree:crownRadius = 1.679
+        double tree:crownBase = 1.260
+        double tree:trunkDiameter = 0.210
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.953
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.878826, 0, 0, 0.477142)
+        double3 xformOp:translate = (-12.042, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_05_trunk"
+    {
+        double3 xformOp:translate = (-12.042, 14.000, 1.228)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.456
+            uniform token purpose = "guide"
+            double radius = 0.105
+        }
+    }
+    def Xform "row8_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.976
+        double tree:crownRadius = 1.592
+        double tree:crownBase = 1.194
+        double tree:trunkDiameter = 0.199
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.005
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.927456, 0, 0, 0.373932)
+        double3 xformOp:translate = (-7.940, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_06_trunk"
+    {
+        double3 xformOp:translate = (-7.940, 14.000, 1.164)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.329
+            uniform token purpose = "guide"
+            double radius = 0.100
+        }
+    }
+    def Xform "row8_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.523
+        double tree:crownRadius = 1.447
+        double tree:crownBase = 1.086
+        double tree:trunkDiameter = 0.181
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.105
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.580330, 0, 0, 0.814381)
+        double3 xformOp:translate = (-4.147, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_07_trunk"
+    {
+        double3 xformOp:translate = (-4.147, 14.000, 1.058)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.117
+            uniform token purpose = "guide"
+            double radius = 0.090
+        }
+    }
+    def Xform "row8_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.445
+        double tree:crownRadius = 1.742
+        double tree:crownBase = 1.307
+        double tree:trunkDiameter = 0.218
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.918
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.993030, 0, 0, 0.117865)
+        double3 xformOp:translate = (0.086, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_08_trunk"
+    {
+        double3 xformOp:translate = (0.086, 14.000, 1.274)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.548
+            uniform token purpose = "guide"
+            double radius = 0.109
+        }
+    }
+    def Xform "row8_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.474
+        double tree:crownRadius = 1.752
+        double tree:crownBase = 1.314
+        double tree:trunkDiameter = 0.219
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.913
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.740823, 0, 0, 0.671700)
+        double3 xformOp:translate = (4.079, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_09_trunk"
+    {
+        double3 xformOp:translate = (4.079, 14.000, 1.281)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.562
+            uniform token purpose = "guide"
+            double radius = 0.109
+        }
+    }
+    def Xform "row8_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.338
+        double tree:crownRadius = 1.708
+        double tree:crownBase = 1.281
+        double tree:trunkDiameter = 0.214
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.937
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.854331, 0, 0, 0.519730)
+        double3 xformOp:translate = (7.920, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_10_trunk"
+    {
+        double3 xformOp:translate = (7.920, 14.000, 1.249)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.498
+            uniform token purpose = "guide"
+            double radius = 0.107
+        }
+    }
+    def Xform "row8_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.566
+        double tree:crownRadius = 1.461
+        double tree:crownBase = 1.096
+        double tree:trunkDiameter = 0.183
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.095
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.764788, 0, 0, 0.644282)
+        double3 xformOp:translate = (11.890, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_11_trunk"
+    {
+        double3 xformOp:translate = (11.890, 14.000, 1.069)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.137
+            uniform token purpose = "guide"
+            double radius = 0.091
+        }
+    }
+    def Xform "row8_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.681
+        double tree:crownRadius = 1.498
+        double tree:crownBase = 1.123
+        double tree:trunkDiameter = 0.187
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.068
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.691537, 0, 0, 0.722341)
+        double3 xformOp:translate = (16.073, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_12_trunk"
+    {
+        double3 xformOp:translate = (16.073, 14.000, 1.095)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.191
+            uniform token purpose = "guide"
+            double radius = 0.094
+        }
+    }
+    def Xform "row8_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.717
+        double tree:crownRadius = 1.509
+        double tree:crownBase = 1.132
+        double tree:trunkDiameter = 0.189
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.060
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.882473, 0, 0, 0.470363)
+        double3 xformOp:translate = (19.995, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_13_trunk"
+    {
+        double3 xformOp:translate = (19.995, 14.000, 1.104)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.208
+            uniform token purpose = "guide"
+            double radius = 0.094
+        }
+    }
+    def Xform "row8_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 5.347
+        double tree:crownRadius = 1.711
+        double tree:crownBase = 1.283
+        double tree:trunkDiameter = 0.214
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 0.935
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (-0.851419, 0, 0, 0.524486)
+        double3 xformOp:translate = (23.982, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_14_trunk"
+    {
+        double3 xformOp:translate = (23.982, 14.000, 1.251)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.502
+            uniform token purpose = "guide"
+            double radius = 0.107
+        }
+    }
+    def Xform "row8_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "cherry"
+    )
+    {
+        double tree:height = 4.690
+        double tree:crownRadius = 1.501
+        double tree:crownBase = 1.126
+        double tree:trunkDiameter = 0.188
+        double tree:leafAreaDensity = 1.3
+        double tree:naturalFrequency = 1.066
+        double tree:dampingRatio = 0.12
+        double tree:leafArea = 0.004
+        int tree:branchCount = 12
+        quatd xformOp:orient = (0.998373, 0, 0, 0.057024)
+        double3 xformOp:translate = (28.070, 14.000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "row8_15_trunk"
+    {
+        double3 xformOp:translate = (28.070, 14.000, 1.097)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 2.195
+            uniform token purpose = "guide"
+            double radius = 0.094
+        }
+    }
+    def Xform "edge_01" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 18.285
+        double tree:crownRadius = 2.502
+        double tree:crownBase = 4.812
+        double tree:trunkDiameter = 0.481
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.312
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (-0.822579, 0, 0, 0.568650)
+        double3 xformOp:translate = (-34.370, 23.179, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_01_trunk"
+    {
+        double3 xformOp:translate = (-34.370, 23.179, 4.427)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 8.854
+            uniform token purpose = "guide"
+            double radius = 0.241
+        }
+    }
+    def Xform "edge_02" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 17.082
+        double tree:crownRadius = 4.555
+        double tree:crownBase = 5.125
+        double tree:trunkDiameter = 0.683
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.307
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (0.812854, 0, 0, 0.582467)
+        double3 xformOp:translate = (-27.925, 23.265, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_02_trunk"
+    {
+        double3 xformOp:translate = (-27.925, 23.265, 4.356)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 8.712
+            uniform token purpose = "guide"
+            double radius = 0.342
+        }
+    }
+    def Xform "edge_03" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 17.117
+        double tree:crownRadius = 2.342
+        double tree:crownBase = 4.505
+        double tree:trunkDiameter = 0.450
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.333
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (0.577145, 0, 0, 0.816641)
+        double3 xformOp:translate = (-21.921, 24.115, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_03_trunk"
+    {
+        double3 xformOp:translate = (-21.921, 24.115, 4.144)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 8.288
+            uniform token purpose = "guide"
+            double radius = 0.225
+        }
+    }
+    def Xform "edge_04" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 15.340
+        double tree:crownRadius = 4.091
+        double tree:crownBase = 4.602
+        double tree:trunkDiameter = 0.614
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.342
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (0.380954, 0, 0, 0.924594)
+        double3 xformOp:translate = (-16.404, 24.041, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_04_trunk"
+    {
+        double3 xformOp:translate = (-16.404, 24.041, 3.912)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 7.824
+            uniform token purpose = "guide"
+            double radius = 0.307
+        }
+    }
+    def Xform "edge_05" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 21.733
+        double tree:crownRadius = 2.974
+        double tree:crownBase = 5.719
+        double tree:trunkDiameter = 0.572
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.262
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (-0.655446, 0, 0, 0.755242)
+        double3 xformOp:translate = (-8.839, 23.794, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_05_trunk"
+    {
+        double3 xformOp:translate = (-8.839, 23.794, 5.262)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 10.523
+            uniform token purpose = "guide"
+            double radius = 0.286
+        }
+    }
+    def Xform "edge_06" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 21.786
+        double tree:crownRadius = 2.981
+        double tree:crownBase = 5.733
+        double tree:trunkDiameter = 0.573
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.262
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (0.995802, 0, 0, 0.091535)
+        double3 xformOp:translate = (-2.217, 22.674, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_06_trunk"
+    {
+        double3 xformOp:translate = (-2.217, 22.674, 5.274)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 10.549
+            uniform token purpose = "guide"
+            double radius = 0.287
+        }
+    }
+    def Xform "edge_07" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 18.676
+        double tree:crownRadius = 2.556
+        double tree:crownBase = 4.915
+        double tree:trunkDiameter = 0.491
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.305
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (0.939617, 0, 0, 0.342228)
+        double3 xformOp:translate = (4.719, 22.258, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_07_trunk"
+    {
+        double3 xformOp:translate = (4.719, 22.258, 4.522)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 9.043
+            uniform token purpose = "guide"
+            double radius = 0.246
+        }
+    }
+    def Xform "edge_08" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "spruce"
+    )
+    {
+        double tree:height = 18.657
+        double tree:crownRadius = 2.634
+        double tree:crownBase = 2.744
+        double tree:trunkDiameter = 0.494
+        double tree:leafAreaDensity = 1.5
+        double tree:naturalFrequency = 0.273
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.0005
+        int tree:branchCount = 30
+        quatd xformOp:orient = (0.550139, 0, 0, 0.835073)
+        double3 xformOp:translate = (8.768, 22.539, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_08_trunk"
+    {
+        double3 xformOp:translate = (8.768, 22.539, 3.759)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 7.518
+            uniform token purpose = "guide"
+            double radius = 0.247
+        }
+    }
+    def Xform "edge_09" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "spruce"
+    )
+    {
+        double tree:height = 15.320
+        double tree:crownRadius = 2.163
+        double tree:crownBase = 2.253
+        double tree:trunkDiameter = 0.406
+        double tree:leafAreaDensity = 1.5
+        double tree:naturalFrequency = 0.333
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.0005
+        int tree:branchCount = 30
+        quatd xformOp:orient = (0.426422, 0, 0, 0.904524)
+        double3 xformOp:translate = (15.519, 21.672, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_09_trunk"
+    {
+        double3 xformOp:translate = (15.519, 21.672, 3.087)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 6.173
+            uniform token purpose = "guide"
+            double radius = 0.203
+        }
+    }
+    def Xform "edge_10" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 21.609
+        double tree:crownRadius = 2.957
+        double tree:crownBase = 5.686
+        double tree:trunkDiameter = 0.569
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.264
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (0.564455, 0, 0, 0.825464)
+        double3 xformOp:translate = (21.798, 24.078, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_10_trunk"
+    {
+        double3 xformOp:translate = (21.798, 24.078, 5.232)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 10.463
+            uniform token purpose = "guide"
+            double radius = 0.284
+        }
+    }
+    def Xform "edge_11" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "spruce"
+    )
+    {
+        double tree:height = 18.382
+        double tree:crownRadius = 2.595
+        double tree:crownBase = 2.703
+        double tree:trunkDiameter = 0.487
+        double tree:leafAreaDensity = 1.5
+        double tree:naturalFrequency = 0.277
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.0005
+        int tree:branchCount = 30
+        quatd xformOp:orient = (-0.790658, 0, 0, 0.612258)
+        double3 xformOp:translate = (28.113, 21.896, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_11_trunk"
+    {
+        double3 xformOp:translate = (28.113, 21.896, 3.703)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 7.407
+            uniform token purpose = "guide"
+            double radius = 0.243
+        }
+    }
+    def Xform "edge_12" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 13.459
+        double tree:crownRadius = 3.589
+        double tree:crownBase = 4.038
+        double tree:trunkDiameter = 0.538
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.390
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (-0.929766, 0, 0, 0.368152)
+        double3 xformOp:translate = (34.177, 23.400, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_12_trunk"
+    {
+        double3 xformOp:translate = (34.177, 23.400, 3.432)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 6.864
+            uniform token purpose = "guide"
+            double radius = 0.269
+        }
+    }
+    def Xform "edge_13" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 12.764
+        double tree:crownRadius = 3.404
+        double tree:crownBase = 3.829
+        double tree:trunkDiameter = 0.511
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.411
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (-0.090814, 0, 0, 0.995868)
+        double3 xformOp:translate = (41.747, 23.292, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_13_trunk"
+    {
+        double3 xformOp:translate = (41.747, 23.292, 3.255)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 6.510
+            uniform token purpose = "guide"
+            double radius = 0.255
+        }
+    }
+    def Xform "edge_14" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "spruce"
+    )
+    {
+        double tree:height = 17.851
+        double tree:crownRadius = 2.520
+        double tree:crownBase = 2.625
+        double tree:trunkDiameter = 0.473
+        double tree:leafAreaDensity = 1.5
+        double tree:naturalFrequency = 0.286
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.0005
+        int tree:branchCount = 30
+        quatd xformOp:orient = (0.995858, 0, 0, 0.090917)
+        double3 xformOp:translate = (39.487, 16.479, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_14_trunk"
+    {
+        double3 xformOp:translate = (39.487, 16.479, 3.596)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 7.193
+            uniform token purpose = "guide"
+            double radius = 0.236
+        }
+    }
+    def Xform "edge_15" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 17.066
+        double tree:crownRadius = 4.551
+        double tree:crownBase = 5.120
+        double tree:trunkDiameter = 0.683
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.308
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (-0.197611, 0, 0, 0.980280)
+        double3 xformOp:translate = (39.945, 8.329, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_15_trunk"
+    {
+        double3 xformOp:translate = (39.945, 8.329, 4.352)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 8.704
+            uniform token purpose = "guide"
+            double radius = 0.341
+        }
+    }
+    def Xform "edge_16" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "spruce"
+    )
+    {
+        double tree:height = 15.135
+        double tree:crownRadius = 2.137
+        double tree:crownBase = 2.226
+        double tree:trunkDiameter = 0.401
+        double tree:leafAreaDensity = 1.5
+        double tree:naturalFrequency = 0.337
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.0005
+        int tree:branchCount = 30
+        quatd xformOp:orient = (0.080829, 0, 0, 0.996728)
+        double3 xformOp:translate = (40.601, 3.206, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_16_trunk"
+    {
+        double3 xformOp:translate = (40.601, 3.206, 3.049)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 6.098
+            uniform token purpose = "guide"
+            double radius = 0.200
+        }
+    }
+    def Xform "edge_17" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 14.304
+        double tree:crownRadius = 3.814
+        double tree:crownBase = 4.291
+        double tree:trunkDiameter = 0.572
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.367
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (-0.856099, 0, 0, 0.516812)
+        double3 xformOp:translate = (38.879, -3.449, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_17_trunk"
+    {
+        double3 xformOp:translate = (38.879, -3.449, 3.648)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 7.295
+            uniform token purpose = "guide"
+            double radius = 0.286
+        }
+    }
+    def Xform "edge_18" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 12.945
+        double tree:crownRadius = 3.452
+        double tree:crownBase = 3.883
+        double tree:trunkDiameter = 0.518
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.406
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (0.975688, 0, 0, 0.219166)
+        double3 xformOp:translate = (39.581, -8.288, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_18_trunk"
+    {
+        double3 xformOp:translate = (39.581, -8.288, 3.301)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 6.602
+            uniform token purpose = "guide"
+            double radius = 0.259
+        }
+    }
+    def Xform "edge_19" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "poplar"
+    )
+    {
+        double tree:height = 21.277
+        double tree:crownRadius = 2.912
+        double tree:crownBase = 5.599
+        double tree:trunkDiameter = 0.560
+        double tree:leafAreaDensity = 0.8
+        double tree:naturalFrequency = 0.268
+        double tree:dampingRatio = 0.08
+        double tree:leafArea = 0.003
+        int tree:branchCount = 18
+        quatd xformOp:orient = (0.962186, 0, 0, 0.272394)
+        double3 xformOp:translate = (38.972, -15.869, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_19_trunk"
+    {
+        double3 xformOp:translate = (38.972, -15.869, 5.151)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 10.303
+            uniform token purpose = "guide"
+            double radius = 0.280
+        }
+    }
+    def Xform "edge_20" (
+        prepend apiSchemas = ["TreeAPI_1"]
+        doc = "oak"
+    )
+    {
+        double tree:height = 14.270
+        double tree:crownRadius = 3.805
+        double tree:crownBase = 4.281
+        double tree:trunkDiameter = 0.571
+        double tree:leafAreaDensity = 1.0
+        double tree:naturalFrequency = 0.368
+        double tree:dampingRatio = 0.1
+        double tree:leafArea = 0.004
+        int tree:branchCount = 24
+        quatd xformOp:orient = (0.716139, 0, 0, 0.697957)
+        double3 xformOp:translate = (40.278, -20.793, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "edge_20_trunk"
+    {
+        double3 xformOp:translate = (40.278, -20.793, 3.639)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 7.277
+            uniform token purpose = "guide"
+            double radius = 0.285
+        }
+    }
+    def Xform "tall_grass_1"
+    {
+        double3 xformOp:translate = (-36.000, 19.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.42, 0.18)]
+            rel material:binding = </orchard/looks/tall_grass>
+            float3 xformOp:scale = (8.000, 5.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/tall_grass>
+            float3 xformOp:scale = (8.000, 5.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "tall_grass_2"
+    {
+        double3 xformOp:translate = (35.000, -17.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.42, 0.18)]
+            rel material:binding = </orchard/looks/tall_grass>
+            float3 xformOp:scale = (5.000, 8.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/tall_grass>
+            float3 xformOp:scale = (5.000, 8.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "tall_grass_3"
+    {
+        double3 xformOp:translate = (4.000, -19.000, 0.010)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.36, 0.42, 0.18)]
+            rel material:binding = </orchard/looks/tall_grass>
+            float3 xformOp:scale = (12.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/tall_grass>
+            float3 xformOp:scale = (12.000, 3.000, 0.020)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "landing_pad"
+    {
+        double3 xformOp:translate = (-36.000, 0.000, 0.050)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.95, 0.55, 0.15)]
+            rel material:binding = </orchard/looks/pad>
+            float3 xformOp:scale = (2.000, 2.000, 0.100)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            uniform token purpose = "guide"
+            rel material:binding = </orchard/looks/pad>
+            float3 xformOp:scale = (2.000, 2.000, 0.100)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "landing_pad_mark"
+    {
+        double3 xformOp:translate = (-36.000, 0.000, 0.101)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.96, 0.96, 0.94)]
+            rel material:binding = </orchard/looks/mark>
+            float3 xformOp:scale = (1.200, 0.200, 0.002)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+}

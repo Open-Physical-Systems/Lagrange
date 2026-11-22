@@ -686,3 +686,83 @@ anything but small leaves, the leaves' own lift in flight and the true dynamics 
 a leaf sliding along the ground under its lift-off speed, the outwash's turbulence (the mean flow
 only), leaves stopped by convex hulls, cylinders or moving colliders (robots), and leaves sticking
 to wet walls.
+
+### The orchard
+
+`assets/worlds/orchard/orchard.usda` is a sample for agricultural drone runs and for loading the
+trees' models with many trees: eight rows of fifteen fruit trees (apple, pear, cherry) 4 m apart in
+the row and 4 m between rows, a forest edge of twenty taller trees (oak, poplar, spruce) to the
+north and east, 140 `TreeAPI_1` trees in all, each with a trunk collider up to a third of the way
+into its crown. Mown alleys between the rows are `grass`, three patches along the edge are
+`tall_grass` (both canopies, "Lidar over grass" and "Reeds and shrubs"), and a 2 m landing pad,
+10 cm high, stands 8 m west of the rows. `make_orchard.py` beside it writes it (each tree jittered,
+turned and scaled by ±10 % from a fixed seed; 170 kB):
+
+```bash
+lagrange assets/robots/quad_x500/quad_x500.usda assets/worlds/orchard/orchard.usda \
+    --spawn -36,0,0.1 --air-density 1.225
+```
+
+The quadcopter takes off from the pad, and `/cmd_vel` forward flies it down the alley at y = 0
+between the apple row at y = −2 m and the pear row at y = 2 m.
+
+The species are presets of the script, typical values rather than measurements of one orchard:
+
+| Species | Height (m) | Crown radius (m) | Crown base (m) | LAD (m²/m³) | First sway mode (Hz) | Damping ratio | Branches |
+|---|---|---|---|---|---|---|---|
+| apple | 3.5 | 1.1 | 0.8 | 2.0 | 1.6 | 0.15 | 16 |
+| pear | 4.5 | 1.2 | 1.0 | 1.6 | 1.3 | 0.15 | 14 |
+| cherry | 5.0 | 1.6 | 1.2 | 1.3 | 1.0 | 0.12 | 12 |
+| oak | 15 | 4.0 | 4.5 | 1.0 | 0.35 | 0.1 | 24 |
+| poplar | 19 | 2.6 | 5.0 | 0.8 | 0.3 | 0.08 | 18 |
+| spruce | 17 | 2.4 | 2.5 | 1.5 | 0.3 | 0.08 | 30 |
+
+Each tree's frequency is divided by its ±10 % scale (f falling with height at a fixed slenderness).
+Sources: the first sway frequencies of 0.2–0.5 Hz for trees of 14–20 m and the damping ratios are
+within those Moore and Maguire (2004, Trees 18, 195) collect; the fruit trees' 1–2 Hz follow the
+same trend to 3–5 m trees and are TODO(verify) against free-swing measurements of fruit trees
+(trunk-shaker studies give the shaking frequencies that detach fruit, about 4–6 Hz for apple
+canopies, not the first mode). Leaf area densities of 1–3 m²/m³ for apple crowns are the usual
+range, TODO(verify) against a measured profile (one modelled apple canopy peaks at 1.2 m²/m³);
+the forest trees' densities, leaf areas and branch counts are TODO(verify).
+
+**Many trees.** Every tree is in every step, so the models that look at them skip what is far:
+
+- *Lidar* (`sensors::CrownIndex`): a grid in x and y of each crown's bounding sphere at its sway,
+  rebuilt every scan; a beam walks the cells under its path (Amanatides and Woo 1987) and only the
+  crowns there are tested, in tree order. A beam takes a random draw only for a crown it crosses
+  (before, every crown took one), so its returns do not depend on the grid
+  (`Crown.TheIndexListsEveryCrownABeamCrosses`: for 20 000 random beams through 140 crowns, every
+  crossed crown is a candidate, 19 of the 140 a beam on average for those long random beams).
+  The branches the beams stop on (`TreeWood::ray`) have a grid of their own, of a sphere round
+  each tree's wood at its sway (`sensors::woodBound`; `Crown.TheWoodIndexListsEveryTreeABeamMeets`),
+  and a camera's crowns in its depth and instance images (`crownDepth`) use the crowns' grid, one
+  draw per crown a pixel's ray crosses, like the lidar's.
+- *Vegetation*: the rotors' cuts, branch strikes, the branches' push on bodies and the drag on
+  bodies first test each crown's (or its wood's) bounding sphere, at its sway, against the
+  rotor's disc or the body's reach, in the world's axes and with a margin so that nothing their
+  own tests keep is skipped: the results are the same bit for bit.
+- *Aerodynamics*: a crown farther from every robot's wake column than ten times the spread of its
+  five air samples (half its radius) takes the air at its centre alone instead of their mean
+  (`kCrownWakeFar`; there the field is smooth and the symmetric samples cancel to first order).
+  test_downwash `FarFromTheWakeTheCrownsCentreStandsForItsMean`: for the sample quadcopter
+  hovering 1 to 15 m up and crowns of 1 to 5 m, the centre is within 0.2 % of the mean plus
+  0.2 mm/s wherever the rule applies (the test allows 2 % plus 2 mm/s). A cutoff by distance
+  alone would not do: the outwash of a hovering 2 kg quadcopter is still 0.12 m/s 30 m away.
+
+Cost, CPU time of `lagrange determinism` (the run twice, CPU lidar, no ROS), median of three on
+an i9-13900H laptop shared with other jobs (its clock lower than when the first numbers were
+taken, so compare within a row), against the same world without its trees:
+
+| Run | Before | After | Without trees |
+|---|---|---|---|
+| quad_x500 hovering over the pad, 2 × 20 s | 24.4 s (RTF 1.6) | 8.5 s (RTF 4.7) | 3.2 s (RTF 12.7) |
+| sedan with its 32 × 1024 CPU lidar and its camera on the headland, 2 × 10 s | 152 s (wall 13.2 s) | 33 s (wall 4.3 s) | 17.4 s (wall 2.2 s) |
+
+The trees' share fell 4 times for the quadcopter and 8.6 times for the sedan, whose lidar and
+camera had taken a Philox draw for every crown and tested every tree's wood on every beam and
+pixel. What is left is per tree and per step: the sway, the signals (`tree/<n>/*`), the far
+crowns' one air sample. `server/test/test_orchard_run.cpp` loads the
+orchard and runs both for a few seconds against a bound of RTF 1 on the CPU (here RTF 10 and 3.4, under the full test load).
+The realistic view draws the 140 trees in 1.8 ms of GPU for the 3D view against 1.45 ms
+without them (the orchard from 45 m, 1600x1000, RTX 4060 Laptop, `LAGRANGE_VIEWER_PROFILE=1`).
