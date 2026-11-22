@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (24)</summary>
+<details><summary>User guide (25)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -177,6 +177,7 @@ recorded to MCAP and replayed.
 - [Concepts](docs/guide/concepts.md)
 - [Installing Lagrange](docs/guide/install.md)
 - [Profiles](docs/guide/profiles.md)
+- [Learning: environments and domain randomisation](docs/guide/rl.md)
 - [Robots and worlds](docs/guide/robots.md)
 - [The run file](docs/guide/run-file.md)
 - [Sensors](docs/guide/sensors.md)

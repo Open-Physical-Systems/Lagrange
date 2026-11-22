@@ -1673,6 +1673,10 @@ struct Server::Impl {
         if (!electricalNetwork && idealTorqueLast && !addPluginSubstitute("electrical")) {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
+        // Push disturbances for learning (Server::setPushes), summed below with the rest.
+        if (!options.pushBodies.empty()) {
+            next->add(std::make_unique<Pushes>(pushSchedule, pushBodies()));
+        }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());
         next->leaveOut(leftOut);
@@ -1973,6 +1977,33 @@ struct Server::Impl {
     /// Puts back a checkpoint's site. A different one rebuilds the run, which the state read next
     /// then overwrites; the same one costs nothing.
     Status restoreSite(StateReader& reader) {
+        SiteNow saved;
+        if (Status status = readSite(reader, saved); !status.ok()) {
+            return status;
+        }
+        if (saved == siteNow()) {
+            return {};
+        }
+        putSite(std::move(saved));
+        if (Status status = build(); !status.ok()) {
+            return status;
+        }
+        broadcast(environmentState());
+        return {};
+    }
+    /// Takes a checkpoint's site as the run's, without rebuilding it.
+    void putSite(SiteNow saved) {
+        auto& [gravity, ambient, density, aero, weather, temperature, local] = saved;
+        appliedGravity = gravity;
+        appliedAmbientK = ambient;
+        appliedAirDensity = density;
+        appliedAerodynamics = std::move(aero);
+        appliedWeather = std::move(weather);
+        options.ambientTemperatureK = temperature;
+        robot.world.gravityLocal = local;
+    }
+    /// Reads a checkpoint's site.
+    static Status readSite(StateReader& reader, SiteNow& saved) {
         const auto optional = [&reader](std::optional<double>& out) {
             bool has = false;
             double value = 0.0;
@@ -2015,7 +2046,6 @@ struct Server::Impl {
                 }
             }
         };
-        SiteNow saved;
         auto& [gravity, ambient, density, aero, weather, temperature, local] = saved;
         optional(gravity);
         optional(ambient);
@@ -2027,21 +2057,450 @@ struct Server::Impl {
         if (reader.failed()) {
             return Status::error(StatusCode::InvalidConfig, "a checkpoint with no site in it");
         }
-        if (saved == siteNow()) {
+        return {};
+    }
+
+    // --- Domain randomisation (Server::parameters, resetTo; docs/guide/rl.md) ---------------
+
+    /// The values resetTo can change, as one copy of the world tables' columns.
+    struct Tables {
+        std::vector<double> mass;
+        std::vector<std::array<double, 3>> com;
+        std::vector<std::array<double, 6>> inertia;
+        std::vector<Pose> poseInParent;
+        std::vector<double> colliderFriction;
+        std::vector<double> jointDamping, jointFriction;
+        std::vector<std::map<std::string, double, std::less<>>> sensorSettings;
+        std::vector<std::map<std::string, double, std::less<>>> schemaReals;
+        bool operator==(const Tables& other) const {
+            const auto samePoses = [](const std::vector<Pose>& a, const std::vector<Pose>& b) {
+                return std::ranges::equal(a, b, [](const Pose& x, const Pose& y) {
+                    return x.position == y.position && x.orientation == y.orientation;
+                });
+            };
+            return mass == other.mass && com == other.com && inertia == other.inertia &&
+                   samePoses(poseInParent, other.poseInParent) &&
+                   colliderFriction == other.colliderFriction &&
+                   jointDamping == other.jointDamping && jointFriction == other.jointFriction &&
+                   sensorSettings == other.sensorSettings && schemaReals == other.schemaReals;
+        }
+    };
+    /// The files' values, taken before resetTo first changes one; dropped whenever the model is
+    /// composed again (spawn, delete, floating origin), whose tables are the files' once more.
+    std::optional<Tables> fileTables;
+    /// Push disturbances from the API (Server::setPushes), outliving rebuilds.
+    std::shared_ptr<PushSchedule> pushSchedule = std::make_shared<PushSchedule>();
+
+    [[nodiscard]] Tables tablesNow() const {
+        const World& w = robot.world;
+        Tables t;
+        t.mass = w.bodies.mass;
+        t.com = w.bodies.comLocal;
+        t.inertia = w.bodies.inertiaLocal;
+        t.poseInParent = w.bodies.poseInParent;
+        t.colliderFriction = w.colliders.friction;
+        t.jointDamping = w.joints.damping;
+        t.jointFriction = w.joints.friction;
+        t.sensorSettings = w.sensors.settings;
+        t.schemaReals.reserve(w.schemaInstances.size());
+        for (const SchemaInstance& s : w.schemaInstances) {
+            t.schemaReals.push_back(s.reals);
+        }
+        return t;
+    }
+    void putTables(const Tables& t) {
+        World& w = robot.world;
+        w.bodies.mass = t.mass;
+        w.bodies.comLocal = t.com;
+        w.bodies.inertiaLocal = t.inertia;
+        w.bodies.poseInParent = t.poseInParent;
+        w.colliders.friction = t.colliderFriction;
+        w.joints.damping = t.jointDamping;
+        w.joints.friction = t.jointFriction;
+        w.sensors.settings = t.sensorSettings;
+        for (std::size_t i = 0; i < w.schemaInstances.size(); ++i) {
+            w.schemaInstances[i].reals = t.schemaReals[i];
+        }
+    }
+    /// Whether the tables still have the files' shape (a streamed tile adds colliders).
+    [[nodiscard]] bool sameShape(const Tables& t) const {
+        const World& w = robot.world;
+        return t.mass.size() == w.bodies.mass.size() &&
+               t.colliderFriction.size() == w.colliders.friction.size() &&
+               t.jointDamping.size() == w.joints.damping.size() &&
+               t.sensorSettings.size() == w.sensors.settings.size() &&
+               t.schemaReals.size() == w.schemaInstances.size();
+    }
+
+    /// Settings a sensor takes though its file need not give them (read as 0 when absent).
+    static std::vector<std::string> extraSensorSettings(SensorType type) {
+        std::vector<std::string> keys{"latency", "jitter"};
+        if (type == SensorType::Imu) {
+            for (const char* channel : {"accel", "gyro"}) {
+                for (const char* key : {"noise", "bias_mean", "bias_stddev"}) {
+                    keys.push_back(std::string(channel) + "_" + key);
+                }
+            }
+        }
+        return keys;
+    }
+
+    /// The robot's root bodies, which "start/..." moves: those hanging from the world with the
+    /// first body's robot index.
+    [[nodiscard]] std::vector<std::size_t> startBodies() const {
+        const World::Bodies& b = robot.world.bodies;
+        std::vector<std::size_t> roots;
+        for (std::size_t i = 0; i < b.names.size(); ++i) {
+            if (b.parent[i] == kWorldBody && b.robot[i] == b.robot.front() &&
+                !(i < b.kinematic.size() && b.kinematic[i])) {
+                roots.push_back(i);
+            }
+        }
+        return roots;
+    }
+
+    [[nodiscard]] std::map<std::string, double> parameterValues() const {
+        const World& w = robot.world;
+        Tables t = fileTables && sameShape(*fileTables) ? *fileTables : tablesNow();
+        std::map<std::string, double> out;
+        static constexpr std::array<const char*, 3> kAxes{"x", "y", "z"};
+        static constexpr std::array<const char*, 6> kInertia{"xx", "yy", "zz", "xy", "xz", "yz"};
+        for (std::size_t b = 0; b < w.bodies.names.size(); ++b) {
+            const std::string base = "body/" + w.bodies.names[b] + "/";
+            out[base + "mass"] = t.mass[b];
+            for (std::size_t k = 0; k < 3; ++k) {
+                out[base + "com_" + kAxes[k]] = t.com[b][k];
+            }
+            for (std::size_t k = 0; k < 6; ++k) {
+                out[base + "inertia_" + kInertia[k]] = t.inertia[b][k];
+            }
+        }
+        // A body's friction is its first collider's (resetTo sets every one of them).
+        for (std::size_t c = 0; c < w.colliders.body.size(); ++c) {
+            const BodyId body = w.colliders.body[c];
+            const std::string name = body == kWorldBody
+                                         ? std::string("world/friction")
+                                         : "body/" + w.bodies.names[body.index] + "/friction";
+            out.try_emplace(name, t.colliderFriction[c]);
+        }
+        for (std::size_t j = 0; j < w.joints.names.size(); ++j) {
+            out["joint/" + w.joints.names[j] + "/damping"] = t.jointDamping[j];
+            out["joint/" + w.joints.names[j] + "/friction"] = t.jointFriction[j];
+        }
+        for (std::size_t n = 0; n < w.sensors.names.size(); ++n) {
+            const std::string base = "sensor/" + w.sensors.names[n] + "/";
+            for (const auto& [key, value] : t.sensorSettings[n]) {
+                out[base + key] = value;
+            }
+            for (const std::string& key : extraSensorSettings(w.sensors.type[n])) {
+                out.try_emplace(base + key, 0.0);
+            }
+        }
+        for (std::size_t i = 0; i < w.schemaInstances.size(); ++i) {
+            const SchemaInstance& s = w.schemaInstances[i];
+            if (s.prim.index >= w.prims.paths.size()) {
+                continue;
+            }
+            for (const auto& [attribute, value] : t.schemaReals[i]) {
+                out[w.prims.paths[s.prim.index] + "." + attribute] = value;
+            }
+        }
+        if (!startBodies().empty()) {
+            for (const char* key : {"start/x", "start/y", "start/z", "start/yaw"}) {
+                out[key] = 0.0;
+            }
+        }
+        return out;
+    }
+
+    /// Sets one parameter in the world tables (on the files' values, put back before).
+    Status setParameter(const std::string& name, double value, std::array<double, 4>& start) {
+        const auto bad = [&name](const std::string& why) {
+            return Status::error(StatusCode::InvalidConfig, name + ": " + why);
+        };
+        if (!std::isfinite(value)) {
+            return bad("not a finite number");
+        }
+        World& w = robot.world;
+        const auto indexOf = [](const std::vector<std::string>& names, std::string_view n) {
+            const auto it = std::find(names.begin(), names.end(), n);
+            return it == names.end() ? std::optional<std::size_t>{}
+                                     : std::optional<std::size_t>(it - names.begin());
+        };
+        const std::size_t slash = name.rfind('/');
+        const std::string_view head = std::string_view(name).substr(0, slash);
+        const std::string field = slash == std::string::npos ? "" : name.substr(slash + 1);
+        if (name.starts_with("start/")) {
+            static constexpr std::array<const char*, 4> kStart{"x", "y", "z", "yaw"};
+            for (std::size_t k = 0; k < kStart.size(); ++k) {
+                if (field == kStart[k]) {
+                    if (startBodies().empty()) {
+                        return bad("the run has no robot to start elsewhere");
+                    }
+                    start[k] = value;
+                    return {};
+                }
+            }
+            return bad("start/ takes x, y, z (m) and yaw (rad)");
+        }
+        if (name == "world/friction" || (name.starts_with("body/") && field == "friction")) {
+            if (value < 0.0) {
+                return bad("a friction coefficient is at least 0");
+            }
+            BodyId body = kWorldBody;
+            if (name != "world/friction") {
+                const auto b = indexOf(w.bodies.names, head.substr(5));
+                if (!b) {
+                    return bad("no such body");
+                }
+                body = BodyId{static_cast<std::uint32_t>(*b)};
+            }
+            bool any = false;
+            for (std::size_t c = 0; c < w.colliders.body.size(); ++c) {
+                if (w.colliders.body[c] == body) {
+                    w.colliders.friction[c] = value;
+                    any = true;
+                }
+            }
+            return any ? Status{} : bad("no collider");
+        }
+        if (name.starts_with("body/")) {
+            const auto b = indexOf(w.bodies.names, head.substr(5));
+            if (!b) {
+                return bad("no such body");
+            }
+            if (field == "mass") {
+                if (value <= 0.0) {
+                    return bad("a mass is positive");
+                }
+                w.bodies.mass[*b] = value;
+                return {};
+            }
+            static constexpr std::array<const char*, 3> kCom{"com_x", "com_y", "com_z"};
+            for (std::size_t k = 0; k < kCom.size(); ++k) {
+                if (field == kCom[k]) {
+                    w.bodies.comLocal[*b][k] = value;
+                    return {};
+                }
+            }
+            static constexpr std::array<const char*, 6> kInertia{
+                "inertia_xx", "inertia_yy", "inertia_zz", "inertia_xy", "inertia_xz", "inertia_yz"};
+            for (std::size_t k = 0; k < kInertia.size(); ++k) {
+                if (field == kInertia[k]) {
+                    if (k < 3 && value <= 0.0) {
+                        return bad("a principal moment of inertia is positive");
+                    }
+                    w.bodies.inertiaLocal[*b][k] = value;
+                    return {};
+                }
+            }
+            return bad("a body takes mass, com_x|y|z, inertia_xx|yy|zz|xy|xz|yz, friction");
+        }
+        if (name.starts_with("joint/")) {
+            const auto j = indexOf(w.joints.names, head.substr(6));
+            if (!j) {
+                return bad("no such joint");
+            }
+            if (value < 0.0) {
+                return bad("a joint's damping and friction are at least 0");
+            }
+            if (field == "damping") {
+                w.joints.damping[*j] = value;
+            } else if (field == "friction") {
+                w.joints.friction[*j] = value;
+            } else {
+                return bad("a joint takes damping, friction");
+            }
             return {};
         }
-        appliedGravity = gravity;
-        appliedAmbientK = ambient;
-        appliedAirDensity = density;
-        appliedAerodynamics = std::move(aero);
-        appliedWeather = std::move(weather);
-        options.ambientTemperatureK = temperature;
-        robot.world.gravityLocal = local;
-        if (Status status = build(); !status.ok()) {
+        if (name.starts_with("sensor/")) {
+            const auto n = indexOf(w.sensors.names, head.substr(7));
+            if (!n) {
+                return bad("no such sensor");
+            }
+            auto& settings = w.sensors.settings[*n];
+            const auto extras = extraSensorSettings(w.sensors.type[*n]);
+            if (!settings.contains(field) && std::ranges::find(extras, field) == extras.end()) {
+                return bad("the sensor has no setting " + field);
+            }
+            if (value < 0.0 && (field.find("noise") != std::string::npos || field == "latency" ||
+                                field == "jitter" || field.ends_with("stddev"))) {
+                return bad("at least 0");
+            }
+            // A setting the file leaves out reads as 0: leave it out at 0, so the tables stay
+            // the file's.
+            if (value == 0.0 && !fileTables->sensorSettings[*n].contains(field)) {
+                settings.erase(field);
+            } else {
+                settings[field] = value;
+            }
+            return {};
+        }
+        if (const std::size_t dot = name.find('.');
+            name.starts_with('/') && dot != std::string::npos) {
+            const std::string path = name.substr(0, dot);
+            const std::string attribute = name.substr(dot + 1);
+            bool any = false;
+            for (SchemaInstance& s : w.schemaInstances) {
+                if (s.prim.index >= w.prims.paths.size() || w.prims.paths[s.prim.index] != path) {
+                    continue;
+                }
+                const auto it = s.reals.find(attribute);
+                if (it == s.reals.end()) {
+                    continue;
+                }
+                if (auto problem = stage::checkSchemaReal(s.schema, attribute, value)) {
+                    return bad(*problem);
+                }
+                it->second = value;
+                any = true;
+            }
+            return any ? Status{} : bad("no number of our schemas by that name on that prim");
+        }
+        return bad("not a parameter (Server::parameters lists them)");
+    }
+
+    /// Moves the robot's start by (x, y, z) in the world frame and turns it by yaw about the
+    /// vertical through its first root body.
+    void moveStart(const std::array<double, 4>& start) {
+        const std::vector<std::size_t> roots = startBodies();
+        if (roots.empty() || start == std::array<double, 4>{}) {
+            return;
+        }
+        std::vector<Pose>& poses = robot.world.bodies.poseInParent;
+        const std::array<double, 3> pivot = poses[roots.front()].position;
+        const double c = std::cos(start[3]);
+        const double s = std::sin(start[3]);
+        const std::array<double, 4> turn{std::cos(start[3] / 2.0), 0.0, 0.0,
+                                         std::sin(start[3] / 2.0)};
+        for (const std::size_t b : roots) {
+            Pose& pose = poses[b];
+            const double dx = pose.position[0] - pivot[0];
+            const double dy = pose.position[1] - pivot[1];
+            pose.position = {pivot[0] + c * dx - s * dy + start[0],
+                             pivot[1] + s * dx + c * dy + start[1], pose.position[2] + start[2]};
+            const auto& q = pose.orientation;  // turn * q, both (w, x, y, z)
+            pose.orientation = {turn[0] * q[0] - turn[3] * q[3], turn[0] * q[1] - turn[3] * q[2],
+                                turn[0] * q[2] + turn[3] * q[1], turn[0] * q[3] + turn[3] * q[0]};
+        }
+    }
+
+    Status resetTo(std::span<const std::byte> state,
+                   const std::map<std::string, double>& parameters) {
+        if (replay) {
+            return Status::error(StatusCode::Unsupported, "a replay shows what was recorded");
+        }
+        StateReader reader(state);
+        SiteNow saved;
+        if (Status status = readSite(reader, saved); !status.ok()) {
             return status;
         }
-        broadcast(environmentState());
+        const std::span<const std::byte> schedulerState =
+            state.subspan(state.size() - reader.remaining());
+        std::int64_t stateNs = -1;  // the state's time: after the scheduler's magic and version
+        {
+            StateReader header(schedulerState);
+            std::uint32_t magic = 0;
+            std::uint32_t version = 0;
+            header.get(magic);
+            header.get(version);
+            header.get(stateNs);
+        }
+        const SiteNow siteBefore = siteNow();
+        const Tables tablesBefore = tablesNow();
+        if (!fileTables) {
+            fileTables = tablesBefore;
+        } else if (!sameShape(*fileTables)) {
+            return Status::error(StatusCode::Unsupported,
+                                 "the world tables changed shape since the files' values were "
+                                 "taken (a streamed tile?): parameters cannot be set on them");
+        }
+        const auto takeBack = [&] {
+            putSite(siteBefore);
+            putTables(tablesBefore);
+        };
+        putSite(saved);
+        putTables(*fileTables);
+        std::array<double, 4> start{};
+        for (const auto& [name, value] : parameters) {
+            Status status;
+            if (name.starts_with("site/")) {
+                status = storeSite(name.substr(5), value);
+                if (status.ok() && name == "site/gravity") {
+                    robot.world.gravityLocal = {0.0, 0.0, -value};
+                }
+            } else {
+                status = setParameter(name, value, start);
+            }
+            if (!status.ok()) {
+                takeBack();
+                return status;
+            }
+        }
+        moveStart(start);
+        const bool tablesChanged = !(tablesNow() == tablesBefore);
+        const bool siteChanged = !(siteNow() == siteBefore);
+        if (start != std::array<double, 4>{} && stateNs != 0) {
+            takeBack();
+            return Status::error(StatusCode::InvalidConfig,
+                                 "start/...: a robot starts elsewhere only from a state at t = 0");
+        }
+        if (tablesChanged || siteChanged) {
+            if (Status status = build(); !status.ok()) {
+                takeBack();
+                (void)build();
+                return status;
+            }
+            broadcast(environmentState());
+            if (tablesChanged && stateNs == 0) {
+                return {};  // afresh from the tables, as the run started
+            }
+        }
+        StateReader rest(schedulerState);
+        return scheduler->restoreState(rest);
+    }
+
+    Status setPushes(std::vector<Push> pushes) {
+        if (options.pushBodies.empty()) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "the run takes no pushes: start it with push bodies "
+                                 "(ServerOptions::pushBodies, Python pushes=)");
+        }
+        const std::vector<std::string> pushed = pushBodies();
+        for (Push& push : pushes) {
+            if (push.body.empty() && !robot.world.bodies.names.empty()) {
+                push.body = robot.world.bodies.names.front();
+            }
+            const bool known = std::ranges::find(pushed, push.body) != pushed.end();
+            if (!known) {
+                return Status::error(StatusCode::InvalidConfig, "no push on " + push.body +
+                                                                    ": the run pushes only the "
+                                                                    "bodies it was started with");
+            }
+            if (!std::isfinite(push.start) || !(push.duration >= 0.0) ||
+                !std::ranges::all_of(push.wrench, [](double v) { return std::isfinite(v); })) {
+                return Status::error(StatusCode::InvalidConfig,
+                                     "a push needs a finite start, wrench and a duration >= 0");
+            }
+        }
+        pushSchedule->replace(std::move(pushes));
         return {};
+    }
+    /// ServerOptions::pushBodies by name ("" the robot's first body).
+    [[nodiscard]] std::vector<std::string> pushBodies() const {
+        std::vector<std::string> names;
+        for (const std::string& name : options.pushBodies) {
+            if (name.empty()) {
+                if (!robot.world.bodies.names.empty()) {
+                    names.push_back(robot.world.bodies.names.front());
+                }
+            } else {
+                names.push_back(name);
+            }
+        }
+        std::ranges::sort(names);
+        names.erase(std::unique(names.begin(), names.end()), names.end());
+        return names;
     }
 
     /// Whether the run has people.
@@ -4800,6 +5259,7 @@ struct Server::Impl {
             return Status::error(status.code, "floating origin: " + status.message);
         }
         shiftRegion(robot, offset);
+        fileTables.reset();  // moved with the origin: the files' values no longer apply
         if (Status status = build(); !status.ok()) {
             return Status::error(status.code, "floating origin: " + status.message);
         }
@@ -4922,6 +5382,7 @@ struct Server::Impl {
         }
         const double old = *target;
         *target = value;
+        fileTables.reset();  // an edit is the model's own value from now on
         if (Status status = rebuildKeepingState(); !status.ok()) {
             *target = old;
             return Status::error(status.code, name + " = " + std::to_string(value) +
@@ -5503,6 +5964,7 @@ struct Server::Impl {
         tileContent.clear();
         tileSelector.reset();
         robot = std::move(model);
+        fileTables.reset();  // the model's tables are its files' again
         shift = recentre(robot);
         if (Status status = startStreaming(); !status.ok()) {
             return status;
@@ -9215,6 +9677,22 @@ Status Server::restoreState(std::span<const std::byte> state) {
         }
     }
     return s.scheduler->restoreState(reader);
+}
+
+std::map<std::string, double> Server::parameters() const {
+    return impl_->parameterValues();
+}
+
+Status Server::resetTo(std::span<const std::byte> state,
+                       const std::map<std::string, double>& parameters) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "resetTo() before load()");
+    }
+    return impl_->resetTo(state, parameters);
+}
+
+Status Server::setPushes(std::vector<Push> pushes) {
+    return impl_->setPushes(std::move(pushes));
 }
 
 Status Server::setSite(const std::string& name, double value) {

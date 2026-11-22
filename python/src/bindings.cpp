@@ -12,17 +12,22 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -39,8 +44,19 @@ public:
                const std::optional<std::vector<double>>& spawn,
                const std::optional<std::array<int, 3>>& traffic, bool jointControl,
                const std::vector<std::string>& sensorFaults,
-               const std::optional<std::string>& overlay, bool cameras) {
+               const std::optional<std::string>& overlay, bool cameras, const nb::object& pushes) {
         lagrange::server::ServerOptions options;
+        // pushes=True: the robot's first body takes pushes (set_pushes); a list: these bodies.
+        if (nb::isinstance<nb::bool_>(pushes)) {
+            if (nb::cast<bool>(pushes)) {
+                options.pushBodies = {""};
+            }
+        } else if (!pushes.is_none()) {
+            options.pushBodies = nb::cast<std::vector<std::string>>(pushes);
+            if (options.pushBodies.empty()) {
+                throw std::invalid_argument("pushes= is True, False or a list of body names");
+            }
+        }
         options.jointControl = jointControl;
         // False: cameras publish their ground truth and no GPU device is made for them, as for
         // `lagrange determinism` (many environments in one process, deterministic runs).
@@ -271,6 +287,30 @@ public:
         }
     }
 
+    /// Every parameter reset_to can set, with its files' value.
+    [[nodiscard]] std::map<std::string, double> parameters() const { return server_->parameters(); }
+
+    void resetTo(const nb::bytes& state, const std::map<std::string, double>& parameters) {
+        const std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(state.c_str()),
+                                               state.size());
+        if (const lagrange::Status status = server_->resetTo(bytes, parameters); !status.ok()) {
+            throw std::invalid_argument(status.message);
+        }
+    }
+
+    /// (body, start s, duration s, fx, fy, fz, tx, ty, tz) each; body "" the robot's first.
+    void setPushes(const std::vector<std::tuple<std::string, double, double, double, double, double,
+                                                double, double, double>>& pushes) {
+        std::vector<lagrange::server::Push> out;
+        out.reserve(pushes.size());
+        for (const auto& [body, start, duration, fx, fy, fz, tx, ty, tz] : pushes) {
+            out.push_back({body, start, duration, {fx, fy, fz, tx, ty, tz}});
+        }
+        if (const lagrange::Status status = server_->setPushes(std::move(out)); !status.ok()) {
+            throw std::invalid_argument(status.message);
+        }
+    }
+
     void setSite(const std::string& name, double value) {
         if (const lagrange::Status status = server_->setSite(name, value); !status.ok()) {
             throw std::runtime_error(status.message);
@@ -400,11 +440,12 @@ NB_MODULE(_lagrange, m) {
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&,
                       const std::optional<std::array<int, 3>>&, bool,
-                      const std::vector<std::string>&, const std::optional<std::string>&, bool>(),
+                      const std::vector<std::string>&, const std::optional<std::string>&, bool,
+                      const nb::object&>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
              "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false,
              "sensor_faults"_a = std::vector<std::string>{}, "overlay"_a = nb::none(),
-             "cameras"_a = true)
+             "cameras"_a = true, "pushes"_a = false)
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
@@ -426,6 +467,20 @@ NB_MODULE(_lagrange, m) {
         .def("save_state", &Simulation::saveState,
              "The whole state as bytes: restore_state goes back to it and the run repeats.")
         .def("restore_state", &Simulation::restoreState, "state"_a)
+        .def("parameters", &Simulation::parameters,
+             "Every parameter reset_to can set, with the value the files give it: "
+             "body/<b>/mass, com_x, inertia_xx, friction, world/friction, joint/<j>/damping, "
+             "friction, sensor/<n>/<setting>, '<prim path>.<attribute>', start/x|y|z|yaw.")
+        .def("reset_to", &Simulation::resetTo, "state"_a,
+             "parameters"_a = std::map<std::string, double>{},
+             "Back to a saved state with these parameters (and 'site/<name>' values) set on the "
+             "files' values, every other one at its file's. Changed parameters rebuild the run "
+             "from its tables, afresh when the state is at t = 0. ValueError for an unknown "
+             "name or a value out of range.")
+        .def("set_pushes", &Simulation::setPushes, "pushes"_a,
+             "With pushes=: replaces the push disturbances, each (body, start s, duration s, "
+             "fx, fy, fz N, tx, ty, tz N·m) in the world frame at the body's centre of mass; "
+             "body '' is the robot's first.")
         .def("set_site", &Simulation::setSite, "name"_a, "value"_a,
              "Change a site parameter while running: gravity, wind_speed, temperature, ...")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")

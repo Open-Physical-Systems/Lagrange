@@ -4,6 +4,7 @@
 #include "lagrange/module/Status.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/server/Profile.hpp"
+#include "lagrange/server/Pushes.hpp"
 #include "lagrange/signals/SignalBus.hpp"
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
@@ -112,6 +113,9 @@ struct ServerOptions {
     bool jointControl{false};
     /// Bandwidth of its position and velocity loops, Hz.
     double jointLoopHz{8.0};
+    /// Bodies that take push disturbances (Server::setPushes) as body/<b>/wrench/push; an empty
+    /// name stands for the robot's first body. Empty: no push module in the run.
+    std::vector<std::string> pushBodies;
     /// --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH: a body of still water (m); the surface at LEVEL.
     struct Water {
         std::array<double, 3> surface{};
@@ -285,6 +289,25 @@ public:
     /// Wind acts on links with AeroAPI_1 and on rotors; a value that brings a domain in or
     /// takes one out (the first air density) rebuilds the run keeping time and poses.
     Status setSite(const std::string& name, double value);
+    /// Domain randomisation (docs/guide/rl.md): every parameter resetTo can set, with the value
+    /// the robot's and world's files give it. "body/<b>/mass" (kg), "body/<b>/com_x|y|z" (m, body
+    /// frame), "body/<b>/inertia_xx|yy|zz|xy|xz|yz" (kg·m²), "body/<b>/friction" (every collider
+    /// of the body; "world/friction" the scenery's), "joint/<j>/damping" (N·m·s/rad or N·s/m),
+    /// "joint/<j>/friction" (N·m or N), "sensor/<n>/<setting>" (World::Sensors::settings, also
+    /// "latency" and the IMU's "accel_bias_mean", "gyro_bias_mean", ... though the file has none),
+    /// "<prim path>.<attribute>" (a number of one of our schemas, as SetAttribute edits it), and
+    /// "start/x|y|z|yaw" (m, rad: the robot's start moved in the world frame, turned about z).
+    [[nodiscard]] std::map<std::string, double> parameters() const;
+    /// Back to a saved state (saveState), with `parameters` set on the files' values and every
+    /// other parameter at its file's value, and "site/<name>" values (setSite's names) set on the
+    /// state's site. Nothing changed from the run as it is: as restoreState. The site changed:
+    /// the run is rebuilt and the state restored into it. A parameter changed: the run is rebuilt
+    /// from the world tables, and starts afresh at t = 0 when the state is at t = 0 (a robot moved
+    /// by "start/..." starts there), else the state is restored into it (no "start/...", then).
+    Status resetTo(std::span<const std::byte> state,
+                   const std::map<std::string, double>& parameters);
+    /// Replaces the pushes (ServerOptions::pushBodies), times in simulated seconds.
+    Status setPushes(std::vector<Push> pushes);
     /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
     /// "effort" (N·m, N). False for another mode, a joint the run does not have, or a value
     /// that is not finite.
