@@ -80,6 +80,9 @@ public:
         double maxAngleTiltRad{0.5235987755982988};  // 30°
         double minHeightM{0.3};      // m above the start the set point never goes below
         bool waitForCommand{false};  // on the ground until a command asks to climb
+        // The commands come from the API in step with the run (Server::commandFlight from
+        // Python), not from ROS: the run stays deterministic.
+        bool deterministicCommands{false};
     };
 
     /// A velocity command: forward and left in the drone's heading frame, up, and yaw rate.
@@ -89,12 +92,22 @@ public:
         /// over maxHorizontalMps are the share of full stick, which tilts it up to
         /// maxAngleTiltRad; nothing holds it in place, so the wind carries it (angle mode with
         /// altitude hold). Up and yaw rate are the same in both.
-        enum class Mode { Position, Angle };
+        ///
+        /// Rates: collective thrust and body rates, as an autopilot's acro mode or PX4's offboard
+        /// rate set point: the position and attitude loops are off; `thrustMps2` is the thrust
+        /// over the mass along the body z axis (9.81 hovers level), `rollRateRadps`,
+        /// `pitchRateRadps` and `yawRateRadps` the body rates the rate loop follows, each within
+        /// its cap (Settings::maxRollPitchRateRadps, maxYawRateRadps). Forward, left and up are
+        /// unused. Back in position mode it holds where it then is.
+        enum class Mode { Position, Angle, Rates };
         double forwardMps{0.0};
         double leftMps{0.0};
         double upMps{0.0};
         double yawRateRadps{0.0};
         Mode mode{Mode::Position};
+        double thrustMps2{0.0};      // Rates: collective thrust over mass, m/s²
+        double rollRateRadps{0.0};   // Rates: body x rate, rad/s
+        double pitchRateRadps{0.0};  // Rates: body y rate, rad/s
     };
     /// Where commands come from (ROS /cmd_vel); nullopt: none recent, hold where it is.
     using CommandSource = std::function<std::optional<FlightCommand>()>;
@@ -138,6 +151,12 @@ public:
                                  const std::vector<double>& thrustMax, bool airborne = false);
 
 private:
+    /// The mixer and each rotor's speed loop: (thrust N, body torque N·m) to torque commands.
+    /// `errorR` and `ki`: the attitude error and integral gain (roll and pitch integral, grown
+    /// only while the rotors give what is asked); `yaw`: the heading now, rad.
+    void drive(SignalBus& bus, double thrust, const std::array<double, 3>& torque,
+               const std::array<double, 3>& errorR, double ki, double dt, double yaw);
+
     struct Rotor {
         std::array<double, 3> position{};  // hub in the base frame, m
         double direction{1.0};             // +1 ccw, −1 cw about the thrust direction (+z)

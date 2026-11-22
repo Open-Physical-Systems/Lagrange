@@ -24,3 +24,5 @@ robotis = "robotis"  # ROBOTIS, a robot maker (MuJoCo Menagerie robotis_op3)
 Metalness = "Metalness"
 # POSIX msghdr field.
 msg_controllen = "msg_controllen"
+# Stable-Baselines3 PPO argument (generalized advantage estimation lambda).
+gae_lambda = "gae_lambda"

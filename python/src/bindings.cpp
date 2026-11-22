@@ -6,6 +6,7 @@
 //   sim.read("body/base_link/pose")
 #include "lagrange/server/Server.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -317,6 +318,26 @@ public:
         }
     }
 
+    void commandFlight(const std::string& mode, const std::vector<double>& values) {
+        std::array<double, 4> four{};
+        if (mode != "hold" && values.size() != four.size()) {
+            throw std::invalid_argument("command_flight takes four values, not " +
+                                        std::to_string(values.size()));
+        }
+        std::copy_n(values.begin(), std::min(values.size(), four.size()), four.begin());
+        if (const lagrange::Status status = server_->commandFlight(mode, four); !status.ok()) {
+            throw std::invalid_argument(status.message);
+        }
+    }
+
+    void record(const std::string& path) {
+        if (const lagrange::Status status = server_->startRecording(path); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
+    }
+
+    void stopRecording() { server_->stopRecording(); }
+
     [[nodiscard]] std::vector<std::string> notes() const { return server_->importNotes(); }
 
     [[nodiscard]] nb::list signals() const {
@@ -483,6 +504,19 @@ NB_MODULE(_lagrange, m) {
              "body '' is the robot's first.")
         .def("set_site", &Simulation::setSite, "name"_a, "value"_a,
              "Change a site parameter while running: gravity, wind_speed, temperature, ...")
+        .def("command_flight", &Simulation::commandFlight, "mode"_a,
+             "values"_a = std::vector<double>{},
+             "Fly a multicopter that the built-in controller flies. mode 'velocity': [forward, "
+             "left, up] m/s in its heading frame and yaw rate rad/s, as /cmd_vel; 'angle': the "
+             "same in angle mode; 'rates': [thrust over mass m/s² along body z (9.81 hovers "
+             "level), roll, pitch, yaw rate rad/s in the body frame]; 'hold': no command, it "
+             "holds where it is. The command stays until the next. ValueError for a robot no "
+             "built-in controller flies.")
+        .def("record", &Simulation::record, "path"_a,
+             "Record the run from now to an MCAP file, as lagrange_server --record, until "
+             "stop_recording() or the end of the Simulation; lagrange_server --replay serves it "
+             "to viewers. Going back with restore_state while recording is not supported.")
+        .def("stop_recording", &Simulation::stopRecording, "End the recording record() began.")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")

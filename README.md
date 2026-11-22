@@ -181,6 +181,7 @@ recorded to MCAP and replayed.
 - [Robots and worlds](docs/guide/robots.md)
 - [The run file](docs/guide/run-file.md)
 - [Sensors](docs/guide/sensors.md)
+- [Training a policy](docs/guide/training-a-policy.md)
 - [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
 - [Tutorial: the sample arm with MoveIt 2](docs/guide/tutorial-arm.md)
 - [Tutorial: a car in a city block](docs/guide/tutorial-cars.md)

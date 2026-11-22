@@ -83,6 +83,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <netinet/in.h>
 #include <numbers>
 #include <optional>
@@ -1557,26 +1558,32 @@ struct Server::Impl {
                 // left and up in m/s, yaw rate in rad/s; without a command for 0.5 s it holds.
                 // /flight_mode angle: the sticks tilt it and the wind carries it; without a
                 // command it flies level, holding only its height.
-                MulticopterController::CommandSource commands;
-                if (bridge) {
-                    commands = [this]() -> std::optional<MulticopterController::FlightCommand> {
-                        using Mode = MulticopterController::FlightCommand::Mode;
-                        const Mode mode = bridge->flightMode() == ros2::FlightMode::Angle
-                                              ? Mode::Angle
-                                              : Mode::Position;
-                        const auto c = bridge->latestCommand(std::chrono::milliseconds(500));
-                        if (!c) {
-                            if (mode == Mode::Angle) {
-                                return MulticopterController::FlightCommand{0.0, 0.0, 0.0, 0.0,
-                                                                            mode};
-                            }
-                            return std::nullopt;
+                // A command from the API (Server::commandFlight, Python's command_flight) wins
+                // while it is set; otherwise ROS's, when the bridge runs.
+                MulticopterController::CommandSource commands = [this, slot = flightCommands]()
+                    -> std::optional<MulticopterController::FlightCommand> {
+                    if (auto api = slot->get()) {
+                        return api;
+                    }
+                    if (!bridge) {
+                        return std::nullopt;
+                    }
+                    using Mode = MulticopterController::FlightCommand::Mode;
+                    const Mode mode = bridge->flightMode() == ros2::FlightMode::Angle
+                                          ? Mode::Angle
+                                          : Mode::Position;
+                    const auto c = bridge->latestCommand(std::chrono::milliseconds(500));
+                    if (!c) {
+                        if (mode == Mode::Angle) {
+                            return MulticopterController::FlightCommand{0.0, 0.0, 0.0, 0.0, mode};
                         }
-                        return MulticopterController::FlightCommand{
-                            c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps, mode};
-                    };
-                }
+                        return std::nullopt;
+                    }
+                    return MulticopterController::FlightCommand{
+                        c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps, mode};
+                };
                 MulticopterController::Settings flight;
+                flight.deterministicCommands = bridge == nullptr;
                 flight.thrustLimit = options.thrustLimit;
                 flight.waitForCommand = !options.demoDrive;  // --no-demo: it waits for you
                 // The ground under it, so that it can fly off a bridge or a roof and land below.
@@ -1756,6 +1763,20 @@ struct Server::Impl {
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
     /// Gripper commands from the API (Server::commandActuator), outliving rebuilds.
     std::shared_ptr<actuators::Commands> actuatorCommands = std::make_shared<actuators::Commands>();
+    /// Flight commands from the API (Server::commandFlight), outliving rebuilds.
+    struct FlightCommands {
+        std::optional<MulticopterController::FlightCommand> get() const {
+            const std::lock_guard lock(mutex);
+            return command;
+        }
+        void set(std::optional<MulticopterController::FlightCommand> next) {
+            const std::lock_guard lock(mutex);
+            command = next;
+        }
+        mutable std::mutex mutex;
+        std::optional<MulticopterController::FlightCommand> command;
+    };
+    std::shared_ptr<FlightCommands> flightCommands = std::make_shared<FlightCommands>();
     /// Servo commands from the API (Server::commandJoint on a servo joint), outliving rebuilds.
     std::shared_ptr<actuators::Commands> servoCommands = std::make_shared<actuators::Commands>();
     // Stateless modules ("domain/name") left out of the run because the state restored last was
@@ -9572,8 +9593,25 @@ Status Server::stepUntil(SimTime t) {
         if (Status status = impl_->worldUpdate(true); !status.ok()) {
             return status;
         }
+        if (impl_->recorder) {
+            impl_->record();
+        }
     }
     return {};
+}
+
+Status Server::startRecording(const std::string& path) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "startRecording() before load()");
+    }
+    impl_->stopRecording("a new recording started");
+    return impl_->startRecording(path);
+}
+
+void Server::stopRecording() {
+    if (impl_->scheduler) {
+        impl_->stopRecording("stopped");
+    }
 }
 
 std::vector<Server::SignalEntry> Server::signals() const {
@@ -9700,6 +9738,45 @@ Status Server::setSite(const std::string& name, double value) {
         return Status::error(StatusCode::Internal, "setSite() before load()");
     }
     return impl_->setSite(name, value);
+}
+
+Status Server::commandFlight(const std::string& mode, const std::array<double, 4>& values) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "commandFlight() before load()");
+    }
+    Impl& s = *impl_;
+    if (!MulticopterController::canFly(WorldView(s.robot.world)) || s.controllers ||
+        s.jointControlled() || s.options.px4Port || s.options.ardupilotPort) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "no built-in flight controller flies this run's robot (a "
+                             "multicopter without an autopilot or ros2_control)");
+    }
+    for (const double v : values) {
+        if (!std::isfinite(v)) {
+            return Status::error(StatusCode::InvalidConfig, "flight command values must be finite");
+        }
+    }
+    using Command = MulticopterController::FlightCommand;
+    if (mode == "hold") {
+        s.flightCommands->set(std::nullopt);
+        return {};
+    }
+    Command c;
+    if (mode == "velocity" || mode == "angle") {
+        c = Command{values[0], values[1], values[2], values[3],
+                    mode == "angle" ? Command::Mode::Angle : Command::Mode::Position};
+    } else if (mode == "rates") {
+        c.mode = Command::Mode::Rates;
+        c.thrustMps2 = values[0];
+        c.rollRateRadps = values[1];
+        c.pitchRateRadps = values[2];
+        c.yawRateRadps = values[3];
+    } else {
+        return Status::error(StatusCode::InvalidConfig,
+                             "flight mode must be velocity, angle, rates or hold, not " + mode);
+    }
+    s.flightCommands->set(c);
+    return {};
 }
 
 bool Server::commandActuator(const std::string& name, double value) {

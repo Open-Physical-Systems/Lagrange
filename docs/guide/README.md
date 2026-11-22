@@ -14,6 +14,7 @@
 | [Tutorial: a car in a city block](tutorial-cars.md) | The sedan's layers, OpenDRIVE roads, traffic, radar and camera, an OpenSCENARIO cut-in, driving over `/ackermann_cmd` |
 | [Tutorial: people around your robot](tutorial-humans.md) | A crowd, spawning a person, your own person with waypoints, how close a robot came, and what people do not do |
 | [Tutorial: heat in the parts, and a robot's own interference](tutorial-heat-and-emi.md) | LEDs heating a board and its heat sink, thermometers, the same in OpenFOAM, and battery leads disturbing a compass |
+| [Training a policy](training-a-policy.md) | The task library (`lagrange.tasks`: quadcopter hover and waypoints, AMR go-to-goal), PPO with Stable-Baselines3 in parallel workers, the curves, success against random and the built-in controller |
 | [Autoware with a simulated car](autoware.md) | The vehicle interface (`lagrange_autoware`), building it with the Autoware messages, the sedan launch, and what to do while Autoware is not on Lyrical |
 | [The run file](run-file.md) | One YAML file for a whole run: robot, world, what to simulate, the site. Start here for your own robot |
 | [The viewer's workspaces](viewer.md) | What each workspace offers: the command palette, Domains' tabs, radar drawing, Replay comparison, ROS 2 actions and TF tree, Performance |

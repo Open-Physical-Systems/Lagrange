@@ -241,7 +241,13 @@ bool MulticopterController::canFly(const WorldView& world) {
 
 ModuleInfo MulticopterController::info() const {
     // Commands from outside (ROS) are not deterministic.
-    return {"control", "multicopter", 0, 1, false, !commands_, CapabilityTier::Tier0};
+    return {"control",
+            "multicopter",
+            0,
+            1,
+            false,
+            !commands_ || settings_.deterministicCommands,
+            CapabilityTier::Tier0};
 }
 
 Duration MulticopterController::preferredStep() const {
@@ -481,6 +487,35 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
                      dot({rot[0][1], rot[1][1], rot[2][1]}, omegaWorld),
                      dot({rot[0][2], rot[1][2], rot[2][2]}, omegaWorld)};
 
+    const double dt = context.dt.seconds();
+    const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
+    if (command && command->mode == FlightCommand::Mode::Rates) {
+        // Collective thrust and body rates: the rate loop of the cascade below, fed by the
+        // command instead of the attitude error. The set point follows the drone, so that back
+        // in position mode it holds where it then is.
+        setpoint_ = position;
+        velocity_ = {};
+        accel_ = {};
+        held_ = {};
+        attitudeIntegral_ = {};
+        heading_ = std::atan2(rot[1][0], rot[0][0]);
+        const double wa = 2.0 * std::numbers::pi * settings_.attitudeHz;
+        const double kdRate = 2.0 * settings_.damping * wa;
+        const Vec3 wanted{std::clamp(command->rollRateRadps, -settings_.maxRollPitchRateRadps,
+                                     settings_.maxRollPitchRateRadps),
+                          std::clamp(command->pitchRateRadps, -settings_.maxRollPitchRateRadps,
+                                     settings_.maxRollPitchRateRadps),
+                          std::clamp(command->yawRateRadps, -settings_.maxYawRateRadps,
+                                     settings_.maxYawRateRadps)};
+        Vec3 torque{};
+        for (std::size_t i = 0; i < 3; ++i) {
+            torque[i] = inertia_[i] * kdRate * (wanted[i] - omega[i]);
+        }
+        const double thrust = mass_ * std::max(0.0, command->thrustMps2);
+        drive(bus, thrust, torque, {}, 0.0, dt, heading_);
+        return {};
+    }
+
     // Position loop: the acceleration wanted, plus gravity, times the mass.
     const double wp = 2.0 * std::numbers::pi * settings_.positionHz;
     const double kp = wp * wp;
@@ -492,8 +527,6 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     bool angleMode = false;
     std::array<double, 2> tilt{};  // angle mode: the stick's share towards world x and y
     double yawRate = 0.0;
-    const double dt = context.dt.seconds();
-    const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
     // Where it would stand here: on the surface under it, or at its start without the scenery.
     double standing = home_[2];
     if (standKnown_) {
@@ -660,6 +693,12 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         torque[i] = inertia_[i] * kd * (wanted - omega[i]);
     }
 
+    drive(bus, thrust, torque, errorR, ki, dt, std::atan2(rot[1][0], rot[0][0]));
+    return {};
+}
+
+void MulticopterController::drive(SignalBus& bus, double thrust, const Vec3& torque,
+                                  const Vec3& errorR, double ki, double dt, double yaw) {
     // Mixer and each rotor's speed loop, for the air the rotors are in.
     double airShare = 1.0;
     if (densityIn_.valid()) {
@@ -684,7 +723,6 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         // Yaw saturated (a cable or the wind turns it harder than the propellers can): the held
         // heading follows within kSaturatedYawErrorRad, so the error does not wind up and it
         // turns back smoothly once it can.
-        const double yaw = std::atan2(rot[1][0], rot[0][0]);
         const double off = std::remainder(heading_ - yaw, 2.0 * std::numbers::pi);
         if (std::abs(off) > kSaturatedYawErrorRad) {
             heading_ = yaw + std::copysign(kSaturatedYawErrorRad, off);
@@ -706,7 +744,6 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         }
         bus.write(r.command, torqueCommand);
     }
-    return {};
 }
 
 Status MulticopterController::saveState(StateWriter& writer) const {
