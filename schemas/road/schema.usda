@@ -2,7 +2,9 @@
 (
     """Lagrange road schemas (RFC 0002, docs/design/formats.md section 3.11). Codeless.
     RoadLaneAPI_1 makes a prim one lane of a road network (from OpenDRIVE, io/opendrive): its
-    centre line in the direction of travel and its links, for traffic and planners."""
+    centre line in the direction of travel and its links, for traffic and planners.
+    RoadSignalAPI_1 makes a prim one traffic light (an OpenDRIVE dynamic signal): the lanes it
+    governs, where vehicles stop for it, and the controller it turns with."""
     subLayers = [ @usd/schema.usda@ ]
 )
 
@@ -65,5 +67,67 @@ class "RoadLaneAPI_1" (
     )
     rel lane:predecessors (
         doc = "Lanes that lead into this one."
+    )
+}
+
+class "RoadSignalAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A traffic light: an OpenDRIVE dynamic <signal> (ASAM OpenDRIVE 1.8 section 14) with
+    its validity and controller. The prim's pose is the middle of the light's face, its x axis
+    out of the face towards the traffic it governs. Vehicles on the lanes it governs stop where
+    it stands along the road (signal:s); the signals of one controller turn green together, and
+    a junction's controllers take turns in their signal:sequence order."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    string signal:id = "" (
+        doc = "The OpenDRIVE signal id."
+    )
+    int signal:road = 0 (
+        lagrangeUnit = "1"
+        doc = "The OpenDRIVE road id the signal stands on."
+    )
+    double signal:s = 0 (
+        lagrangeUnit = "m"
+        doc = "Where along its road (OpenDRIVE s) it stands: the stop line of the lanes it governs."
+    )
+    double signal:t = 0 (
+        lagrangeUnit = "m"
+        doc = "Its lateral offset from the road's reference line, positive to the left."
+    )
+    uniform token signal:orientation = "+" (
+        allowedTokens = ["+", "-", "none"]
+        doc = "The traffic it applies to: + along s (right lanes), - against s (left lanes), none both."
+    )
+    string signal:type = "" (
+        doc = "The OpenDRIVE signal type (country specific, e.g. 1000001 for a three-lamp light)."
+    )
+    string signal:subtype = "" (
+        doc = "The OpenDRIVE signal subtype."
+    )
+    int signal:fromLane = 0 (
+        lagrangeUnit = "1"
+        doc = "The first lane id it governs (OpenDRIVE validity); with signal:toLane 0 as well: every driving lane of its orientation's side."
+    )
+    int signal:toLane = 0 (
+        lagrangeUnit = "1"
+        doc = "The last lane id it governs (OpenDRIVE validity)."
+    )
+    string signal:controller = "" (
+        doc = "The OpenDRIVE controller that switches it; empty: none, it turns on its own."
+    )
+    int signal:junction = -1 (
+        lagrangeUnit = "1"
+        doc = "The OpenDRIVE junction whose controller list names its controller; -1: none."
+    )
+    int signal:sequence = -1 (
+        lagrangeUnit = "1"
+        doc = "Its controller's sequence in that junction: lower turns green first; -1: none given (then by controller id)."
+    )
+    double signal:height = 0 (
+        lagrangeUnit = "m"
+        doc = "The light's head height; its lamps stand a third of it apart. 0: not given (1 m)."
     )
 }

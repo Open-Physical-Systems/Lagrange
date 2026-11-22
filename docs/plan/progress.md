@@ -360,7 +360,9 @@ fallback documented if Autoware is not available for Lyrical.
    BankedRoad, `test_server` BankedRing. Objects and signals **done** 2026-11-17: `<object>` with
    `<repeat>` and outlines as fixed scenery (boxes, cylinders, hulls; marks painted), `<signal>`
    as boards and dark traffic-light heads on poles, formats.md §3.11, `test_opendrive` Objects.
-   Owed: signals do not drive the traffic module's lights, which stay at the lane ends)
+   Signals drive the traffic lights **done** 2026-11-22: `RoadSignalAPI_1` (validity,
+   controllers, junction sequence), stop lines at the signals, lamps in their housings;
+   `test_opendrive` Signals, `test_traffic` OpenDriveSignals)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
    traffic lights, as kinematic bodies (**done** 2026-10-25: `lagrange_traffic`, traffic.md §8;
    kinematic bodies in MuJoCo and Jolt; `--traffic`; the city block runs 8 vehicles and 6

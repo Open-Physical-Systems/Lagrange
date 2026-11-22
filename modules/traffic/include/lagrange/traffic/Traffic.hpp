@@ -46,6 +46,23 @@ struct LaneGraph {
     std::vector<std::optional<std::size_t>> beside;
     /// Whether any lane leaves the level (its centre lines' heights differ): agents then tilt.
     bool sloped{false};
+    /// Per junction, how many signal groups take turns: 2 for the lights placed by geometry,
+    /// its controllers for a junction with RoadSignalAPI_1 signals.
+    std::vector<int> groups;
+    /// Per lane, where along it vehicles stop for its light (m): its end, or the stop line of the
+    /// RoadSignalAPI_1 signal that governs it.
+    std::vector<double> stopAt;
+    /// Per lane with a light from a RoadSignalAPI_1 signal: where its head is, the middle of
+    /// the housing behind the face (as vehicleHead's), the way it faces and its lamps' spacing.
+    struct SignalHead {
+        Vec3 at{};
+        double yaw{0.0};
+        double spacing{0.33};  // m between its lamps
+    };
+    std::vector<std::optional<SignalHead>> head;
+    /// Whether the lights come from the world's RoadSignalAPI_1 signals (OpenDRIVE dynamic
+    /// signals) rather than from the junctions' geometry.
+    bool fromSignals{false};
 };
 
 /// A vehicle's tilt on its lane `along` metres in: roll about its direction of travel (rad,
@@ -57,7 +74,11 @@ struct Tilt {
 };
 [[nodiscard]] Tilt tiltAt(const LaneGraph& graph, std::size_t lane, double along);
 
-/// The network of `world`'s RoadLaneAPI_1 lanes, with signal groups: per junction, approaches
+/// The network of `world`'s RoadLaneAPI_1 lanes, with signal groups. With RoadSignalAPI_1
+/// signals in the world, a junction has lights when signals govern lanes into it (or it has a
+/// crossing): the signals of one controller share a group, a junction's controllers take turns in
+/// their sequence order (else by controller id), and vehicles stop at a signal's stop line.
+/// Without them, every junction whose lanes conflict has lights and, per junction, approaches
 /// facing each other share a group.
 [[nodiscard]] LaneGraph lanesOf(const WorldView& world);
 

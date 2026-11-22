@@ -38,7 +38,7 @@ EXPECTED = {
     "sensor_material": ["SensorMaterialAPI_1"],
     "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
     "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
-    "road": ["RoadLaneAPI_1"],
+    "road": ["RoadLaneAPI_1", "RoadSignalAPI_1"],
     "human": ["HumanAPI_1"],
     "water": ["WaterAPI_1"],
     "joint": ["JointDynamicsAPI_1"],
@@ -228,6 +228,22 @@ def test_brake_is_an_addition():
     assert brake.GetAttributeDefinition("act:brake:holdingForce").GetMetadata("lagrangeUnit") == "N"
     with FROZEN.open() as f:
         assert "BrakeAPI_1" not in json.load(f)
+
+
+def test_road_signal_is_an_addition():
+    # OpenDRIVE dynamic signals drive the traffic lights: RoadSignalAPI_1 is a new class of the
+    # road library (schema addition approved by the owner on 2026-11-22).
+    signal = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("RoadSignalAPI_1")
+    assert signal
+    assert signal.GetAttributeDefinition("signal:s").GetMetadata("lagrangeUnit") == "m"
+    assert signal.GetAttributeDefinition("signal:fromLane").GetFallbackValue() == 0
+    assert signal.GetAttributeDefinition("signal:sequence").GetFallbackValue() == -1
+    tokens = signal.GetAttributeDefinition("signal:orientation").GetMetadata("allowedTokens")
+    assert list(tokens) == ["+", "-", "none"]
+    with FROZEN.open() as f:
+        frozen = json.load(f)
+    assert "RoadSignalAPI_1" not in frozen
+    assert not [name for name in frozen["RoadLaneAPI_1"] if name.startswith("signal:")]
 
 
 def test_solenoid_is_an_addition():

@@ -714,6 +714,23 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
 | `lane:junction` | bool | — | `false` | A junction's connecting road |
 | `lane:successors`, `lane:predecessors` | rel | — | — | Lanes it continues into, and those leading into it |
 
+**`RoadSignalAPI_1`** (single-apply, added in 1.x: schema addition approved by the owner on
+2026-11-22). One per traffic light (an OpenDRIVE dynamic signal), on an Xform at the middle of the
+light's face, its x axis out of the face towards the traffic it governs.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `signal:id` | string | — | `""` | The OpenDRIVE signal id |
+| `signal:road` | int | 1 | `0` | The road it stands on |
+| `signal:s`, `signal:t` | double | m | `0` | Where on the road: s is the stop line of the lanes it governs |
+| `signal:orientation` | token | — | `+` | `+` traffic along s (right lanes), `-` against s (left lanes), `none` both |
+| `signal:type`, `signal:subtype` | string | — | `""` | OpenDRIVE type and subtype (country specific) |
+| `signal:fromLane`, `signal:toLane` | int | 1 | `0` | The lanes it governs (OpenDRIVE `<validity>`); both 0: every driving lane of its orientation's side |
+| `signal:controller` | string | — | `""` | The OpenDRIVE controller that switches it; empty: none |
+| `signal:junction` | int | 1 | `-1` | The junction whose `<controller>` list names that controller |
+| `signal:sequence` | int | 1 | `-1` | That controller's `sequence` there (else the controller's own); lower turns green first; -1: none given |
+| `signal:height` | double | m | `0` | The light's head height; its lamps a third of it apart. 0: not given (1 m) |
+
 **OpenDRIVE import** (v0.6). An own reader covers the subset that carries geometry and lanes:
 - **Reference lines:** line, arc, spiral (clothoid, by Gauss–Legendre integration), poly3 and
   paramPoly3 (both by arc length).
@@ -779,13 +796,22 @@ road surface, `zOffset` up, and faces the traffic it applies to: orientation `+`
 s) looks back against s, `-` and `none` along it, turned counter-clockwise by `hOffset`, then
 `pitch` and `roll`. It is `width` wide and `height` tall (0.6 m by 0.6 m when not given, 3 cm
 thick); a dynamic signal (`dynamic="yes"`, a traffic light) is a dark housing (0.35 m by 1.0 m
-by 0.3 m when not given) with its red, yellow and green lamps drawn unlit. A steel pole
-(radius 4 cm) behind it rises from the road surface to its top when zOffset is above the road.
-Board and pole collide. The traffic module (traffic.md §8) still places and lights its own
-signal heads at the ends of the lanes into each junction: a file's signals do not drive it,
-since the lanes have no attribute to carry a signal's place and passing one would take a schema
-addition; `<signalReference>`, `<controller>` and the signals' country codes and values are not
-read.
+by 0.3 m when not given) whose lamps the traffic module draws and lights. A steel pole (radius
+4 cm) behind it rises from the road surface to its top when zOffset is above the road. Board and
+pole collide.
+
+A dynamic signal is also a `RoadSignalAPI_1` prim, `/<root>/signals/signal_<id>`, at the middle
+of its face (its board's origin plus half its depth out and half its height up). Its first
+`<validity fromLane toLane>` (§14.3) gives the lanes it governs; without one, every driving lane
+of the side its orientation faces. Its controller is the first top-level `<controller>` whose
+`<control signalId>` names it (§14.6), and that controller's place in its junction is the
+`sequence` of the junction's `<controller id>` entry that names it (else the top-level
+controller's own `sequence`). The traffic module (traffic.md §8) then takes its lights from
+these prims: vehicles stop at each signal's s on the lanes it governs, a controller's signals
+turn together and a junction's controllers take turns. A world without them keeps the lights
+the traffic module places by the junctions' geometry. Not read: `<signalReference>` (a signal
+governing another road), a second `<validity>`, `<dependency>` and `<reference>`, the control
+`type`, and the signals' country codes and values.
 
 ### 3.12 `schemas/tether/schema.usda`
 
