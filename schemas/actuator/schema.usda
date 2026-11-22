@@ -305,3 +305,48 @@ class "ServoAPI_1" (
         overheating shutdown turns the torque off. 0: never."""
     )
 }
+
+class "SolenoidAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A solenoid (RFC 0020 section 4.6) on this prismatic joint: a plunger in a coil whose
+    inductance L(x) grows as the plunger goes in. The joint's position x is the plunger's travel
+    into the coil, 0 at rest and stroke fully in; its limits are the stops. With the flux linkage
+    as the coil's state, v = R i + d(L(x) i)/dt, and the joint is pushed along +x by
+    F = 1/2 i^2 dL/dx - (springPreload + springRate x). The command act/<joint>/command (0 to 1)
+    puts that share of ratedVoltage across the coil."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double[] act:solenoid:inductanceStrokes (
+        lagrangeUnit = "m"
+        doc = """The strokes of the inductance table, rising, from 0 or less to the stroke or
+        more (RFC 0020's inductanceTable, its first column). Required."""
+    )
+    double[] act:solenoid:inductances (
+        lagrangeUnit = "H"
+        doc = """The coil's inductance at each of inductanceStrokes; linear between them.
+        Required."""
+    )
+    double act:solenoid:resistance (
+        lagrangeUnit = "ohm"
+        doc = "The coil's resistance. Required."
+    )
+    double act:solenoid:springRate = 0 (
+        lagrangeUnit = "N/m"
+        doc = "The return spring's rate."
+    )
+    double act:solenoid:springPreload = 0 (
+        lagrangeUnit = "N"
+        doc = "The return spring's push at rest (x = 0), towards rest."
+    )
+    double act:solenoid:stroke (
+        lagrangeUnit = "m"
+        doc = "The plunger's travel, rest to fully in. Required."
+    )
+    double act:solenoid:ratedVoltage (
+        lagrangeUnit = "V"
+        doc = "The voltage across the coil at a command of 1. Required."
+    )
+}

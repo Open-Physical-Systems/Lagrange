@@ -13,6 +13,8 @@ add_library(
     src/Nozzles.cpp
     src/Servo.cpp
     src/Servos.cpp
+    src/Solenoid.cpp
+    src/Solenoids.cpp
 )
 lagrange_target_defaults(lagrange_actuators)
 target_include_directories(
@@ -43,6 +45,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_servo test/test_servo.cpp TIMEOUT 120)
     target_link_libraries(test_servo lagrange_actuators)
     lagrange_target_defaults(test_servo)
+    ament_add_gtest(test_solenoid test/test_solenoid.cpp TIMEOUT 120)
+    target_link_libraries(test_solenoid lagrange_actuators)
+    lagrange_target_defaults(test_solenoid)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

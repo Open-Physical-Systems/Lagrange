@@ -2,6 +2,7 @@
 #include "lagrange/actuators/Grippers.hpp"
 #include "lagrange/actuators/Nozzles.hpp"
 #include "lagrange/actuators/Servos.hpp"
+#include "lagrange/actuators/Solenoids.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
@@ -54,10 +55,10 @@
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
 #include "lagrange/vegetation/Vegetation.hpp"
-#include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
+#include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/RoadLanes.hpp"
 
@@ -508,7 +509,7 @@ struct Session {
     // The slices this viewer wants: per field and orientation (a viewer may watch the air both
     // from above and from the side).
     std::map<std::pair<std::string, int>, FieldWant> fields;
-    double cutVersion{-1.0};  // the vegetation/canopy_cut version last sent as kCutField
+    double cutVersion{-1.0};      // the vegetation/canopy_cut version last sent as kCutField
     Clock::time_point cutSent{};  // when: sent again every few seconds (a rebuilt run restarts it)
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
@@ -948,6 +949,10 @@ struct Server::Impl {
             for (const std::string& joint : servoJoints()) {
                 modes[joint] = "servo";
             }
+            // A solenoid's plunger (RFC 0020 §4.6) is pushed by its coil and spring only.
+            for (const std::string& joint : solenoidJoints()) {
+                modes[joint] = "servo";
+            }
             next->add(std::make_unique<JointControl>(jointTargets, std::move(modes),
                                                      options.jointLoopHz));
         } else if (controllers) {
@@ -1184,6 +1189,23 @@ struct Server::Impl {
                                            : actuators::Servos::Mode::Off;
                 next->add(std::make_unique<actuators::Servos>(mode, servoCommands),
                           ModuleConfig(board));
+            }
+        }
+        // Solenoids (RFC 0020 §4.6): each plunger's coil and spring, as a force on its slide.
+        // Before the electrical substitute, which passes on the torque commands declared above.
+        if (hasSolenoids()) {
+            ModuleConfigData coil;
+            if (!(off("actuators") && !hasGrippers() && !hasNozzles() && !hasServos() &&
+                  addPluginSubstitute("actuators", coil))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const bool ideal =
+                    token != settings.substituteTokens.end() && token->second == "ideal";
+                const actuators::Solenoids::Mode mode = !off("actuators")
+                                                            ? actuators::Solenoids::Mode::Full
+                                                        : ideal ? actuators::Solenoids::Mode::Ideal
+                                                                : actuators::Solenoids::Mode::Off;
+                next->add(std::make_unique<actuators::Solenoids>(mode, actuatorCommands),
+                          ModuleConfig(coil));
             }
         }
         // People (RFC 0009): moved like traffic agents, around the robots.
@@ -2008,6 +2030,22 @@ struct Server::Impl {
         const WorldView view(robot.world);
         const World::Joints& joints = robot.world.joints;
         for (const SchemaInstance* s : view.instancesOf("ServoAPI_1")) {
+            const auto j = std::find(joints.prim.begin(), joints.prim.end(), s->prim);
+            if (j != joints.prim.end()) {
+                out.push_back(joints.names[static_cast<std::size_t>(j - joints.prim.begin())]);
+            }
+        }
+        return out;
+    }
+    /// Whether the stage has solenoids (RFC 0020 §4.6), and the joints they push.
+    bool hasSolenoids() const {
+        return !WorldView(robot.world).instancesOf("SolenoidAPI_1").empty();
+    }
+    std::vector<std::string> solenoidJoints() const {
+        std::vector<std::string> out;
+        const WorldView view(robot.world);
+        const World::Joints& joints = robot.world.joints;
+        for (const SchemaInstance* s : view.instancesOf("SolenoidAPI_1")) {
             const auto j = std::find(joints.prim.begin(), joints.prim.end(), s->prim);
             if (j != joints.prim.end()) {
                 out.push_back(joints.names[static_cast<std::size_t>(j - joints.prim.begin())]);
@@ -3710,7 +3748,7 @@ struct Server::Impl {
                 yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
                                               : "  lights: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "actuators" &&
-                       (hasGrippers() || hasNozzles() || hasServos())) {
+                       (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids())) {
                 yaml += substituted("actuators")
                             ? "  actuators: {enabled: false, substitute: zero}\n"
                             : "  actuators: {enabled: true}\n";
@@ -3835,8 +3873,8 @@ struct Server::Impl {
                   "plane)"
             : domain == "fire" ? "no fires in the stage (FireAPI_1)"
             : domain == "actuators"
-                ? "no grippers, nozzles or servos in the stage (SuctionGripperAPI_1, "
-                  "MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1)"
+                ? "no grippers, nozzles, servos or solenoids in the stage (SuctionGripperAPI_1, "
+                  "MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1, SolenoidAPI_1)"
                 : "no module in this build yet; the substitute stands in");
     }
 
@@ -4997,6 +5035,19 @@ struct Server::Impl {
         if (appliedGravity) {
             model.world.gravityLocal = {0.0, 0.0, -*appliedGravity};
         }
+        // A solenoid's slide (RFC 0020 §4.6) is driven by its coil whatever its file says: the
+        // engines take a force only on an actuated joint.
+        for (const SchemaInstance* solenoid : WorldView(model.world).instancesOf("SolenoidAPI_1")) {
+            World::Joints& joints = model.world.joints;
+            const auto j = std::find(joints.prim.begin(), joints.prim.end(), solenoid->prim);
+            if (j != joints.prim.end()) {
+                const auto index = static_cast<std::size_t>(j - joints.prim.begin());
+                if (!joints.actuated[index]) {
+                    joints.actuated[index] = true;
+                    model.actuatedJoints.push_back(joints.names[index]);
+                }
+            }
+        }
         // Joint control: every hinge and slide of the robot takes a command, whatever its file
         // says (a plain URDF has no <ros2_control> block to say so).
         jointControllable = WorldView(model.world).instancesOf("VehicleAPI_1").empty() &&
@@ -6054,7 +6105,7 @@ struct Server::Impl {
         if (hasLamps()) {
             context.modules.insert("lights");
         }
-        if (hasGrippers() || hasNozzles() || hasServos()) {
+        if (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids()) {
             context.modules.insert("actuators");
         }
         for (const auto& [key, value] : options.weather) {
@@ -7104,9 +7155,11 @@ struct Server::Impl {
                                   std::numeric_limits<float>::quiet_NaN());
         float most = 0.0F;
         for (const Top& t : tops) {
-            const auto ix = std::min(nx - 1, static_cast<std::uint32_t>((t.x - lo[0]) / cell + 0.5));
-            const auto iy = std::min(ny - 1, static_cast<std::uint32_t>((t.y - lo[1]) / cell + 0.5));
-            float& v = values[static_cast<std::size_t>(iy) * nx + ix];
+            const auto column =
+                std::min(nx - 1, static_cast<std::uint32_t>((t.x - lo[0]) / cell + 0.5));
+            const auto row =
+                std::min(ny - 1, static_cast<std::uint32_t>((t.y - lo[1]) / cell + 0.5));
+            float& v = values[static_cast<std::size_t>(row) * nx + column];
             const auto z = static_cast<float>(t.z - base);
             v = std::isnan(v) ? z : std::min(v, z);
             most = std::max(most, z);
@@ -8777,6 +8830,16 @@ Status Server::load() {
                     "std_msgs/msg/Float64", "");
                 add(maps.publish, act + "overload", topic + "overload", "std_msgs/msg/Bool", "");
             }
+            // Every solenoid's (RFC 0020 §4.6): /<s>/command (0 to 1) in, /<s>/current (A) and
+            // /<s>/position (m, the plunger's) out.
+            for (const actuators::SolenoidSpec& solenoid :
+                 actuators::solenoidsOf(WorldView(s.robot.world), problem)) {
+                const std::string act = "act/" + solenoid.name + "/";
+                const std::string topic = "/" + solenoid.name + "/";
+                input(act + "command", topic + "command", "std_msgs/msg/Float64", "1", 0.0);
+                add(maps.publish, act + "current", topic + "current", "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "position", topic + "position", "std_msgs/msg/Float64", "");
+            }
         }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
@@ -8982,6 +9045,13 @@ bool Server::commandActuator(const std::string& name, double value) {
     for (const actuators::NozzleSpec& z :
          actuators::nozzlesOf(WorldView(impl_->robot.world), error).nozzles) {
         if (z.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    for (const actuators::SolenoidSpec& s :
+         actuators::solenoidsOf(WorldView(impl_->robot.world), error)) {
+        if (s.name == name) {
             impl_->actuatorCommands->set(name, value);
             return true;
         }
@@ -9269,7 +9339,8 @@ void Server::runOnce(int timeoutMs) {
                                            ? s.scheduler->bus().readN(cut)[0]
                                            : -1.0;
                     constexpr auto kCutRefresh = std::chrono::seconds(3);
-                    if (now != session->cutVersion || Clock::now() - session->cutSent > kCutRefresh) {
+                    if (now != session->cutVersion ||
+                        Clock::now() - session->cutSent > kCutRefresh) {
                         double version = -1.0;
                         if (auto volume = s.cutVolume(&version)) {
                             session->send(*volume);

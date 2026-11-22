@@ -52,6 +52,7 @@ EXPECTED = {
         "NozzleAPI_1",
         "TankAPI_1",
         "ServoAPI_1",
+        "SolenoidAPI_1",
     ],
 }
 
@@ -202,6 +203,17 @@ def test_servo_and_position_mode_are_additions():
     assert servo.GetAttributeDefinition("act:servo:deadband").GetMetadata("lagrangeUnit") == "rad"
     with FROZEN.open() as f:
         assert "ServoAPI_1" not in json.load(f)
+
+
+def test_solenoid_is_an_addition():
+    # RFC 0020 §4.6: SolenoidAPI_1 is a new class of the actuator library.
+    solenoid = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("SolenoidAPI_1")
+    assert solenoid
+    assert solenoid.GetAttributeDefinition("act:solenoid:resistance").GetFallbackValue() is None
+    assert solenoid.GetAttributeDefinition("act:solenoid:springRate").GetFallbackValue() == 0
+    assert solenoid.GetAttributeDefinition("act:solenoid:stroke").GetMetadata("lagrangeUnit") == "m"
+    with FROZEN.open() as f:
+        assert "SolenoidAPI_1" not in json.load(f)
 
 
 def test_stepper_is_an_addition():

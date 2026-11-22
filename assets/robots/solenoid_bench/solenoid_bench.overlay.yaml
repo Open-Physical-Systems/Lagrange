@@ -1,0 +1,20 @@
+# The bench solenoid's coil and spring (RFC 0020 §4.6; docs/physics/actuators.md "Solenoids"):
+# a 12 V push-pull solenoid of 24 Ω (0.5 A, 6 W on), 10 mm of stroke. Applied to
+# solenoid_bench.urdf by `lagrange_server --overlay`. Parameters are illustrative, of the size a
+# small open-frame solenoid's datasheet gives, not a real product:
+#   L(x) from 30 mH at rest to 90 mH fully in, steeper towards the stop (the air gap closing);
+#   the pull ½·i²·dL/dx at 0.5 A is 0.19 N at rest and 2.5 N in the last millimetre;
+#   the spring pushes 0.10 N at rest and 0.15 N fully in, so 0.5 A pulls in and none lets go.
+# Command it with /plunger/command (0 to 1) or `Server::commandActuator("plunger", 1)`.
+schema_version: 1
+apply:
+  - prim: plunger
+    schemas:
+      SolenoidAPI_1:
+        act:solenoid:inductanceStrokes: [0.0, 0.002, 0.004, 0.006, 0.008, 0.009, 0.010]   # m
+        act:solenoid:inductances: [0.030, 0.033, 0.037, 0.044, 0.057, 0.070, 0.090]       # H
+        act:solenoid:resistance: 24.0            # ohm
+        act:solenoid:springRate: 5.0             # N/m
+        act:solenoid:springPreload: 0.1          # N
+        act:solenoid:stroke: 0.010               # m
+        act:solenoid:ratedVoltage: 12.0          # V

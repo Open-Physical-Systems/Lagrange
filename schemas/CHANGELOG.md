@@ -29,6 +29,10 @@ and `test_schemas.py` checks it.
   torque and no-load speed for the motor-less model, overload and overheating shutdown). New
   class, nothing to migrate.
 
+- **Actuator library** (RFC 0020 §4.6): `SolenoidAPI_1` on a prismatic joint, a solenoid's
+  plunger and coil (an inductance table over the stroke, resistance, return spring rate and
+  preload, stroke, rated voltage). New class, nothing to migrate.
+
 - **Electrical library** (RFC 0020 §4.5): `stepper` appended to `elec:motorType`'s tokens, and
   `elec:stepper:rotorTeeth` (50), `elec:stepper:detentTorque` (0 N·m), `elec:stepper:holdCurrent`
   (no fallback: `maxCurrent`) and `elec:stepper:microsteps` (1) on `ElectricalMotorAPI_1`, used
