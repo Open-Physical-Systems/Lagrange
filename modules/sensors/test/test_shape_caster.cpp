@@ -3,6 +3,7 @@
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/world/TreeWood.hpp"
 
 #include <array>
 #include <cmath>
@@ -759,6 +760,68 @@ TEST(Crown, CutCellsLetTheBeamThroughAndTheSwayMovesTheCrown) {
         std::isinf(crownStop(t, 0, {-10.0, -2.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.5)));
     EXPECT_FALSE(
         std::isinf(crownStop(t, 0, {-10.0, -0.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.1)));
+}
+
+// The wood in a crown (lagrange/world/TreeWood.hpp): a beam level and square to a limb, aimed at
+// its axis, stops on its bark at the distance to the axis less the limb's radius, wherever the
+// sway puts the crown; with the limb broken off at its base, it goes on past.
+TEST(Crown, ABeamStopsOnABranch) {
+    TreeSpec t = crown();
+    t.trunkDiameter = 0.4;
+    t.branchCount = 12;
+    t.maxCutDiameter = 0.01;
+    TreeWood wood;
+    wood.build({t});
+    const std::vector<BranchSegment>& segs = wood.skeleton(0).segments;
+    std::size_t i = 0;
+    while (i < segs.size() && segs[i].generation != 0) {
+        ++i;
+    }
+    ASSERT_LT(i, segs.size());
+    const BranchSegment& s = segs[i];
+    const std::array<double, 3> u = [&] {
+        const std::array<double, 3> d{s.to[0] - s.from[0], s.to[1] - s.from[1],
+                                      s.to[2] - s.from[2]};
+        const double n = std::hypot(d[0], d[1], d[2]);
+        return std::array<double, 3>{d[0] / n, d[1] / n, d[2] / n};
+    }();
+    const double level = std::hypot(u[0], u[1]);
+    const std::array<double, 3> side{u[1] / level, -u[0] / level, 0.0};
+    for (const std::array<double, 3>& sway :
+         {std::array<double, 3>{}, std::array<double, 3>{0.4, -0.3, 0.0}}) {
+        const std::array<double, 3> mid{0.5 * (s.from[0] + s.to[0]) + sway[0],
+                                        0.5 * (s.from[1] + s.to[1]) + sway[1],
+                                        0.5 * (s.from[2] + s.to[2]) + t.centreHeight()};
+        const std::array<double, 3> from{mid[0] + 10.0 * side[0], mid[1] + 10.0 * side[1], mid[2]};
+        const std::array<double, 3> dir{-side[0], -side[1], 0.0};
+        WoodHit hit;
+        ASSERT_TRUE(wood.ray(t, 0, from, dir, 100.0, sway, hit));
+        EXPECT_NEAR(hit.distance, 10.0 - 0.5 * s.diameter, 1e-9);
+        EXPECT_NEAR(hit.diameter, s.diameter, 1e-15);
+        EXPECT_NEAR(hit.normal[0] * side[0] + hit.normal[1] * side[1], 1.0, 1e-9);
+        // Short of it, nothing.
+        EXPECT_FALSE(wood.ray(t, 0, from, dir, 9.0, sway, hit));
+    }
+    // Broken off at its base (kBranchCutSignal), the limb is gone.
+    std::vector<double> values(kBranchCutLength, 0.0);
+    values[0] = 1.0;
+    values[1] = 1.0;
+    values[kBranchCutHeader + 1] = static_cast<double>(i);
+    wood.load(values);
+    EXPECT_EQ(wood.standing(0, i), 0.0);
+    const std::array<double, 3> mid{0.5 * (s.from[0] + s.to[0]), 0.5 * (s.from[1] + s.to[1]),
+                                    0.5 * (s.from[2] + s.to[2]) + t.centreHeight()};
+    WoodHit hit;
+    const bool met = wood.ray(t, 0, {mid[0] + 10.0 * side[0], mid[1] + 10.0 * side[1], mid[2]},
+                              {-side[0], -side[1], 0.0}, 100.0, {}, hit);
+    EXPECT_TRUE(!met || hit.distance > 10.0 - 0.5 * s.diameter + 1e-6);
+    // The capsule itself: from inside, 0; along the axis, the round end.
+    EXPECT_EQ(
+        rayCapsule({0.0, 0.0, 0.5}, {1.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 0.1, 10.0),
+        0.0);
+    EXPECT_NEAR(
+        rayCapsule({0.0, 0.0, 5.0}, {0.0, 0.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 0.1, 10.0),
+        3.9, 1e-12);
 }
 
 // Flying leaves (ground.md "Flying leaves"): a beam passing within size/2 of a leaf's centre

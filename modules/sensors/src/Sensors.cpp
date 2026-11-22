@@ -20,6 +20,7 @@
 #include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/TreeWood.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -574,10 +575,12 @@ public:
         trees_.clear();
         treeSway_.clear();
         treeCut_ = SignalId{};
+        branchCut_ = SignalId{};
         flyingIn_ = SignalId{};
         if (!groundTruth_) {
             std::string treeError;
             trees_ = treesOf(raw, treeError);
+            wood_.build(trees_);
             for (const TreeSpec& t : trees_) {
                 SignalSpec sway =
                     spec("tree/" + t.name + "/sway", SignalType::Vec3, units::m, "world_local");
@@ -594,6 +597,14 @@ public:
                 cut.feedback = true;
                 treeCut_ = d.input(cut);
                 surfaceMaterialPreset("shrub", leaves_);
+                // The wood in the crowns (lagrange/world/TreeWood.hpp), less what broke off.
+                SignalSpec broken =
+                    spec(std::string(kBranchCutSignal), SignalType::ScalarArray, units::one);
+                broken.arrayLength = kBranchCutLength;
+                broken.optional = true;
+                broken.feedback = true;
+                branchCut_ = d.input(broken);
+                surfaceMaterialPreset("bark", bark_);
                 SignalSpec flying = spec(std::string(kLeavesSignal), SignalType::ScalarArray,
                                          units::one, "world_local");
                 flying.arrayLength = kLeavesLength;
@@ -714,6 +725,9 @@ public:
         if (treeCut_.valid()) {
             treeCuts_.load(bus.readN(treeCut_));
         }
+        if (branchCut_.valid()) {
+            wood_.load(bus.readN(branchCut_));
+        }
         if (flyingIn_.valid()) {
             flying_.load(bus.readN(flyingIn_));
         }
@@ -770,6 +784,8 @@ public:
             double stop = std::numeric_limits<double>::infinity();
             std::uint32_t stopShape = kNoShapeHit;
             bool leaves = false;
+            bool wood = false;
+            double woodCosine = 1.0;
             if (!canopyVolumes_.empty() || !trees_.empty()) {
                 random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
                 const double reach = hit ? nearest_[i] : maxRange_;
@@ -802,14 +818,42 @@ public:
                         leaves = true;
                     }
                 }
+                // The wood in the crowns (TreeWood::ray): bark, nearer than the leaves.
+                for (std::size_t k = 0; k < trees_.size(); ++k) {
+                    WoodHit w;
+                    if (wood_.ray(trees_[k], k, from.position, dir, std::min(reach, stop),
+                                  sways_[k], w) &&
+                        w.distance < stop) {
+                        stop = w.distance;
+                        wood = true;
+                        leaves = false;
+                        stopShape = kNoShapeHit;
+                        woodCosine =
+                            -(dir[0] * w.normal[0] + dir[1] * w.normal[1] + dir[2] * w.normal[2]);
+                    }
+                }
                 // Flying leaves (ShapeCaster.hpp FlyingLeaves): the first the beam meets.
                 if (!flying_.empty()) {
                     const double at = flying_.stop(from.position, dir, std::min(reach, stop));
                     if (at < stop) {
                         stop = at;
                         leaves = true;
+                        wood = false;
+                        stopShape = kNoShapeHit;
                     }
                 }
+            }
+            if (wood) {
+                nearest_[i] = stop;
+                hitShape_[i] = kNoShapeHit;  // no collider: a branch in a crown
+                const LidarReturn back =
+                    lidarReturn(bark_, true, wavelength1550_, std::clamp(woodCosine, 0.0, 1.0),
+                                stop, maxRange_, referenceReflectivity_);
+                intensity_[i] = back.intensity;
+                if (!back.detected) {
+                    nearest_[i] = kNoHit;
+                }
+                return;
             }
             if (leaves) {
                 nearest_[i] = stop;
@@ -1224,6 +1268,9 @@ private:
     std::vector<std::array<double, 3>> sways_;  // this scan's
     SignalId treeCut_;                          // vegetation/tree_cut
     TreeCuts treeCuts_;
+    TreeWood wood_;           // the crowns' branches (lagrange/world/TreeWood.hpp)
+    SignalId branchCut_;      // vegetation/branch_cut
+    SurfaceMaterial bark_;    // a branch's return: the bark preset's
     SignalId flyingIn_;       // vegetation/leaves
     FlyingLeaves flying_;     // this scan's
     SurfaceMaterial leaves_;  // a leaf's return: the shrub preset's

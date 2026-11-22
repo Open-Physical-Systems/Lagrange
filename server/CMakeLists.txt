@@ -561,6 +561,7 @@ if(BUILD_TESTING)
         test_branches_run
         PRIVATE
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_TREE_RAM="${CMAKE_CURRENT_SOURCE_DIR}/test/data/tree_ram.urdf"
             LAGRANGE_TEST_OPEN_FIELD="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/open_field/open_field.usda"
     )
     lagrange_target_defaults(test_branches_run)

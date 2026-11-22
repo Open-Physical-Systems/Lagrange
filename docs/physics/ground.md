@@ -452,6 +452,45 @@ that crosses it:
 Only a rotor whose tips move faster than 5 m/s meets the wood, as for the leaves. The trunk below
 the crown base is the stage's collider, unchanged.
 
+**A body meeting wood.** Every moving body's colliders (spheres, capsules, cylinders, boxes,
+hulls; the propellers' links meet it as their discs, above) are tested against every piece of wood
+near them, each a capsule of its diameter at the crown's sway (`Branches::touch`, at 1 ms). Along
+the piece, the point nearest the collider is found by a golden-section search on the collider's
+signed distance (convex along a line), and the overlap is `δ = d/2 − distance`.
+
+- Wood no thicker than `tree:maxCutDiameter` that a collider reaches into **breaks** there: it is
+  cut as a propeller cuts a twig, its subtree gone, counted in `tree/<n>/twigs_cut`. It pushes
+  back nothing (the energy of breaking it is not yet charged to the body).
+- Thicker wood **pushes** the body out along the collider's outward normal by a penalty contact,
+  a spring and a damper on the overlap, with Coulomb friction against the sliding:
+
+  ```
+  F_n = max(0, k δ + c v_n)        |F_t| = min(μ F_n, c |v_t|)
+  k = m/τ²,  c = 2m/τ
+  ```
+
+  `m` the link's mass, `v` the contact point's velocity relative to the swaying crown. This is a
+  critically damped soft contact with time constant τ = 0.02 s, after MuJoCo's default
+  `solref = (0.02, 1)` (MuJoCo documentation, "Solver parameters"): a numerical choice, not a
+  property of wood (config `contact_time`). μ = 0.5 for bark on a robot's shell is TODO(verify)
+  (config `bark_friction`). At rest under a steady push `F`, the body sinks `δ = F τ²/m` into the
+  wood (2 mm for 5 N on 1 kg). The push is `body/<b>/wrench/branches` (about the centre of mass)
+  and its size `body/<b>/branch_force`; equal and opposite, its level part pushes the crown's
+  sway mode in the next step.
+- Wood inside a fixed collider of the world (the stage's trunk, which in the open field reaches
+  0.5 m into the crown) is that collider's, and does not push a second time.
+
+The wood is rigid: no limb bends or springs back under a body, and the crown's sway is the only
+way it gives. Config `branch_contact: false` turns the contacts off.
+
+**Lidars.** The beams see the wood too (`TreeWood::ray`, lagrange/world/TreeWood.hpp, the same
+skeleton the vegetation domain grows): a beam stops on the first piece of standing wood it meets,
+a capsule at the crown's sway, nearer than a leaf or a canopy, and returns as bark (the `bark`
+preset: 0.35 at 905 and 1550 nm, TODO(verify) against a measured bark spectrum) at its incidence
+on the wood's surface. Wood broken off by a rotor or a body is gone for them as well: the
+vegetation domain publishes the breaks as `vegetation/branch_cut` (`[version, count, (tree,
+segment, share) × count]`, up to 4096).
+
 Checked:
 
 | Check | Reference | Result |
@@ -460,6 +499,11 @@ Checked:
 | Its wood twice, and for another index | a pure function | equal; differs; all within the crown |
 | A disc square to a twig | `E = σ π d²/4`, the twig cut where the sheet meets it, its subtree gone, nothing more on a second pass; saved and restored | exact (`ATwigIsCutForItsCrossSection`) |
 | A 10-inch propeller (I = 9·10⁻⁵ kg·m²) at 700 rad/s whose blade meets a 71 mm branch 10 cm out | `I ω + τ Δt = 0`, `F = I ω/(r Δt)` square to the branch, `½ I ω²` taken | 630 N for 1 ms, 22.1 J, damage 0.73; both spins (`ABranchStopsThePropeller`) |
+| A 6 cm ball of 1 kg pushed by 5 N into a 71 mm branch, square to it | at rest: the wood's push equals 5 N through the ball's centre, `δ = F τ²/m` (2.00 mm), the crown pushed back by −5 N | to 1e-6 (`ABodyPushedIntoABranchStops`) |
+| A 2 cm ball moving across a twig | it breaks, no push, its subtree gone; the signal the lidars read agrees | exact (`ABodyBreaksATwig`) |
+| A ball overlapping the trunk's crown segment where the stage's trunk collider is | no second push | exact (`TheTrunkColliderKeepsItsWood`) |
+| A 20 cm ram of 2 kg on a rail (`server/test/data/tree_ram.urdf`) driven at 0.3 m/s with up to 40 N into tree_1's crown | stops on the wood; the wood's push along the rail balances the joint's 40 N; the crown leans `F/(m ω²)` | stops 0.28 m inside the crown's edge, 40.0 N, leans 0.083 m against 0.083 m; its lidar sees the wood ahead; bit for bit twice (`test_branches_run` `BranchesRun.ARam*`) |
+| A beam level and square to a limb, aimed at its axis from 10 m | stops at `10 − d/2`, normal facing it; with the crown swayed, the same; the limb broken off, it goes past | to 1e-9 (`test_shape_caster` `Crown.ABeamStopsOnABranch`) |
 | The quadcopter taking off under tree_1 | — | at 2.28 s, its base link 2.86 m up, rotor_1's blade meets a limb: 139 → 2.5 rad/s in 2 ms; the kicks push the drone sideways at up to 0.25 m/s; rotors 2 and 4 stall on the wood (30 strikes, damage up to 0.047) and it falls out of the tree to the ground; the same run twice and a run restored from 2.2 s are bit for bit (`test_branches_run`) |
 
 **Numbers and sources.** The pipe model and Leonardo's rule are cited above; real trees follow the
@@ -470,9 +514,9 @@ smallest wood, the 1 cm sheet, `tree:maxCutDiameter` 1 cm for a 10-inch propelle
 specific cutting energy is measured for willow stems in Applied Sciences 15(2), 696, 2025,
 "Impact of blade geometric parameters on the specific cutting energy of willow (Salix viminalis)
 stems", whose numbers we have not read). Left out: the wood does not sway on its own (it moves
-with the crown), cut-off wood does not fall as bodies, the leaves beyond a cut stay, the wood is
-not a collider for bodies (only the blades meet it), the lidars and the viewer do not see it, and
-a strike's push has no bounce (restitution) of its own. A damaged blade loses thrust and shakes
+with the crown), cut-off wood does not fall as bodies, the leaves beyond a cut stay, the wood
+does not bend under a body, the viewer does not draw it (the realistic view draws trees of its own),
+and a strike's push has no bounce (restitution) of its own. A damaged blade loses thrust and shakes
 the drone ([rotors.md](rotors.md), "A damaged blade").
 
 ### Numbers and sources

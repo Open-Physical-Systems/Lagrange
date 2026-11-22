@@ -410,6 +410,14 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
     branches_.build(treeSpecs_);
     branches_.breakEnergy =
         std::max(0.0, config.get<double>("blade_break_energy").value_or(kBladeBreakEnergy));
+    branches_.contactTime =
+        std::max(0.0, config.get<double>("contact_time").value_or(kWoodContactTime));
+    branches_.friction = std::max(0.0, config.get<double>("bark_friction").value_or(kBarkFriction));
+    const bool woodContact =
+        !treeSpecs_.empty() && config.get<bool>("branch_contact").value_or(true);
+    if (!treeSpecs_.empty()) {
+        branches_.declareTrees(treeSpecs_, d);
+    }
     trees_.clear();
     for (const TreeSpec& t : treeSpecs_) {
         Tree tree;
@@ -450,15 +458,32 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
     dragCoefficient_ =
         std::max(0.0, config.get<double>("drag_coefficient").value_or(kStemDragCoefficient));
     const std::vector<bool> moving = movingBodies(raw);
+    // A propeller meets the wood as its disc (Branches::sweep), not as its colliders.
+    std::vector<bool> propeller(raw.bodies.names.size(), false);
+    for (const SchemaInstance* r : world.instancesOf("RotorAPI_1")) {
+        const auto j = static_cast<std::size_t>(std::ranges::find(raw.joints.prim, r->prim) -
+                                                raw.joints.prim.begin());
+        if (j < raw.joints.prim.size() && raw.joints.child[j].index < propeller.size()) {
+            propeller[raw.joints.child[j].index] = true;
+        }
+    }
     for (std::uint32_t b = 0; b < raw.bodies.names.size(); ++b) {
         if (!moving[b] || raw.bodies.kinematic[b]) {
             continue;
         }
         Body body;
         body.com = raw.bodies.comLocal[b];
+        body.mass = raw.bodies.mass[b];
         for (std::size_t c = 0; c < raw.colliders.body.size(); ++c) {
             if (raw.colliders.body[c] != BodyId{b}) {
                 continue;
+            }
+            if (WoodShape wood; woodContact && !propeller[b] && woodShapeOf(raw, c, wood)) {
+                body.bound =
+                    std::max(body.bound, std::hypot(wood.pose.position[0], wood.pose.position[1],
+                                                    wood.pose.position[2]) +
+                                             wood.bound);
+                body.shapes.push_back(wood);
             }
             const ShapeType type = raw.colliders.shape[c];
             const std::array<double, 3>& size = raw.colliders.size[c];
@@ -504,8 +529,36 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         body.wrench =
             d.output(spec(base + "wrench/vegetation", SignalType::Wrench, units::N, "world_local"));
         body.inside = d.output(spec(base + "in_vegetation", SignalType::Scalar, units::one));
+        if (!body.shapes.empty()) {
+            body.woodWrench = d.output(
+                spec(base + "wrench/branches", SignalType::Wrench, units::N, "world_local"));
+            body.woodForce = d.output(spec(base + "branch_force", SignalType::Scalar, units::N));
+        }
         bodies_.push_back(std::move(body));
     }
+    // The world's fixed colliders near the trees: wood inside them (the trunk) is theirs.
+    std::vector<WoodShape> fixed;
+    if (woodContact) {
+        for (std::size_t c = 0; c < raw.colliders.body.size(); ++c) {
+            WoodShape wood;
+            if (raw.colliders.body[c] != kWorldBody || !woodShapeOf(raw, c, wood)) {
+                continue;
+            }
+            for (std::size_t k = 0; k < treeSpecs_.size(); ++k) {
+                const TreeSpec& t = treeSpecs_[k];
+                const std::array<double, 3> q = inCrown(t, wood.pose.position, {});
+                // Within the crown's bounding box, grown by a metre for its sway.
+                constexpr double kSwayRoom = 1.0;  // m
+                if (std::abs(q[0]) <= t.crownRadius + wood.bound + kSwayRoom &&
+                    std::abs(q[1]) <= t.crownRadius + wood.bound + kSwayRoom &&
+                    std::abs(q[2]) <= t.halfHeight() + wood.bound + kSwayRoom) {
+                    fixed.push_back(wood);
+                    break;
+                }
+            }
+        }
+    }
+    branches_.setFixed(std::move(fixed));
     // Cutting: every rotor, while the run has canopies.
     rotors_.clear();
     cutOut_ = SignalId{};
@@ -574,7 +627,6 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         SignalSpec out = spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
         out.arrayLength = kTreeCutLength;
         treeCutOut_ = d.output(out);
-        branches_.declareTrees(treeSpecs_, d);
     }
     return {};
 }
@@ -583,6 +635,10 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     for (const Body& body : bodies_) {
         bus.writeN(body.wrench, std::array<double, 6>{});
         bus.write(body.inside, 0.0);
+        if (body.woodWrench.valid()) {
+            bus.writeN(body.woodWrench, std::array<double, 6>{});
+            bus.write(body.woodForce, 0.0);
+        }
     }
     for (const Rotor& r : rotors_) {
         bus.writeN(r.wrench, std::array<double, 6>{});
@@ -597,6 +653,7 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     branches_.init(bus);
     for (Tree& tree : trees_) {
         tree.state = Sway{};
+        tree.push = {};
         tree.cut = 0.0;
         bus.writeN(tree.sway, std::array<double, 3>{});
         bus.writeN(tree.force, std::array<double, 3>{});
@@ -633,7 +690,8 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
         }
         const std::array<double, 2> force =
             crownForce(treeSpecs_[k], density_, air, tree.state.velocity);
-        stepSway(treeSpecs_[k], tree.state, force, dt);
+        // The bodies pushing on its wood push the crown too.
+        stepSway(treeSpecs_[k], tree.state, {force[0] + tree.push[0], force[1] + tree.push[1]}, dt);
         sways[k] = {tree.state.position[0], tree.state.position[1], 0.0};
         bus.writeN(tree.sway, sways[k]);
         bus.writeN(tree.force, std::array<double, 3>{force[0], force[1], 0.0});
@@ -690,7 +748,6 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
         bus.writeN(r.wrench, wrench);
         bus.write(r.power, power);
     }
-    branches_.publish(bus);
     if (cutOut_.valid()) {
         if (cuts_.values()[0] != version) {
             bus.writeN(cutOut_, cuts_.values());
@@ -711,9 +768,25 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
         bus.write(trees_[k].cutVolume, trees_[k].cut);
         bus.write(trees_[k].leaves, std::floor(trees_[k].cut * t.leafAreaDensity / t.leafArea));
     }
+    std::vector<std::array<double, 3>> crownVelocity(trees_.size());
+    std::vector<std::array<double, 3>> crownPush(trees_.size());
+    for (std::size_t k = 0; k < trees_.size(); ++k) {
+        crownVelocity[k] = {trees_[k].state.velocity[0], trees_[k].state.velocity[1], 0.0};
+    }
     for (const Body& body : bodies_) {
         const std::span<const double> p = bus.readN(body.pose);
         const std::span<const double> v = bus.readN(body.twist);
+        if (body.woodWrench.valid()) {
+            BodyContact contact;
+            if (p.size() == 7 && v.size() == 6) {
+                contact = branches_.touch(treeSpecs_, body.shapes, body.bound,
+                                          Pose{{p[0], p[1], p[2]}, {p[3], p[4], p[5], p[6]}},
+                                          {v[0], v[1], v[2], v[3], v[4], v[5]}, body.com, body.mass,
+                                          sways, crownVelocity, crownPush);
+            }
+            bus.writeN(body.woodWrench, contact.wrench);
+            bus.write(body.woodForce, contact.force);
+        }
         std::array<double, 6> wrench{};
         double inside = 0.0;
         if (p.size() == 7 && v.size() == 6) {
@@ -770,6 +843,10 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
         bus.writeN(body.wrench, wrench);
         bus.write(body.inside, body.volume > 0.0 ? inside / body.volume : 0.0);
     }
+    for (std::size_t k = 0; k < trees_.size(); ++k) {
+        trees_[k].push = {crownPush[k][0], crownPush[k][1]};
+    }
+    branches_.publish(bus);
     return {};
 }
 
@@ -853,7 +930,7 @@ Status Vegetation::saveState(StateWriter& writer) const {
     branches_.save(writer);
     for (const Tree& t : trees_) {
         for (const double v : {t.state.position[0], t.state.position[1], t.state.velocity[0],
-                               t.state.velocity[1], t.cut}) {
+                               t.state.velocity[1], t.cut, t.push[0], t.push[1]}) {
             writer.put(v);
         }
     }
@@ -881,7 +958,7 @@ Status Vegetation::restoreState(StateReader& reader) {
     }
     for (Tree& t : trees_) {
         for (double* v : {&t.state.position[0], &t.state.position[1], &t.state.velocity[0],
-                          &t.state.velocity[1], &t.cut}) {
+                          &t.state.velocity[1], &t.cut, &t.push[0], &t.push[1]}) {
             if (!reader.get(*v)) {
                 return Status::error(StatusCode::Internal, "vegetation: short tree state");
             }
