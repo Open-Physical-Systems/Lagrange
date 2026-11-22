@@ -1,4 +1,4 @@
-# Actuators: grippers, lead screws, nozzles, tanks, servos, steppers and solenoids
+# Actuators: grippers, lead screws, nozzles, tanks, servos, steppers, solenoids and brakes
 
 Grippers that hold a part without fingers (RFC 0020, phase 1): a suction cup
 (`SuctionGripperAPI_1`) and an electromagnet or electropermanent magnet (`MagnetGripperAPI_1`).
@@ -667,6 +667,73 @@ reference: the 20 g plunger sits about 0.2 mm past rest under the spring's 0.1 N
 past the end stop under the 2.5 N pull (the model holds `x` to the stroke for its own sums). The
 co-energy force is the textbook result for a linear magnetic circuit (TODO(verify): cite an
 edition; no openly readable text was found in this pass, as RFC 0020 §4.6 notes).
+
+## Holding brakes
+
+A holding brake (`BrakeAPI_1`, RFC 0020 "Also worth adding") sits on a revolute, continuous or
+prismatic joint, as on nearly every industrial arm's joints. It is spring-applied and power-off:
+springs press a friction disc, and a coil pulls the armature off it when powered. With no power
+it holds, which is what makes an arm safe when its drives trip. `actuators/brakes`
+(`modules/actuators`, 1 ms) keeps the coil's current. The coil is an R–L circuit with a
+freewheeling diode across it, so the current rises as `V/R·(1 − e^(−t/τ))` when powered and
+decays as `e^(−t/τ)` when not, with `τ = L/R`. The armature lets go at `releaseCurrent` and the
+springs apply it again at `dropoutCurrent`, a hysteresis. So the brake releases
+`−τ·ln(1 − I_r/I_0)` after power on and is applied `−τ·ln(I_d/I_0)` after power off.
+
+While applied, the brake writes `joint/<j>/friction_limit`, the engines' Coulomb limit of the lead
+screws (§ "Lead screws"). Because the limit has a writer, MuJoCo makes the joint's friction row
+stiff and the brake holds without creeping. At rest, below 1e-3 rad/s, the limit is the holding
+torque. While the joint slips it is the dynamic torque. A joint whose motor has a lead screw's
+`elec:gearBackEfficiency` is refused, since both would write its friction limit. The joint is
+made actuated whatever its file says.
+
+### Using it
+
+```bash
+lagrange assets/robots/brake_arm/brake_arm.urdf --world none \
+  --overlay assets/robots/brake_arm/brake_arm.overlay.yaml
+ros2 topic pub --once /shoulder/release std_msgs/msg/Bool "{data: true}"
+```
+
+| Signal | Unit | Meaning |
+|---|---|---|
+| `act/<b>/release` | 1 | In: 0 to 1, the share of the rated voltage on the coil (optional, 0: held) |
+| `act/<b>/current` | A | The coil's current |
+| `act/<b>/voltage`, `power` | V, W | On the coil |
+| `act/<b>/engaged` | Bool | The springs apply the disc |
+| `act/<b>/torque` | N·m (N) | The friction limit it writes |
+
+ROS: `/<b>/release` (`std_msgs/Bool`) in, `/<b>/engaged` out; `Server::commandActuator(name, 1)`;
+in ros2_control, a `<gpio>` with command interface `release` and state interface `engaged`.
+Substitutes: `ideal` switches at once on the command, `constant` always holds, and `zero` never
+holds, as if the joint had no brake.
+
+The sample is a one-joint arm: 1 kg, 0.3 m out on a horizontal shoulder, 2.94 N·m of gravity at
+the horizontal, with a 5 N·m brake (4 N·m dynamic) on a 24 V coil of 48 Ω and 0.5 H. Its numbers
+are illustrative, of the size a small servo motor's brake datasheet gives, not a real product's.
+
+### Checked
+
+`test_brake` (the coil and the armature) and `test_brakes_run` (the arm on MuJoCo):
+
+| Check | Reference | Result |
+|---|---|---|
+| Release after power on, steps of 0.01, 0.1 and 1 ms | `−τ·ln(1 − I_r/I_0)` = 12.54 ms | within one step |
+| Applied after power off, the same steps | `−τ·ln(I_d/I_0)` = 12.54 ms | within one step |
+| Between dropout and release currents | the armature's hysteresis | it stays as it was |
+| The arm held at the horizontal for 1 s | no motion | 3.2e-6 rad |
+| Released for 0.1 s, then applied | an independent integration of the arm with the 4 N·m dynamic torque | stopped at 0.5391 rad against 0.5391 rad, then 1.4e-6 rad in 0.5 s |
+| Release and apply in the run | 12.54 ms | 13.0 ms each (the run's 1 ms step) |
+| The actuators domain off (zero) | | never holds: the arm falls |
+| The same run twice | | bit for bit |
+
+What it leaves out: the disc's wear and its friction's change with temperature and speed (the
+dynamic torque is one number), the armature's own travel time (only the coil's current decides),
+overexcitation and holding-voltage reduction of brake drivers, the suppression by a Zener or
+varistor instead of a diode (they apply the brake sooner), and the brake's heat when it is
+slipped. The release and dropout currents' fallbacks, 0.7 and 0.3 of the rated current, are of
+the order brake datasheets give for pull-in and drop-out voltages (TODO(verify) against a named
+datasheet).
 
 ## ros2_control GPIO
 

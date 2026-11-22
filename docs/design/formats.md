@@ -1054,6 +1054,19 @@ servo's or smart servo's board; its motor is the joint's `ElectricalMotorAPI_1` 
 `elec:controlMode`'s token `position` (appended) makes the motor's drive run this loop itself on
 `joint/<j>/position_command`.
 
+**`BrakeAPI_1`** (single-apply, on a revolute, continuous or prismatic joint; RFC 0020 "Also worth
+adding"). A spring-applied, power-off holding brake released by a coil.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:brake:holdingTorque`, `dynamicTorque` | double | N·m | —, = holding | Static and slipping torque. Holding required on a hinge |
+| `act:brake:holdingForce`, `dynamicForce` | double | N | —, = holding | The same on a slide |
+| `act:brake:coilResistance` | double | ohm | — | Required |
+| `act:brake:coilInductance` | double | H | `0` | |
+| `act:brake:ratedVoltage` | double | V | — | On the coil at a command of 1. Required |
+| `act:brake:releaseCurrent` | double | A | 0.7 of `V/R` | The armature pulls in |
+| `act:brake:dropoutCurrent` | double | A | 0.3 of `V/R` | The springs apply it again |
+
 **`SolenoidAPI_1`** (single-apply, on a prismatic joint; RFC 0020 §4.6). A plunger in a coil: the
 joint's position is the plunger's stroke into it, 0 at rest; its limits are the stops.
 

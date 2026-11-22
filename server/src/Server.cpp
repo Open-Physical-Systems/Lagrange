@@ -1,4 +1,5 @@
 #include "Recorder.hpp"
+#include "lagrange/actuators/Brakes.hpp"
 #include "lagrange/actuators/Grippers.hpp"
 #include "lagrange/actuators/Nozzles.hpp"
 #include "lagrange/actuators/Servos.hpp"
@@ -1191,12 +1192,30 @@ struct Server::Impl {
                           ModuleConfig(board));
             }
         }
+        // Holding brakes (RFC 0020, "Also worth adding"): each joint's friction limit while the
+        // springs apply the disc; released by powering its coil.
+        if (hasBrakes()) {
+            ModuleConfigData hold;
+            if (!(off("actuators") && !hasGrippers() && !hasNozzles() && !hasServos() &&
+                  addPluginSubstitute("actuators", hold))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const std::string preset =
+                    token != settings.substituteTokens.end() ? token->second : "zero";
+                const actuators::Brakes::Mode mode =
+                    !off("actuators")      ? actuators::Brakes::Mode::Full
+                    : preset == "ideal"    ? actuators::Brakes::Mode::Ideal
+                    : preset == "constant" ? actuators::Brakes::Mode::Hold
+                                           : actuators::Brakes::Mode::Off;
+                next->add(std::make_unique<actuators::Brakes>(mode, actuatorCommands),
+                          ModuleConfig(hold));
+            }
+        }
         // Solenoids (RFC 0020 §4.6): each plunger's coil and spring, as a force on its slide.
         // Before the electrical substitute, which passes on the torque commands declared above.
         if (hasSolenoids()) {
             ModuleConfigData coil;
             if (!(off("actuators") && !hasGrippers() && !hasNozzles() && !hasServos() &&
-                  addPluginSubstitute("actuators", coil))) {
+                  !hasBrakes() && addPluginSubstitute("actuators", coil))) {
                 const auto token = settings.substituteTokens.find("actuators");
                 const bool ideal =
                     token != settings.substituteTokens.end() && token->second == "ideal";
@@ -2037,6 +2056,8 @@ struct Server::Impl {
         }
         return out;
     }
+    /// Whether the stage has holding brakes (RFC 0020, "Also worth adding").
+    bool hasBrakes() const { return !WorldView(robot.world).instancesOf("BrakeAPI_1").empty(); }
     /// Whether the stage has solenoids (RFC 0020 §4.6), and the joints they push.
     bool hasSolenoids() const {
         return !WorldView(robot.world).instancesOf("SolenoidAPI_1").empty();
@@ -3748,7 +3769,8 @@ struct Server::Impl {
                 yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
                                               : "  lights: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "actuators" &&
-                       (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids())) {
+                       (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids() ||
+                        hasBrakes())) {
                 yaml += substituted("actuators")
                             ? "  actuators: {enabled: false, substitute: zero}\n"
                             : "  actuators: {enabled: true}\n";
@@ -3873,8 +3895,9 @@ struct Server::Impl {
                   "plane)"
             : domain == "fire" ? "no fires in the stage (FireAPI_1)"
             : domain == "actuators"
-                ? "no grippers, nozzles, servos or solenoids in the stage (SuctionGripperAPI_1, "
-                  "MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1, SolenoidAPI_1)"
+                ? "no grippers, nozzles, servos, solenoids or brakes in the stage "
+                  "(SuctionGripperAPI_1, MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1, "
+                  "SolenoidAPI_1, BrakeAPI_1)"
                 : "no module in this build yet; the substitute stands in");
     }
 
@@ -5035,9 +5058,15 @@ struct Server::Impl {
         if (appliedGravity) {
             model.world.gravityLocal = {0.0, 0.0, -*appliedGravity};
         }
-        // A solenoid's slide (RFC 0020 §4.6) is driven by its coil whatever its file says: the
-        // engines take a force only on an actuated joint.
-        for (const SchemaInstance* solenoid : WorldView(model.world).instancesOf("SolenoidAPI_1")) {
+        // A solenoid's slide (RFC 0020 §4.6) is driven by its coil, a brake's joint (RFC 0020,
+        // "Also worth adding") held by it, whatever its file says: the engines take a force and a
+        // friction limit only on an actuated joint.
+        std::vector<const SchemaInstance*> driven =
+            WorldView(model.world).instancesOf("SolenoidAPI_1");
+        for (const SchemaInstance* brake : WorldView(model.world).instancesOf("BrakeAPI_1")) {
+            driven.push_back(brake);
+        }
+        for (const SchemaInstance* solenoid : driven) {
             World::Joints& joints = model.world.joints;
             const auto j = std::find(joints.prim.begin(), joints.prim.end(), solenoid->prim);
             if (j != joints.prim.end()) {
@@ -6105,7 +6134,7 @@ struct Server::Impl {
         if (hasLamps()) {
             context.modules.insert("lights");
         }
-        if (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids()) {
+        if (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids() || hasBrakes()) {
             context.modules.insert("actuators");
         }
         for (const auto& [key, value] : options.weather) {
@@ -8831,6 +8860,14 @@ Status Server::load() {
                     "std_msgs/msg/Float64", "");
                 add(maps.publish, act + "overload", topic + "overload", "std_msgs/msg/Bool", "");
             }
+            // Every brake's: /<b>/release (Bool: power the coil) in, /<b>/engaged out.
+            for (const actuators::BrakeSpec& brake :
+                 actuators::brakesOf(WorldView(s.robot.world), problem)) {
+                const std::string act = "act/" + brake.name + "/";
+                const std::string topic = "/" + brake.name + "/";
+                input(act + "release", topic + "release", "std_msgs/msg/Bool", "1", 0.0);
+                add(maps.publish, act + "engaged", topic + "engaged", "std_msgs/msg/Bool", "");
+            }
             // Every solenoid's (RFC 0020 §4.6): /<s>/command (0 to 1) in, /<s>/current (A) and
             // /<s>/position (m, the plunger's) out.
             for (const actuators::SolenoidSpec& solenoid :
@@ -9065,6 +9102,13 @@ bool Server::commandActuator(const std::string& name, double value) {
     for (const actuators::NozzleSpec& z :
          actuators::nozzlesOf(WorldView(impl_->robot.world), error).nozzles) {
         if (z.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    for (const actuators::BrakeSpec& b :
+         actuators::brakesOf(WorldView(impl_->robot.world), error)) {
+        if (b.name == name) {
             impl_->actuatorCommands->set(name, value);
             return true;
         }
