@@ -9,6 +9,7 @@
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -253,6 +254,11 @@ public:
     /// After load(), without start(): advances the simulation to `t` as fast as it can (no
     /// viewers, no wall clock), for headless checks such as `lagrange determinism`.
     Status stepUntil(SimTime t);
+    /// After load(): records the run from now to an MCAP file, as --record (stepUntil included),
+    /// until stopRecording() or the server's end; `lagrange_server --replay` serves it.
+    Status startRecording(const std::string& path);
+    /// Ends the recording startRecording began (nothing when there is none).
+    void stopRecording();
     /// After load(): the run's whole state (time, every module, the bus), to restore later in
     /// the same run (Scheduler::saveState); the physics conformance suite checks backends with it.
     [[nodiscard]] Expected<std::vector<std::byte>, Status> saveState() const;
@@ -315,6 +321,13 @@ public:
     /// has no gripper of that name. Taken at the actuators domain's next step; a later change on
     /// the bus (its ROS topic) wins over it in turn.
     bool commandActuator(const std::string& name, double value);
+    /// After load(): flies a multicopter that the built-in controller flies (no autopilot, no
+    /// ros2_control) from the API, in step with the run. `mode` "velocity": forward and left in
+    /// its heading frame and up (m/s) and yaw rate (rad/s), as /cmd_vel; "angle": the same in
+    /// angle mode (/flight_mode); "rates": collective thrust over mass (m/s², along body z) and
+    /// roll, pitch and yaw rates (rad/s, body), the rate loop only; "hold": no command, it holds
+    /// where it is. The command stays until the next; while set it wins over ROS's /cmd_vel.
+    Status commandFlight(const std::string& mode, const std::array<double, 4>& values);
     bool commandJoint(const std::string& joint, const std::string& mode, double value);
     /// commandJoint's outcome in full: why it was refused, or the value taken, held within the
     /// joint's velocity limit, effort limit or range from the robot file (not the effort limit

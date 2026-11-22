@@ -26,6 +26,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -999,6 +1000,60 @@ TEST(Multicopter, TakingOffFromTallGrassCutsItUnderTheRotors) {
     EXPECT_GT(energy, 0.8 * discs * vegetation::kCutEnergyPerArea);
     EXPECT_LT(energy, 2.0 * discs * vegetation::kCutEnergyPerArea);
     EXPECT_NEAR(bus.readN(base)[2] - at[2], 2.0, 0.15);
+}
+
+// Server::commandFlight in rates mode (thrust over mass and body rates, as Python's
+// command_flight("rates", ...) for learned policies): the rate loop follows the commanded body
+// rate, a level thrust of g holds the height, and 1.2 g climbs at 0.2 g (closed forms; the run
+// has no aerodynamic drag, only the rotors). "hold" then holds where it is, and a robot the
+// built-in controller does not fly refuses commands.
+TEST(Multicopter, FliesByThrustAndBodyRatesFromTheApi) {
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_QUAD_USDA;
+    o.airDensityKgM3 = 1.225;
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    double t = 4.0;  // taken off at 1 s, hovering 2 m up
+    const auto fly = [&](double seconds) {
+        t += seconds;
+        EXPECT_TRUE(server.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9 + 0.5)}).ok());
+    };
+    fly(0.0);
+    constexpr double kG = 9.81;  // m/s², the controller's gravity
+    ASSERT_TRUE(server.commandFlight("rates", {kG, 0.0, 0.0, 0.0}).ok());
+    fly(1.0);
+    EXPECT_NEAR(server.read("body/base_link/twist").at(2), 0.0, 0.05);  // level: holds height
+
+    // Roll at 0.5 rad/s for 0.4 s: the rate loop (time constant 1/(2ζωa) ≈ 30 ms) follows it.
+    ASSERT_TRUE(server.commandFlight("rates", {kG, 0.5, 0.0, 0.0}).ok());
+    fly(0.4);
+    const std::vector<double> twist = server.read("body/base_link/twist");
+    EXPECT_NEAR(twist.at(3), 0.5, 0.05);  // world x rate = body x rate while still near level
+    const std::vector<double> rolled = server.read("body/base_link/pose");
+    const double roll = 2.0 * std::atan2(rolled.at(4), rolled.at(3));  // about x only
+    EXPECT_NEAR(roll, 0.2 - 0.5 * 0.03, 0.03);  // 0.5 rad/s for 0.4 s, less the lag
+
+    // Level again, then 1.2 g of thrust: 0.2 g up.
+    ASSERT_TRUE(server.commandFlight("hold", {}).ok());
+    fly(3.0);
+    ASSERT_TRUE(server.commandFlight("rates", {1.2 * kG, 0.0, 0.0, 0.0}).ok());
+    fly(0.5);  // the rotors spin up
+    const double v0 = server.read("body/base_link/twist").at(2);
+    fly(0.5);
+    const double v1 = server.read("body/base_link/twist").at(2);
+    EXPECT_NEAR((v1 - v0) / 0.5, 0.2 * kG, 0.3);
+
+    // Hold: it stops and holds where it then is.
+    ASSERT_TRUE(server.commandFlight("hold", {}).ok());
+    fly(4.0);
+    const double held = server.read("body/base_link/pose").at(2);
+    fly(2.0);
+    EXPECT_NEAR(server.read("body/base_link/pose").at(2), held, 0.05);
+
+    EXPECT_FALSE(server.commandFlight("sideways", {0.0, 0.0, 0.0, 0.0}).ok());
+    EXPECT_FALSE(server.commandFlight("rates", {NAN, 0.0, 0.0, 0.0}).ok());
 }
 
 }  // namespace

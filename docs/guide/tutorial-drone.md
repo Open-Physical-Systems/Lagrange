@@ -102,6 +102,24 @@ print(sim.read("battery/battery/power")[0])  # about 190 W
 print(sim.read("sensor/barometer/pressure")[0])  # about 95 570 Pa at 490 m
 ```
 
+Python flies it with `command_flight`, which the built-in controller takes in step with the run
+(so the run stays deterministic), and records it for `lagrange_server --replay`:
+
+```python
+sim.record("flight.mcap")
+sim.command_flight("velocity", [1.0, 0.0, 0.0, 0.0])  # forward, left, up m/s; yaw rate rad/s
+sim.step_until(10.0)
+sim.command_flight("rates", [9.81, 0.0, 0.0, 0.5])  # thrust over mass m/s², body rates rad/s
+sim.step_until(11.0)
+sim.command_flight("hold")  # no command: it holds where it is
+sim.step_until(15.0)
+sim.stop_recording()
+```
+
+`"angle"` is the velocity command in angle mode (`/flight_mode`). `"rates"` keeps only the
+controller's rate loop, mixer and rotor speed loops: the action space of the learning tasks in
+[Training a policy](training-a-policy.md).
+
 ### Propellers as built
 
 Each rotor also names its propeller: `assets/propellers/generic_10in_2blade_ccw.prop.yaml` and
