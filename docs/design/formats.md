@@ -1196,6 +1196,30 @@ In a URDF, on the links:
 `pump_efficiency`, `axis`, `tank` (a `<water_tank>`'s name, or its link's when it has none), `name`
 and `xyz`, placed as the grippers are.
 
+
+### 3.17 Trees (`TreeAPI_1`, `schemas/world/schema.usda`)
+
+**`TreeAPI_1`** (single-apply, on an Xform at the foot of the trunk, z up; added after 1.0, approved
+by the owner on 2026-11-22). The trunk is whatever collider the stage gives the tree; the crown is
+no collider but an ellipsoid of leaves over `crownBase` with semi-axes (`crownRadius`,
+`crownRadius`, (`height` − `crownBase`)/2), docs/physics/ground.md "Trees".
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `tree:height` | double | m | — | Foot to the top of the crown. Required |
+| `tree:crownRadius` | double | m | — | The crown's horizontal semi-axis. Required |
+| `tree:crownBase` | double | m | 0.3 `height` | Where the crown starts |
+| `tree:trunkDiameter` | double | m | `crownRadius`/8 | For drawing |
+| `tree:leafAreaDensity` | double | m²/m³ | `1` | Drag on what moves through, the lidars' gap probability |
+| `tree:dragCoefficient` | double | 1 | `0.3` | Of the crown's side area, for its sway |
+| `tree:naturalFrequency` | double | Hz | `0.5` | The first sway mode |
+| `tree:dampingRatio` | double | 1 | `0.1` | The first sway mode |
+| `tree:crownMass` | double | kg | 2 kg/m³ × crown volume | The sway mode's mass |
+| `tree:cutEnergy` | double | J/m³ | `2000` | Spent by a propeller cutting through the crown |
+| `tree:leafArea` | double | m² | `0.003` | One leaf, to count the leaves a cut sheds |
+
+Every fallback is TODO(verify) against measurements of the species.
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file

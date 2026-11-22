@@ -2,7 +2,7 @@
 <!--
   An open field for the drone samples (robot-classes.md §5): the loaders' 50 m ground slab with a
   painted landing pad at the origin (visual only, flush with the ground), a windsock on a pole
-  4 m from the pad, four trees and a shed, all more than 15 m from the pad so that the 10 m
+  4 m from the pad, four trees (their crowns soft: TreeAPI_1 in open_field.usda, ground.md "Trees") and a shed, all more than 15 m from the pad so that the 10 m
   mission square at 5 m (tools/ci/px4_mission.sh) flies clear of them, all fixed to the ground
   (root link "world"). Primitives only, so it needs no mesh files.
 -->
@@ -81,9 +81,6 @@
       <geometry><sphere radius="1.8"/></geometry>
       <material name="leaves"/>
     </visual>
-    <collision>
-      <geometry><sphere radius="1.8"/></geometry>
-    </collision>
   </link>
   <joint name="tree_1_crown_fixed" type="fixed">
     <parent link="world"/>
@@ -109,9 +106,6 @@
       <geometry><sphere radius="1.8"/></geometry>
       <material name="leaves"/>
     </visual>
-    <collision>
-      <geometry><sphere radius="1.8"/></geometry>
-    </collision>
   </link>
   <joint name="tree_2_crown_fixed" type="fixed">
     <parent link="world"/>
@@ -137,9 +131,6 @@
       <geometry><sphere radius="1.8"/></geometry>
       <material name="leaves"/>
     </visual>
-    <collision>
-      <geometry><sphere radius="1.8"/></geometry>
-    </collision>
   </link>
   <joint name="tree_3_crown_fixed" type="fixed">
     <parent link="world"/>
@@ -165,9 +156,6 @@
       <geometry><sphere radius="1.8"/></geometry>
       <material name="leaves"/>
     </visual>
-    <collision>
-      <geometry><sphere radius="1.8"/></geometry>
-    </collision>
   </link>
   <joint name="tree_4_crown_fixed" type="fixed">
     <parent link="world"/>

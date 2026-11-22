@@ -28,6 +28,7 @@
 
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/world/CanopyCut.hpp"
+#include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"
 
 #include <array>
@@ -35,6 +36,7 @@
 #include <limits>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lagrange::vegetation {
@@ -91,6 +93,40 @@ private:
     std::unordered_map<std::uint64_t, std::uint32_t> index_;  // key -> slot
 };
 
+/// The crowns' cut cells (lagrange/world/Trees.hpp): cells of each crown cut away by sweeps.
+class TreeCutMap {
+public:
+    /// Sweeps a rotor's disc (centre and unit normal, world; radius) through tree `index`'s
+    /// crown at its sway: every cell of leaves the disc passes through is cut away. Returns the
+    /// crown volume cut (m³).
+    double sweep(const TreeSpec& tree, std::uint32_t index, const std::array<double, 3>& centre,
+                 const std::array<double, 3>& normal, double radius,
+                 const std::array<double, 3>& sway);
+    [[nodiscard]] const TreeCuts& cuts() const { return reader_; }
+    [[nodiscard]] const std::vector<double>& values() const { return values_; }
+    bool assign(std::span<const double> values);
+    [[nodiscard]] bool full() const { return keys_.size() >= kTreeCutCapacity; }
+
+private:
+    std::vector<double> values_ = std::vector<double>(kTreeCutLength, 0.0);
+    std::unordered_set<std::uint64_t> keys_;
+    TreeCuts reader_;
+};
+
+/// A crown's sway (docs/physics/ground.md "Trees"): one mode of a damped oscillator in each
+/// horizontal direction, m x'' + 2 ζ ω m x' + ω² m x = F, ω = 2π f, driven by the air on the
+/// crown F = ½ ρ Cd A |u| u with u the air's horizontal velocity relative to the moving crown.
+struct Sway {
+    std::array<double, 2> position{};  // m, the crown centre's displacement
+    std::array<double, 2> velocity{};  // m/s
+};
+/// The air's force on a crown (N, horizontal): ½ ρ Cd A |u − v| (u − v).
+[[nodiscard]] std::array<double, 2> crownForce(const TreeSpec& tree, double density,
+                                               const std::array<double, 2>& air,
+                                               const std::array<double, 2>& crownVelocity);
+/// One semi-implicit Euler step of the sway under force `force`.
+void stepSway(const TreeSpec& tree, Sway& sway, const std::array<double, 2>& force, double dt);
+
 /// The canopies of a world: fixed boxes and planes with a canopy height over 0.
 [[nodiscard]] std::vector<Canopy> canopiesOf(const World& world);
 
@@ -106,6 +142,12 @@ private:
                                              double frontalArea, double volume,
                                              const std::array<double, 3>& velocity);
 
+/// Trees (TreeAPI_1): bodies are dragged by the crown's leaves as by a canopy's (a = G·LAD), the
+/// crown sways in env/wind/velocity plus tree/<n>/downwash (the aerodynamics domain's rotors' air
+/// at the crown), and rotors cut it. Out per tree: tree/<n>/sway (Vec3, m, world), air_force
+/// (Vec3, N), cut_volume (m³ so far), leaves_shed (leaves cut off so far: the cut volume's leaf
+/// area over tree:leafArea); and vegetation/tree_cut, the cut cells.
+///
 /// Writes body/<b>/wrench/vegetation (world_local, about the centre of mass) and
 /// body/<b>/in_vegetation (the share of its colliders' volume inside a canopy) for every moving,
 /// non-kinematic body with colliders, at 1 ms. Config: "density" (kg/m³; the site's air density
@@ -146,6 +188,15 @@ private:
         double inertia{0.0};           // kg·m² of the propeller's link about the axis
         double owed{0.0};              // J of cutting not yet paid by the rotor
     };
+    struct Tree {
+        SignalId downwash, sway, force, cutVolume, leaves;
+        Sway state;
+        double cut{0.0};  // m³
+    };
+    std::vector<TreeSpec> treeSpecs_;
+    std::vector<Tree> trees_;
+    TreeCutMap treeCuts_;
+    SignalId wind_, treeCutOut_;
     std::vector<Canopy> canopies_;
     std::vector<Body> bodies_;
     std::vector<Rotor> rotors_;

@@ -42,7 +42,7 @@ EXPECTED = {
     "human": ["HumanAPI_1"],
     "water": ["WaterAPI_1"],
     "joint": ["JointDynamicsAPI_1"],
-    "world": ["WorldTileAPI_1"],
+    "world": ["WorldTileAPI_1", "TreeAPI_1"],
     "tether": ["TetherAPI_1"],
     "fire": ["FireAPI_1"],
     "light": ["LampAPI_1"],
@@ -217,6 +217,20 @@ def test_open_water_chart_is_an_addition():
     with FROZEN.open() as f:
         frozen = json.load(f)
     assert "aero:rotor:advanceRatios" not in json.dumps(frozen)
+
+
+def test_tree_is_an_addition():
+    # Trees (ground.md "Trees"): TreeAPI_1 is a new class of the world library; the owner approved
+    # the addition on 2026-11-22.
+    tree = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("TreeAPI_1")
+    assert tree
+    assert tree.GetAttributeDefinition("tree:height").GetFallbackValue() is None
+    assert tree.GetAttributeDefinition("tree:naturalFrequency").GetFallbackValue() == 0.5
+    assert (
+        tree.GetAttributeDefinition("tree:leafAreaDensity").GetMetadata("lagrangeUnit") == "m2/m3"
+    )
+    with FROZEN.open() as f:
+        assert "TreeAPI_1" not in json.load(f)
 
 
 def test_brake_is_an_addition():

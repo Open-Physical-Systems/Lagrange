@@ -568,6 +568,33 @@ public:
             cut.feedback = true;
             canopyCut_ = d.input(cut);
         }
+        // Trees (ground.md "Trees"): crowns are turbid volumes at their sway, without the cells
+        // the propellers cut. Both inputs optional: without the vegetation domain, still and whole.
+        trees_.clear();
+        treeSway_.clear();
+        treeCut_ = SignalId{};
+        if (!groundTruth_) {
+            std::string treeError;
+            trees_ = treesOf(raw, treeError);
+            for (const TreeSpec& t : trees_) {
+                SignalSpec sway =
+                    spec("tree/" + t.name + "/sway", SignalType::Vec3, units::m, "world_local");
+                sway.optional = true;
+                sway.feedback = true;
+                sway.defaultValue = 0.0;
+                treeSway_.push_back(d.input(sway));
+            }
+            if (!trees_.empty()) {
+                SignalSpec cut =
+                    spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
+                cut.arrayLength = kTreeCutLength;
+                cut.optional = true;
+                cut.feedback = true;
+                treeCut_ = d.input(cut);
+                surfaceMaterialPreset("shrub", leaves_);
+            }
+            sways_.assign(trees_.size(), {});
+        }
         // The water's moving surface (water.md): beams meet it at η, not at the still level.
         if (!groundTruth_) {
             return movingWater_.declare(world, config, d);
@@ -676,6 +703,14 @@ public:
         if (canopyCut_.valid()) {
             cuts_.load(bus.readN(canopyCut_));
         }
+        if (treeCut_.valid()) {
+            treeCuts_.load(bus.readN(treeCut_));
+        }
+        for (std::size_t k = 0; k < treeSway_.size(); ++k) {
+            const std::span<const double> w = bus.readN(treeSway_[k]);
+            sways_[k] =
+                w.size() == 3 ? std::array<double, 3>{w[0], w[1], w[2]} : std::array<double, 3>{};
+        }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
         sweep(sensor);
         // Place every shape once per scan, not once per beam.
@@ -723,7 +758,8 @@ public:
             const bool hit = hitShape_[i] != kNoShapeHit && std::isfinite(nearest_[i]);
             double stop = std::numeric_limits<double>::infinity();
             std::uint32_t stopShape = kNoShapeHit;
-            if (!canopyVolumes_.empty()) {
+            bool leaves = false;
+            if (!canopyVolumes_.empty() || !trees_.empty()) {
                 random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
                 const double reach = hit ? nearest_[i] : maxRange_;
                 for (const std::uint32_t k : canopyVolumes_) {
@@ -744,6 +780,29 @@ public:
                         stopShape = k;
                     }
                 }
+                // Crowns (ShapeCaster.hpp crownStop): one draw per tree, in order.
+                for (std::size_t k = 0; k < trees_.size(); ++k) {
+                    const double at =
+                        crownStop(trees_[k], static_cast<std::uint32_t>(k), from.position, dir,
+                                  std::min(reach, stop), sways_[k],
+                                  treeCuts_.empty() ? nullptr : &treeCuts_, rng.uniform());
+                    if (at < stop) {
+                        stop = at;
+                        leaves = true;
+                    }
+                }
+            }
+            if (leaves) {
+                nearest_[i] = stop;
+                hitShape_[i] = kNoShapeHit;  // no collider: a leaf in a crown
+                const LidarReturn back =
+                    lidarReturn(leaves_, true, wavelength1550_, kCanopyLeafCosine, stop, maxRange_,
+                                referenceReflectivity_);
+                intensity_[i] = back.intensity;
+                if (!back.detected) {
+                    nearest_[i] = kNoHit;
+                }
+                return;
             }
             static const SurfaceMaterial kDefault{};
             if (stopShape != kNoShapeHit) {
@@ -1141,6 +1200,12 @@ private:
     std::vector<std::uint32_t> canopyVolumes_;  // shapes_ with a canopy volume (boxes, planes)
     SignalId canopyCut_;                        // the vegetation domain's cut map, when it runs
     CanopyCuts cuts_;
+    std::vector<TreeSpec> trees_;               // crowns the beams cross (ground.md "Trees")
+    std::vector<SignalId> treeSway_;            // tree/<n>/sway, the vegetation domain's
+    std::vector<std::array<double, 3>> sways_;  // this scan's
+    SignalId treeCut_;                          // vegetation/tree_cut
+    TreeCuts treeCuts_;
+    SurfaceMaterial leaves_;  // a leaf's return: the shrub preset's
     std::vector<double> intensity_;
     bool wavelength1550_{false};
     double referenceReflectivity_{0.1};

@@ -4,6 +4,8 @@
 
 #include <cmath>
 #include <numbers>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -161,6 +163,127 @@ TEST(Cutting, OnlyOverTheBoxAndTheStemsStopAtTheCut) {
     ASSERT_TRUE(back.assign(cuts.values()));
     EXPECT_NEAR(back.top(0, 0.9, 0.9), 1.0, 1e-12);
     EXPECT_EQ(back.cells(), cuts.cells());
+}
+
+// Trees (ground.md "Trees"): the crown's ellipsoid, its sway as a damped oscillator in the air,
+// and a disc cutting through it.
+TreeSpec oak() {
+    TreeSpec t;
+    t.name = "oak";
+    t.pose.position = {5.0, 0.0, 0.0};
+    t.height = 10.0;
+    t.crownRadius = 3.0;
+    t.crownBase = 3.0;  // crown centre at 6.5 m, half height 3.5 m
+    t.leafAreaDensity = 1.0;
+    t.dragCoefficient = 0.3;
+    t.naturalFrequency = 0.5;
+    t.dampingRatio = 0.1;
+    t.crownMass = 2.0 * t.crownVolume();
+    t.cutEnergy = 2000.0;
+    t.leafArea = 0.003;
+    return t;
+}
+
+TEST(Trees, TheCrownIsAnEllipsoidOverItsBase) {
+    const TreeSpec t = oak();
+    const std::array<double, 3> none{};
+    EXPECT_TRUE(inLeaves(t, 0, {5.0, 0.0, 6.5}, none, nullptr));
+    EXPECT_TRUE(inLeaves(t, 0, {7.9, 0.0, 6.5}, none, nullptr));
+    EXPECT_FALSE(inLeaves(t, 0, {8.1, 0.0, 6.5}, none, nullptr));
+    EXPECT_TRUE(inLeaves(t, 0, {5.0, 0.0, 9.9}, none, nullptr));
+    EXPECT_FALSE(inLeaves(t, 0, {5.0, 0.0, 2.9}, none, nullptr));  // under the crown: the trunk
+    // Swayed 0.5 m in +x, the crown's edge moves with it.
+    EXPECT_TRUE(inLeaves(t, 0, {8.4, 0.0, 6.5}, {0.5, 0.0, 0.0}, nullptr));
+    EXPECT_NEAR(t.crownVolume(), 4.0 / 3.0 * std::numbers::pi * 9.0 * 3.5, 1e-9);
+}
+
+TEST(Trees, ASteadyWindBendsTheCrownByForceOverStiffness) {
+    const TreeSpec t = oak();
+    constexpr double kAir = 1.225;
+    const std::array<double, 2> wind{8.0, 0.0};
+    Sway sway;
+    for (int k = 0; k < 120000; ++k) {  // 120 s at 1 ms: many times 1/(ζω) = 3.2 s
+        stepSway(t, sway, crownForce(t, kAir, wind, sway.velocity), 1e-3);
+    }
+    const double omega = 2.0 * std::numbers::pi * t.naturalFrequency;
+    const double force = 0.5 * kAir * t.dragCoefficient * t.frontalArea() * 64.0;
+    const double expected = force / (t.crownMass * omega * omega);
+    std::printf("8 m/s on the oak: %.1f N, the crown %.3f m over (F/k %.3f)\n", force,
+                sway.position[0], expected);
+    EXPECT_NEAR(sway.position[0], expected, 1e-4 * expected);
+    EXPECT_NEAR(sway.position[1], 0.0, 1e-12);
+}
+
+TEST(Trees, LetGoTheCrownSwingsAtItsFrequencyAndDampingRatio) {
+    const TreeSpec t = oak();
+    Sway sway;
+    sway.position = {0.3, 0.0};
+    const double dt = 1e-4;
+    // Upward zero crossings of the velocity mark the peaks: their period and decrement.
+    std::vector<double> peaks;
+    std::vector<double> times;
+    double previous = 0.0;
+    for (int k = 0; k < 200000; ++k) {  // 20 s
+        stepSway(t, sway, {0.0, 0.0}, dt);
+        if (previous > 0.0 && sway.velocity[0] <= 0.0) {
+            peaks.push_back(sway.position[0]);
+            times.push_back(k * dt);
+        }
+        previous = sway.velocity[0];
+    }
+    ASSERT_GE(peaks.size(), 4U);
+    const double period = (times[3] - times[0]) / 3.0;
+    const double zeta = t.dampingRatio;
+    const double expected = 1.0 / (t.naturalFrequency * std::sqrt(1.0 - zeta * zeta));
+    EXPECT_NEAR(period, expected, 0.002 * expected);
+    // The logarithmic decrement δ = ln(x_n / x_(n+1)) = 2πζ/√(1 − ζ²).
+    const double delta = std::log(peaks[0] / peaks[1]);
+    EXPECT_NEAR(delta, 2.0 * std::numbers::pi * zeta / std::sqrt(1.0 - zeta * zeta), 0.01 * delta);
+}
+
+TEST(Trees, ADiscCutsTheLeavesItPassesThrough) {
+    const TreeSpec t = oak();
+    TreeCutMap cuts;
+    const std::array<double, 3> none{};
+    // A 10-inch propeller, level, at the crown's centre: a disc of cells one cell thick.
+    const double radius = 0.127;
+    const double volume = cuts.sweep(t, 0, {5.0, 0.0, 6.55}, {0.0, 0.0, 1.0}, radius, none);
+    // Cells of 10 cm a side whose centres... the disc meets the cells it passes over: from the
+    // disc's area (0.0507 m²) to that of the cells round it, one cell thick.
+    const double cell = kTreeCutCell;
+    EXPECT_GT(volume, std::numbers::pi * radius * radius * cell);
+    EXPECT_LT(volume, std::numbers::pi * (radius + 1.5 * cell) * (radius + 1.5 * cell) * cell);
+    EXPECT_FALSE(inLeaves(t, 0, {5.0, 0.0, 6.55}, none, &cuts.cuts()));
+    EXPECT_TRUE(inLeaves(t, 0, {5.0, 0.0, 6.85}, none, &cuts.cuts()));  // above the cut
+    EXPECT_TRUE(inLeaves(t, 0, {5.5, 0.0, 6.55}, none, &cuts.cuts()));  // beyond the disc
+    // The same sweep again cuts nothing more; outside the crown nothing.
+    EXPECT_EQ(cuts.sweep(t, 0, {5.0, 0.0, 6.55}, {0.0, 0.0, 1.0}, radius, none), 0.0);
+    EXPECT_EQ(cuts.sweep(t, 0, {5.0, 0.0, 11.0}, {0.0, 0.0, 1.0}, radius, none), 0.0);
+    // The map round-trips through its signal.
+    TreeCutMap back;
+    ASSERT_TRUE(back.assign(cuts.values()));
+    EXPECT_FALSE(inLeaves(t, 0, {5.0, 0.0, 6.55}, none, &back.cuts()));
+}
+
+TEST(Trees, TreeApiReadsWithItsFallbacks) {
+    World w;
+    w.schemaInstances.push_back({});
+    SchemaInstance& s = w.schemaInstances.back();
+    s.schema = "TreeAPI_1";
+    s.prim = w.addPrim("/oak", "oak");
+    w.prims.poseInBody.at(s.prim.index).position = {1.0, 2.0, 0.0};
+    s.reals = {{"tree:height", 8.0}, {"tree:crownRadius", 2.0}};
+    std::string error;
+    const std::vector<TreeSpec> trees = treesOf(w, error);
+    ASSERT_EQ(error, "");
+    ASSERT_EQ(trees.size(), 1U);
+    EXPECT_EQ(trees[0].name, "oak");
+    EXPECT_DOUBLE_EQ(trees[0].crownBase, kTreeCrownBaseShare * 8.0);
+    EXPECT_DOUBLE_EQ(trees[0].crownMass, kTreeCrownDensity * trees[0].crownVolume());
+    EXPECT_DOUBLE_EQ(trees[0].pose.position[1], 2.0);
+    s.reals["tree:crownBase"] = 9.0;  // above the top
+    EXPECT_TRUE(treesOf(w, error).empty());
+    EXPECT_NE(error.find("crownBase"), std::string::npos);
 }
 
 }  // namespace

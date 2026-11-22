@@ -342,3 +342,69 @@ Not modelled yet:
 - The clippings.
 - Damage to the propeller.
 - The viewer: it still draws the grass uncut. Camera depth does not see the stubble either.
+
+## Trees
+
+A tree is a `TreeAPI_1` prim at the foot of its trunk (formats.md §3.17). Its trunk is whatever
+collider the stage gives it, a solid cylinder in the sample. Its crown is not a collider. It is a
+volume of leaves and twigs: an ellipsoid over the crown base with semi-axes `R`, `R` and
+`c = (height − crownBase)/2`, through which things move as through a canopy.
+
+**What pushes through it.** A body's cells inside the crown are dragged as a canopy drags them
+(§ "Reeds and shrubs"), `F = −½ ρ Cd a V |v| v`, with the frontal area per volume
+`a = G·LAD` (`tree:leafAreaDensity`, G = 0.5), relative to the swaying crown.
+
+**Sway.** The crown has one sway mode in each horizontal direction, a damped oscillator of the
+crown's mass `m` (`tree:crownMass`), natural frequency `f` and damping ratio `ζ`:
+
+```
+m x'' + 2 ζ ω m x' + ω² m x = F,    ω = 2π f
+F = ½ ρ Cd A |u − x'| (u − x')       A = π R c
+```
+
+`u` is the horizontal air at the crown: the site wind (`env/wind/velocity`) plus the rotors' wake
+there (`tree/<n>/downwash`, which the aerodynamics domain writes as the mean of its downwash at the
+crown's centre and four points half way to its edge). Taking the air relative to the moving crown
+gives the aerodynamic damping that real crowns have. In a steady wind the crown settles at
+`F/(m ω²)`; let go, it swings at `f√(1 − ζ²)` with a logarithmic decrement `2πζ/√(1 − ζ²)`. The
+crown moves as a whole by its centre's displacement (`tree/<n>/sway`), for the drag, the cuts and
+the lidars.
+
+**Cutting.** A spinning rotor whose blade tips move faster than 5 m/s cuts every cell of leaves
+its disc passes through (cells of 10 cm in the crown's own frame, kept in `vegetation/tree_cut`,
+lagrange/world/Trees.hpp). It pays `tree:cutEnergy` per m³ cut as a torque against its spin, as for
+the grass. The volume cut so far is `tree/<n>/cut_volume`, and the leaves it cut off,
+`cut volume × LAD / tree:leafArea`, are `tree/<n>/leaves_shed`. Cut cells hold no leaves: nothing
+drags there, and the lidars see through them.
+
+**Lidars.** A beam crossing a crown stops in it with the gap probability: its free path through
+the leaves has `P(s > x) = exp(−G·LAD·x)`, counted only through cells not cut away, the crown at
+its sway (`sensors::crownStop`). The return is a leaf's (the `shrub` preset's reflectivity) facing
+the beam at random.
+
+Checked:
+
+| Check | Reference | Result |
+|---|---|---|
+| The crown's ellipsoid, swayed | its equation | `test_vegetation` `Trees.TheCrownIsAnEllipsoidOverItsBase` |
+| 8 m/s steady on a 10 m oak (R 3 m, c 3.5 m, Cd 0.3, 0.5 Hz) | `F/(m ω²)` | 387.9 N, 0.149 m, within 1e-4 |
+| Let go from 0.3 m | period `1/(f√(1 − ζ²))`, decrement `2πζ/√(1 − ζ²)` | within 0.2 % and 1 % |
+| A 10-inch disc level through the centre | the cells under the disc, one cell thick | cut, the cells above and beside it not; nothing more on a second pass |
+| A beam through 6 m of crown, LAD 0.5 | passes with `exp(−G·LAD·6)` = 0.223; mean stop depth of the truncated exponential | within 0.002; within 1 % (`test_shape_caster` `Crown.*`) |
+| Cut cells and sway | the beam passes the cut line; the crown moves with its sway | `Crown.CutCellsLetTheBeamThroughAndTheSwayMovesTheCrown` |
+| The quadcopter taking off under the open field's tree_1 | its rotors in the crown | 0.118 m³ cut, 39 leaves, up to 41.6 W of cutting; bit for bit twice (`test_trees_run`) |
+
+### Numbers and sources
+
+Every fallback of `TreeAPI_1` is TODO(verify) against measurements of the species: a leaf area
+density of 1 m²/m³ (broadleaf crowns run from about 0.5 to 2), a crown drag coefficient of 0.3
+(crowns streamline and their CdA falls with the wind, Vollsinger et al. 2005, Can. J. For. Res.
+35, 1238), a first sway frequency of 0.5 Hz and a damping ratio of 0.1 (open-grown trees of some
+10 m; Moore and Maguire 2004, Trees 18, 195, collect measured frequencies and damping ratios),
+a crown mass of 2 kg per m³ of crown, 2000 J to cut a m³ of crown, a leaf of 30 cm². The sway is
+one mode of the whole crown: branches do not sway on their own, and the crown does not bend
+(its top moves as its centre). The crown's air is sampled at its centre's height; rotors inside
+the crown under it give it their inflow, not their wake. Not yet: leaves and twigs that fly
+from a cut or a gust, the realistic view's trees, the crown's shelter of the air behind it,
+branches that stop a propeller, trees broken by a vehicle.
+

@@ -12,6 +12,8 @@ namespace lagrange::vegetation {
 namespace {
 
 constexpr int kCells = 4;  // a side, per collider
+/// m³, a tree's cut volume.
+constexpr Unit kCubicMetres{{.length = 3}, 1.0, QuantityKind::Unspecified};
 
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
     SignalSpec s;
@@ -276,6 +278,110 @@ std::array<double, 3> stemDrag(double density, double dragCoefficient, double fr
     return {-gain * velocity[0], -gain * velocity[1], -gain * velocity[2]};
 }
 
+double TreeCutMap::sweep(const TreeSpec& tree, std::uint32_t index,
+                         const std::array<double, 3>& centre, const std::array<double, 3>& normal,
+                         double radius, const std::array<double, 3>& sway) {
+    if (!(radius > 0.0)) {
+        return 0.0;
+    }
+    // Far from the crown: nothing to cut.
+    const std::array<double, 3> c = inCrown(tree, centre, sway);
+    const double reach = std::max(tree.crownRadius, tree.halfHeight()) + radius;
+    if (std::hypot(c[0], c[1], c[2]) > reach) {
+        return 0.0;
+    }
+    const std::array<double, 3> pick = std::abs(normal[0]) < 0.9
+                                           ? std::array<double, 3>{1.0, 0.0, 0.0}
+                                           : std::array<double, 3>{0.0, 1.0, 0.0};
+    std::array<double, 3> e1 = cross(normal, pick);
+    const double l1 = std::hypot(e1[0], e1[1], e1[2]);
+    if (!(l1 > 0.0)) {
+        return 0.0;
+    }
+    e1 = {e1[0] / l1, e1[1] / l1, e1[2] / l1};
+    const std::array<double, 3> e2 = cross(normal, e1);
+    // Points on rings half a cell apart, so every cell the disc passes through is met.
+    const double spacing = 0.5 * kTreeCutCell;
+    const int rings = std::max(1, static_cast<int>(std::ceil(radius / spacing)));
+    constexpr double kCellVolume = kTreeCutCell * kTreeCutCell * kTreeCutCell;
+    double volume = 0.0;
+    for (int k = 0; k < rings; ++k) {
+        const double r = std::min(radius, (k + 0.5) * spacing);
+        const int around =
+            std::max(1, static_cast<int>(std::ceil(2.0 * std::numbers::pi * r / spacing)));
+        for (int a = 0; a < around && !full(); ++a) {
+            const double angle = 2.0 * std::numbers::pi * (a + 0.5) / around;
+            const double ca = r * std::cos(angle);
+            const double sa = r * std::sin(angle);
+            const std::array<double, 3> point{centre[0] + ca * e1[0] + sa * e2[0],
+                                              centre[1] + ca * e1[1] + sa * e2[1],
+                                              centre[2] + ca * e1[2] + sa * e2[2]};
+            const std::array<double, 3> q = inCrown(tree, point, sway);
+            if (!inEllipsoid(tree, q)) {
+                continue;
+            }
+            const std::int32_t x = treeCutIndex(q[0]);
+            const std::int32_t y = treeCutIndex(q[1]);
+            const std::int32_t z = treeCutIndex(q[2]);
+            if (!keys_.insert(treeCutKey(index, x, y, z)).second) {
+                continue;  // already cut
+            }
+            const std::size_t at = kTreeCutHeader + (4 * (keys_.size() - 1));
+            values_[at] = index;
+            values_[at + 1] = x;
+            values_[at + 2] = y;
+            values_[at + 3] = z;
+            volume += kCellVolume;
+        }
+    }
+    if (volume > 0.0) {
+        values_[0] += 1.0;
+        values_[1] = static_cast<double>(keys_.size());
+        reader_.load(values_);
+    }
+    return volume;
+}
+
+bool TreeCutMap::assign(std::span<const double> values) {
+    if (values.size() != kTreeCutLength) {
+        return false;
+    }
+    values_.assign(values.begin(), values.end());
+    keys_.clear();
+    const auto count = static_cast<std::size_t>(
+        std::clamp(values_[1], 0.0, static_cast<double>(kTreeCutCapacity)));
+    for (std::size_t k = 0; k < count; ++k) {
+        const std::size_t at = kTreeCutHeader + (4 * k);
+        keys_.insert(treeCutKey(static_cast<std::uint32_t>(values_[at]),
+                                static_cast<std::int32_t>(values_[at + 1]),
+                                static_cast<std::int32_t>(values_[at + 2]),
+                                static_cast<std::int32_t>(values_[at + 3])));
+    }
+    reader_ = TreeCuts{};
+    reader_.load(values_);
+    return true;
+}
+
+std::array<double, 2> crownForce(const TreeSpec& tree, double density,
+                                 const std::array<double, 2>& air,
+                                 const std::array<double, 2>& crownVelocity) {
+    const std::array<double, 2> u{air[0] - crownVelocity[0], air[1] - crownVelocity[1]};
+    const double speed = std::hypot(u[0], u[1]);
+    const double gain = 0.5 * density * tree.dragCoefficient * tree.frontalArea() * speed;
+    return {gain * u[0], gain * u[1]};
+}
+
+void stepSway(const TreeSpec& tree, Sway& sway, const std::array<double, 2>& force, double dt) {
+    const double omega = 2.0 * std::numbers::pi * tree.naturalFrequency;
+    for (std::size_t k = 0; k < 2; ++k) {
+        const double acceleration = force.at(k) / tree.crownMass -
+                                    2.0 * tree.dampingRatio * omega * sway.velocity.at(k) -
+                                    omega * omega * sway.position.at(k);
+        sway.velocity.at(k) += dt * acceleration;
+        sway.position.at(k) += dt * sway.velocity.at(k);
+    }
+}
+
 ModuleInfo Vegetation::info() const {
     return {"vegetation", "stem_drag", 1, 0};
 }
@@ -287,6 +393,35 @@ Duration Vegetation::preferredStep() const {
 Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
     const World& raw = world.raw();
     canopies_ = canopiesOf(raw);
+    std::string treeError;
+    treeSpecs_ = treesOf(raw, treeError);
+    if (!treeError.empty()) {
+        return Status::error(StatusCode::InvalidConfig, treeError);
+    }
+    trees_.clear();
+    for (const TreeSpec& t : treeSpecs_) {
+        Tree tree;
+        const std::string base = "tree/" + t.name + "/";
+        SignalSpec air = spec(base + "downwash", SignalType::Vec3, units::m_per_s, "world_local");
+        air.optional = true;
+        air.feedback = true;
+        air.defaultValue = 0.0;
+        tree.downwash = d.input(air);
+        tree.sway = d.output(spec(base + "sway", SignalType::Vec3, units::m, "world_local"));
+        tree.force = d.output(spec(base + "air_force", SignalType::Vec3, units::N, "world_local"));
+        tree.cutVolume = d.output(spec(base + "cut_volume", SignalType::Scalar, kCubicMetres));
+        tree.leaves = d.output(spec(base + "leaves_shed", SignalType::Scalar, units::one));
+        trees_.push_back(tree);
+    }
+    wind_ = SignalId{};
+    if (!trees_.empty()) {
+        SignalSpec wind =
+            spec("env/wind/velocity", SignalType::Vec3, units::m_per_s, "world_local");
+        wind.optional = true;
+        wind.feedback = true;
+        wind.defaultValue = 0.0;
+        wind_ = d.input(wind);
+    }
     bodies_.clear();
     density_ = std::max(0.0, config.get<double>("density").value_or(0.0));
     dragCoefficient_ =
@@ -352,7 +487,8 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
     rotors_.clear();
     cutOut_ = SignalId{};
     cutEnergy_ = std::max(0.0, config.get<double>("cut_energy").value_or(kCutEnergyPerArea));
-    if (canopies_.empty() || !config.get<bool>("cutting").value_or(true)) {
+    treeCutOut_ = SignalId{};
+    if ((canopies_.empty() && treeSpecs_.empty()) || !config.get<bool>("cutting").value_or(true)) {
         return {};
     }
     const World::Joints& joints = world.joints();
@@ -391,10 +527,15 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         r.power = d.output(spec("rotor/" + joint + "/cutting_power", SignalType::Scalar, units::W));
         rotors_.push_back(r);
     }
-    if (!rotors_.empty()) {
+    if (!rotors_.empty() && !canopies_.empty()) {
         SignalSpec out = spec(std::string(kCanopyCutSignal), SignalType::ScalarArray, units::m);
         out.arrayLength = kCanopyCutLength;
         cutOut_ = d.output(out);
+    }
+    if (!rotors_.empty() && !treeSpecs_.empty()) {
+        SignalSpec out = spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
+        out.arrayLength = kTreeCutLength;
+        treeCutOut_ = d.output(out);
     }
     return {};
 }
@@ -411,12 +552,42 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     if (cutOut_.valid()) {
         bus.writeN(cutOut_, cuts_.values());
     }
+    if (treeCutOut_.valid()) {
+        bus.writeN(treeCutOut_, treeCuts_.values());
+    }
+    for (Tree& tree : trees_) {
+        tree.state = Sway{};
+        tree.cut = 0.0;
+        bus.writeN(tree.sway, std::array<double, 3>{});
+        bus.writeN(tree.force, std::array<double, 3>{});
+        bus.write(tree.cutVolume, 0.0);
+        bus.write(tree.leaves, 0.0);
+    }
     return {};
 }
 
 Status Vegetation::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
     const double version = cuts_.values()[0];
+    const double treeVersion = treeCuts_.values()[0];
+    // The crowns' sway in the wind and the rotors' air.
+    const std::span<const double> wind =
+        wind_.valid() ? bus.readN(wind_) : std::span<const double>{};
+    std::vector<std::array<double, 3>> sways(trees_.size());
+    for (std::size_t k = 0; k < trees_.size(); ++k) {
+        Tree& tree = trees_[k];
+        const std::span<const double> w = bus.readN(tree.downwash);
+        std::array<double, 2> air{};
+        for (std::size_t c = 0; c < 2; ++c) {
+            air.at(c) = (wind.size() == 3 ? wind[c] : 0.0) + (w.size() == 3 ? w[c] : 0.0);
+        }
+        const std::array<double, 2> force =
+            crownForce(treeSpecs_[k], density_, air, tree.state.velocity);
+        stepSway(treeSpecs_[k], tree.state, force, dt);
+        sways[k] = {tree.state.position[0], tree.state.position[1], 0.0};
+        bus.writeN(tree.sway, sways[k]);
+        bus.writeN(tree.force, std::array<double, 3>{force[0], force[1], 0.0});
+    }
     for (Rotor& r : rotors_) {
         const std::span<const double> p = bus.readN(r.pose);
         const double omega = bus.read(r.velocity);
@@ -430,6 +601,12 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
                 area += cuts_.sweep(canopy, hub.position, axis, r.radius);
             }
             r.owed += area * cutEnergy_;
+            for (std::size_t k = 0; k < trees_.size(); ++k) {
+                const double cut = treeCuts_.sweep(treeSpecs_[k], static_cast<std::uint32_t>(k),
+                                                   hub.position, axis, r.radius, sways[k]);
+                trees_[k].cut += cut;
+                r.owed += cut * treeSpecs_[k].cutEnergy;
+            }
             // The cut is paid by the spinning propeller, no faster than a twentieth of its
             // kinetic energy per step, so a deep plunge slows it over steps instead of reversing
             // it in one (a propeller without inertia pays at once).
@@ -458,6 +635,18 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
         } else {
             bus.hold(cutOut_);
         }
+    }
+    if (treeCutOut_.valid()) {
+        if (treeCuts_.values()[0] != treeVersion) {
+            bus.writeN(treeCutOut_, treeCuts_.values());
+        } else {
+            bus.hold(treeCutOut_);
+        }
+    }
+    for (std::size_t k = 0; k < trees_.size(); ++k) {
+        const TreeSpec& t = treeSpecs_[k];
+        bus.write(trees_[k].cutVolume, trees_[k].cut);
+        bus.write(trees_[k].leaves, std::floor(trees_[k].cut * t.leafAreaDensity / t.leafArea));
     }
     for (const Body& body : bodies_) {
         const std::span<const double> p = bus.readN(body.pose);
@@ -490,6 +679,29 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
                     }
                     break;  // one canopy per cell: overlapping canopies do not add up
                 }
+                for (std::size_t k = 0; k < treeSpecs_.size(); ++k) {
+                    const TreeSpec& t = treeSpecs_[k];
+                    if (!inLeaves(t, static_cast<std::uint32_t>(k), at, sways[k],
+                                  &treeCuts_.cuts())) {
+                        continue;
+                    }
+                    inside += cell.volume;
+                    // Relative to the swaying crown.
+                    const std::array<double, 3> around =
+                        cross(spin, {at[0] - p[0], at[1] - p[1], at[2] - p[2]});
+                    const std::array<double, 2>& cv = trees_[k].state.velocity;
+                    const std::array<double, 3> force = stemDrag(
+                        density_, dragCoefficient_, kLeafProjection * t.leafAreaDensity,
+                        cell.volume,
+                        {v[0] + around[0] - cv[0], v[1] + around[1] - cv[1], v[2] + around[2]});
+                    const std::array<double, 3> moment =
+                        cross({at[0] - com[0], at[1] - com[1], at[2] - com[2]}, force);
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        wrench.at(c) += force.at(c);
+                        wrench.at(c + 3) += moment.at(c);
+                    }
+                    break;
+                }
             }
         }
         bus.writeN(body.wrench, wrench);
@@ -503,6 +715,13 @@ Status Vegetation::saveState(StateWriter& writer) const {
     for (const Rotor& r : rotors_) {
         writer.put(r.owed);
     }
+    writer.putDoubles(treeCuts_.values());
+    for (const Tree& t : trees_) {
+        for (const double v : {t.state.position[0], t.state.position[1], t.state.velocity[0],
+                               t.state.velocity[1], t.cut}) {
+            writer.put(v);
+        }
+    }
     return {};
 }
 
@@ -513,6 +732,18 @@ Status Vegetation::restoreState(StateReader& reader) {
     }
     for (Rotor& r : rotors_) {
         reader.get(r.owed);
+    }
+    std::vector<double> trees(kTreeCutLength, 0.0);
+    if (!reader.getDoubles(trees) || !treeCuts_.assign(trees)) {
+        return Status::error(StatusCode::Internal, "vegetation: the saved tree cuts are short");
+    }
+    for (Tree& t : trees_) {
+        for (double* v : {&t.state.position[0], &t.state.position[1], &t.state.velocity[0],
+                          &t.state.velocity[1], &t.cut}) {
+            if (!reader.get(*v)) {
+                return Status::error(StatusCode::Internal, "vegetation: short tree state");
+            }
+        }
     }
     return {};
 }

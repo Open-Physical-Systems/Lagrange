@@ -4,6 +4,7 @@
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/Trees.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -471,6 +472,29 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
             fires_.push_back(fire);
         }
     }
+    // Trees (ground.md "Trees"): every robot's wake over each crown, the mean of five points at
+    // its centre's height (the centre and half way to its edge both ways along x and y), for the
+    // vegetation domain's sway.
+    crowns_.clear();
+    if (!rotors_.empty()) {
+        std::string treeError;
+        for (const TreeSpec& t : treesOf(world.raw(), treeError)) {
+            TreeCrown crown;
+            const double h = 0.5 * t.crownRadius;
+            const std::array<std::array<double, 3>, 5> offsets{
+                {{0.0, 0.0, 0.0}, {h, 0.0, 0.0}, {-h, 0.0, 0.0}, {0.0, h, 0.0}, {0.0, -h, 0.0}}};
+            for (std::size_t k = 0; k < 5; ++k) {
+                const std::array<double, 3> local{offsets.at(k)[0], offsets.at(k)[1],
+                                                  t.centreHeight()};
+                const std::array<double, 3> w = rotate(t.pose.orientation, local);
+                crown.points.at(k) = {t.pose.position[0] + w[0], t.pose.position[1] + w[1],
+                                      t.pose.position[2] + w[2]};
+            }
+            crown.downwash = d.output(spec("tree/" + t.name + "/downwash", SignalType::Vec3,
+                                           units::m_per_s, "world_local"));
+            crowns_.push_back(crown);
+        }
+    }
     if (hasGround_) {
         downwash_.setGround(groundPoint_, groundNormal_);
     } else {
@@ -604,6 +628,9 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     }
     for (const FireBase& fire : fires_) {
         bus.writeN(fire.downwash, Vec3{});
+    }
+    for (const TreeCrown& crown : crowns_) {
+        bus.writeN(crown.downwash, Vec3{});
     }
     downwash_.update({});
     others_.update({});
@@ -830,6 +857,16 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             w = wakeAt(Vec3{at[0], at[1], at[2] + up}, Downwash::kNoGroup);
         }
         bus.writeN(fire.downwash, w);
+    }
+    for (const TreeCrown& crown : crowns_) {
+        Vec3 sum{};
+        for (const Vec3& at : crown.points) {
+            const Vec3 w = wakeAt(at, Downwash::kNoGroup);
+            for (std::size_t k = 0; k < 3; ++k) {
+                sum.at(k) += w.at(k) / static_cast<double>(crown.points.size());
+            }
+        }
+        bus.writeN(crown.downwash, sum);
     }
     // The fountain under each low multirotor: a push up its thrust axis on its first link.
     std::vector<Vec3> fountain(groupCount_, Vec3{});
