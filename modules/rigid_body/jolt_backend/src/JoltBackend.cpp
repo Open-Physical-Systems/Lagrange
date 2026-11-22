@@ -4,6 +4,7 @@
 
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/SurfaceContact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,16 @@ constexpr std::size_t kLambdas = 7;
 constexpr double kArmatureRelaxation = 0.5;
 
 // A bound on any body's angular velocity that no robot reaches (rad/s); see its use.
+// Share of a hinge's turn-made anchor velocity error given back after Jolt's projection takes it
+// off (JoltBackend::Impl::measureJointTurn). Not a tuning: with a share e given back each
+// sub-step, the next projection takes off ½ ((1 − e) ω Δt)² of the kinetic energy and the share
+// put back ½ (e ω Δt)², so the energy is kept, to leading order, at e = ½ alone (the velocities
+// then run along the step's middle, as the midpoint rule's do). Measured: a pendulum from 1 rad
+// loses 0.13 % in 60 s at 1 ms (16.4 % with none); 0.4 loses 3.9 %, 0.6 gains 4.0 %.
+constexpr float kHingeTurnShare = 0.5F;
+// Gauss-Seidel passes over a robot's hinges for the turn given back together (Jolt's own
+// velocity solve takes 10).
+constexpr int kHingeTurnIterations = 10;
 constexpr float kMaxAngularVelocityRadPerS = 1.0e6F;
 
 // Object layers: static scenery, and everything that moves.
@@ -327,6 +338,9 @@ struct JoltBackend::Impl {
         double armature{0.0};  // kg·m² or kg: the rotor inertia the joint drives
         SignalId position, velocity, torque, loadTorque;
         SignalId acceleration, effectiveInertia, constraintTorque;
+        SignalId frictionLimit;      // joint/<j>/friction_limit, optional (RFC 0020 §4.4)
+        double staticFriction{0.0};  // N or N·m, JointDynamicsAPI_1's
+        double appliedFriction{0.0};
         double lastVelocity{0.0};      // at the end of the previous step: for the acceleration
         double lastAcceleration{0.0};  // over the previous step
         double armatureTorque{0.0};    // applied over the previous step
@@ -338,6 +352,17 @@ struct JoltBackend::Impl {
         /// then their mean over one sub-step.
         std::array<double, kLambdas> lambdaSum{};
         std::array<double, kLambdas> lambda{};
+        /// A hinge's anchor before a sub-step (measureJointTurn): the arms from each body's
+        /// centre of mass, their inverse masses and inertias, and the impulse to give back.
+        struct Turn {
+            bool active{false};
+            bool measured{false};  // r1, r2 hold the last sub-step's arms
+            JPH::Vec3 r1, r2, impulse;
+            JPH::Vec3 target;  // the anchor's velocity change to make
+            JPH::Mat44 mass;   // the anchor's effective mass
+            JPH::Mat44 invI1, invI2;
+            float invM1{0.0F}, invM2{0.0F};
+        } turn;
     };
     std::vector<Joint> joints;
     int lambdaCount{0};  // sub-steps summed into the joints' lambdaSum this step
@@ -349,6 +374,17 @@ struct JoltBackend::Impl {
     /// Adds every joint's impulses over the sub-step just solved to its lambdaSum.
     void sumLambdas();
 
+    /// Jolt holds a hinge's anchor by projecting velocities at the start of each sub-step: the
+    /// velocities left by the last one are along the bodies' turn at its start, so the anchor's
+    /// velocities now differ by about ω²·r·Δt, and the projection takes that off as an inelastic
+    /// impulse, (ω Δt)² of the kinetic energy each sub-step (a 1 m pendulum from 1 rad loses 16 %
+    /// in 60 s at 1 ms). Before the sub-step this measures that error from the velocities alone
+    /// (no gravity or effort yet), and returnJointTurn gives back kHingeTurnShare of its
+    /// impulse after it, equal and opposite on the two bodies.
+    void measureJointTurn();
+    void returnJointTurn();
+    std::vector<JPH::Vec3> turnLinear, turnAngular;  // measureJointTurn's scratch, per group
+
     /// Called by Jolt before each sub-step: from the second one on, the constraints hold the
     /// previous sub-step's impulses, which would be lost to the next solve.
     class SubstepListener final : public JPH::PhysicsStepListener {
@@ -356,7 +392,9 @@ struct JoltBackend::Impl {
         explicit SubstepListener(Impl& impl) : impl_(impl) {}
         void OnStep(const JPH::PhysicsStepListenerContext& context) override {
             if (!context.mIsFirstStep) {
+                impl_.returnJointTurn();
                 impl_.sumLambdas();
+                impl_.measureJointTurn();
             }
         }
 
@@ -719,6 +757,11 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config, 
                                                   prismatic ? units::kg : units::kg_m2));
             out.constraintTorque =
                 io.output(spec(base + "/constraint_torque", SignalType::Scalar, effort));
+            // A Coulomb limit for the step on top of the joint's own friction (a screw's gear),
+            // the latest value: the constraint's maximum friction force or torque.
+            SignalSpec friction = spec(base + "/friction_limit", SignalType::Scalar, effort);
+            friction.optional = true;
+            out.frictionLimit = io.input(friction);
         }
         s.joints.push_back(out);
     }
@@ -760,9 +803,9 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
     Impl& s = *impl_;
     // Jolt solves joints as constraints between free bodies (maximal coordinates): each step's
     // velocity projection takes off the part of a body's velocity its turn over the step made
-    // radial, a loss of (ω·Δt)² of the kinetic energy per step, so O(Δt) per second (a 1 m
-    // pendulum from 1 rad loses 16 % in 60 s at 1 ms; docs/physics/rigid-body.md). Sub-steps
-    // divide it by their count at that many times the cost; one by default.
+    // radial, a loss of (ω·Δt)² of the kinetic energy per step (a 1 m pendulum from 1 rad would
+    // lose 16 % in 60 s at 1 ms); measureJointTurn gives half of it back, so it keeps 99.9 %
+    // (docs/physics/rigid-body.md). Sub-steps make Jolt's step shorter; one by default.
     s.substeps = 1;
     if (const auto asked = config.get<std::int64_t>("substeps")) {
         if (*asked < 1 || *asked > kMaxSubsteps) {
@@ -903,13 +946,13 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                                      "jolt: collider of " + bodies.names[owner.index] + ": " +
                                          std::string(shape.GetError().c_str()));
             }
-            tagFriction(*shape.Get(), world.colliders.friction[c]);
+            tagFriction(*shape.Get(), colliderFrictionOnSurface(world, c));
             compound.AddShape(jv(p.position),
                               shapeRotation(world.colliders.shape[c], p.orientation), shape.Get());
             if (parts == 0) {
-                firstFriction = world.colliders.friction[c];
+                firstFriction = colliderFrictionOnSurface(world, c);
             }
-            mixedFriction = mixedFriction || world.colliders.friction[c] != firstFriction;
+            mixedFriction = mixedFriction || colliderFrictionOnSurface(world, c) != firstFriction;
             ++parts;
         }
         JPH::RefConst<JPH::Shape> shape;
@@ -981,7 +1024,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
             return Status::error(StatusCode::InvalidConfig,
                                  "jolt: " + std::string(shape.GetError().c_str()));
         }
-        tagFriction(*shape.Get(), world.colliders.friction[c]);
+        tagFriction(*shape.Get(), colliderFrictionOnSurface(world, c));
         JPH::BodyCreationSettings settings(shape.Get(), JPH::RVec3(jv(p.position)),
                                            shapeRotation(world.colliders.shape[c], p.orientation),
                                            JPH::EMotionType::Static, kStaticLayer);
@@ -1000,6 +1043,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
         j.armature = world.joints.armature[j.joint];
         j.damping = world.joints.damping[j.joint];
         j.lastVelocity = 0.0;
+        j.turn = {};
         j.lastAcceleration = 0.0;
         j.armatureTorque = 0.0;
         j.angle = 0.0;
@@ -1040,6 +1084,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                 slider.mLimitsMax = static_cast<float>(upper);
             }
             slider.mMaxFrictionForce = static_cast<float>(world.joints.friction[j.joint]);
+            j.staticFriction = j.appliedFriction = world.joints.friction[j.joint];
             slider.mMotorSettings.mSpringSettings.mFrequency = kMimicMotorHz;
             j.constraint = slider.Create(parentBody, childBody);
         } else {
@@ -1053,6 +1098,7 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, Sign
                 hinge.mLimitsMax = static_cast<float>(upper);
             }
             hinge.mMaxFrictionTorque = static_cast<float>(world.joints.friction[j.joint]);
+            j.staticFriction = j.appliedFriction = world.joints.friction[j.joint];
             hinge.mMotorSettings.mSpringSettings.mFrequency = kMimicMotorHz;
             j.constraint = hinge.Create(parentBody, childBody);
         }
@@ -1194,6 +1240,21 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
                         static_cast<float>(std::remainder(target, 2.0 * std::numbers::pi)));
             }
         }
+        if (j.frictionLimit.valid()) {
+            // Jolt 5.6: SliderConstraint::SetMaxFrictionForce, HingeConstraint::
+            // SetMaxFrictionTorque, used by the next update.
+            const double total = j.staticFriction + std::max(0.0, io.read(j.frictionLimit));
+            if (total != j.appliedFriction) {
+                j.appliedFriction = total;
+                if (j.prismatic) {
+                    static_cast<JPH::SliderConstraint&>(*j.constraint)
+                        .SetMaxFrictionForce(static_cast<float>(total));
+                } else {
+                    static_cast<JPH::HingeConstraint&>(*j.constraint)
+                        .SetMaxFrictionTorque(static_cast<float>(total));
+                }
+            }
+        }
         const double rotor = j.armatureTorque;
         // Explicit damping: never more than a step can take without turning the joint round.
         const double damper =
@@ -1265,12 +1326,14 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         j.lambdaSum.fill(0.0);
     }
     s.lambdaCount = 0;
+    s.measureJointTurn();
     const JPH::EPhysicsUpdateError error =
         s.system->Update(static_cast<float>(dt), s.substeps, s.temp.get(), s.jobs.get());
     if (error != JPH::EPhysicsUpdateError::None) {
         return Status::error(StatusCode::Diverged, "jolt: physics update error " +
                                                        std::to_string(static_cast<int>(error)));
     }
+    s.returnJointTurn();
     // The last sub-step's impulses, then the mean over the sub-steps: the listener (registered
     // only with more than one sub-step) adds each earlier one. With one sub-step there is no
     // listener, so Jolt skips the step when every body sleeps and the impulses stay the last.
@@ -1288,14 +1351,16 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         if (j.prismatic) {
             const auto& slider = static_cast<JPH::SliderConstraint&>(*j.constraint);
             io.write(j.position, slider.GetCurrentPosition());
-            limitLambda = j.lambda[2];
+            // The limit's and the motor's, which is the joint's friction while it has no motor
+            // (and a mimic joint's drive), as MuJoCo's qfrc_constraint has both.
+            limitLambda = j.lambda[2] + j.lambda[3];
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
             // Jolt's angle wraps at ±π; a joint's position counts turns, as MuJoCo's does.
             j.angle += std::remainder(static_cast<double>(hinge.GetCurrentAngle()) - j.angle,
                                       2.0 * std::numbers::pi);
             io.write(j.position, j.angle);
-            limitLambda = j.lambda[5];
+            limitLambda = j.lambda[5] + j.lambda[6];
         }
         velocity = s.jointVelocity(j, axis);
         io.write(j.velocity, velocity);
@@ -1374,6 +1439,120 @@ std::array<double, kLambdas> JoltBackend::Impl::jointLambdas(const Joint& j) {
             bend[1],
             hinge.GetTotalLambdaRotationLimits(),
             hinge.GetTotalLambdaMotor()};
+}
+
+void JoltBackend::Impl::measureJointTurn() {
+    const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    for (Joint& j : joints) {
+        Joint::Turn& t = j.turn;
+        t.active = false;
+        if (j.prismatic) {
+            continue;
+        }
+        const JPH::Body* child = lock.TryGetBody(j.child);
+        if (child == nullptr || !child->IsDynamic()) {
+            continue;
+        }
+        const JPH::Body* parent = j.parent.IsInvalid() ? nullptr : lock.TryGetBody(j.parent);
+        const auto& hinge = static_cast<const JPH::HingeConstraint&>(*j.constraint);
+        t.invM2 = child->GetMotionProperties()->GetInverseMass();
+        t.invI2 = child->GetInverseInertia();
+        t.invM1 = 0.0F;
+        t.invI1 = JPH::Mat44::sZero();
+        const JPH::Vec3 lastR1 = t.r1;
+        const JPH::Vec3 lastR2 = t.r2;
+        // The arms from each body's own attachment point (relative to its centre of mass), turned
+        // by its rotation alone: from world positions, float rounding far from the origin (6e-5 m
+        // at 1 km) would read as a turn and kick a fast wheel every step.
+        t.r2 = child->GetRotation() * hinge.GetLocalSpacePoint2();
+        t.r1 = JPH::Vec3::sZero();
+        if (parent != nullptr) {
+            t.r1 = parent->GetRotation() * hinge.GetLocalSpacePoint1();
+            if (parent->IsDynamic()) {
+                t.invM1 = parent->GetMotionProperties()->GetInverseMass();
+                t.invI1 = parent->GetInverseInertia();
+            }
+        }
+        const bool before = t.measured;
+        t.measured = true;
+        if (!before) {
+            continue;
+        }
+        // The anchor's velocity error made by the turn alone: the velocities as they are, on the
+        // arms now less on the arms of the last sub-step (where they were made to agree). Any
+        // other error (what the solver left, or what was given back last time) is not in it, so
+        // nothing given back is given back again.
+        JPH::Vec3 error = child->GetAngularVelocity().Cross(t.r2 - lastR2);
+        if (parent != nullptr) {
+            error -= parent->GetAngularVelocity().Cross(t.r1 - lastR1);
+        }
+        // The anchor's effective mass, as Jolt's PointConstraintPart builds it.
+        const JPH::Mat44 r1x = JPH::Mat44::sCrossProduct(t.r1);
+        const JPH::Mat44 r2x = JPH::Mat44::sCrossProduct(t.r2);
+        const JPH::Mat44 k = JPH::Mat44::sScale(t.invM1 + t.invM2) +
+                             r1x.Multiply3x3(t.invI1).Multiply3x3RightTransposed(r1x) +
+                             r2x.Multiply3x3(t.invI2).Multiply3x3RightTransposed(r2x);
+        JPH::Mat44 mass;
+        if (!mass.SetInversed3x3(k)) {
+            continue;
+        }
+        t.mass = mass;
+        t.target = -kHingeTurnShare * error;
+        t.impulse = JPH::Vec3::sZero();
+        t.active = true;
+    }
+    // The impulses that change the anchors' velocities by their targets together: a chain's
+    // anchors share bodies, so each one's alone would be wrong (and add energy). Gauss-Seidel on
+    // the velocity changes only, as Jolt solves its constraints.
+    turnLinear.assign(groups.size(), JPH::Vec3::sZero());
+    turnAngular.assign(groups.size(), JPH::Vec3::sZero());
+    for (int pass = 0; pass < kHingeTurnIterations; ++pass) {
+        for (Joint& j : joints) {
+            Joint::Turn& t = j.turn;
+            if (!t.active) {
+                continue;
+            }
+            const auto c = static_cast<std::size_t>(j.childGroup);
+            JPH::Vec3 change = turnLinear[c] + turnAngular[c].Cross(t.r2);
+            const bool parentMoves = t.invM1 > 0.0F && j.parentGroup >= 0;
+            const auto p = static_cast<std::size_t>(std::max(j.parentGroup, 0));
+            if (parentMoves) {
+                change -= turnLinear[p] + turnAngular[p].Cross(t.r1);
+            }
+            const JPH::Vec3 step = t.mass.Multiply3x3(t.target - change);
+            t.impulse += step;
+            turnLinear[c] += t.invM2 * step;
+            turnAngular[c] += t.invI2.Multiply3x3(t.r2.Cross(step));
+            if (parentMoves) {
+                turnLinear[p] -= t.invM1 * step;
+                turnAngular[p] -= t.invI1.Multiply3x3(t.r1.Cross(step));
+            }
+        }
+    }
+}
+
+void JoltBackend::Impl::returnJointTurn() {
+    const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    for (Joint& j : joints) {
+        const Joint::Turn& t = j.turn;
+        if (!t.active) {
+            continue;
+        }
+        JPH::Body* child = lock.TryGetBody(j.child);
+        child->SetLinearVelocity(child->GetLinearVelocity() + t.invM2 * t.impulse);
+        child->SetAngularVelocity(child->GetAngularVelocity() +
+                                  t.invI2.Multiply3x3(t.r2.Cross(t.impulse)));
+        if (t.invM1 > 0.0F) {
+            JPH::Body* parent = lock.TryGetBody(j.parent);
+            parent->SetLinearVelocity(parent->GetLinearVelocity() - t.invM1 * t.impulse);
+            parent->SetAngularVelocity(parent->GetAngularVelocity() -
+                                       t.invI1.Multiply3x3(t.r1.Cross(t.impulse)));
+        }
+        // Part of the joint's impulse over the sub-step (+ on the child, as Jolt's).
+        j.lambdaSum[0] += t.impulse.GetX();
+        j.lambdaSum[1] += t.impulse.GetY();
+        j.lambdaSum[2] += t.impulse.GetZ();
+    }
 }
 
 void JoltBackend::Impl::sumLambdas() {
@@ -1577,6 +1756,17 @@ Status JoltBackend::saveState(StateWriter& writer) const {
     for (const Impl::Body& b : impl_->bodies) {
         writer.putDoubles(b.lastTwist);
     }
+    // The hinges' arms at the last sub-step (measureJointTurn), so a restored run goes on
+    // bit-identically; appended, so a state saved without them restores with none.
+    for (const Impl::Joint& j : impl_->joints) {
+        const Impl::Joint::Turn& t = j.turn;
+        writer.put(static_cast<std::uint8_t>(t.measured ? 1 : 0));
+        for (const JPH::Vec3& r : {t.r1, t.r2}) {
+            writer.put(static_cast<double>(r.GetX()));
+            writer.put(static_cast<double>(r.GetY()));
+            writer.put(static_cast<double>(r.GetZ()));
+        }
+    }
     return {};
 }
 
@@ -1619,6 +1809,20 @@ Status JoltBackend::restoreState(StateReader& reader) {
     }
     if (!ok) {
         return Status::error(StatusCode::Internal, "jolt: short state");
+    }
+    for (Impl::Joint& j : impl_->joints) {
+        Impl::Joint::Turn& t = j.turn;
+        std::uint8_t measured = 0;
+        std::array<double, 6> r{};
+        bool read = reader.get(measured);
+        for (double& x : r) {
+            read = read && reader.get(x);
+        }
+        t.measured = read && measured != 0;
+        t.r1 =
+            JPH::Vec3(static_cast<float>(r[0]), static_cast<float>(r[1]), static_cast<float>(r[2]));
+        t.r2 =
+            JPH::Vec3(static_cast<float>(r[3]), static_cast<float>(r[4]), static_cast<float>(r[5]));
     }
     impl_->applyFrictionScale(scale);
     // The groups' last velocities (for their contact force) are the restored ones.

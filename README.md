@@ -11,7 +11,7 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v1.4.0, stable** ([release notes](docs/release/v1.4.0.md); documentation at
+**Status: v1.5.0, stable** ([release notes](docs/release/v1.5.0.md); documentation at
 [open-physical-systems.github.io/Lagrange](https://open-physical-systems.github.io/Lagrange/)). The USD schemas, the
 plugin C ABI, the viewer protocol, profiles and recordings are frozen for 1.x and change only by
 addition ([RFC 0007](rfcs/0007-v1-freeze.md)); 1.x is supported on `release/1.x` until ROS 2
@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (23)</summary>
+<details><summary>User guide (24)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -186,6 +186,7 @@ recorded to MCAP and replayed.
 - [Tutorial: test your own drone, step by step](docs/guide/tutorial-custom-drone.md)
 - [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
 - [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
+- [Tutorial: a robot puts out a fire](docs/guide/tutorial-fire.md)
 - [Tutorial: heat in the parts, and a robot's own interference](docs/guide/tutorial-heat-and-emi.md)
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
 - [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
@@ -196,16 +197,20 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (18)</summary>
+<details><summary>Physics reference (22)</summary>
 
+- [Actuators: grippers, lead screws, nozzles, tanks, servos, steppers, solenoids and brakes](docs/physics/actuators.md)
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)
 - [The electrical network: buses, converters and the parts between them](docs/physics/electrical-network.md)
 - [EMI and radio links](docs/physics/emi-and-radio.md)
+- [Fire](docs/physics/fire.md)
+- [The ground under wheels, beams and contacts](docs/physics/ground.md)
 - [Heat conduction in solids](docs/physics/heat-conduction.md)
 - [Humans: people who walk](docs/physics/humans.md)
 - [Physics reference](docs/physics/index.md)
+- [Lights](docs/physics/lights.md)
 - [Motors](docs/physics/motors.md)
 - [Rigid body](docs/physics/rigid-body.md)
 - [Rotors](docs/physics/rotors.md)
@@ -316,7 +321,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Release notes (13)</summary>
+<details><summary>Release notes (14)</summary>
 
 - [v0.2.0 compared with Gazebo Jetty: the sample AMR](docs/release/v0.2.0-comparison.md)
 - [Lagrange v0.2.0: simulation core and AMR (release notes, draft)](docs/release/v0.2.0.md)
@@ -331,6 +336,7 @@ recorded to MCAP and replayed.
 - [Lagrange v1.2.1: one command to install (release notes)](docs/release/v1.2.1.md)
 - [Lagrange v1.3.0: 37 new sensors, a faster simulator, hardened protocol (release notes)](docs/release/v1.3.0.md)
 - [Lagrange v1.4.0: build a robot in the viewer (release notes)](docs/release/v1.4.0.md)
+- [Lagrange v1.5.0: actuators, lamps, fire, and trees a drone can fly into (release notes)](docs/release/v1.5.0.md)
 
 </details>
 
@@ -347,7 +353,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (19)</summary>
+<details><summary>Design proposals (RFCs) (24)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -368,6 +374,11 @@ recorded to MCAP and replayed.
 - [RFC 0017: MuJoCo 4.x for the MuJoCo backend](rfcs/0017-mujoco-4.md)
 - [RFC 0018: The radiation domain (ionizing radiation)](rfcs/0018-radiation.md)
 - [RFC 0019: Legged robots as a supported robot class](rfcs/0019-legged-robots.md)
+- [RFC 0020: Actuators: what Lagrange has, and which to add](rfcs/0020-actuators.md)
+- [RFC 0021: Lights on robots and in scenes](rfcs/0021-lights.md)
+- [RFC 0022: Fire, smoke and putting fires out](rfcs/0022-fire.md)
+- [RFC 0023: Joint springs](rfcs/0023-joint-springs.md)
+- [RFC 0024: Fluid power: pneumatic and hydraulic cylinders, valves, pumps and lines](rfcs/0024-fluid-power.md)
 
 </details>
 
@@ -387,6 +398,11 @@ sudo apt install ~/lagrange_debs/*.deb
 PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install -c packaging/pip-constraints.txt mcap coacd
 packaging/test_install.sh ~/lagrange_debs              # optional: the clean-machine test
 ```
+
+To give Lagrange an app button (app grid and dock, opening the viewer's launcher with ROS
+sourced): `/opt/ros/lyrical/share/lagrange_viewer/desktop/install_desktop_entry.sh` for the
+debs (the one-line installer does it for you), or `tools/desktop/install_desktop_entry.sh` from
+a clone after a source build; `--uninstall` removes it ([The app button](docs/guide/install.md#the-app-button)).
 
 Or build from source:
 
@@ -470,7 +486,9 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 
 ```bash
 source install/setup.bash          # or /opt/ros/lyrical/setup.bash with the debs installed
-lagrange                           # the server and the viewer: the sample AMR in the warehouse
+lagrange                           # the viewer on its launcher: start a simulator from there
+lagrange amr                       # the server and the viewer: the sample AMR in the warehouse
+lagrange build robot.urdf          # the robot builder, with your URDF open
 lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve, people
 lagrange robot.urdf                # your own robot on an empty ground, still until you command it
 lagrange robot.usda world.sdf      # and a world (URDF, SDFormat, MJCF or USD)

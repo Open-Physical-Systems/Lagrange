@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!-- A one-joint arm with a holding brake (RFC 0020, "Also worth adding"), the sample of
+     docs/physics/actuators.md "Holding brakes": a 1 kg arm 0.3 m out from a horizontal shoulder,
+     so gravity pulls it down with 2.94 N·m at the horizontal. The brake is in
+     brake_arm.overlay.yaml. Dimensions are illustrative, not a real product. -->
+<robot name="brake_arm">
+  <link name="world"/>
+  <link name="post">
+    <inertial>
+      <origin xyz="0 0 0.25"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.04" iyy="0.04" izz="0.005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.25"/>
+      <geometry><box size="0.06 0.06 0.5"/></geometry>
+      <material name="grey"><color rgba="0.35 0.37 0.4 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.25"/>
+      <geometry><box size="0.06 0.06 0.5"/></geometry>
+    </collision>
+  </link>
+  <joint name="post_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="post"/>
+  </joint>
+  <link name="arm">
+    <inertial>
+      <origin xyz="0.3 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.0005" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.15 0 0"/>
+      <geometry><box size="0.32 0.03 0.03"/></geometry>
+      <material name="orange"><color rgba="0.95 0.55 0.15 1"/></material>
+    </visual>
+  </link>
+  <joint name="shoulder" type="revolute">
+    <parent link="post"/>
+    <child link="arm"/>
+    <origin xyz="0 0.05 0.5"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.5" upper="2.5" effort="20" velocity="10"/>
+  </joint>
+</robot>

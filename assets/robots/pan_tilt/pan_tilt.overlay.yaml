@@ -1,0 +1,90 @@
+# The pan-tilt's servos and power (RFC 0020 §4.3; docs/physics/actuators.md "Servos"): two hobby
+# PWM servos on a 2S LFP battery (6.6 V), each a brushed motor in voltage mode behind a 200:1
+# gear whose board (ServoAPI_1) turns a 1.0–2.0 ms pulse into ±45° and drives the motor with a
+# proportional duty. Applied to pan_tilt.urdf by `lagrange_server --overlay`. Parameters are
+# illustrative, of the size a standard servo's datasheet gives, not a real product:
+#   N·Kt = 200 × 0.0034 = 0.68 V·s/rad, R = 9.6 Ω, gear efficiency 0.7. At 6.6 V:
+#   no-load speed V/(N·Kt) = 9.7 rad/s (60° in 0.108 s), stall torque η·N·Kt·V/R = 0.33 N·m.
+#   Kp = 20 per rad: full duty from 2.9° of error past a dead zone of 0.01 rad (0.57°).
+#   Without the electrical domain (--domain electrical=off) the boards drive the same line from
+#   act:servo:stallTorque and noLoadSpeed, the numbers above at the battery's 6.56 V.
+# Command them with /pan/pulse_width (s) or /pan/goal_position (rad), the same for tilt, or
+# `Server::commandJoint("pan", "position", rad)` and /joint_commands' position.
+schema_version: 1
+apply:
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 2
+        elec:battery:capacity: 7200.0            # C (2 Ah)
+        elec:battery:initialSoc: 0.5             # OCV 6.56 V
+        elec:battery:ocvSoc: [0.0, 0.1, 0.5, 0.9, 1.0]
+        elec:battery:ocvVoltage: [2.80, 3.20, 3.28, 3.33, 3.45]   # V per cell
+        elec:battery:r0: 0.01                    # ohm per cell
+        elec:battery:cutoffVoltage: 5.6          # V, 2.8 V per cell
+        elec:battery:maxChargeCurrent: 2.0       # A
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 6.6     # V
+        elec:port:dc_out:maxCurrent: 10.0        # A
+        elec:port:dc_out:connectedTo: power/dc_6v
+  - create: power/dc_6v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.001              # F
+        elec:bus:undervoltageTrip: 5.0           # V
+        elec:bus:overvoltageTrip: 8.0            # V
+  - prim: pan
+    create_child: pan_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: dc_brushed
+        elec:controlMode: voltage
+        elec:windingResistance: 9.6              # ohm
+        elec:inductance: 0.0005                  # H
+        elec:torqueConstant: 0.0034              # N·m/A
+        elec:gearRatio: 200.0
+        elec:gearEfficiency: 0.7
+        elec:maxCurrent: 2.0                     # A (a hobby board has no limit; the drive's)
+        elec:resistanceTempCoeff: 0.0            # 1/K: no thermal model here
+        elec:joint: pan
+        elec:powerPort: power/dc_6v
+  - prim: pan
+    schemas:
+      ServoAPI_1:
+        act:servo:kind: pwm
+        act:servo:pulseMin: 0.001                # s
+        act:servo:pulseMax: 0.002                # s
+        act:servo:angleMin: -0.7854              # rad, -45°
+        act:servo:angleMax: 0.7854               # rad, +45°
+        act:servo:kp: 20.0                       # duty per rad
+        act:servo:deadband: 0.01                 # rad
+        act:servo:stallTorque: 0.3253            # N·m, 0.7 × 0.68 × 6.56 / 9.6
+        act:servo:noLoadSpeed: 9.647             # rad/s, 6.56 / 0.68
+  - prim: tilt
+    create_child: tilt_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: dc_brushed
+        elec:controlMode: voltage
+        elec:windingResistance: 9.6              # ohm
+        elec:inductance: 0.0005                  # H
+        elec:torqueConstant: 0.0034              # N·m/A
+        elec:gearRatio: 200.0
+        elec:gearEfficiency: 0.7
+        elec:maxCurrent: 2.0                     # A
+        elec:resistanceTempCoeff: 0.0            # 1/K
+        elec:joint: tilt
+        elec:powerPort: power/dc_6v
+  - prim: tilt
+    schemas:
+      ServoAPI_1:
+        act:servo:kind: pwm
+        act:servo:pulseMin: 0.001                # s
+        act:servo:pulseMax: 0.002                # s
+        act:servo:angleMin: -0.7854              # rad
+        act:servo:angleMax: 0.7854               # rad
+        act:servo:kp: 20.0                       # duty per rad
+        act:servo:deadband: 0.01                 # rad
+        act:servo:stallTorque: 0.3253            # N·m
+        act:servo:noLoadSpeed: 9.647             # rad/s

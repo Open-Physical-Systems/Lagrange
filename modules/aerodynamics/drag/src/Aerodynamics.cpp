@@ -3,7 +3,9 @@
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/random/Philox.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/Trees.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +20,9 @@ namespace lagrange::aerodynamics {
 using namespace literals;
 
 namespace {
+
+/// m: a leaf this near the surface a wake stops on lies in its outwash.
+constexpr double kLeafOnSurface = 0.05;
 
 using Vec3 = std::array<double, 3>;
 
@@ -122,6 +127,21 @@ std::vector<RotorSource> rotorSources(const WorldView& world) {
         out.push_back({std::string(world.signalInstanceName(s->prim)),
                        std::string(world.signalInstanceName(bodies.prim[child])), *radius,
                        roots.at(rootOf(bodies, child))});
+    }
+    return out;
+}
+
+std::vector<Downwash::WaterSurface> waterSurfaces(const WorldView& world) {
+    constexpr double kDefaultSize = 10.0;  // m, WaterBody's
+    std::vector<Downwash::WaterSurface> out;
+    const World& raw = world.raw();
+    for (const SchemaInstance* s : world.instancesOf("WaterAPI_1")) {
+        Downwash::WaterSurface w;
+        w.name = raw.prims.instanceNames.at(s->prim.index);
+        w.centre = raw.prims.poseInBody.at(s->prim.index).position;
+        w.halfX = s->real("water:sizeX").value_or(kDefaultSize) / 2.0;
+        w.halfY = s->real("water:sizeY").value_or(kDefaultSize) / 2.0;
+        out.push_back(std::move(w));
     }
     return out;
 }
@@ -377,8 +397,10 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         }
         return it->second;
     };
+    std::vector<std::string> rotorNames;
     if (downwashOn_) {
         for (const RotorSource& source : rotorSources(world)) {
+            rotorNames.push_back(source.joint);
             RotorLink r;
             r.radius = source.radius;
             r.group = source.group;
@@ -433,13 +455,97 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
             cables_.push_back(std::move(cable));
         }
     }
+    // Fires (RFC 0022 §5.2): the rotors' air at each fire's base, as for the tethers.
+    fires_.clear();
+    if (const auto* named = config.find<std::vector<std::string>>("fire_names");
+        named != nullptr && !rotors_.empty()) {
+        for (const std::string& name : *named) {
+            const std::string base = "fire/" + name + "/";
+            SignalSpec at = spec(base + "base", SignalType::Vec3, units::m, "world_local");
+            at.optional = true;
+            at.feedback = true;
+            at.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            SignalSpec height = spec(base + "flame_height", SignalType::Scalar, units::m);
+            height.optional = true;
+            height.feedback = true;
+            FireBase fire;
+            fire.base = d.input(at);
+            fire.height = d.input(height);
+            fire.downwash =
+                d.output(spec(base + "downwash", SignalType::Vec3, units::m_per_s, "world_local"));
+            fires_.push_back(fire);
+        }
+    }
+    // Trees (ground.md "Trees"): every robot's wake over each crown, the mean of five points at
+    // its centre's height (the centre and half way to its edge both ways along x and y), for the
+    // vegetation domain's sway.
+    crowns_.clear();
+    if (!rotors_.empty()) {
+        std::string treeError;
+        for (const TreeSpec& t : treesOf(world.raw(), treeError)) {
+            TreeCrown crown;
+            const double h = 0.5 * t.crownRadius;
+            const std::array<std::array<double, 3>, 5> offsets{
+                {{0.0, 0.0, 0.0}, {h, 0.0, 0.0}, {-h, 0.0, 0.0}, {0.0, h, 0.0}, {0.0, -h, 0.0}}};
+            for (std::size_t k = 0; k < 5; ++k) {
+                const std::array<double, 3> local{offsets.at(k)[0], offsets.at(k)[1],
+                                                  t.centreHeight()};
+                const std::array<double, 3> w = rotate(t.pose.orientation, local);
+                crown.points.at(k) = {t.pose.position[0] + w[0], t.pose.position[1] + w[1],
+                                      t.pose.position[2] + w[2]};
+            }
+            crown.spread = h;
+            crown.downwash = d.output(spec("tree/" + t.name + "/downwash", SignalType::Vec3,
+                                           units::m_per_s, "world_local"));
+            crowns_.push_back(crown);
+        }
+    }
+    // Leaves (ground.md "Leaves lifted again"): the air at each one the vegetation domain lists,
+    // read a step late, with the wind and every robot's wake, whether rotors fly or not.
+    leavesIn_ = leavesAir_ = SignalId{};
+    {
+        std::string treeError;
+        if (!treesOf(world.raw(), treeError).empty()) {
+            SignalSpec in = spec(std::string(kLeavesSignal), SignalType::ScalarArray, units::one,
+                                 "world_local");
+            in.arrayLength = kLeavesLength;
+            in.optional = true;
+            in.feedback = true;
+            leavesIn_ = d.input(in);
+            SignalSpec out = spec(std::string(kLeavesAirSignal), SignalType::ScalarArray,
+                                  units::one, "world_local");
+            out.arrayLength = kLeavesAirLength;
+            leavesAir_ = d.output(out);
+        }
+    }
     if (hasGround_) {
         downwash_.setGround(groundPoint_, groundNormal_);
     } else {
         downwash_.clearGround();
     }
     downwash_.setObstacles(downwashObstacles(world.raw()));
+    // Water (config "downwash_water", default true): a wake stops on its surface.
+    waterOn_ = config.get<bool>("downwash_water").value_or(true);
+    downwash_.setWater(waterOn_ ? waterSurfaces(world) : std::vector<Downwash::WaterSurface>{});
     others_ = downwash_;
+    // Its load on the water's moving surface, when the water domain runs one (config
+    // "water_surface", with "surface_cells", "surface_cell" and "surface_step" as the water's).
+    {
+        std::vector<Downwash::WaterSurface> surfaces;
+        if (waterOn_ && downwashOn_ && !rotors_.empty() &&
+            config.get<bool>("water_surface").value_or(false)) {
+            surfaces = downwash_.water();
+        }
+        WaterGrid grid;
+        grid.cells = static_cast<int>(config.get<std::int64_t>("surface_cells").value_or(128));
+        grid.cell = config.get<double>("surface_cell").value_or(0.03);
+        grid.step = config.get<double>("surface_step").value_or(0.04);
+        // Spray (config "downwash_spray", default true): drops torn off by the outwash.
+        const bool spray = config.get<bool>("downwash_spray").value_or(true);
+        if (Status s = waterAir_.declare(surfaces, grid, spray, rotorNames, gravity_, d); !s.ok()) {
+            return s;
+        }
+    }
     airBox_ = SignalId{};
     if (lbmWanted_ && !rotors_.empty()) {
         airBox_ =
@@ -543,8 +649,19 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         std::ranges::fill(cable.values, std::numeric_limits<double>::quiet_NaN());
         bus.writeN(cable.downwash, cable.values);
     }
+    for (const FireBase& fire : fires_) {
+        bus.writeN(fire.downwash, Vec3{});
+    }
+    for (const TreeCrown& crown : crowns_) {
+        bus.writeN(crown.downwash, Vec3{});
+    }
+    if (leavesAir_.valid()) {
+        leafAir_.assign(kLeavesAirLength, 0.0);
+        bus.writeN(leavesAir_, leafAir_);
+    }
     downwash_.update({});
     others_.update({});
+    waterAir_.init(bus);
     live_.reset();
     published_.reset();
     liveGroup_ = Downwash::kNoGroup;
@@ -724,6 +841,22 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
         return downwash_.velocityAt(at, group);
     };
+    // The water under the wakes: its surface's load, and the spray carried by the whole air.
+    if (!waterAir_.empty()) {
+        std::vector<Vec3> hubs;
+        hubs.reserve(wakes.size());
+        for (const Downwash::Rotor& w : wakes) {
+            hubs.push_back(w.hub);
+        }
+        waterAir_.step(
+            context, downwash_, rho_, hubs,
+            [&](const Vec3& x) {
+                const Vec3 mean = meanAir(x);
+                const Vec3 w = wakeAt(x, Downwash::kNoGroup);
+                return Vec3{mean[0] + w[0], mean[1] + w[1], mean[2] + w[2]};
+            },
+            bus);
+    }
     // Every robot's wake at each tether node, its own drone's too: the cable is not the rotors'
     // body (the rotor data leave out only what the rotors do to their own airframe).
     for (TetherNodes& cable : cables_) {
@@ -739,6 +872,36 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
                       cable.values.begin() + static_cast<std::ptrdiff_t>(3 * i));
         }
         bus.writeN(cable.downwash, cable.values);
+    }
+    // Every robot's wake at each fire (RFC 0022 §5.2), half way up its flame: the base itself
+    // is on the fuel, where a wake that meets it stops (its stagnation point).
+    for (const FireBase& fire : fires_) {
+        const std::span<const double> at = bus.readN(fire.base);
+        const double up = 0.5 * std::max(bus.read(fire.height), 0.0);
+        Vec3 w{};
+        if (at.size() == 3 && std::isfinite(at[0]) && std::isfinite(at[1]) &&
+            std::isfinite(at[2])) {
+            w = wakeAt(Vec3{at[0], at[1], at[2] + up}, Downwash::kNoGroup);
+        }
+        bus.writeN(fire.downwash, w);
+    }
+    for (const TreeCrown& crown : crowns_) {
+        Vec3 sum{};
+        // The broad phase (kCrownWakeFar): far from every wake column, the centre alone.
+        const bool far = std::ranges::none_of(downwash_.groups(), [&](const Downwash::Group& g) {
+            return Downwash::wakeDistance(g, crown.points[0]) <= kCrownWakeFar * crown.spread;
+        });
+        if (far) {
+            bus.writeN(crown.downwash, wakeAt(crown.points[0], Downwash::kNoGroup));
+            continue;
+        }
+        for (const Vec3& at : crown.points) {
+            const Vec3 w = wakeAt(at, Downwash::kNoGroup);
+            for (std::size_t k = 0; k < 3; ++k) {
+                sum.at(k) += w.at(k) / static_cast<double>(crown.points.size());
+            }
+        }
+        bus.writeN(crown.downwash, sum);
     }
     // The fountain under each low multirotor: a push up its thrust axis on its first link.
     std::vector<Vec3> fountain(groupCount_, Vec3{});
@@ -814,6 +977,19 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             const Vec3 hit = impactForce(water.at(kind), rotate(conjugate(q), drops), link.area);
             for (std::size_t k = 0; k < 3; ++k) {
                 force[k] += hit[k];
+            }
+        }
+        // Spray off water: its drops, at their own velocity, stopped by the link.
+        if (waterAir_.drops() > 0) {
+            Vec3 dropVelocity{};
+            const double spray = waterAir_.sprayAt(at, &dropVelocity);
+            if (spray > 0.0) {
+                const Vec3 drops{dropVelocity[0] - velocity[0], dropVelocity[1] - velocity[1],
+                                 dropVelocity[2] - velocity[2]};
+                const Vec3 hit = impactForce(spray, rotate(conjugate(q), drops), link.area);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    force[k] += hit[k];
+                }
             }
         }
         const Vec3 omegaLocal = rotate(conjugate(q), omega);
@@ -898,6 +1074,49 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
         bus.writeN(rotors_[i].air, air);
     }
+    // The air at each leaf and along the ground under it (Leaves.hpp kLeavesAirSignal): in flight
+    // the wind at its height, the gust and every robot's wake; lying, the mean wind at its blade's
+    // length above the ground and the outwash at the wall jet's peak, the most across its layer.
+    if (leavesAir_.valid()) {
+        const std::span<const double> in = bus.readN(leavesIn_);
+        std::ranges::fill(leafAir_, 0.0);
+        const std::size_t count =
+            in.size() >= kLeavesHeader
+                ? std::min<std::size_t>(
+                      static_cast<std::size_t>(std::clamp(in[1], 0.0, double{kLeavesCapacity})),
+                      (in.size() - kLeavesHeader) / kLeavesFields)
+                : 0;
+        leafAir_[0] = count > 0 ? in[0] : 0.0;
+        leafAir_[1] = static_cast<double>(count);
+        for (std::size_t n = 0; n < count; ++n) {
+            const double* leaf = in.data() + kLeavesHeader + (kLeavesFields * n);
+            const Vec3 x{leaf[0], leaf[1], leaf[2]};
+            double* out = leafAir_.data() + kLeavesHeader + (kLeavesAirFields * n);
+            std::copy(x.begin(), x.end(), out);
+            if (!std::isfinite(x[0]) || !std::isfinite(x[1]) || !std::isfinite(x[2])) {
+                continue;
+            }
+            const Vec3 mean = meanAir(x);
+            const Vec3 wake = wakeAt(x, Downwash::kNoGroup);
+            for (std::size_t k = 0; k < 3; ++k) {
+                out[3 + k] = mean[k] + firstGust[k] + wake[k];
+            }
+            const Vec3 low = meanAir(Vec3{x[0], x[1], x[2] + std::max(leaf[5], 0.0)});
+            // The outwash runs along the surface a wake stops on: a leaf on a roof the wake
+            // passes by has none.
+            const bool onSurface = std::ranges::any_of(downwash_.groups(), [&](const auto& g) {
+                return g.hits &&
+                       std::abs(((x[0] - g.hitPoint[0]) * g.hitNormal[0]) +
+                                ((x[1] - g.hitPoint[1]) * g.hitNormal[1]) +
+                                ((x[2] - g.hitPoint[2]) * g.hitNormal[2])) < kLeafOnSurface;
+            });
+            const Vec3 outwash = onSurface ? downwash_.surfaceOutwash(x) : Vec3{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                out[6 + k] = low[k] + outwash[k];
+            }
+        }
+        bus.writeN(leavesAir_, leafAir_);
+    }
     if (dustOut_.valid()) {
         bus.write(dustOut_,
                   liftedDust(downwash_.peakOutwash(), dustDiameter_, dustMost_, rho_, gravity_));
@@ -911,6 +1130,10 @@ Status AeroDrag::saveState(StateWriter& writer) const {
             writer.put(v);
         }
     }
+    // After the links', so a state saved before the water's spray still restores.
+    if (!waterAir_.empty()) {
+        waterAir_.saveState(writer);
+    }
     return {};
 }
 
@@ -923,6 +1146,9 @@ Status AeroDrag::restoreState(StateReader& reader) {
             }
         }
         link.turbulence.setState(s);
+    }
+    if (!waterAir_.empty() && !waterAir_.restoreState(reader)) {
+        return Status::error(StatusCode::InvalidConfig, "aerodynamics water state truncated");
     }
     return {};
 }

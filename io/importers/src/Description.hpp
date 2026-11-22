@@ -59,6 +59,15 @@ struct SensorDesc {
     std::string problem;  // why the file's sensor cannot be read; non-empty refuses the model
 };
 
+/// A lamp (RFC 0021) as LampAPI_1 values; its light leaves along +X of `pose`.
+struct LampDesc {
+    std::string name;
+    Pose pose;                                         // in the link frame
+    std::map<std::string, double, std::less<>> reals;  // "lamp:luminousIntensity", ...
+    std::map<std::string, std::string, std::less<>> tokens;
+    std::map<std::string, std::vector<double>, std::less<>> realArrays;
+};
+
 struct LinkDesc {
     std::string name;
     Pose pose;                    // in the world, with every joint at zero
@@ -69,6 +78,7 @@ struct LinkDesc {
     std::vector<VisualDesc> visuals;
     std::vector<CollisionDesc> collisions;
     std::vector<SensorDesc> sensors;
+    std::vector<LampDesc> lamps;
 };
 
 struct JointDesc {

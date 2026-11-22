@@ -299,6 +299,53 @@ TEST(ThermalMaterials, AUrdfLinksMaterialAndHeatSourcesReachTheWorldAndUsd) {
     check(back->world);
 }
 
+// RFC 0021: a URDF link's <lamp> is a LampAPI_1 prim on it, placed by xyz and rpy, and the
+// USD that lagrange_import writes reads back the same.
+TEST(Lamps, AUrdfLinksLampReachesTheWorldAndUsd) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                       ("lagrange_lamp_" + std::to_string(::getpid()) + ".urdf");
+    std::ofstream(path) << R"(<?xml version="1.0"?><robot name="r">
+<link name="body"><visual><geometry><box size="0.4 0.3 0.1"/></geometry></visual>
+<inertial><mass value="2"/><inertia ixx="0.1" iyy="0.1" izz="0.1" ixy="0" ixz="0" iyz="0"/></inertial></link>
+<gazebo reference="body">
+  <lamp name="headlamp" kind="spot" intensity="900" beam_angle="0.4" color="1 0.9 0.8"
+        efficacy="80" blink_frequency="1.5" initial="1" xyz="0.2 0 0.05" rpy="0 0.2 0"/>
+  <lamp intensity="1"/>
+</gazebo>
+</robot>)";
+    const auto check = [](const World& w) {
+        int lamps = 0;
+        for (const SchemaInstance& s : w.schemaInstances) {
+            if (s.schema != "LampAPI_1") {
+                continue;
+            }
+            ++lamps;
+            EXPECT_EQ(w.prims.instanceNames[s.prim.index], "headlamp");
+            EXPECT_EQ(s.token("lamp:kind"), "spot");
+            EXPECT_EQ(s.real("lamp:luminousIntensity"), 900.0);
+            EXPECT_EQ(s.real("lamp:beamAngle"), 0.4);
+            EXPECT_EQ(s.real("lamp:luminousEfficacy"), 80.0);
+            EXPECT_EQ(s.real("lamp:blinkFrequency"), 1.5);
+            EXPECT_NEAR(s.realArray("lamp:color")[1], 0.9, 1e-6);
+            EXPECT_EQ(w.bodies.names[w.prims.body[s.prim.index].index], "body");
+            const Pose& at = w.prims.poseInBody[s.prim.index];
+            EXPECT_NEAR(at.position[0], 0.2, 1e-6);
+            EXPECT_NEAR(at.position[2], 0.05, 1e-6);
+            EXPECT_NEAR(at.orientation[2], std::sin(0.1), 1e-6);
+        }
+        EXPECT_EQ(lamps, 1);  // the one without a name is skipped
+    };
+    const auto model = loadUrdf(path.string(), {});
+    ASSERT_TRUE(model) << model.error();
+    check(model->world);
+    const std::filesystem::path usd = std::filesystem::temp_directory_path() /
+                                      ("lagrange_lamp_" + std::to_string(::getpid()) + ".usda");
+    ASSERT_TRUE(stage::writeStage(*model, usd.string())) << usd;
+    const auto back = loadModel(usd.string());
+    ASSERT_TRUE(back) << back.error();
+    check(back->world);
+}
+
 // RFC 0012 end to end: a URDF's LED board on an aluminium heat sink heats in the server's run
 // (the conduction fidelity, started because a link has a thermal material).
 TEST(ThermalMaterials, AUrdfLedBoardHeatsInTheServer) {

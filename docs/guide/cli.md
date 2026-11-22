@@ -1,18 +1,24 @@
 # The `lagrange` command
 
-`lagrange` is on the PATH once ROS is sourced (package `lagrange`, `tools/cli/`). Without a
-command it runs the simulator and its viewer together, like `gazebo`:
+`lagrange` is on the PATH once ROS is sourced (package `lagrange`, `tools/cli/`). With nothing
+after it, it opens the viewer on its launcher, from zero: start a local simulator, connect to
+one, open a recording or build a robot. With a sample, a robot or a run file it runs the
+simulator and its viewer together, like `gazebo`:
 
 ```bash
 source /opt/ros/lyrical/setup.bash && source install/setup.bash
+lagrange                           # the viewer on its launcher (as lagrange viewer)
 lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml | PROFILE.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
 lagrange --server-only ...         # the server alone, headless
 lagrange viewer [VIEWER OPTIONS]   # the viewer alone
-lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve, people, empty
+lagrange build [ROBOT.urdf|.xacro] # the viewer in the robot builder (builder.md), no server
+lagrange samples                   # amr, sedan, quad, lexus, x500, swerve, people, empty
 lagrange empty                     # no robot, no world: the ground only
 lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]   # a robot into the running simulator
 lagrange delete NAME               # and out again
 ```
+
+Up to 1.4, `lagrange` alone ran the sample AMR in the warehouse; that is `lagrange amr` now.
 
 A simulation profile (a YAML file with `domains:`, [profiles](profiles.md)) runs as
 `lagrange run PROFILE` does, with the viewer: `lagrange profiles/examples/quad_x500_downwash.yaml

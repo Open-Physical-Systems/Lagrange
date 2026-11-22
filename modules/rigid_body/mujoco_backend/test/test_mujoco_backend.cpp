@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -195,6 +196,87 @@ TEST(MujocoBackend, FrictionScaleMakesTheBoxSlide) {
         Scheduler scheduler;
         scheduler.add(std::make_unique<MujocoBackend>());
         scheduler.add(std::make_unique<Constant>("env/friction_scale", units::one, scale));
+        wire(scheduler, world);
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+        const double moved = std::abs(read(scheduler, "body/box/pose", 0));
+        if (scale == 1.0) {
+            EXPECT_LT(moved, 0.01) << "sticks at full friction";
+        } else {
+            EXPECT_GT(moved, 0.1) << "slides at half friction";
+        }
+    }
+}
+
+// --- surfaces: grass (docs/physics/ground.md "Engine contacts on grass") -------------------
+
+/// A solid 1 kg ball of radius 0.1 m on a ground of the given surface, gravity tilted by
+/// `slopeDegrees` to make a slope, sliding friction 1 so it rolls without slipping.
+World ballOnSurface(double slopeDegrees, const SurfaceMaterial& ground) {
+    World world;
+    const double angle = slopeDegrees * std::numbers::pi / 180.0;
+    world.gravityLocal = {kGravity * std::sin(angle), 0.0, -kGravity * std::cos(angle)};
+    world.addCollider(kWorldBody, ShapeType::Box, {50.0, 5.0, 0.1}, Pose{{0.0, 0.0, -0.1}}, 1.0);
+    world.surfaceMaterials.push_back(ground);
+    world.colliders.material.back() = 0;
+    const double inertia = 0.4 * 1.0 * 0.1 * 0.1;  // kg·m², solid sphere, 2/5 m r²
+    const BodyId ball = world.addBody("ball", kWorldBody, Pose{{0.0, 0.0, 0.1}}, 1.0, {},
+                                      diagonal(inertia, inertia, inertia));
+    world.addJoint("ball_free", JointType::Free, ball, {0.0, 0.0, 1.0}, false);
+    world.addCollider(ball, ShapeType::Sphere, {0.1, 0.0, 0.0}, Pose{}, 1.0);
+    return world;
+}
+
+/// The ball's acceleration down the slope from 0.5 to 1.5 s, m/s².
+double rollingAcceleration(double slopeDegrees, const SurfaceMaterial& ground) {
+    const World world = ballOnSurface(slopeDegrees, ground);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    wire(scheduler, world);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{500'000'000}).ok());
+    const double v0 = read(scheduler, "body/ball/twist", 0);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{1'500'000'000}).ok());
+    return read(scheduler, "body/ball/twist", 0) - v0;
+}
+
+TEST(MujocoBackend, RollingResistanceSlowsABallAtTheClosedFormRate) {
+    // m a = m g sin θ − F, I α = F r − Crr N r, a = α r:
+    // a = g (sin θ − Crr cos θ) m r² / (I + m r²), with m r² / (I + m r²) = 5/7 for a solid ball.
+    const double slope = 10.0;
+    const double angle = slope * std::numbers::pi / 180.0;
+    const double share = 1.0 / (1.0 + 0.4);
+    const double bare = rollingAcceleration(slope, SurfaceMaterial{});
+    EXPECT_NEAR(bare, kGravity * std::sin(angle) * share, 0.01 * kGravity * std::sin(angle));
+    SurfaceMaterial grass;
+    grass.rollingResistance = 0.08;  // a test value, not the preset
+    const double slowed = rollingAcceleration(slope, grass);
+    EXPECT_NEAR(slowed, kGravity * (std::sin(angle) - 0.08 * std::cos(angle)) * share,
+                0.01 * kGravity * std::sin(angle));
+}
+
+TEST(MujocoBackend, RollingResistanceHoldsABallOnAGentleSlope) {
+    // Crr 0.1 > tan 3° = 0.052: rolling resistance holds it, and never rolls it back up.
+    SurfaceMaterial grass;
+    grass.rollingResistance = 0.1;
+    const World world = ballOnSurface(3.0, grass);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_LT(std::abs(read(scheduler, "body/ball/pose", 0)), 0.01);
+}
+
+TEST(MujocoBackend, SurfaceFrictionScaleMakesTheBoxSlide) {
+    // As FrictionScaleMakesTheBoxSlide, from the ground's surface instead of the weather.
+    for (const double scale : {1.0, 0.5}) {
+        World world = boxOnGround(20.0, 0.5);
+        SurfaceMaterial slick;
+        slick.frictionScale = scale;
+        world.surfaceMaterials.push_back(slick);
+        world.colliders.material.front() = 0;  // the ground plane
+        // The pair takes the larger coefficient, so the box's own surface must be scaled too.
+        world.colliders.material.back() = 0;
+        Scheduler scheduler;
+        scheduler.add(std::make_unique<MujocoBackend>());
         wire(scheduler, world);
         ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
         const double moved = std::abs(read(scheduler, "body/box/pose", 0));
@@ -559,6 +641,117 @@ TEST(MujocoBackend, SaveRunRestoreRunIsIdentical) {
     ASSERT_TRUE(scheduler.restoreState(reader).ok());
     ASSERT_TRUE(scheduler.stepUntil(SimTime{600'000'000}).ok());
     EXPECT_EQ(read(scheduler, "body/box/pose", 0), x);
+    EXPECT_EQ(scheduler.stateHash().value(), first);
+}
+
+// --- friction limit (RFC 0020 §4.4) --------------------------------------------------------
+
+/// A 10 kg carriage on a vertical slide (z up), its axis along z: gravity pulls it at −m g.
+World carriage() {
+    World world;
+    const BodyId body = world.addBody("carriage", kWorldBody, Pose{{0.0, 0.0, 1.0}}, 10.0, {},
+                                      diagonal(0.05, 0.05, 0.05));
+    world.addJoint("lift", JointType::Prismatic, body, {0.0, 0.0, 1.0}, true);
+    return world;
+}
+
+/// Writes a friction limit that changes every step (a screw's under a changing load).
+class Wobble final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override { return {"electrical", "wobble"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "joint/lift/friction_limit";
+        spec.unit = units::N;
+        id_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(id_, 0.0);
+        return {};
+    }
+    Status step(const StepContext& context, SignalBus& bus) override {
+        // Around the weight (98 N): it holds, slips and holds again.
+        bus.write(id_, 98.0 + 30.0 * std::sin(10.0 * context.t.seconds()));
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    SignalId id_;
+};
+
+TEST(MujocoBackend, AFrictionLimitAboveTheWeightHoldsTheSlide) {
+    const World world = carriage();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/lift/friction_limit", units::N, 120.0));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+    const double start = read(scheduler, "joint/lift/position");
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{10'100'000'000}).ok());
+    const double crept = read(scheduler, "joint/lift/position") - start;
+    std::printf("held by 120 N: crept %.3g m in 10 s\n", crept);
+    EXPECT_LT(std::abs(crept), 1e-4) << "holds within 0.1 mm over 10 s";
+    // What holds it is the joint's constraint force: the weight.
+    EXPECT_NEAR(read(scheduler, "joint/lift/constraint_torque"), 10.0 * kGravity, 0.01);
+}
+
+TEST(MujocoBackend, AFrictionLimitBelowTheWeightSlowsItsFall) {
+    const World world = carriage();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(
+        std::make_unique<Constant>("joint/lift/friction_limit", units::N, 5.0 * kGravity));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    // m a = m g − F: a = g / 2.
+    EXPECT_NEAR(read(scheduler, "joint/lift/velocity"), -0.5 * kGravity, 0.01 * kGravity);
+}
+
+TEST(MujocoBackend, AFrictionLimitAddsToTheJointsOwnFriction) {
+    World world = carriage();
+    world.joints.friction.back() = 4.0 * kGravity;
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/lift/friction_limit", units::N, kGravity));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "joint/lift/velocity"), -0.5 * kGravity, 0.01 * kGravity);
+}
+
+TEST(MujocoBackend, AFrictionLimitOnAHingeHoldsBackItsTorque) {
+    // A worm gear's: τ − limit turns the flywheel.
+    constexpr double kInertia = 0.02;  // kg·m²
+    const World world = flywheel(kInertia);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/axle/torque", units::N_m, 0.05));
+    scheduler.add(std::make_unique<Constant>("joint/axle/friction_limit", units::N_m, 0.02));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "joint/axle/velocity"), 0.03 / kInertia * 2.0, 0.01 * 3.0);
+}
+
+TEST(MujocoBackend, AChangingFrictionLimitRestoresBitForBit) {
+    const World world = carriage();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Wobble>());
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{200'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{900'000'000}).ok());
+    const std::uint64_t first = scheduler.stateHash().value();
+    const double z = read(scheduler, "joint/lift/position");
+    EXPECT_LT(z, -1e-3) << "it slipped where the limit was below the weight";
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{900'000'000}).ok());
+    EXPECT_EQ(read(scheduler, "joint/lift/position"), z);
     EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 

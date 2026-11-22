@@ -103,6 +103,7 @@ add_library(
     raster/src/Raster.cpp
     raster/src/Realistic.cpp
     raster/src/SurfaceTextures.cpp
+    raster/src/TreeShapes.cpp
 )
 add_library(lagrange::gpu_raster ALIAS lagrange_gpu_raster)
 lagrange_target_defaults(lagrange_gpu_raster)
@@ -230,6 +231,20 @@ lagrange_add_slang_shader(
     ENTRY fsWater
     STAGE fragment
     SYMBOL kRealWaterFragment
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY vsVeg
+    STAGE vertex
+    SYMBOL kRealVegVertex
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsVeg
+    STAGE fragment
+    SYMBOL kRealVegFragment
 )
 
 install(

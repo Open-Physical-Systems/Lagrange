@@ -105,10 +105,24 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
 - **Pedestrians.** They walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends,
   and step aside from each other and from the robots by a social force (Helbing and Molnár 1995,
   A = 2 m/s², B = 0.3 m). On a world with crossings they are walking people instead (§8.2).
-- **Lights.** Fixed cycle per junction, illustrative: approaches facing each other share a group,
-  and groups take turns at 20 s green, 3 s yellow and 2 s all red. Their states are
-  `traffic/lights`, and they are drawn (§8.2). A junction whose lanes do not conflict (a bend) has
-  none.
+- **Lights.** Fixed cycle per junction, illustrative: groups take turns at 20 s green, 3 s yellow
+  and 2 s all red. Their states are `traffic/lights`, and they are drawn (§8.2).
+  - **From OpenDRIVE signals.** When the world has `RoadSignalAPI_1` prims (formats.md §3.11:
+    the importer's dynamic `<signal>`s with their `<validity>` and `<controller>`), they decide:
+    a junction has lights when signals govern lanes into it; the signals of one controller form
+    one group and turn green together; a junction's controllers take turns in their `sequence`
+    order (else by controller id; a signal without a controller is a group of its own); vehicles
+    stop at the signal's s on each lane it governs, not at the lane's end; and the lamps stand in
+    the signal's own housing (the importer draws housing and pole, the module its lenses and
+    lamps). A signal before no junction gets a cycle of its own per controller. A junction with
+    crossings but no signals keeps the lights its geometry gives. `test_traffic`
+    OpenDriveSignals, on `io/opendrive/test/data/signals.xodr` (a four-way junction, two
+    controllers): over four minutes the two controllers are never open together and each turns
+    green every cycle, no vehicle crosses its line after 0.2 s of red, and the first in each queue
+    stops 2.0 m short of its signal's line (the IDM's jam distance), never past it.
+  - **By geometry**, in a world without signals: approaches facing each other share a group. A
+    junction whose lanes do not conflict (a bend) has none. These worlds run bit for bit as
+    before signals were read (city block, town, banked ring).
 - **Outputs.** `traffic/agents` (8 numbers per agent), `traffic/agent_count`, `traffic/lights`.
 - **Validation** (`test_traffic`, on MuJoCo with the city block):
   - the IDM's equilibrium gap;
@@ -133,9 +147,11 @@ world gets the same behaviour:
   would join a whole grid into one junction.)
 - **Crossings** are sidewalk lanes that go over a driving lane of a junction. Sidewalk lanes in a
   junction are paths, not drawn surfaces. Walkers' sidewalks join where their ends touch.
-- **Signals** are drawn by `addAgents`: poles, housings, dark lenses, and lamps. A lamp is a
-  kinematic body without a collider that is either in front of its lens or inside the housing, so
-  viewers, camera sensors and recordings all see it with no protocol change.
+- **Signals** are drawn by `addAgents`: poles, housings, dark lenses, and lamps, on the right of
+  each approach lane's end; for a `RoadSignalAPI_1` signal only lenses and lamps, in the housing
+  the OpenDRIVE importer drew at the signal's pose. A lamp is a kinematic body without a collider
+  that is either in front of its lens or inside the housing, so viewers, camera sensors and
+  recordings all see it with no protocol change.
 - **Actuated junctions** are those with crossings. A button cuts the green to 8 s (a lone crossing
   stays green until asked); after yellow and all red, every vehicle stops for an exclusive walk of
   7 s and a flashing clearance as long as the longest crossing takes at 1.2 m/s, held until the

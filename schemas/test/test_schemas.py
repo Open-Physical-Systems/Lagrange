@@ -38,12 +38,23 @@ EXPECTED = {
     "sensor_material": ["SensorMaterialAPI_1"],
     "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
     "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
-    "road": ["RoadLaneAPI_1"],
+    "road": ["RoadLaneAPI_1", "RoadSignalAPI_1"],
     "human": ["HumanAPI_1"],
     "water": ["WaterAPI_1"],
     "joint": ["JointDynamicsAPI_1"],
-    "world": ["WorldTileAPI_1"],
+    "world": ["WorldTileAPI_1", "TreeAPI_1"],
     "tether": ["TetherAPI_1"],
+    "fire": ["FireAPI_1"],
+    "light": ["LampAPI_1"],
+    "actuator": [
+        "SuctionGripperAPI_1",
+        "MagnetGripperAPI_1",
+        "NozzleAPI_1",
+        "TankAPI_1",
+        "ServoAPI_1",
+        "SolenoidAPI_1",
+        "BrakeAPI_1",
+    ],
 }
 
 
@@ -166,6 +177,118 @@ def test_lidar_patterns_and_fisheye_lenses_are_additions():
     cutoff = camera.GetAttributeDefinition("sensor:camera:cutoffAngle")
     assert cutoff.GetMetadata("lagrangeUnit") == "rad"
     assert cutoff.GetFallbackValue() is None
+
+
+def test_gear_back_efficiency_is_an_addition():
+    # RFC 0020 §4.4: appended to ElectricalMotorAPI_1 with a fallback of -1, "the same as
+    # gearEfficiency", so every file without it behaves as before; not in frozen_1_0.json.
+    motor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    back = motor.GetAttributeDefinition("elec:gearBackEfficiency")
+    assert back
+    assert back.GetFallbackValue() == -1.0
+    assert back.GetMetadata("lagrangeUnit") == "1"
+    with FROZEN.open() as f:
+        assert "elec:gearBackEfficiency" not in json.load(f)["ElectricalMotorAPI_1"]
+
+
+def test_servo_and_position_mode_are_additions():
+    # RFC 0020 §4.3: ServoAPI_1 is a new class, and elec:controlMode's `position` token is
+    # appended after the frozen ones, so every 1.x file reads as before.
+    motor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    tokens = list(motor.GetAttributeDefinition("elec:controlMode").GetMetadata("allowedTokens"))
+    assert tokens == ["torque", "velocity", "voltage", "position"]
+    servo = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ServoAPI_1")
+    assert servo
+    assert servo.GetAttributeDefinition("act:servo:kind").GetFallbackValue() == "pwm"
+    assert servo.GetAttributeDefinition("act:servo:kp").GetFallbackValue() is None
+    assert servo.GetAttributeDefinition("act:servo:deadband").GetMetadata("lagrangeUnit") == "rad"
+    with FROZEN.open() as f:
+        assert "ServoAPI_1" not in json.load(f)
+
+
+def test_open_water_chart_is_an_addition():
+    # Marine thrusters: RotorAPI_1's chart attributes are new, with no fallback, so a rotor
+    # without them keeps its static coefficients.
+    rotor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("RotorAPI_1")
+    for name in ("advanceRatios", "thrustCoeffs", "torqueCoeffs"):
+        attribute = rotor.GetAttributeDefinition("aero:rotor:" + name)
+        assert attribute
+        assert attribute.GetFallbackValue() is None
+    with FROZEN.open() as f:
+        frozen = json.load(f)
+    assert "aero:rotor:advanceRatios" not in json.dumps(frozen)
+
+
+def test_tree_is_an_addition():
+    # Trees (ground.md "Trees"): TreeAPI_1 is a new class of the world library; the owner approved
+    # the addition on 2026-11-22.
+    tree = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("TreeAPI_1")
+    assert tree
+    assert tree.GetAttributeDefinition("tree:height").GetFallbackValue() is None
+    assert tree.GetAttributeDefinition("tree:naturalFrequency").GetFallbackValue() == 0.5
+    assert (
+        tree.GetAttributeDefinition("tree:leafAreaDensity").GetMetadata("lagrangeUnit") == "m2/m3"
+    )
+    # Branches (ground.md "Branches"), added to TreeAPI_1 with fallbacks (approved 2026-11-22).
+    assert tree.GetAttributeDefinition("tree:branchCount").GetFallbackValue() == 12
+    assert tree.GetAttributeDefinition("tree:woodCutEnergy").GetFallbackValue() == 50000
+    assert tree.GetAttributeDefinition("tree:maxCutDiameter").GetFallbackValue() == 0.01
+    assert tree.GetAttributeDefinition("tree:woodCutEnergy").GetMetadata("lagrangeUnit") == "J/m2"
+    with FROZEN.open() as f:
+        assert "TreeAPI_1" not in json.load(f)
+
+
+def test_brake_is_an_addition():
+    # RFC 0020 "Also worth adding": BrakeAPI_1 is a new class of the actuator library.
+    brake = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("BrakeAPI_1")
+    assert brake
+    assert brake.GetAttributeDefinition("act:brake:holdingTorque").GetFallbackValue() is None
+    assert brake.GetAttributeDefinition("act:brake:coilInductance").GetFallbackValue() == 0
+    assert brake.GetAttributeDefinition("act:brake:holdingForce").GetMetadata("lagrangeUnit") == "N"
+    with FROZEN.open() as f:
+        assert "BrakeAPI_1" not in json.load(f)
+
+
+def test_road_signal_is_an_addition():
+    # OpenDRIVE dynamic signals drive the traffic lights: RoadSignalAPI_1 is a new class of the
+    # road library (schema addition approved by the owner on 2026-11-22).
+    signal = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("RoadSignalAPI_1")
+    assert signal
+    assert signal.GetAttributeDefinition("signal:s").GetMetadata("lagrangeUnit") == "m"
+    assert signal.GetAttributeDefinition("signal:fromLane").GetFallbackValue() == 0
+    assert signal.GetAttributeDefinition("signal:sequence").GetFallbackValue() == -1
+    tokens = signal.GetAttributeDefinition("signal:orientation").GetMetadata("allowedTokens")
+    assert list(tokens) == ["+", "-", "none"]
+    with FROZEN.open() as f:
+        frozen = json.load(f)
+    assert "RoadSignalAPI_1" not in frozen
+    assert not [name for name in frozen["RoadLaneAPI_1"] if name.startswith("signal:")]
+
+
+def test_solenoid_is_an_addition():
+    # RFC 0020 §4.6: SolenoidAPI_1 is a new class of the actuator library.
+    solenoid = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("SolenoidAPI_1")
+    assert solenoid
+    assert solenoid.GetAttributeDefinition("act:solenoid:resistance").GetFallbackValue() is None
+    assert solenoid.GetAttributeDefinition("act:solenoid:springRate").GetFallbackValue() == 0
+    assert solenoid.GetAttributeDefinition("act:solenoid:stroke").GetMetadata("lagrangeUnit") == "m"
+    with FROZEN.open() as f:
+        assert "SolenoidAPI_1" not in json.load(f)
+
+
+def test_stepper_is_an_addition():
+    # RFC 0020 §4.5: `stepper` is appended to elec:motorType's tokens and the elec:stepper
+    # attributes are new, with fallbacks that change nothing for other motor types.
+    motor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    tokens = list(motor.GetAttributeDefinition("elec:motorType").GetMetadata("allowedTokens"))
+    assert tokens == ["pmsm", "bldc", "dc_brushed", "stepper"]
+    assert motor.GetAttributeDefinition("elec:stepper:rotorTeeth").GetFallbackValue() == 50
+    assert motor.GetAttributeDefinition("elec:stepper:microsteps").GetFallbackValue() == 1
+    assert motor.GetAttributeDefinition("elec:stepper:detentTorque").GetFallbackValue() == 0.0
+    assert motor.GetAttributeDefinition("elec:stepper:holdCurrent").GetFallbackValue() is None
+    with FROZEN.open() as f:
+        frozen = json.load(f)["ElectricalMotorAPI_1"]
+    assert not [name for name in frozen if name.startswith("elec:stepper:")]
 
 
 # RFC 0007: the schemas are frozen at 1.0. Every attribute of every schema at v1.0.0 is listed

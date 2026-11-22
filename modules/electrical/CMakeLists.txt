@@ -12,6 +12,7 @@ add_library(
     substitutes/src/IdealTorqueSource.cpp
     network/src/Models.cpp
     network/src/Network.cpp
+    network/src/Stepper.cpp
     fmu_host/src/FmuHost.cpp
     export/src/Export.cpp
 )
@@ -64,6 +65,9 @@ if(BUILD_TESTING)
         PRIVATE LAGRANGE_TEST_NGSPICE="$<$<BOOL:${NGSPICE}>:${NGSPICE}>"
     )
     lagrange_target_defaults(test_export)
+    ament_add_gtest(test_stepper test/test_stepper.cpp TIMEOUT 300)
+    target_link_libraries(test_stepper lagrange_electrical)
+    lagrange_target_defaults(test_stepper)
     ament_add_gtest(test_coupling test/test_coupling.cpp TIMEOUT 300)
     target_link_libraries(test_coupling lagrange_electrical)
     lagrange_target_defaults(test_coupling)

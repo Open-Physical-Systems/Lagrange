@@ -42,7 +42,7 @@ The key numbers, all measured here: real-time factor (higher is faster), median 
 | Start-up to the first step | 0.07 s | 2.4 to 2.7 s |
 | Peak memory, AMR with sensors | 78 MB (CPU lidar) | 961 MB |
 | Two runs bit-identical | yes (both backends) | not known: the second run was stopped |
-| Worst closed-form error in the six physics cases | Jolt backend loses 16 % of a pendulum's energy in 60 s (5 % with 4 sub-steps, at 4 times the cost); MuJoCo backend within 0.15 % | within 0.15 % |
+| Worst closed-form error in the six physics cases | Jolt backend loses 16 % of a pendulum's energy in 60 s (5 % with 4 sub-steps, at 4 times the cost; 0.13 % on `dev` after v1.4.0, below); MuJoCo backend within 0.15 % | within 0.15 % |
 
 ## Method
 
@@ -187,7 +187,7 @@ What the numbers say:
   - MuJoCo 4.0.1 runs the same scene 2.5 times faster than Lagrange's MuJoCo (3.7 times before
     the fix).
   - Lagrange's Jolt backend is the fastest measured here: 2.71, 15 times its MuJoCo backend. It
-    loses energy in the pendulum test, though (below).
+    lost energy in the pendulum test up to v1.4.0, though (below; fixed on `dev` after v1.4.0).
   - PyBullet is in between. Gazebo's DART did not finish.
 - **Memory.** Gazebo's rendering adds 750 to 820 MB (883 to 961 MB with sensors against 137 MB
   without). Lagrange's camera adds about 320 MB, and its GPU lidar 200 MB.
@@ -281,9 +281,20 @@ What this says:
     two floors).
   - The conformance suite now holds every backend to the bound. The test
     `Conformance.APendulumKeepsItsPeriodAndEnergy` checks the exact period within 0.25 %, no
-    gain over 0.5 %, and at least 80 % of the energy kept. `Jolt.APendulumLosesEnergyAs...`
-    pins Jolt's loss to the model.
+    gain over 0.5 %, and at least 80 % of the energy kept. Up to v1.4.0 a Jolt test pinned Jolt's
+    loss to the model; `Jolt.APendulumKeepsItsEnergy` now holds it under 1 %.
   - Use MuJoCo, the default and the reference, when energy over long free motion matters.
+  - **Fixed on `dev` after v1.4.0** (not in the table above, which is v1.3.0). The backend now
+    gives half of each hinge's turn impulse back after Jolt's step, solved together along a
+    chain, which keeps the energy to leading order
+    ([rigid_body.md §8.1](../design/domains/rigid_body.md)). Measured by
+    `Jolt.APendulumKeepsItsEnergy` on the same pendulum (a 1 kg point mass on 1 m from 1 rad,
+    60 s at 1 ms): −0.13 % (−0.04 % from 2 rad, −0.004 % from 3 rad, which lost 35 % and 40 %).
+    `Conformance.APendulumKeepsItsPeriodAndEnergy` (this page's 1 kg ball of 2 cm on 1 m) gives
+    −0.14 % on Jolt and Jolt as a plugin, −0.07 % on MuJoCo, period within 1.3 ppm.
+    A double pendulum ends 30 s within 0.02 % of its start, where it lost 7 to 41 %. With
+    `substeps: 4` it is −0.65 %: sub-steps no longer help the energy. Jolt runs' state hashes
+    changed with it.
 - **Slide.** Every engine is within 0.014 % of g(sin θ − μ cos θ).
   - Lagrange's MuJoCo backend uses MuJoCo's elliptic friction cone, and is 136 ppm low.
   - Standalone MuJoCo, with its default pyramidal cone, is 124 ppm high.
@@ -430,9 +441,11 @@ Worse at, or missing:
   Engine for photorealism. Training perception on its images is not a validated use.
 - **No PhysX**, and so no GPU-parallel rigid bodies for reinforcement learning at scale (Isaac
   Sim, MuJoCo's MJX and Warp).
-- **The Jolt backend loses energy** in the pendulum test: 16 % over 60 s. This comes from
-  Jolt's joints, which are constraints between free bodies. `substeps: 4` brings it to 5 %, at
-  four times the cost. Stay on MuJoCo, the default, when that matters.
+- **The Jolt backend lost energy** in the pendulum test up to v1.4.0: 16 % over 60 s. Jolt holds
+  joints as constraints between free bodies and projected the turn out of the velocities each
+  step. Fixed on `dev` after v1.4.0: half of that impulse is given back, and the pendulum loses
+  0.13 % (a double pendulum ends 30 s within 0.02 %), with no sub-steps. MuJoCo stays the
+  default and the reference.
 - **The quadcopter needed its electrical domain.** With `electrical` switched to its ideal
   substitute, the sample quadcopter's rotors did not turn and it never took off (found while
   preparing this page; fixed on `dev` after v1.3.0, test

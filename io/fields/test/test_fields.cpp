@@ -64,6 +64,40 @@ TEST(Fields, AVectorFieldIsAWindShear) {
     EXPECT_NEAR((*loaded)->sampleScalar(p), std::hypot(v[0], v[1], v[2]), 1e-12);
 }
 
+TEST(Fields, AScalarFieldInMemoryFromVoxelValues) {
+    // x slowest, z fastest; the linear field at every voxel centre, as writeScalarField's.
+    const DenseBox box{{-2.0, -2.0, 0.0}, 0.5, {9, 9, 7}};
+    std::vector<float> values;
+    for (int i = 0; i < 9; ++i) {
+        for (int j = 0; j < 9; ++j) {
+            for (int k = 0; k < 7; ++k) {
+                values.push_back(static_cast<float>(
+                    linear({-2.0 + (0.5 * i), -2.0 + (0.5 * j), 0.0 + (0.5 * k)})));
+            }
+        }
+    }
+    const auto f = scalarField("smoke", box, values);
+    ASSERT_TRUE(f);
+    EXPECT_EQ(f->kind(), Field::Kind::Scalar);
+    EXPECT_EQ(f->name(), "smoke");
+    for (const Vec3& p : {Vec3{0.13, -0.71, 1.37}, Vec3{-1.9, 1.2, 0.05}, Vec3{1.5, 1.5, 2.9}}) {
+        EXPECT_NEAR(f->sampleScalar(p), linear(p), 1e-6);
+    }
+    EXPECT_NEAR(f->integrate({-1.0, 0.0, 1.0}, {1.0, 1.0, 2.0}),
+                linear({0.0, 0.5, 1.5}) * std::sqrt(6.0), 1e-5);
+    // One voxel on: its value there, zero a voxel away; bounds are the active voxel.
+    std::vector<float> one(values.size(), 0.0F);
+    one[((4 * 9) + 4) * 7 + 2] = 0.25F;
+    const auto g = scalarField("smoke", box, one);
+    ASSERT_TRUE(g);
+    EXPECT_NEAR(g->sampleScalar({0.0, 0.0, 1.0}), 0.25, 1e-7);
+    EXPECT_EQ(g->sampleScalar({0.5, 0.0, 1.0}), 0.0);
+    EXPECT_NEAR(g->bounds()[0][2], 1.0, 1e-9);
+    // Nothing to hold, or values that do not fill the box: no field.
+    EXPECT_FALSE(scalarField("smoke", box, std::vector<float>(values.size(), 0.0F)));
+    EXPECT_FALSE(scalarField("smoke", box, std::vector<float>(3, 1.0F)));
+}
+
 TEST(Fields, AMissingFileIsAnError) {
     const auto loaded = Field::load(temp("missing.nvdb"));
     ASSERT_FALSE(loaded);

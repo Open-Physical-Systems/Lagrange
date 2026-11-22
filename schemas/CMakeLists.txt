@@ -24,6 +24,9 @@ set(LAGRANGE_SCHEMA_LIBRARIES
     water
     world
     tether
+    fire
+    light
+    actuator
 )
 set(usd_env
     "PXR_PLUGINPATH_NAME=${CMAKE_CURRENT_SOURCE_DIR}/metadata"

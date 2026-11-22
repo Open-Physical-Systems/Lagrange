@@ -1,0 +1,93 @@
+#usda 1.0
+(
+    defaultPrim = "warehouse_small"
+    doc = """The sample warehouse with its pallet on fire (RFC 0022, docs/physics/fire.md): a
+    wood pallet stack that ignites at the start and grows as a fast t-squared fire, under a flat
+    roof 3 m up that its smoke spreads beneath, with a visibility meter near the roof. The run
+    file warehouse_fire.yaml brings the sample AMR and a sprinkler's rate of water at 60 s."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [
+        @../warehouse_small/warehouse_small.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "warehouse_small"
+{
+    # The pallet's collider (0.8 m x 1.2 m x 0.6 m) gives the burning area, 0.96 m2, and the
+    # flame's base, its top. The fuel values below are an example of the form, for a wood pallet
+    # stack, not measured data: each is TODO(verify) against the source named with it. The
+    # presets ship empty until their cited values are confirmed (RFC 0022 open question 3).
+    over "pallet" (
+        prepend apiSchemas = ["FireAPI_1"]
+    )
+    {
+        uniform token fire:class = "a"
+        # The fast t-squared class, 46.889 W/s2 (NBSIR 85-3167, checked). Pallet stacks grow
+        # fast to ultrafast: TODO(verify) Babrauskas, SFPE Handbook 5th ed. ch. 26.
+        double fire:alpha = 46.889
+        # TODO(verify) the pallet stack's HRR per area: Babrauskas, SFPE Handbook ch. 26.
+        double fire:hrrPerArea = 1000000
+        # TODO(verify) four pallets of about 20 kg.
+        double fire:fuelMass = 80
+        # TODO(verify) wood's effective heat of combustion: Tewarson, SFPE Handbook ch. 36.
+        double fire:heatOfCombustion = 12000000
+        # TODO(verify) wood's radiative fraction: Tewarson, SFPE Handbook ch. 36.
+        double fire:radiativeFraction = 0.3
+        # TODO(verify) wood's soot yield: Tewarson, SFPE Handbook ch. 36.
+        double fire:sootYield = 0.015
+        # TODO(verify) the critical rate for wood cribs: Tamanini 1976, as NISTIR 5254 cites it.
+        double fire:criticalWaterRate = 0.02
+        double fire:ignitionTime = 0
+    }
+
+    # A flat roof 3 m up over the whole floor (collision only, so the viewer's camera sees in):
+    # the smoke stops under it and spreads (RFC 0022 §4), and the lidars' upper beams reach it.
+    def Xform "roof"
+    {
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0, 3.1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token purpose = "guide"
+            double size = 1
+            quatd xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (18.4, 9.4, 0.2)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    # A visibility meter on a post by the north rack, 2.7 m up, where the smoke layer forms: the
+    # kind visibility_sensor (sensors.md §9) reads the smoke there, S = C/sigma with C = 3 and 8.
+    # The post is a body welded to the ground, as a sensor rides on a rigid body.
+    def Xform "meter_post" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 1
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (3, 2.6, 2.7)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Xform "smoke_meter" (
+            prepend apiSchemas = ["SensorAPI_1", "CustomSensorAPI_1"]
+        )
+        {
+            uniform string sensor:custom:kind = "visibility_sensor"
+            double sensor:custom:param:range:min = 1
+            double sensor:custom:param:time_constant = 5
+            double sensor:rate = 2
+        }
+    }
+
+    def PhysicsFixedJoint "meter_post_weld"
+    {
+        rel physics:body1 = </warehouse_small/meter_post>
+    }
+}

@@ -31,6 +31,11 @@ namespace lagrange::server {
 /// propeller coefficients come from the world (RotorAPI_1), the air density from the config
 /// ("air_density", as rotor_aero).
 ///
+/// The attitude law runs as a cascade with capped body rates (Settings::maxRollPitchRateRadps,
+/// maxYawRateRadps), and the mixer keeps every rotor between idle and its top in the air with
+/// roll and pitch first and yaw last (mix()), so a torque past the propellers' reach (a tether
+/// pulled aside) costs the heading, not the lift.
+///
 /// With config "ideal_motors" true (the electrical domain off: its ideal torque source delivers
 /// the command exactly) each rotor's torque command is bounded by what its drive could give: the
 /// propeller's torque at the rotor's loaded top speed (mavlink::rotorTopSpeed; with a motor, its
@@ -47,11 +52,20 @@ public:
         double positionHz{0.6};     // natural frequency of the position loop
         double attitudeHz{3.0};     // natural frequency of the attitude loop
         double damping{0.9};        // damping ratio of both
-        double speedGain{0.02};     // N·m per rad/s of rotor speed error
+        // Roll and pitch integral gain over the attitude loop's natural frequency (ki = this·ωa,
+        // 1/s), for a steady torque (a load off centre); 0, the default: PD only. (At 0.2 the
+        // tethered flight of Multicopter.TurnedByItsTetherItStillFlies sinks 0.55 m and tilts
+        // 57°, against 0.1 m and 36° without: the cable's torque is not steady.)
+        double attitudeIntegralRatio{0.0};
+        double speedGain{0.02};  // N·m per rad/s of rotor speed error
         // Limits on what a velocity command may ask for.
         double maxHorizontalMps{5.0};
         double maxVerticalMps{2.0};
-        double maxYawRateRadps{1.5};
+        double maxYawRateRadps{1.5};  // also the most yaw rate the attitude loop asks for
+        // The most roll and pitch rate the attitude loop asks for (143°/s; PX4's default cap is
+        // 220°/s, but this frame's rotors take about 0.25 s from idle to full and a higher cap
+        // let a tether that jerked it flip it, Multicopter.TurnedByItsTetherItStillFlies).
+        double maxRollPitchRateRadps{2.5};
         // How fast the commanded velocity may change, as PX4's position mode ramps its stick
         // (PX4 v1.17: MPC_ACC_HOR 3, MPC_ACC_UP_MAX 4, MPC_ACC_DOWN_MAX 3 m/s²): it starts and
         // stops smoothly, and brakes to a stop where the stick is let go.
@@ -106,6 +120,23 @@ public:
     /// joints, all on one body.
     [[nodiscard]] static bool canFly(const WorldView& world);
 
+    /// What the mixer gives each rotor, and how much of the torque asked it could.
+    struct Mix {
+        std::vector<double> thrust;  // N per rotor, each within [0, its top]
+        double rollPitchShare{1.0};  // share of the roll and pitch torque given
+        double yawShare{1.0};        // share of the yaw torque given
+    };
+    /// Mixes (thrust, τx, τy, τz) into rotor thrusts within [0, thrustMax_i] (≤ 0: no top;
+    /// `airborne`: not below idle, 4 % of thrustMax_i, either),
+    /// with PX4's priorities (its control allocator's desaturation): roll and pitch first,
+    /// scaled down only when they alone exceed what the rotors span; then the collective
+    /// thrust, shifted as little as keeps every rotor in range; yaw last, cut to what is left.
+    /// Without this, a yaw (or roll) torque past the propellers' reach drove two rotors to zero
+    /// and the drone fell.
+    [[nodiscard]] static Mix mix(const std::vector<std::array<double, 4>>& mixer, double thrust,
+                                 const std::array<double, 3>& torque,
+                                 const std::vector<double>& thrustMax, bool airborne = false);
+
 private:
     struct Rotor {
         std::array<double, 3> position{};  // hub in the base frame, m
@@ -115,6 +146,7 @@ private:
         double torquePerOmega2{0.0};       // N·m per (rad/s)²
         double speedLimit{0.0};            // rad/s it may ask for; 0: none
         double torqueLimit{0.0};           // N·m it may command (ideal motors); 0: none
+        double thrustMax{0.0};             // N at its top speed in the design air; 0: none
         SignalId velocity, command;
     };
 
@@ -131,11 +163,12 @@ private:
     std::shared_ptr<const services::SceneQuery> ground_;
     double standHeight_{0.0};  // m: its base above the surface under it, standing at the start
     bool standKnown_{false};
-    double heading_{0.0};               // rad, the yaw it holds
-    bool airborne_{false};              // waitForCommand: taken off, not landed since
-    std::array<double, 3> velocity_{};  // m/s, world: the set point's velocity, ramped
-    std::array<double, 3> accel_{};     // m/s², world: the set point's acceleration
-    std::array<bool, 3> held_{};        // the leash held the set point back along this axis
+    double heading_{0.0};                       // rad, the yaw it holds
+    bool airborne_{false};                      // waitForCommand: taken off, not landed since
+    std::array<double, 3> velocity_{};          // m/s, world: the set point's velocity, ramped
+    std::array<double, 3> accel_{};             // m/s², world: the set point's acceleration
+    std::array<bool, 3> held_{};                // the leash held the set point back along this axis
+    std::array<double, 2> attitudeIntegral_{};  // rad·s, body roll and pitch error integral
     SignalId pose_, twist_;
     // With the weather (config "weather_air"): its air density against the one the mixer was
     // built for, as a flight controller's hover-thrust estimate follows the air (an ideal one).

@@ -12,6 +12,7 @@
 
 #include <pxr/base/gf/vec2d.h>
 #include <pxr/base/gf/vec3d.h>
+#include <pxr/base/gf/vec3f.h>
 #include <pxr/base/plug/plugin.h>
 #include <pxr/base/plug/registry.h>
 #include <pxr/base/vt/array.h>
@@ -35,10 +36,10 @@ namespace {
 
 // Property namespaces of the project's schema libraries (RFC 0002 convention 2): an applied
 // schema whose properties live in one of them is collected into World::schemaInstances.
-constexpr std::array<std::string_view, 18> kSchemaNamespaces{
-    "elec:",    "thermal:", "aero:",  "weather:", "emi:",   "rad:",
-    "sensmat:", "sensor:",  "world:", "comms:",   "can:",   "vehicle:",
-    "wheel:",   "lane:",    "human:", "water:",   "joint:", "tether:"};
+constexpr std::array<std::string_view, 23> kSchemaNamespaces{
+    "elec:",  "thermal:", "aero:", "weather:", "emi:",   "rad:",    "sensmat:", "sensor:",
+    "world:", "comms:",   "can:",  "vehicle:", "wheel:", "lane:",   "human:",   "water:",
+    "joint:", "tether:",  "fire:", "lamp:",    "act:",   "signal:", "tree:"};
 
 // Loader checks of RFC 0002 ("Loading") that the schema definitions cannot express.
 struct PairedArrays {
@@ -49,11 +50,24 @@ constexpr std::array<PairedArrays, 1> kPairedArrays{
 struct Fraction {
     std::string_view schema, attribute;
 };
-constexpr std::array<Fraction, 4> kFractions{
+constexpr std::array<Fraction, 10> kFractions{
     {{"BatteryAPI_1", "elec:battery:initialSoc"},
      {"ElectricalMotorAPI_1", "elec:gearEfficiency"},
      {"ElectricalConverterAPI_1", "elec:conv:efficiency"},
-     {"ThermalMaterialAPI_1", "thermal:material:emissivity"}}};
+     {"ThermalMaterialAPI_1", "thermal:material:emissivity"},
+     {"FireAPI_1", "fire:radiativeFraction"},
+     {"FireAPI_1", "fire:decayFraction"},
+     {"FireAPI_1", "fire:oxygenLimit"},
+     {"LampAPI_1", "lamp:heatFraction"},
+     {"LampAPI_1", "lamp:blinkDuty"},
+     {"LampAPI_1", "lamp:initialCommand"}}};
+// A fraction whose fallback is a sentinel outside 0..1 that means "unset".
+struct FractionOrUnset {
+    std::string_view schema, attribute;
+    double unset;
+};
+constexpr std::array<FractionOrUnset, 1> kFractionsOrUnset{
+    {{"ElectricalMotorAPI_1", "elec:gearBackEfficiency", -1.0}}};
 struct JointTarget {
     std::string_view schema, relationship;
 };
@@ -121,6 +135,29 @@ std::optional<SchemaAttribute> schemaAttribute(const std::string& schema,
     return out;
 }
 
+std::optional<double> fireGrowthAlpha(std::string_view name) {
+    // NBSIR 85-3167 (Evans and Stroup 1985), the DETACT-T2 listing: W/s².
+    constexpr double kSlow = 2.9306;
+    constexpr double kMedium = 11.722;
+    constexpr double kFast = 46.889;
+    // 1000 Btu/s (1055.056 W per Btu/s, the International Table Btu) reached at 75 s.
+    // TODO(verify): the ultrafast class against NFPA 72's annex, not openly readable.
+    constexpr double kUltrafast = 1.055056e6 / (75.0 * 75.0);
+    if (name == "slow") {
+        return kSlow;
+    }
+    if (name == "medium") {
+        return kMedium;
+    }
+    if (name == "fast") {
+        return kFast;
+    }
+    if (name == "ultrafast") {
+        return kUltrafast;
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> checkSchemaReal(const std::string& schema, const std::string& attribute,
                                            double value) {
     if (!std::isfinite(value)) {
@@ -130,6 +167,13 @@ std::optional<std::string> checkSchemaReal(const std::string& schema, const std:
         if (schema == rule.schema && attribute == rule.attribute &&
             !(value >= 0.0 && value <= 1.0)) {
             return attribute + " is " + std::to_string(value) + "; it must be within 0 to 1";
+        }
+    }
+    for (const FractionOrUnset& rule : kFractionsOrUnset) {
+        if (schema == rule.schema && attribute == rule.attribute && value != rule.unset &&
+            !(value >= 0.0 && value <= 1.0)) {
+            return attribute + " is " + std::to_string(value) + "; it must be within 0 to 1, or " +
+                   std::to_string(rule.unset) + " for unset";
         }
     }
     return std::nullopt;
@@ -235,7 +279,14 @@ void SchemaCollector::readProperty(const UsdPrim& prim, const UsdPrimDefinition&
     } else if (value.IsHolding<TfToken>()) {
         const TfToken token = value.UncheckedGet<TfToken>();
         VtTokenArray allowed;
-        if (definition.GetPropertyMetadata(property, SdfFieldKeys->AllowedTokens, &allowed) &&
+        // sensmat:preset also takes the presets added after the schema was frozen (grass,
+        // wet_grass, tall_grass, reeds, shrub: surfaceMaterialPreset), which the frozen 1.x
+        // schema's allowedTokens cannot list. TODO: list them in the schema by an RFC.
+        SurfaceMaterial known;
+        const bool laterPreset =
+            name.GetString() == "sensmat:preset" && surfaceMaterialPreset(token.GetString(), known);
+        if (!laterPreset &&
+            definition.GetPropertyMetadata(property, SdfFieldKeys->AllowedTokens, &allowed) &&
             !allowed.empty() && std::find(allowed.begin(), allowed.end(), token) == allowed.end()) {
             std::string list;
             for (const TfToken& a : allowed) {
@@ -266,6 +317,9 @@ void SchemaCollector::readProperty(const UsdPrim& prim, const UsdPrimDefinition&
     } else if (value.IsHolding<GfVec3d>()) {
         const GfVec3d& v = value.UncheckedGet<GfVec3d>();
         s.realArrays.emplace(key, std::vector<double>{v[0], v[1], v[2]});
+    } else if (value.IsHolding<GfVec3f>()) {  // color3f (lamp:color)
+        const GfVec3f& v = value.UncheckedGet<GfVec3f>();
+        s.realArrays.emplace(key, std::vector<double>{v[0], v[1], v[2]});
     } else {
         note_(where + ": values of type " + attribute.GetTypeName().GetAsToken().GetString() +
               " are not read yet");
@@ -288,6 +342,15 @@ void SchemaCollector::check(const UsdPrim& prim, const SchemaInstance& s) {
         if (s.schema == rule.schema && value && !(*value >= 0.0 && *value <= 1.0)) {
             errors_.get().push_back(path + ": " + std::string(rule.attribute) + " is " +
                                     std::to_string(*value) + "; it must be within 0 to 1");
+        }
+    }
+    for (const FractionOrUnset& rule : kFractionsOrUnset) {
+        const std::optional<double> value = s.real(rule.attribute);
+        if (s.schema == rule.schema && value && *value != rule.unset &&
+            !(*value >= 0.0 && *value <= 1.0)) {
+            errors_.get().push_back(path + ": " + std::string(rule.attribute) + " is " +
+                                    std::to_string(*value) + "; it must be within 0 to 1, or " +
+                                    std::to_string(rule.unset) + " for unset");
         }
     }
     for (const JointTarget& rule : kJointTargets) {

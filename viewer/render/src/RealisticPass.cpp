@@ -78,6 +78,97 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     settings.snowMmPerH = options.snowMmPerH;
     settings.wind = options.wind;
     settings.seconds = frame != nullptr ? static_cast<double>(frame->simTimeNs) * 1e-9 : 0.0;
+    lamps_.clear();
+    for (const RenderOptions::Lamp& from : options.lamps) {
+        gpu::RealisticLamp& lamp = lamps_.emplace_back();
+        lamp.position = from.position;
+        lamp.axis = from.axis;
+        lamp.intensity = from.intensity;
+        lamp.beamAngle = from.beamAngle;
+        lamp.fieldAngle = from.fieldAngle;
+        lamp.point = from.point;
+        if (from.colorTemperature > 0.0) {
+            lamp.color = gpu::colorOfTemperature(from.colorTemperature);
+        } else {
+            // lamp:color, normalised to luminance 1 (Rec. 709 weights, sRGB's Y row).
+            const std::array<float, 3>& c = from.color;
+            const float y = 0.2126F * c[0] + 0.7152F * c[1] + 0.0722F * c[2];
+            lamp.color = y > 0.0F ? std::array<float, 3>{c[0] / y, c[1] / y, c[2] / y}
+                                  : std::array<float, 3>{0.0F, 0.0F, 0.0F};
+        }
+    }
+    settings.lamps = lamps_;
+    rotors_.clear();
+    for (const RenderOptions::Rotor& from : options.rotors) {
+        rotors_.push_back(
+            {from.hub, from.thrustAxis, from.radius, from.induced, from.thrust, from.group});
+    }
+    settings.rotors = rotors_;
+    settings.skyIlluminance = options.skyIlluminance;
+    settings.waterCdom = options.waterCdom;
+    if (const auto& moving = options.waterSurface) {
+        settings.waterSurface.cells = moving->cells;
+        settings.waterSurface.cell = moving->cell;
+        settings.waterSurface.first = moving->first;
+        settings.waterSurface.heights = moving->heights;
+        settings.waterSurface.foam = moving->foam;
+        settings.waterSurface.friction = moving->friction;
+        settings.waterSurface.relief = options.waterRelief;
+    }
+    if (const auto& cut = options.cutPlants) {
+        settings.cutPlants.cells = cut->cells;
+        settings.cutPlants.cell = cut->cell;
+        settings.cutPlants.first = cut->first;
+        settings.cutPlants.level = cut->level;
+        settings.cutPlants.tops = cut->tops;
+    }
+    trees_.clear();
+    for (const RenderOptions::Tree& from : options.trees) {
+        gpu::RealisticTree& tree = trees_.emplace_back();
+        tree.foot = from.foot;
+        tree.rotation = from.rotation;
+        tree.height = from.height;
+        tree.crownRadius = from.crownRadius;
+        tree.crownBase = from.crownBase;
+        tree.trunkDiameter = from.trunkDiameter;
+        tree.sway = from.sway;
+        tree.seed = from.seed;
+    }
+    settings.trees = trees_;
+    if (options.treeCuts != treeCutsOf_) {
+        treeCutsOf_ = options.treeCuts;
+        treeCuts_.clear();
+        if (const auto& cuts = options.treeCuts) {
+            treeCuts_.reserve(cuts->size());
+            for (const RenderOptions::TreeCut& from : *cuts) {
+                treeCuts_.push_back({from.tree, from.cell});
+            }
+        }
+    }
+    settings.treeCuts = treeCuts_;
+    leaves_.clear();
+    if (const auto& leaves = options.leaves) {
+        for (const RenderOptions::Leaf& from : *leaves) {
+            leaves_.push_back({from.position, from.yaw, from.pitch, from.size});
+        }
+    }
+    settings.leaves = leaves_;
+    if (const auto& spray = options.spray3d) {
+        // The drops' extinction per kg/m³ of water: Q_ext = 2 for drops much larger than the
+        // wavelength (van de Hulst 1957, §8.42), 3/(ρ_w·D) per kg/m³, over the aerodynamics
+        // domain's equal shares of 50, 150 and 450 µm drops (downwash.md §5b).
+        constexpr double kWaterDensity = 1000.0;                            // kg/m³
+        constexpr std::array<double, 3> kDiameters{50e-6, 150e-6, 450e-6};  // m
+        double perKg = 0.0;
+        for (const double d : kDiameters) {
+            perKg += 3.0 / (kWaterDensity * d) / static_cast<double>(kDiameters.size());
+        }
+        settings.spray.cells = spray->cells;
+        settings.spray.cell = spray->cell;
+        settings.spray.first = spray->first;
+        settings.spray.water = spray->water;
+        settings.spray.extinctionPerKg = perKg;
+    }
     return renderer_.record(commands, draws_, view, settings, meshes, color, depth);
 }
 

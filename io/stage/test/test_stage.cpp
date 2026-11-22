@@ -1036,7 +1036,262 @@ apply:
         << again.error();
 }
 
+// RFC 0020 §4.4: a power screw's efficiencies against Shigley's power-screw torques (Budynas and
+// Nisbett, ch. 8): raising T_R = F·dm/2·(l + π·f·dm·sec α)/(π·dm − f·l·sec α), lowering
+// T_L = F·dm/2·(π·f·dm·sec α − l)/(π·dm + f·l·sec α); η = F·l/(2π·T_R), η_back = −2π·T_L/(F·l),
+// self-locking when T_L ≥ 0. Exact for a square thread; with a flank angle Shigley takes α where
+// the screw takes the angle in the normal plane, αn = atan(tan α·cos λ), a hair apart.
+TEST(LeadScrew, EfficienciesMatchThePowerScrewTorques) {
+    const auto shigley = [](double l, double dm, double f, double alpha) {
+        const double sec = 1.0 / std::cos(alpha);
+        const double pi = std::numbers::pi;
+        const double raise = dm / 2.0 * (l + pi * f * dm * sec) / (pi * dm - f * l * sec);
+        const double lower = dm / 2.0 * (pi * f * dm * sec - l) / (pi * dm + f * l * sec);
+        return std::array<double, 2>{l / (2.0 * pi * raise), -2.0 * pi * lower / l};
+    };
+    // A ball screw 16×5 (rolling friction 0.005, as a square thread): back-drivable.
+    const auto ball = leadScrewGear({0.005, 0.016, 0.005, 0.0});
+    ASSERT_TRUE(ball) << ball.error();
+    const auto ballRef = shigley(0.005, 0.016, 0.005, 0.0);
+    EXPECT_NEAR(ball->efficiency, ballRef[0], 1e-12);
+    EXPECT_NEAR(ball->backEfficiency, ballRef[1], 1e-12);
+    EXPECT_NEAR(ball->efficiency, 0.9517, 1e-4);
+    EXPECT_NEAR(ball->backEfficiency, 0.9493, 1e-4);
+    EXPECT_NEAR(ball->gearRatio, 2.0 * std::numbers::pi / 0.005, 1e-9);
+    EXPECT_FALSE(ball->selfLocking());
+    // A trapezoidal Tr12×2 (pitch diameter 11 mm, 15° flanks, f = 0.15): self-locking.
+    const auto trapezoidal = leadScrewGear({0.002, 0.011, 0.15, 15.0 * std::numbers::pi / 180.0});
+    ASSERT_TRUE(trapezoidal) << trapezoidal.error();
+    const auto trapRef = shigley(0.002, 0.011, 0.15, 15.0 * std::numbers::pi / 180.0);
+    EXPECT_NEAR(trapezoidal->efficiency, trapRef[0], 1e-4);
+    EXPECT_NEAR(trapezoidal->efficiency, 0.2691, 1e-4);
+    EXPECT_LT(trapRef[1], 0.0) << "Shigley: T_L > 0, it must be driven down";
+    EXPECT_EQ(trapezoidal->backEfficiency, 0.0);
+    EXPECT_TRUE(trapezoidal->selfLocking());
+    EXPECT_GT(trapezoidal->frictionAngle, trapezoidal->leadAngle);
+    // The same thread square: exact.
+    const auto square = leadScrewGear({0.002, 0.011, 0.15, 0.0});
+    ASSERT_TRUE(square);
+    EXPECT_NEAR(square->efficiency, shigley(0.002, 0.011, 0.15, 0.0)[0], 1e-12);
+    // Out of range.
+    EXPECT_FALSE(leadScrewGear({0.0, 0.011, 0.15, 0.0}));
+    EXPECT_FALSE(leadScrewGear({0.002, 0.011, -0.1, 0.0}));
+    EXPECT_FALSE(leadScrewGear({0.002, 0.011, 0.1, 1.6}));
+    EXPECT_FALSE(leadScrewGear({0.002, 0.011, 1e6, 0.0})) << "too much friction to drive";
+}
+
+// The overlay's lead_screw: sets a motor's gear ratio and both efficiencies; beside any of them
+// it is refused, as are unknown keys.
+TEST(LeadScrew, TheOverlaySetsTheMotorsGearFromTheThread) {
+    const char* const lift = R"(#usda 1.0
+(
+    defaultPrim = "lift"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "lift"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "carriage" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 5
+    }
+    def PhysicsPrismaticJoint "slide" ( prepend apiSchemas = ["PhysicsDriveAPI:linear"] )
+    {
+        rel physics:body0 = </lift/base>
+        rel physics:body1 = </lift/carriage>
+        uniform token physics:axis = "Z"
+    }
+}
+)";
+    const auto overlayWith = [](const std::string& name, const std::string& extra) {
+        return writeText(name, R"(schema_version: 1
+apply:
+  - prim: slide
+    create_child: screw_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.5
+        elec:inductance: 0.0005
+        elec:torqueConstant: 0.1
+        elec:maxCurrent: 15
+        elec:motorType: dc_brushed
+        elec:joint: slide
+)" + extra);
+    };
+    auto model = loadStage(writeText("lift.usda", lift).string());
+    ASSERT_TRUE(model) << model.error();
+    const auto applied = applyOverlay(
+        *model, overlayWith("lift.overlay.yaml",
+                            "        lead_screw: {lead: 0.002, diameter: 0.011, friction: 0.15, "
+                            "thread_angle: 0.2618}\n")
+                    .string());
+    ASSERT_TRUE(applied) << applied.error();
+    const SchemaInstance* motor = only(model->world, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    const auto gear = leadScrewGear({0.002, 0.011, 0.15, 0.2618});
+    ASSERT_TRUE(gear);
+    EXPECT_EQ(motor->real("elec:gearRatio"), gear->gearRatio);
+    EXPECT_EQ(motor->real("elec:gearEfficiency"), gear->efficiency);
+    EXPECT_EQ(motor->real("elec:gearBackEfficiency"), 0.0);
+
+    for (const auto& [extra, says] :
+         {std::pair<std::string, std::string>{"        elec:gearRatio: 3000\n        lead_screw: "
+                                              "{lead: 0.002, diameter: 0.011, friction: 0.1}\n",
+                                              "give one or the other"},
+          {"        lead_screw: {lead: 0.002, diameter: 0.011, friction: 0.1, pitch: 2}\n",
+           "pitch is not one of"},
+          {"        lead_screw: {lead: 0.002, friction: 0.1}\n", "is a map of lead"},
+          {"        lead_screw: {lead: -0.002, diameter: 0.011, friction: 0.1}\n",
+           "must be positive"}}) {
+        auto fresh = loadStage(writeText("lift.usda", lift).string());
+        ASSERT_TRUE(fresh);
+        const auto refused =
+            applyOverlay(*fresh, overlayWith("lift_bad.overlay.yaml", extra).string());
+        ASSERT_FALSE(refused) << extra;
+        EXPECT_NE(refused.error().find(says), std::string::npos) << refused.error();
+    }
+    // The loader refuses a back efficiency out of 0..1 other than the fallback −1.
+    EXPECT_FALSE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", -1.0));
+    EXPECT_FALSE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", 0.4));
+    EXPECT_TRUE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", 1.3));
+    EXPECT_TRUE(checkSchemaReal("ElectricalMotorAPI_1", "elec:gearBackEfficiency", -0.5));
+}
+
 // RFC 0011: a tether from a new prim (the ground station, placed by its anchor point) to a link.
+// RFC 0021: a lamp on a prim under a link, placed in its body, with its colour (a color3f).
+TEST(Lamps, ALampPrimIsPlacedInItsBody) {
+    auto model = loadStage(writeText("lampbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+        double3 xformOp:translate = (0, 0, 0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Xform "beacon" ( prepend apiSchemas = ["LampAPI_1"] )
+        {
+            uniform token lamp:kind = "beacon"
+            double lamp:luminousIntensity = 250
+            double lamp:beamAngle = 0.3
+            color3f lamp:color = (1, 0.5, 0)
+            double lamp:rotationSpeed = 6.283
+            double3 xformOp:translate = (0.1, 0, 0.3)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const World& w = model->world;
+    const SchemaInstance* lamp = only(w, "LampAPI_1");
+    ASSERT_NE(lamp, nullptr);
+    const WorldView view(w);
+    EXPECT_EQ(view.primPath(lamp->prim), "/bot/base/beacon");
+    EXPECT_EQ(lamp->token("lamp:kind"), "beacon");
+    EXPECT_EQ(lamp->real("lamp:luminousIntensity"), 250.0);
+    EXPECT_EQ(lamp->real("lamp:blinkDuty"), 0.5);  // the fallback
+    const auto color = lamp->realArray("lamp:color");
+    EXPECT_EQ(std::vector<double>(color.begin(), color.end()),
+              (std::vector<double>{1.0, 0.5, 0.0}));
+    EXPECT_EQ(w.bodies.names[w.prims.body[lamp->prim.index].index], "base");
+    const Pose& at = w.prims.poseInBody[lamp->prim.index];
+    EXPECT_NEAR(at.position[0], 0.1, 1e-12);
+    EXPECT_NEAR(at.position[2], 0.3, 1e-12);
+}
+
+TEST(Lamps, AFractionOutsideZeroToOneIsRefused) {
+    auto model = loadStage(writeText("lampbad.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+        def Xform "led" ( prepend apiSchemas = ["LampAPI_1"] )
+        {
+            uniform token lamp:kind = "point"
+            double lamp:luminousIntensity = 1
+            double lamp:blinkDuty = 1.5
+        }
+    }
+}
+)")
+                               .string());
+    ASSERT_FALSE(model);
+    EXPECT_NE(model.error().find("lamp:blinkDuty"), std::string::npos) << model.error();
+}
+
+// RFC 0021: an overlay's lamps: list places a new prim on a link and applies its schemas.
+TEST(Overlay, PlacesALampOnALink) {
+    auto model = loadStage(writeText("lampover.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("lampover.overlay.yaml", R"(schema_version: 1
+lamps:
+  - name: headlamp
+    link: base
+    xyz: [0.3, 0.0, 0.2]
+    rpy: [0.0, 0.2, 0.0]
+    schemas:
+      LampAPI_1:
+        lamp:luminousIntensity: 1200.0
+        lamp:beamAngle: 0.5
+        lamp:colorTemperature: 5000.0
+        lamp:color: [1.0, 0.9, 0.8]
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World& w = model->world;
+    const SchemaInstance* lamp = only(w, "LampAPI_1");
+    ASSERT_NE(lamp, nullptr);
+    EXPECT_EQ(WorldView(w).primPath(lamp->prim), "/bot/base/headlamp");
+    EXPECT_EQ(lamp->real("lamp:luminousIntensity"), 1200.0);
+    EXPECT_EQ(lamp->token("lamp:kind"), "spot");  // the fallback
+    EXPECT_EQ(lamp->realArray("lamp:color").size(), 3U);
+    EXPECT_EQ(w.bodies.names[w.prims.body[lamp->prim.index].index], "base");
+    const Pose& at = w.prims.poseInBody[lamp->prim.index];
+    EXPECT_NEAR(at.position[0], 0.3, 1e-12);
+    EXPECT_NEAR(at.position[2], 0.2, 1e-12);
+    EXPECT_NEAR(at.orientation[0], std::cos(0.1), 1e-12);  // pitch 0.2 about y
+    EXPECT_NEAR(at.orientation[2], std::sin(0.1), 1e-12);
+
+    const std::filesystem::path bad = writeText("lampbad.overlay.yaml", R"(schema_version: 1
+lamps:
+  - {name: x, link: nowhere, schemas: {LampAPI_1: {lamp:luminousIntensity: 1.0}}}
+)");
+    auto again = loadStage(scratch("lampover.usda").string());
+    ASSERT_TRUE(again) << again.error();
+    const auto refused = applyOverlay(*again, bad.string());
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().find("nowhere"), std::string::npos) << refused.error();
+}
+
 TEST(Overlay, AppliesATether) {
     auto model = loadStage(writeText("tetherbot.usda", R"(#usda 1.0
 (
@@ -1084,6 +1339,155 @@ apply:
     EXPECT_EQ(tether->real("tether:linearDensity"), 0.03);
     EXPECT_EQ(tether->token("tether:winch"), "tension");
     EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
+}
+
+// RFC 0020: a suction cup and a magnet from an overlay, collected with their fallbacks, and a
+// porous surface's sensmat:airPermeability.
+TEST(Overlay, AppliesGrippers) {
+    auto model = loadStage(writeText("gripbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "tool" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 0.5
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("gripbot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: tool
+    schemas:
+      SuctionGripperAPI_1:
+        act:suction:diameter: 0.04
+        act:suction:volume: 2.0e-5
+        act:suction:flow: 1.0e-4
+        act:suction:ultimatePressure: 20000.0
+      MagnetGripperAPI_1:
+        act:magnet:turns: 400
+        act:magnet:poleArea: 4.0e-4
+        act:magnet:coilResistance: 12.0
+        act:magnet:ratedVoltage: 24.0
+        act:magnet:kind: electropermanent
+      SensorMaterialAPI_1:
+        sensmat:airPermeability: 1.0e-6
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World& w = model->world;
+    const SchemaInstance* cup = only(w, "SuctionGripperAPI_1");
+    ASSERT_NE(cup, nullptr);
+    EXPECT_EQ(cup->real("act:suction:diameter"), 0.04);
+    EXPECT_EQ(cup->real("act:suction:ultimatePressure"), 20000.0);
+    EXPECT_EQ(cup->real("act:suction:sealGap"), 0.002);  // the fallbacks
+    EXPECT_EQ(cup->real("act:suction:maxTilt"), 0.26);
+    const auto axis = cup->realArray("act:suction:axis");
+    EXPECT_EQ(std::vector<double>(axis.begin(), axis.end()), (std::vector<double>{0, 0, 1}));
+    const SchemaInstance* magnet = only(w, "MagnetGripperAPI_1");
+    ASSERT_NE(magnet, nullptr);
+    EXPECT_EQ(magnet->token("act:magnet:kind"), "electropermanent");
+    EXPECT_EQ(magnet->real("act:magnet:turns"), 400.0);
+    EXPECT_FALSE(magnet->real("act:magnet:ironPermeability"));  // required only with a path
+    const SchemaInstance* surface = only(w, "SensorMaterialAPI_1");
+    ASSERT_NE(surface, nullptr);
+    EXPECT_EQ(surface->real("sensmat:airPermeability"), 1.0e-6);
+}
+
+// RFC 0022: a fuel item in USD keeps its fire attributes; an overlay names a t² growth class
+// for fire:alpha (NBSIR 85-3167's fast, 46.889 W/s²), and a radiative fraction over 1 is refused.
+TEST(Overlay, AppliesAFire) {
+    auto model = loadStage(writeText("firebot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+    }
+    def Cube "tray" ( prepend apiSchemas = ["PhysicsCollisionAPI", "FireAPI_1"] )
+    {
+        double size = 1
+        token fire:growth = "pool"
+        uniform token fire:class = "b"
+        double fire:poolBurningRate = 0.1
+        double fire:poolExtinction = 1.1
+        double fire:fuelMass = 5
+        double fire:heatOfCombustion = 4.4e7
+        double fire:radiativeFraction = 0.3
+        double fire:sootYield = 0.03
+        double[] fire:hrrCurve = [0, 0, 10, 1000]
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    {
+        const SchemaInstance* tray = only(model->world, "FireAPI_1");
+        ASSERT_NE(tray, nullptr);
+        EXPECT_EQ(tray->token("fire:growth"), "pool");
+        EXPECT_EQ(tray->token("fire:class"), "b");
+        EXPECT_EQ(tray->real("fire:poolExtinction"), 1.1);
+        EXPECT_EQ(tray->real("fire:ignitionTime"), -1.0);  // the fallback
+        EXPECT_EQ(tray->real("fire:decayFraction"), 0.2);  // the fallback
+        EXPECT_FALSE(tray->real("fire:alpha"));            // no fallback
+        EXPECT_EQ(tray->realArray("fire:hrrCurve").size(), 4U);
+    }
+    const std::filesystem::path overlay = writeText("firebot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: base
+    schemas:
+      FireAPI_1:
+        fire:alpha: fast
+        fire:hrrPerArea: 5.0e5
+        fire:fuelMass: 20
+        fire:heatOfCombustion: 1.2e7
+        fire:radiativeFraction: 0.3
+        fire:sootYield: 0.015
+        fire:criticalWaterRate: 0.05
+        fire:ignitionTime: 2.5
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string()));
+    const WorldView view(model->world);
+    const SchemaInstance* base = nullptr;
+    for (const SchemaInstance* s : view.instancesOf("FireAPI_1")) {
+        if (view.signalInstanceName(s->prim) == "base") {
+            base = s;
+        }
+    }
+    ASSERT_NE(base, nullptr);
+    EXPECT_EQ(base->real("fire:alpha"), 46.889);
+    EXPECT_EQ(base->real("fire:ignitionTime"), 2.5);
+    EXPECT_EQ(base->token("fire:growth"), "t_squared");  // the fallback
+    EXPECT_FALSE(fireGrowthAlpha("brisk"));
+    ASSERT_TRUE(fireGrowthAlpha("ultrafast"));
+    EXPECT_NEAR(*fireGrowthAlpha("ultrafast") * 75.0 * 75.0, 1.055056e6, 1e-3);
+
+    auto bad = loadStage(writeText("firebot2.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Cube "tray" ( prepend apiSchemas = ["PhysicsCollisionAPI", "FireAPI_1"] )
+    {
+        double fire:radiativeFraction = 1.4
+    }
+}
+)")
+                             .string());
+    ASSERT_FALSE(bad);
+    EXPECT_NE(bad.error().find("fire:radiativeFraction"), std::string::npos) << bad.error();
 }
 
 // A radar from an overlay, as the robot builder writes one (catalog `overlay_only`), is the

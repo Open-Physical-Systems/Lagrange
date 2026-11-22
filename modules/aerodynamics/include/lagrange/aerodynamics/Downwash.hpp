@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace lagrange::aerodynamics {
@@ -42,8 +43,23 @@ struct Wind;
 /// Wake skew in wind or forward flight follows the air relative to the group: the wake column
 /// leans along −n·v_i + (air − vehicle), Leishman's skew angle tan χ = μ/λ_i.
 ///
+/// Water (setWater; docs/physics/downwash.md §5a "Over water"): a wake meets a
+/// body of water's surface as it meets the ground, and turns into the same outwash over it; the
+/// air under the surface does not move. The surface's normal load (surfacePressure) and the
+/// outwash's friction velocity on it (surfaceFriction) are what the water's height field and
+/// its spray take.
+///
 /// Not modelled: inflow above the disc, the wake's swirl, rotor-rotor interference within one
-/// drone, unsteadiness (the mean flow only), obstacles other than the ground plane.
+/// drone, unsteadiness (the mean flow only), obstacles other than the ground plane, the boxes
+/// and still water.
+/// The trees' broad phase (ground.md "The orchard"): a crown farther from every wake column
+/// (Downwash::wakeDistance) than this many times the spread of its five air samples (half its
+/// radius) takes the air at its centre alone, not the mean of the five: the field is smooth on
+/// the scale of that distance, so the mean differs from the centre by about (spread/distance)²
+/// of it (the symmetric samples cancel to first order). test_downwash
+/// `FarFromTheWakeTheCrownsCentreStandsForItsMean` bounds the difference.
+inline constexpr double kCrownWakeFar = 10.0;
+
 class Downwash {
 public:
     using Vec3 = std::array<double, 3>;
@@ -79,6 +95,19 @@ public:
     /// distance (m) and its outward unit normal; distance infinite without one.
     [[nodiscard]] double nearestWall(const Vec3& x, Vec3& normal) const;
 
+    /// Bodies of water (WaterAPI_1): the still surface's middle and its half size along x and
+    /// y; the surface is level (normal +z). A wake stops on the first surface it meets.
+    struct WaterSurface {
+        std::string name;  // its prim's, as in the water/<name>/ signals
+        Vec3 centre{};
+        double halfX{0.0}, halfY{0.0};
+    };
+    void setWater(std::vector<WaterSurface> water) { water_ = std::move(water); }
+    [[nodiscard]] const std::vector<WaterSurface>& water() const { return water_; }
+    /// The body of water whose surface is over or at `x` (its x, y inside, z at or under its
+    /// level), or −1.
+    [[nodiscard]] int waterUnder(const Vec3& x) const;
+
     /// Takes this step's rotors and, per group, the air's velocity relative to the vehicle
     /// (m/s, world; for the skew), indexed by group (shorter: zero).
     void update(std::span<const Rotor> rotors, std::span<const Vec3> relativeAir = {});
@@ -89,6 +118,21 @@ public:
     /// The largest outwash speed at the ground over all groups (m/s, at the wall jet's peak
     /// height and radius); 0 without a ground or an active group.
     [[nodiscard]] double peakOutwash() const;
+
+    /// The normal load on the surface a wake meets, at `x` on it (Pa, with the air's density
+    /// `rhoAir`), over every group whose wake stops on that surface (`water` its body of water,
+    /// −1 for the ground or a box): the stagnation pressure ½·ρ·u_n², u_n the free jet's speed
+    /// along the surface normal at a point √2 times nearer each jet's axis (the near wake's and
+    /// the merged jet's ½ρu² blended where they merge). The √2 widens the
+    /// jet's ½ρu² to the wall pressure of an impinging jet, which carries its whole momentum
+    /// flux: ∫p dA = ∫ρu² dA, the thrust far below a rotor. Without a surface, 0.
+    [[nodiscard]] double surfacePressure(const Vec3& x, double rhoAir, int water = -1) const;
+    /// The outwash on that surface at `x`: its velocity at the wall jet's peak height (m/s,
+    /// along the surface), the largest it has across the layer there.
+    [[nodiscard]] Vec3 surfaceOutwash(const Vec3& x, int water = -1) const;
+    /// Its friction velocity u* there (m/s, along the surface, the way the outwash goes):
+    /// kWallJetFriction times surfaceOutwash; the shear stress on the surface is ρ·|u*|·u*.
+    [[nodiscard]] Vec3 surfaceFriction(const Vec3& x, int water = -1) const;
 
     /// The groups after update(), for tests and drawing.
     struct Group {
@@ -102,7 +146,8 @@ public:
         // Where the wake meets a surface (the ground or a box face), and the jet arriving there.
         bool hits{false};
         Vec3 hitPoint{}, hitNormal{};
-        int hitBox{-1};       // -1: the ground
+        int hitBox{-1};       // -1: the ground or water
+        int hitWater{-1};     // the body of water it stops on, -1 for none
         int hitAxis{0};       // the box face's axis (0..2) ...
         double hitSide{1.0};  // ... and side (±1)
         double arriveSpeed{0.0}, arriveRadius{0.0};
@@ -110,9 +155,20 @@ public:
         std::vector<std::pair<Vec3, Vec3>> walls;
     };
     [[nodiscard]] const std::vector<Group>& groups() const { return groups_; }
+    /// How far `x` is from a group's wake column (m): from the segment from its mean hub to where
+    /// the wake meets a surface (or the ray down its axis when it meets none), less half its
+    /// motor-to-motor diagonal.
+    [[nodiscard]] static double wakeDistance(const Group& g, const Vec3& x);
 
 private:
-    [[nodiscard]] double axialSpeed(const Group& g, const Vec3& x, double& s) const;
+    /// The free jet's speed along its axis at `x` (m/s; `s` the distance along it), its lateral
+    /// distances divided by `widen` (1: the jet; √2: its wall pressure).
+    [[nodiscard]] double axialSpeed(const Group& g, const Vec3& x, double& s,
+                                    double widen = 1.0) const;
+    /// The near wake's and the merged jet's speeds there, and the merge weight β of the far.
+    double jetParts(const Group& g, const Vec3& x, double& s, double widen, double& near,
+                    double& far) const;
+    std::vector<WaterSurface> water_;
     bool hasGround_{false};
     Vec3 groundPoint_{}, groundNormal_{0.0, 0.0, 1.0};
     std::vector<Group> groups_;
@@ -140,6 +196,11 @@ inline constexpr double kJetMergeEnd = 2.5;    // l: fully merged, where their f
 /// The jet's radial profile, U/U_C at ξ = r/r½ (Bauersfeld et al. eq. 3, after Pope, Turbulent
 /// Flows, 2000).
 [[nodiscard]] double farJetProfile(double xi);
+
+/// u*/u_m of a wall jet: √(c_f/2) with c_f ≈ 0.005 (TODO(verify): the radial wall jet's skin
+/// friction, e.g. Poreh et al. 1967). For the dust the outwash lifts and the stress it puts on
+/// water.
+inline constexpr double kWallJetFriction = 0.05;
 
 /// Tanner et al. (2015) outwash fit, for a single rotor 1 R above the ground (the calibration):
 /// peak 1.9 V_h at 1.7 R, peak height 0.05 R, layer 0.15 R deep. The near wake arrives there at

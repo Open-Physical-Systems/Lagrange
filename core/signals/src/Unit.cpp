@@ -10,7 +10,7 @@ namespace lagrange {
 
 namespace {
 
-constexpr std::array<std::string_view, 37> kKindNames{
+constexpr std::array<std::string_view, 41> kKindNames{
     "Unspecified",
     "Torque",
     "Energy",
@@ -48,6 +48,10 @@ constexpr std::array<std::string_view, 37> kKindNames{
     "MomentOfInertia",
     "Duration",
     "DataRate",
+    "LuminousIntensity",
+    "LuminousFlux",
+    "Illuminance",
+    "LuminousEfficacy",
 };
 
 /// A symbol the parser accepts, with its dimension.
@@ -58,7 +62,7 @@ struct Symbol {
 
 // Coherent SI units only: schema values are SI (docs/design/formats.md §2), so no prefixes and
 // no scaled units such as h or degC.
-constexpr std::array<Symbol, 23> kSymbols{{
+constexpr std::array<Symbol, 25> kSymbols{{
     {"m", {.length = 1}},
     {"kg", {.mass = 1}},
     {"s", {.time = 1}},
@@ -82,6 +86,8 @@ constexpr std::array<Symbol, 23> kSymbols{{
     {"Gy", {.length = 2, .time = -2}},
     {"Bq", {.time = -1}},
     {"S", {.length = -2, .mass = -1, .time = 3, .current = 2}},
+    {"lm", {.luminous = 1, .angle = 2}},                // cd·sr
+    {"lx", {.length = -2, .luminous = 1, .angle = 2}},  // lm/m²
 }};
 
 constexpr Symbol kWeber{"Wb", {.length = 2, .mass = 1, .time = -2, .current = -1}};
@@ -93,7 +99,7 @@ struct Named {
     Unit unit;
 };
 
-constexpr std::array<Named, 32> kNamed{{
+constexpr std::array<Named, 36> kNamed{{
     {"1", "1", units::one},
     {"m", "m", units::m},
     {"m2", "m²", units::m2},
@@ -126,6 +132,10 @@ constexpr std::array<Named, 32> kNamed{{
     {"Bq", "Bq", units::Bq},
     {"W/m2", "W/m²", units::W_per_m2},
     {"1/m", "1/m", units::per_m},
+    {"cd", "cd", units::cd},
+    {"lm", "lm", units::lm},
+    {"lx", "lx", units::lx},
+    {"lm/W", "lm/W", units::lm_per_W},
 }};
 
 Dimension add(Dimension a, Dimension b, int sign) {

@@ -32,7 +32,11 @@ Expected<std::unique_ptr<ControllerHost>, std::string> ControllerHost::start(
     if (!joints) {
         return Unexpected{joints.error()};
     }
-    if (joints->empty()) {
+    auto gpios = controlGpios(urdf);
+    if (!gpios) {
+        return Unexpected{gpios.error()};
+    }
+    if (joints->empty() && gpios->empty()) {
         return Unexpected{std::string(
             "the robot has no <ros2_control> block with lagrange_ros2_control/LagrangeSystem")};
     }
@@ -42,6 +46,9 @@ Expected<std::unique_ptr<ControllerHost>, std::string> ControllerHost::start(
         table.clear();
         for (const ControlJoint& joint : *joints) {
             (void)table[joint.name];  // every slot exists before the plugin looks
+        }
+        for (const ControlGpio& gpio : *gpios) {
+            (void)table.gpio(gpio.name);
         }
     }
     auto impl = std::make_unique<Impl>();
@@ -118,6 +125,72 @@ Expected<std::vector<ControlJoint>, std::string> controlJoints(const std::string
                     control.gains.positionD = value;
                 } else if (key == "position_i") {
                     control.gains.positionI = value;
+                }
+            }
+            out.push_back(std::move(control));
+        }
+    }
+    return out;
+}
+
+Expected<std::vector<ControlGpio>, std::string> controlGpios(const std::string& urdf) {
+    tinyxml2::XMLDocument document;
+    if (document.Parse(urdf.c_str()) != tinyxml2::XML_SUCCESS) {
+        return Unexpected{std::string("the robot description is not valid XML")};
+    }
+    // RFC 0020 §4.1's names for a suction gripper's interfaces.
+    const auto aliased = [](const std::string& name) {
+        return name == "vacuum"    ? std::string("command")
+               : name == "holding" ? std::string("held")
+               : name == "tank"    ? std::string("tank_mass")
+                                   : name;
+    };
+    std::vector<ControlGpio> out;
+    const tinyxml2::XMLElement* robot = document.FirstChildElement("robot");
+    for (const tinyxml2::XMLElement* block =
+             robot != nullptr ? robot->FirstChildElement("ros2_control") : nullptr;
+         block != nullptr; block = block->NextSiblingElement("ros2_control")) {
+        const tinyxml2::XMLElement* hardware = block->FirstChildElement("hardware");
+        const tinyxml2::XMLElement* plugin =
+            hardware != nullptr ? hardware->FirstChildElement("plugin") : nullptr;
+        if (plugin == nullptr || plugin->GetText() == nullptr ||
+            std::string(plugin->GetText()) != "lagrange_ros2_control/LagrangeSystem") {
+            continue;
+        }
+        for (const tinyxml2::XMLElement* gpio = block->FirstChildElement("gpio"); gpio != nullptr;
+             gpio = gpio->NextSiblingElement("gpio")) {
+            ControlGpio control;
+            control.name = gpio->Attribute("name") != nullptr ? gpio->Attribute("name") : "";
+            if (control.name.empty()) {
+                return Unexpected{std::string("a <gpio> of <ros2_control> has no name")};
+            }
+            for (const char* kind : {"command_interface", "state_interface"}) {
+                for (const tinyxml2::XMLElement* element = gpio->FirstChildElement(kind);
+                     element != nullptr; element = element->NextSiblingElement(kind)) {
+                    ControlGpio::Interface interface;
+                    interface.name =
+                        element->Attribute("name") != nullptr ? element->Attribute("name") : "";
+                    if (interface.name.empty()) {
+                        return Unexpected{"gpio " + control.name + ": an interface has no name"};
+                    }
+                    interface.signal = "act/" + control.name + "/" + aliased(interface.name);
+                    for (const tinyxml2::XMLElement* param = element->FirstChildElement("param");
+                         param != nullptr; param = param->NextSiblingElement("param")) {
+                        const char* key = param->Attribute("name");
+                        const char* text = param->GetText();
+                        if (key == nullptr || text == nullptr) {
+                            continue;
+                        }
+                        if (std::string(key) == "signal") {
+                            interface.signal = text;
+                        } else if (std::string(key) == "unit") {
+                            interface.unit = text;
+                        } else if (std::string(key) == "type") {
+                            interface.type = text;
+                        }
+                    }
+                    (std::string(kind) == "command_interface" ? control.commands : control.states)
+                        .push_back(std::move(interface));
                 }
             }
             out.push_back(std::move(control));

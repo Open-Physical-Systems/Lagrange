@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """lagrange: the simulator and its viewer from one command, like `gazebo`.
 
+lagrange                        the viewer on its launcher, from zero: start a local simulator,
+    connect to one, open a recording or build a robot (as `lagrange viewer`)
 lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml | PROFILE.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
     the server and the viewer together; closing the viewer stops the server. Your robot starts
     still, on an empty ground unless you name a world, each joint commanded on /joint_commands.
@@ -9,6 +11,9 @@ lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml | PROFILE.yaml] [SERVER OPTIONS] [--
     with domains:) runs as `lagrange run PROFILE` does, with --robot and --world, in the viewer
 lagrange --server-only ...      the server alone, headless (like gzserver)
 lagrange viewer [VIEWER OPTIONS]  the viewer alone (like gzclient)
+lagrange build [ROBOT.urdf|ROBOT.xacro] [VIEWER OPTIONS]
+    the viewer in the robot builder (RFC 0016), with that robot open when one is named;
+    no server is needed
 lagrange samples                the sample names
 lagrange empty                  the ground only; spawn robots into it (like an empty world)
 lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]
@@ -80,7 +85,7 @@ SEASONS = {
 def samples() -> dict[str, tuple[str, list[str], list[str], str | None]]:
     quad_site = ["--air-density", "1.225", "--geo-origin", "47.397742,8.545594,488"]
     return {
-        "amr": ("the sample AMR in the small warehouse (the default)", [], [], None),
+        "amr": ("the sample AMR in the small warehouse", [], [], None),
         "people": (
             "the sample AMR in the warehouse, with people walking round it",
             ["--humans", "6,radius=7"],
@@ -194,7 +199,14 @@ def asset_fetched(asset_id: str) -> bool:
         / "lagrange"
         / "assets"
     )
-    return (Path(root) / asset_id / "NOTICE").is_file()
+    if not (Path(root) / asset_id / "NOTICE").is_file():
+        return False
+    # Files made from the fetched ones (the Lexus's body and wheels) that a copy fetched by an
+    # older fetch_assets lacks: made now, without the network.
+    subprocess.run(
+        [executable("lagrange_assets", "fetch_assets"), "--derive", asset_id], check=False
+    )
+    return True
 
 
 def usage() -> None:
@@ -202,7 +214,8 @@ def usage() -> None:
     print("\nSamples:", ", ".join(samples()), "(lagrange samples)")
     print("Server options: lagrange_server --help; viewer options: lagrange viewer --help.")
     print(
-        "Examples:\n  lagrange\n  lagrange sedan\n  lagrange robot.urdf world.sdf --spawn 2,0"
+        "Examples:\n  lagrange\n  lagrange amr\n  lagrange build robot.urdf\n  lagrange sedan"
+        "\n  lagrange robot.urdf world.sdf --spawn 2,0"
         "\n  lagrange empty   (then, in another terminal: lagrange spawn robot.urdf --at 0,0)"
         "\n  lagrange --robot robot.usda --world none -- --follow 5"
     )
@@ -339,6 +352,7 @@ DOMAIN_OFF = {
     "vehicle_dynamics": "vehicle_dynamics",
     "traffic": "traffic",
     "humans": "humans",
+    "fire": "fire",
 }
 RUN_KEYS = {
     "robot",
@@ -358,6 +372,7 @@ RUN_KEYS = {
     "water",
     "sensor_timing",
     "sensor_faults",
+    "fire_water",
 }
 SITE_KEYS = {
     "gravity",
@@ -493,6 +508,16 @@ def run_file_args(path: str) -> list[str]:
             fail("water: each is {at: [x, y, surface height], size: [x, y], depth: m}")
         numbers = [*body["at"], *body["size"], body["depth"]]
         args += ["--water", ",".join(str(float(v)) for v in numbers)]
+    for water in run.get("fire_water") or []:
+        if (
+            not isinstance(water, dict)
+            or set(water) - {"fire", "rate", "at"}
+            or "fire" not in water
+        ):
+            fail("fire_water: each is {fire: NAME, rate: kg/(m2.s), at: s}")
+        assert isinstance(water, dict)
+        rate, start = float(water.get("rate", 0)), float(water.get("at", 0))
+        args += ["--fire-water", f"{water['fire']}={rate}@{start}"]
     if "record" in run:
         args += ["--record", str(base / str(run["record"]))]
     control = run.get("control", "joints")
@@ -539,6 +564,20 @@ def set_site(argv: list[str]) -> int:
         rclpy.try_shutdown()
 
 
+def build(argv: list[str]) -> NoReturn:
+    """The viewer straight in the robot builder, with a URDF or xacro open when one is named."""
+    viewer_args = ["--workspace", "builder"]
+    if argv and not argv[0].startswith("-"):
+        robot = Path(argv.pop(0))
+        if not robot.is_file():
+            sys.exit(f"lagrange build: no file '{robot}'")
+        if robot.suffix.lower() not in (".urdf", ".xacro"):
+            sys.exit(f"lagrange build: '{robot}' is not a .urdf or .xacro")
+        viewer_args += ["--builder-open", str(robot.resolve())]
+    viewer = executable("lagrange_viewer", "lagrange_viewer")
+    os.execv(viewer, [viewer, *viewer_args, *argv])
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "set":
         return set_site(argv[1:])
@@ -565,9 +604,12 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "foam-cht":
         tool = str(Path(__file__).resolve().parent / "lagrange_foam_cht")
         os.execv(tool, ["lagrange foam-cht", *argv[1:]])
-    if argv and argv[0] == "viewer":
+    if not argv or argv[0] == "viewer":
+        # Nothing named: the viewer on its launcher, whose Start local simulator runs a server.
         viewer = executable("lagrange_viewer", "lagrange_viewer")
         os.execv(viewer, [viewer, *argv[1:]])
+    if argv and argv[0] == "build":
+        return build(argv[1:])
     if argv and argv[0] == "spawn":
         return spawn(argv[1:])
     if argv and argv[0] == "delete":

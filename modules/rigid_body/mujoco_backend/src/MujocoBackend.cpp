@@ -1,5 +1,6 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/SurfaceContact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -192,6 +193,11 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
         s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, true));
         s.loadTorque =
             declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort, true));
+        // A Coulomb limit for the step on top of the joint's own friction: a screw's or worm's
+        // gear, which grows with the load (RFC 0020 §4.4). The latest value, not an average.
+        SignalSpec friction = spec(base + "/friction_limit", SignalType::Scalar, effort);
+        friction.optional = true;
+        s.frictionLimit = declarer.input(friction);
         s.acceleration = declarer.output(spec(base + "/acceleration", SignalType::Scalar,
                                               prismatic ? units::m_per_s2 : units::rad_per_s2));
         s.effectiveInertia = declarer.output(spec(base + "/effective_inertia", SignalType::Scalar,
@@ -314,7 +320,15 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
 
-    // Joints.
+    // Joints. Those whose friction limit has a writer (a screw that holds its load) get a stiff
+    // friction row: MuJoCo's soft constraints let a joint held by frictionloss creep at about
+    // r·f/b (r its regularisation, b its damping), 5 mm/s for a held weight at the default
+    // solref and solimp; at the stiffest impedance (mjMAXIMP) and the shortest time constant
+    // the step allows (2 dt, mjDSBL_REFSAFE's floor) it is about 1 µm/s.
+    std::vector<bool> stiffFriction(world.joints().names.size(), false);
+    for (const JointSignals& s : joints_) {
+        stiffFriction[s.joint] = s.frictionLimit.valid() && bus.connected(s.frictionLimit);
+    }
     const World::Joints& joints = world.joints();
     for (std::size_t j = 0; j < joints.names.size(); ++j) {
         if (joints.type[j] == JointType::Fixed) {
@@ -345,11 +359,25 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
         joint->damping[0] = joints.damping[j];
         joint->frictionloss = joints.friction[j];
+        if (stiffFriction[j]) {
+            joint->solref_friction[0] = 2.0 * dt.seconds();  // s, time constant
+            joint->solref_friction[1] = 1.0;                 // critically damped
+            joint->solimp_friction[0] = mjMAXIMP;
+            joint->solimp_friction[1] = mjMAXIMP;
+        }
         if (joints.type[j] != JointType::Continuous &&
             joints.lowerLimit[j] < joints.upperLimit[j]) {
             joint->limited = mjLIMITED_TRUE;
             joint->range[0] = joints.lowerLimit[j];
             joint->range[1] = joints.upperLimit[j];
+            // A stop, not a spring: at MuJoCo's default solver reference (a 20 ms time constant)
+            // a 20 g slider pushed with 2.5 N sat 2.5 mm past its limit, where Jolt's stays on it.
+            // The shortest time constant the step allows (2 dt, as the friction rows above) and
+            // the stiffest impedance hold it to a few µm (AJointLimitIsAStop).
+            joint->solref_limit[0] = 2.0 * dt.seconds();  // s, time constant
+            joint->solref_limit[1] = 1.0;                 // critically damped
+            joint->solimp_limit[0] = mjMAXIMP;
+            joint->solimp_limit[1] = mjMAXIMP;
         }
     }
 
@@ -423,7 +451,11 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
                 geom->pos[i] += up.at(i);
             }
         }
-        geom->friction[0] = colliders.friction[c];
+        // Its own friction times its surface's frictionScale (grass); rolling resistance is
+        // applied from the contacts each step (applyRollingResistance), not by condim 6.
+        geom->friction[0] = colliderFrictionOnSurface(world.raw(), c);
+        const std::string geomName = "collider_" + std::to_string(c);
+        mjs_setName(geom->element, geomName.c_str());
         // Geoms carry collision only; mass and inertia come from the body tables.
         geom->mass = 0.0;
         geom->density = 0.0;
@@ -478,11 +510,17 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     model_ = model;
     data_ = mj_makeData(model_);
 
-    for (JointSignals& s : joints_) {
+    frictionInputs_.clear();
+    for (std::uint32_t i = 0; i < joints_.size(); ++i) {
+        JointSignals& s = joints_[i];
         const int id = mj_name2id(model_, mjOBJ_JOINT, joints.names[s.joint].c_str());
         s.qposAddress = model_->jnt_qposadr[id];
         s.dofAddress = model_->jnt_dofadr[id];
         s.mujocoBody = model_->jnt_bodyid[id];
+        s.staticFriction = model_->dof_frictionloss[s.dofAddress];
+        if (s.frictionLimit.valid() && bus.connected(s.frictionLimit)) {
+            frictionInputs_.push_back(i);
+        }
     }
     for (BodySignals& s : bodies_) {
         s.mujocoBody = mj_name2id(model_, mjOBJ_BODY, bodies.names[s.body].c_str());
@@ -490,6 +528,20 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     }
     dt_ = dt.seconds();
     lastKinematicPose_.assign(bodies_.size(), {});
+    geomRolling_.assign(static_cast<std::size_t>(model_->ngeom), 0.0);
+    rollingTorque_.assign(static_cast<std::size_t>(model_->nv), 0.0);
+    appliedRolling_.assign(static_cast<std::size_t>(model_->nv), 0.0);
+    rollingAny_ = false;
+    for (std::size_t c = 0; c < colliders.body.size(); ++c) {
+        const double crr = colliderSurface(world.raw(), c).rollingResistance;
+        const int g =
+            crr > 0.0 ? mj_name2id(model_, mjOBJ_GEOM, ("collider_" + std::to_string(c)).c_str())
+                      : -1;
+        if (g >= 0) {
+            geomRolling_[static_cast<std::size_t>(g)] = crr;
+            rollingAny_ = true;
+        }
+    }
     baseFriction_.resize(static_cast<std::size_t>(model_->ngeom));
     for (int g = 0; g < model_->ngeom; ++g) {
         baseFriction_[static_cast<std::size_t>(g)] = model_->geom_friction[3 * g];
@@ -560,11 +612,82 @@ void MujocoBackend::sumContactForces() {
     }
 }
 
+/// Rolling resistance of the contacts just solved, as generalized forces for the next step:
+/// for each contact with a surface of rollingResistance (the larger of the two geoms', the rule
+/// MuJoCo uses for geom friction), a torque crr · N · r against the rolling spin, r from the
+/// body's centre of mass to the contact point (rollingResistanceTorque).
+void MujocoBackend::applyRollingResistance() {
+    if (!rollingAny_) {
+        return;
+    }
+    std::fill(rollingTorque_.begin(), rollingTorque_.end(), 0.0);
+    for (int c = 0; c < data_->ncon; ++c) {
+        const mjContact& contact = data_->contact[c];
+        if (contact.exclude != 0) {
+            continue;
+        }
+        const double crr = std::max(geomRolling_[static_cast<std::size_t>(contact.geom[0])],
+                                    geomRolling_[static_cast<std::size_t>(contact.geom[1])]);
+        if (crr <= 0.0) {
+            continue;
+        }
+        std::array<mjtNum, 6> local{};
+        mj_contactForce(model_, data_, c, local.data());
+        const std::array<int, 2> body{model_->geom_bodyid[contact.geom[0]],
+                                      model_->geom_bodyid[contact.geom[1]]};
+        std::array<std::array<mjtNum, 6>, 2> velocity{};
+        for (std::size_t i = 0; i < 2; ++i) {
+            mj_objectVelocity(model_, data_, mjOBJ_BODY, body.at(i), velocity.at(i).data(), 0);
+        }
+        const std::array<double, 3> normal{contact.frame[0], contact.frame[1], contact.frame[2]};
+        // Each side that moves rolls on the other: geom2 with the spin relative to geom1.
+        for (std::size_t i = 0; i < 2; ++i) {
+            const int b = body.at(i);
+            if (b == 0) {
+                continue;  // the world (static scenery is in it): it does not roll
+            }
+            const std::size_t o = 1 - i;
+            std::array<double, 3> omega{};
+            std::array<double, 3> arm{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                omega.at(k) = velocity.at(i).at(k) - velocity.at(o).at(k);
+                arm.at(k) = contact.pos[k] - data_->xipos[3 * b + static_cast<int>(k)];
+            }
+            const double radius = std::sqrt(arm[0] * arm[0] + arm[1] * arm[1] + arm[2] * arm[2]);
+            // Moment of inertia about the contact point: the mean principal one about the
+            // centre of mass of its subtree, plus m r² (parallel axes).
+            const double mass = model_->body_subtreemass[b];
+            const double inertia = (model_->body_inertia[3 * b] + model_->body_inertia[3 * b + 1] +
+                                    model_->body_inertia[3 * b + 2]) /
+                                       3.0 +
+                                   mass * radius * radius;
+            const std::array<double, 3> torque =
+                rollingResistanceTorque(omega, normal, local[0], radius, crr, inertia, dt_);
+            std::array<mjtNum, 3> zero{};
+            std::array<mjtNum, 3> t{torque[0], torque[1], torque[2]};
+            mj_applyFT(model_, data_, zero.data(), t.data(), data_->xipos + 3 * b, b,
+                       rollingTorque_.data());
+        }
+    }
+}
+
 Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     // Inputs, held over this step by the scheduler.
+    // Last step's rolling resistance comes off first: the joint torques below are assigned,
+    // the other dofs keep what was added to them.
+    for (std::size_t d = 0; d < appliedRolling_.size(); ++d) {
+        data_->qfrc_applied[d] -= appliedRolling_[d];
+        appliedRolling_[d] = 0.0;
+    }
     for (const JointSignals& s : joints_) {
         if (s.torque.valid()) {
             data_->qfrc_applied[s.dofAddress] = bus.read(s.torque) + bus.read(s.loadTorque);
+        }
+    }
+    if (rollingAny_) {
+        for (std::size_t d = 0; d < rollingTorque_.size(); ++d) {
+            data_->qfrc_applied[d] += rollingTorque_[d];
+            appliedRolling_[d] = rollingTorque_[d];
         }
     }
     // Only connected inputs: an unconnected one reads its default for the whole run, put in
@@ -582,6 +705,21 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
             std::copy_n(p.begin(), 3, data_->mocap_pos + 3 * s.mocap);
             std::copy_n(p.begin() + 3, 4, data_->mocap_quat + 4 * s.mocap);
         }
+    }
+    // Friction limits: MuJoCo builds a step's constraint rows, frictionloss among them, in
+    // mj_step1, which ran at the end of the last step. A changed limit builds them again (the
+    // same state, so the same rows but this one).
+    bool rebuild = false;
+    for (const std::uint32_t i : frictionInputs_) {
+        const JointSignals& s = joints_[i];
+        const double total = s.staticFriction + std::max(0.0, bus.read(s.frictionLimit));
+        if (total != model_->dof_frictionloss[s.dofAddress]) {
+            model_->dof_frictionloss[s.dofAddress] = total;
+            rebuild = true;
+        }
+    }
+    if (rebuild && model_->nv > 0) {
+        mj_step1(model_, data_);
     }
     const double scale = bus.read(frictionScale_);
     if (scale != appliedFrictionScale_) {
@@ -614,6 +752,7 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     // the next, so the outputs are the state at the end of the step.
     mj_step2(model_, data_);
     sumContactForces();
+    applyRollingResistance();
     if (data_->warning[mjWARN_BADQACC].number > 0) {
         data_->warning[mjWARN_BADQACC].number = 0;
         return Status::error(StatusCode::Diverged,
@@ -772,6 +911,16 @@ Status MujocoBackend::saveState(StateWriter& writer) const {
     writer.put(kStateVersion);
     writer.put(appliedFrictionScale_);
     writer.putDoubles(state);
+    // The joints' frictionloss with their friction limits, which the next step's rows start
+    // from (only joints whose limit has a writer: other runs' states keep their layout).
+    for (const std::uint32_t i : frictionInputs_) {
+        writer.put(model_->dof_frictionloss[joints_[i].dofAddress]);
+    }
+    // Rolling resistance in qfrc_applied and the next step's (only runs on a rolling surface).
+    if (rollingAny_) {
+        writer.putDoubles(appliedRolling_);
+        writer.putDoubles(rollingTorque_);
+    }
     return {};
 }
 
@@ -928,6 +1077,18 @@ Status MujocoBackend::restoreState(StateReader& reader) {
     if (!reader.get(version) || version != kStateVersion || !reader.get(scale) ||
         !reader.getDoubles(state)) {
         return Status::error(StatusCode::InvalidConfig, "MuJoCo state of another model or version");
+    }
+    for (const std::uint32_t i : frictionInputs_) {
+        double total = 0.0;
+        if (!reader.get(total)) {
+            return Status::error(StatusCode::InvalidConfig, "MuJoCo state without its frictions");
+        }
+        model_->dof_frictionloss[joints_[i].dofAddress] = total;
+    }
+    if (rollingAny_ &&
+        (!reader.getDoubles(appliedRolling_) || !reader.getDoubles(rollingTorque_))) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "MuJoCo state without its rolling resistance");
     }
     mj_setState(model_, data_, state.data(), mjSTATE_INTEGRATION);
     for (std::size_t g = 0; g < baseFriction_.size(); ++g) {

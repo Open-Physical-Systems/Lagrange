@@ -1,0 +1,323 @@
+<?xml version="1.0"?>
+<!-- arm6_suction: the sample arm (arm6.urdf) with a suction tool in place of its fingers, for
+     RFC 0020's grippers (docs/physics/actuators.md): a tube from the palm and a 30 mm cup at its
+     end, evacuated by a vacuum ejector. The cup's numbers are illustrative, of the size a vacuum
+     datasheet gives, not one product. arm6.overlay.yaml gives it the same motors and supply. -->
+<robot name="arm6_suction">
+  <material name="grey"><color rgba="0.6 0.62 0.65 1"/></material>
+  <material name="blue"><color rgba="0.22 0.42 0.72 1"/></material>
+  <material name="dark"><color rgba="0.2 0.2 0.22 1"/></material>
+
+  <link name="world"/>
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+  </joint>
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0.05"/>
+      <mass value="4.0"/>
+      <inertia ixx="0.00973333" iyy="0.00973333" izz="0.0128" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.08" length="0.1"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.08" length="0.1"/></geometry>
+    </collision>
+  </link>
+  <link name="shoulder_link">
+    <inertial>
+      <origin xyz="0 0 0.05"/>
+      <mass value="3.0"/>
+      <inertia ixx="0.0052" iyy="0.0052" izz="0.0054" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.06" length="0.1"/></geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.06" length="0.1"/></geometry>
+    </collision>
+  </link>
+  <link name="upper_arm_link">
+    <inertial>
+      <origin xyz="0 0 0.2"/>
+      <mass value="4.0"/>
+      <inertia ixx="0.0457" iyy="0.0457" izz="0.005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.2"/>
+      <geometry><cylinder radius="0.05" length="0.36"/></geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.2"/>
+      <geometry><cylinder radius="0.05" length="0.36"/></geometry>
+    </collision>
+  </link>
+  <link name="forearm_link">
+    <inertial>
+      <origin xyz="0 0 0.175"/>
+      <mass value="2.5"/>
+      <inertia ixx="0.0210208" iyy="0.0210208" izz="0.002" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.175"/>
+      <geometry><cylinder radius="0.04" length="0.31"/></geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.175"/>
+      <geometry><cylinder radius="0.04" length="0.31"/></geometry>
+    </collision>
+  </link>
+  <link name="wrist_1_link">
+    <inertial>
+      <origin xyz="0 0 0.04"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.000839583" iyy="0.000839583" izz="0.0006125" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.04"/>
+      <geometry><cylinder radius="0.035" length="0.08"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.04"/>
+      <geometry><cylinder radius="0.035" length="0.08"/></geometry>
+    </collision>
+  </link>
+  <link name="wrist_2_link">
+    <inertial>
+      <origin xyz="0 0 0.04"/>
+      <mass value="0.8"/>
+      <inertia ixx="0.000485" iyy="0.000485" izz="0.00049" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.04"/>
+      <geometry><cylinder radius="0.035" length="0.06"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.04"/>
+      <geometry><cylinder radius="0.035" length="0.06"/></geometry>
+    </collision>
+  </link>
+  <link name="wrist_3_link">
+    <inertial>
+      <origin xyz="0 0 0.02"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.000179167" iyy="0.000179167" izz="0.000225" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.02"/>
+      <geometry><cylinder radius="0.03" length="0.04"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02"/>
+      <geometry><cylinder radius="0.03" length="0.04"/></geometry>
+    </collision>
+  </link>
+  <link name="palm_link">
+    <inertial>
+      <origin xyz="0 0 0.015"/>
+      <mass value="0.3"/>
+      <inertia ixx="0.0003825" iyy="6.25e-05" izz="0.0004" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.015"/>
+      <geometry><box size="0.04 0.12 0.03"/></geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.015"/>
+      <geometry><box size="0.04 0.12 0.03"/></geometry>
+    </collision>
+  </link>
+  <joint name="shoulder_pan_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="shoulder_link"/>
+    <origin xyz="0 0 0.1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159265" upper="3.14159265" effort="150" velocity="2.0"/>
+  </joint>
+  <joint name="shoulder_lift_joint" type="revolute">
+    <parent link="shoulder_link"/>
+    <child link="upper_arm_link"/>
+    <origin xyz="0 0 0.1"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="2.0" effort="150" velocity="2.0"/>
+  </joint>
+  <joint name="elbow_joint" type="revolute">
+    <parent link="upper_arm_link"/>
+    <child link="forearm_link"/>
+    <origin xyz="0 0 0.4"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="2.6" effort="150" velocity="2.5"/>
+  </joint>
+  <joint name="wrist_1_joint" type="revolute">
+    <parent link="forearm_link"/>
+    <child link="wrist_1_link"/>
+    <origin xyz="0 0 0.35"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159265" upper="3.14159265" effort="30" velocity="3.0"/>
+  </joint>
+  <joint name="wrist_2_joint" type="revolute">
+    <parent link="wrist_1_link"/>
+    <child link="wrist_2_link"/>
+    <origin xyz="0 0 0.08"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="2.0" effort="30" velocity="3.0"/>
+  </joint>
+  <joint name="wrist_3_joint" type="revolute">
+    <parent link="wrist_2_link"/>
+    <child link="wrist_3_link"/>
+    <origin xyz="0 0 0.08"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159265" upper="3.14159265" effort="30" velocity="3.0"/>
+  </joint>
+  <joint name="wrist_3_to_palm" type="fixed">
+    <parent link="wrist_3_link"/>
+    <child link="palm_link"/>
+    <origin xyz="0 0 0.04"/>
+  </joint>
+
+  <!-- The suction tool: a tube along the palm's z, and the cup at its end. The cup link's origin
+       is the centre of its lip; its bellows reach 15 mm back from it. -->
+  <material name="rubber"><color rgba="0.12 0.12 0.13 1"/></material>
+  <link name="suction_tube">
+    <inertial>
+      <origin xyz="0 0 0.045"/>
+      <mass value="0.08"/>
+      <inertia ixx="5.6e-05" iyy="5.6e-05" izz="4.0e-06" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.045"/>
+      <geometry><cylinder radius="0.01" length="0.09"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.045"/>
+      <geometry><cylinder radius="0.01" length="0.09"/></geometry>
+    </collision>
+  </link>
+  <joint name="palm_to_suction_tube" type="fixed">
+    <parent link="palm_link"/>
+    <child link="suction_tube"/>
+    <origin xyz="0 0 0.03"/>
+  </joint>
+  <link name="suction_cup">
+    <inertial>
+      <origin xyz="0 0 -0.0075"/>
+      <mass value="0.02"/>
+      <inertia ixx="1.6e-06" iyy="1.6e-06" izz="2.6e-06" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.0075"/>
+      <geometry><cylinder radius="0.016" length="0.015"/></geometry>
+      <material name="rubber"/>
+    </visual>
+    <!-- Its lip collides as a square of the cup's width, so that the engine holds a part on it by
+         contacts at the corners and not on one point of a round edge. -->
+    <collision>
+      <origin xyz="0 0 -0.0075"/>
+      <geometry><box size="0.03 0.03 0.015"/></geometry>
+    </collision>
+  </link>
+  <joint name="tube_to_suction_cup" type="fixed">
+    <parent link="suction_tube"/>
+    <child link="suction_cup"/>
+    <origin xyz="0 0 0.105"/>
+  </joint>
+
+  <!-- RFC 0020: a 30 mm cup (707 mm²) on 10 mL of hose, an ejector of 0.1 g/s (about 5 L/min of
+       free air) down to 20 kPa absolute: 57.5 N at full vacuum, reached with a time constant of
+       0.1 s. act/suction_cup/command; ROS /suction_cup/command, /suction_cup/state. -->
+  <gazebo reference="suction_cup">
+    <suction_cup diameter="0.03" volume="1.0e-5" flow="1.0e-4" ultimate_pressure="20000"
+                 axis="0 0 1"/>
+  </gazebo>
+
+  <!-- Wrist camera on the palm, looking past the suction tube (along the palm's z). The sensor
+       frame looks along its x (the Gazebo convention); ROS gets wrist_camera_optical too. -->
+  <gazebo reference="palm_link">
+    <sensor name="wrist_camera" type="camera">
+      <pose>0.03 0 0.02 0 -1.5707963 0</pose>
+      <update_rate>15</update_rate>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height></image>
+        <clip><near>0.02</near><far>5</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- Position servos in the drives (LagrangeSystem): joint_trajectory_controller sends
+       positions; the gains turn them into torque commands for the electrical domain. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware>
+      <plugin>lagrange_ros2_control/LagrangeSystem</plugin>
+    </hardware>
+    <joint name="shoulder_pan_joint">
+      <command_interface name="position"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <param name="position_p">1500</param>
+      <param name="position_i">3000</param>
+      <param name="position_d">80</param>
+    </joint>
+    <joint name="shoulder_lift_joint">
+      <command_interface name="position"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <param name="position_p">2000</param>
+      <param name="position_i">4000</param>
+      <param name="position_d">100</param>
+    </joint>
+    <joint name="elbow_joint">
+      <command_interface name="position"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <param name="position_p">1500</param>
+      <param name="position_i">3000</param>
+      <param name="position_d">70</param>
+    </joint>
+    <joint name="wrist_1_joint">
+      <command_interface name="position"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <param name="position_p">150</param>
+      <param name="position_i">300</param>
+      <param name="position_d">4</param>
+    </joint>
+    <joint name="wrist_2_joint">
+      <command_interface name="position"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <param name="position_p">150</param>
+      <param name="position_i">300</param>
+      <param name="position_d">4</param>
+    </joint>
+    <joint name="wrist_3_joint">
+      <command_interface name="position"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <param name="position_p">100</param>
+      <param name="position_i">200</param>
+      <param name="position_d">3</param>
+    </joint>
+  </ros2_control>
+</robot>

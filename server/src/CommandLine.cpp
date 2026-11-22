@@ -117,6 +117,8 @@ void printServerOptions(std::FILE* out) {
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --tether X,Y,Z,LINK[,LENGTH]  a cable from the world point X,Y,Z to LINK (RFC 0011;\n"
         "                     repeatable; LENGTH m, default the distance plus 10 %%)\n"
+        "  --fire-water NAME=RATE[@T]  water on fire NAME (RFC 0022; repeatable): RATE kg/(m2.s)\n"
+        "                     (mm/s) over its burning area from T s on, as a sprinkler\n"
         "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
         "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
         "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
@@ -161,6 +163,8 @@ void printServerOptions(std::FILE* out) {
         "            (default: each rotor's loaded top speed from its motor and battery)\n"
         "  --thrust-limit FRACTION  cap each rotor at this share of its full thrust (0.8: 80 %%),\n"
         "            for the built-in controller and an autopilot's full output\n"
+        "  --leaf-litter N  N leaves lying under each tree's crown from the start (TreeAPI_1);\n"
+        "            the wind and the rotors' outwash lift them again (at most 2048 in all)\n"
         "  --emi-motor-leads SPACING[,X,Y,Z]  a wire from the battery (at X,Y,Z on the root\n"
         "            link) to each motor carrying its bus current, its return SPACING m above\n"
         "            it; magnetometers feel it (RFC 0013)\n"
@@ -169,6 +173,8 @@ void printServerOptions(std::FILE* out) {
         "            a profile's world.geo_origin also sets it)\n"
         "  --air-density KG_M3  the site's air density, for rotors (ISA sea level: 1.225; no\n"
         "            default; a profile's rotor_aero.air_density also sets it)\n"
+        "  --no-downwash-water  wakes go through water to the ground: no dimple, ripples or\n"
+        "            spray (profile aerodynamics.downwash_water: false)\n"
         "  --weather K=V,...  the weather: temperature (K), pressure (Pa) and relative_humidity\n"
         "            (0-1), the site, no defaults; visibility (m, fog), rain_rate (m/s),\n"
         "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
@@ -433,6 +439,14 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--thrust-limit needs a share of full thrust, over 0 and at most 1 (0.8)";
             }
             options.thrustLimit = share;
+        } else if (arg == "--leaf-litter") {
+            const char* text = value();
+            char* end = nullptr;
+            const long count = text != nullptr ? std::strtol(text, &end, 10) : -1;
+            if (text == nullptr || end == text || *end != '\0' || count < 0 || count > 2048) {
+                return "--leaf-litter needs a count of leaves per tree, 0 to 2048";
+            }
+            options.leafLitter = static_cast<std::uint32_t>(count);
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;
@@ -444,6 +458,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             }
             constexpr double kDegree = std::numbers::pi / 180.0;
             options.geoOrigin = coords::Geodetic{lat * kDegree, lon * kDegree, height};
+        } else if (arg == "--no-downwash-water") {
+            options.downwashWater = false;
         } else if (arg == "--air-density") {
             const char* text = value();
             char* end = nullptr;
@@ -740,6 +756,23 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             }
             t.link = rest;
             options.tethers.push_back(std::move(t));
+        } else if (arg == "--fire-water") {
+            const char* text = value();
+            const std::string entry = text != nullptr ? text : "";
+            const std::size_t eq = entry.find('=');
+            char* end = nullptr;
+            const double rate =
+                eq == std::string::npos ? -1.0 : std::strtod(entry.c_str() + eq + 1, &end);
+            double start = 0.0;
+            if (end != nullptr && *end == '@') {
+                start = std::strtod(end + 1, &end);
+            }
+            if (eq == 0 || eq == std::string::npos || end == nullptr || *end != '\0' ||
+                !(rate >= 0.0) || !std::isfinite(rate) || !std::isfinite(start)) {
+                return "--fire-water needs NAME=RATE[@T]: a fire's name, the water rate in "
+                       "kg/(m²·s) (mm/s) and when it starts (s)";
+            }
+            options.fireWater.push_back(entry);
         } else if (arg == "--hydro-coefficients") {
             const char* text = value();
             if (text == nullptr) {

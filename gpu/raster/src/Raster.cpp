@@ -2,6 +2,7 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Realistic.hpp"
+#include "lagrange/gpu/TreeShapes.hpp"
 #include "shaders/kCameraModel.hpp"
 #include "shaders/kMeshVertex.hpp"
 #include "shaders/kSensorColor.hpp"
@@ -246,7 +247,8 @@ struct Pipeline {
 struct RasterScene::Impl {
     std::shared_ptr<Device> device;  // shared with the scenes made from this one (create's reuse)
     std::unique_ptr<MeshSet> meshes;
-    Pipeline color;   // multisampled: the image
+    std::uint32_t firstTreeMesh{0};  // treeMeshSources() follow the scene's meshes
+    Pipeline color;                  // multisampled: the image
     Pipeline labels;  // one sample: depth and instance id, never blended across an edge
     VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
     std::shared_ptr<const RealisticTextures> textures;  // with the realistic look
@@ -350,7 +352,12 @@ std::shared_ptr<RasterScene> RasterScene::create(const std::string& preferredDev
         return nullptr;
     }
     impl.meshes = std::make_unique<MeshSet>(*device);
-    impl.meshes->upload(meshes);
+    // The scene's meshes, then the trees' parts for the simple look (TreeShapes.hpp).
+    std::vector<MeshSource> all(meshes.begin(), meshes.end());
+    impl.firstTreeMesh = static_cast<std::uint32_t>(all.size());
+    const std::span<const MeshSource> treeMeshes = treeMeshSources();
+    all.insert(all.end(), treeMeshes.begin(), treeMeshes.end());
+    impl.meshes->upload(all);
     gpuTiming("meshes", t);
     impl.device = std::move(device);
     if (look.realistic && !impl.device->info().isSoftware) {
@@ -393,6 +400,17 @@ struct RasterCamera::Impl {
     Image realisticDepth;  // with the realistic look: sampled by it
     std::unique_ptr<RealisticRenderer> realistic;
     std::vector<RealisticDraw> draws;
+    std::vector<RealisticLamp> lamps;  // setLighting
+    RealisticWaterSurface water;       // setWaterSurface, its spans into these:
+    std::vector<float> waterHeights, waterFoam, waterFriction;
+    std::vector<AirRotor> rotors;      // setAir
+    std::vector<RealisticTree> trees;  // setTrees
+    std::vector<RealisticTreeCut> treeCuts;
+    std::vector<RealisticLeaf> leaves;
+    std::vector<RasterInstance> treeParts;  // the simple look's trees, this frame
+    std::vector<RasterInstance> trunks;     // their trunks, for depth and instance ids
+    double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
+    bool linear{false};
     bool colour{true};  // false: only depth and ids are drawn (setColour)
     // The sensor model on the GPU (setEffects): its kernel, inputs and output.
     ComputeKernel effects;
@@ -520,6 +538,35 @@ RasterCamera::~RasterCamera() {
     }
     destroy(device, impl_->thermalTemperature);
     destroy(device, impl_->thermalPalette);
+}
+
+void RasterCamera::setLighting(std::span<const RealisticLamp> lamps, double skyIlluminance,
+                               bool linear) {
+    impl_->lamps.assign(lamps.begin(), lamps.end());
+    impl_->skyIlluminance = skyIlluminance;
+    impl_->linear = linear;
+}
+
+void RasterCamera::setWaterSurface(const RealisticWaterSurface& surface) {
+    impl_->waterHeights.assign(surface.heights.begin(), surface.heights.end());
+    impl_->waterFoam.assign(surface.foam.begin(), surface.foam.end());
+    impl_->waterFriction.assign(surface.friction.begin(), surface.friction.end());
+    impl_->water = surface;
+    impl_->water.heights = impl_->waterHeights;
+    impl_->water.foam = impl_->waterFoam;
+    impl_->water.friction = impl_->waterFriction;
+}
+
+void RasterCamera::setAir(std::span<const AirRotor> rotors) {
+    impl_->rotors.assign(rotors.begin(), rotors.end());
+}
+
+void RasterCamera::setTrees(std::span<const RealisticTree> trees,
+                            std::span<const RealisticTreeCut> cuts,
+                            std::span<const RealisticLeaf> leaves) {
+    impl_->trees.assign(trees.begin(), trees.end());
+    impl_->treeCuts.assign(cuts.begin(), cuts.end());
+    impl_->leaves.assign(leaves.begin(), leaves.end());
 }
 
 void RasterCamera::setColour(bool drawn) {
@@ -750,7 +797,8 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
     };
     const auto pass = [&](VkCommandBuffer commands,
                           std::span<const VkRenderingAttachmentInfo> colors,
-                          const VkRenderingAttachmentInfo& depth, const Pipeline& pipeline) {
+                          const VkRenderingAttachmentInfo& depth, const Pipeline& pipeline,
+                          std::span<const RasterInstance> extra) {
         VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
         rendering.renderArea = {{0, 0}, extent};
         rendering.layerCount = 1;
@@ -764,16 +812,18 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
         vkCmdSetViewport(commands, 0, 1, &viewport);
         vkCmdSetScissor(commands, 0, 1, &scissor);
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-        for (const RasterInstance& instance : instances) {
-            push.model =
-                modelRows(instance.position, instance.rotation, instance.scale, camera.position);
-            // The id travels as a float, exact up to 2^24 instances.
-            push.baseColor = {instance.color[0], instance.color[1], instance.color[2],
-                              static_cast<float>(instance.id)};
-            vkCmdPushConstants(commands, pipeline.layout,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                               sizeof(push), &push);
-            scene.meshes->draw(commands, instance.mesh);
+        for (const std::span<const RasterInstance> list : {instances, extra}) {
+            for (const RasterInstance& instance : list) {
+                push.model = modelRows(instance.position, instance.rotation, instance.scale,
+                                       camera.position);
+                // The id travels as a float, exact up to 2^24 instances.
+                push.baseColor = {instance.color[0], instance.color[1], instance.color[2],
+                                  static_cast<float>(instance.id)};
+                vkCmdPushConstants(commands, pipeline.layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(push), &push);
+                scene.meshes->draw(commands, instance.mesh);
+            }
         }
         vkCmdEndRendering(commands);
     };
@@ -849,6 +899,14 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
             RealisticSettings settings;
             settings.season = scene.season;
             settings.seconds = seconds;
+            settings.lamps = impl_->lamps;
+            settings.rotors = impl_->rotors;
+            settings.trees = impl_->trees;
+            settings.treeCuts = impl_->treeCuts;
+            settings.leaves = impl_->leaves;
+            settings.skyIlluminance = impl_->skyIlluminance;
+            settings.linear = impl_->linear;
+            settings.waterSurface = impl_->water;
             transitionImage(commands, impl_->realisticDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
             impl_->realistic->record(commands, impl_->draws, view, settings, *scene.meshes,
@@ -869,7 +927,23 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
             color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
         if (!impl_->realistic && impl_->colour) {
-            pass(commands, std::span{&color, 1}, depthAttachment(impl_->colorDepth), scene.color);
+            // The simple look draws the trees as trunks and clumps (TreeShapes.hpp).
+            impl_->treeParts.clear();
+            for (std::size_t k = 0; k < impl_->trees.size(); ++k) {
+                appendTreeParts(impl_->trees[k], static_cast<std::uint32_t>(k), impl_->treeCuts,
+                                scene.firstTreeMesh, impl_->trees[k].id, impl_->treeParts);
+            }
+            pass(commands, std::span{&color, 1}, depthAttachment(impl_->colorDepth), scene.color,
+                 impl_->treeParts);
+        }
+        // Depth and instance ids see the trunks, solid wood, in either look; the crowns the
+        // sensor adds as its lidar sees them (sensors.md "Trees in the camera").
+        impl_->trunks.clear();
+        for (std::size_t k = 0; k < impl_->trees.size(); ++k) {
+            const std::size_t first = impl_->trunks.size();
+            appendTreeParts(impl_->trees[k], static_cast<std::uint32_t>(k), {}, scene.firstTreeMesh,
+                            impl_->trees[k].id, impl_->trunks);
+            impl_->trunks.resize(std::min(impl_->trunks.size(), first + 1));  // the trunk only
         }
 
         VkClearValue far{};
@@ -878,7 +952,7 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
         none.color.uint32[0] = kNoInstance;
         const std::array<VkRenderingAttachmentInfo, 2> labels = {
             attachment(impl_->labels[0], far), attachment(impl_->labels[1], none)};
-        pass(commands, labels, depthAttachment(impl_->labelDepth), scene.labels);
+        pass(commands, labels, depthAttachment(impl_->labelDepth), scene.labels, impl_->trunks);
 
         // With the model or the thermal image, the images go to their device-local input.
         const VkBuffer images = frame != nullptr         ? impl_->effectsIn.buffer

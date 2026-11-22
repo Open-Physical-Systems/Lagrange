@@ -35,6 +35,8 @@ struct StaticScenery {
 /// joints add (prismatic joints use N, m, m/s, m/s², kg):
 ///   in  joint/j/torque             N·m, WindowAverage
 ///   in  joint/j/load_torque        N·m, WindowAverage, optional
+///   in  joint/j/friction_limit     N·m, optional: a Coulomb limit added to the joint's own
+///                                  friction for the step (dof_frictionloss)
 ///   out joint/j/position, velocity, acceleration, effective_inertia, constraint_torque
 /// per dynamic body `b`:
 ///   in  body/b/external_wrench     Wrench N, world_local, at the centre of mass, optional
@@ -82,7 +84,9 @@ private:
         SignalId torque, loadTorque;
         SignalId position, velocity, acceleration, effectiveInertia, constraintTorque;
         SignalId reaction;
-        int mujocoBody{0};  // the body the joint moves
+        SignalId frictionLimit;      // joint/<j>/friction_limit, optional
+        double staticFriction{0.0};  // N or N·m, JointDynamicsAPI_1's
+        int mujocoBody{0};           // the body the joint moves
         int qposAddress{0};
         int dofAddress{0};
     };
@@ -97,6 +101,7 @@ private:
     void writeOutputs(SignalBus& bus) const;
     void applyFixedWrenches();
     void sumContactForces();
+    void applyRollingResistance();
     void setupKinematicCulling();
     void cullKinematicContacts(bool all);
 
@@ -127,6 +132,9 @@ private:
     // external wrenches with their defaults, put in place once (init, restoreState).
     std::vector<std::uint32_t> wrenchInputs_;
     std::vector<std::uint32_t> poseInputs_;
+    // Indices into joints_ of the friction limits that have a writer (a screw's gear, RFC 0020
+    // §4.4): added to the joint's frictionloss before each step.
+    std::vector<std::uint32_t> frictionInputs_;
     struct FixedWrench {
         int mujocoBody{0};
         std::array<double, 6> wrench{};
@@ -152,6 +160,10 @@ private:
     SignalId frictionScale_;
     double appliedFrictionScale_{1.0};
     std::vector<double> baseFriction_;  // per geom, sliding coefficient at scale 1
+    std::vector<double> geomRolling_;     // per geom, its surface's rollingResistance (1)
+    std::vector<double> rollingTorque_;   // per dof, rolling resistance for the next step
+    std::vector<double> appliedRolling_;  // per dof, what of it is in qfrc_applied now
+    bool rollingAny_{false};
     mjModel_* model_{nullptr};
     mjData_* data_{nullptr};
 };

@@ -50,7 +50,11 @@ class JointControl final : public IModule {
 public:
     /// `driveModes`: joints whose motor follows a velocity or a voltage (electrical::driveModes)
     /// are told that, not a torque. A velocity motor takes position and velocity targets; a voltage
-    /// motor takes volts, as a voltage target or in /joint_commands' effort field.
+    /// motor takes volts, as a voltage target or in /joint_commands' effort field. A joint whose
+    /// mode is "servo" (RFC 0020 §4.3) is left to its servo. A "stepper" joint (RFC 0020 §4.5) is
+    /// told joint/<j>/position_command, the open-loop profile a motion controller gives a stepper
+    /// driver: toward a position target or at a velocity target, at most the joint's velocity
+    /// limit (kStepperSpeed without one), reached in kStepperRampTime.
     explicit JointControl(std::shared_ptr<JointTargets> targets,
                           std::map<std::string, std::string> driveModes = {},
                           double bandwidthHz = 8.0);
@@ -64,6 +68,13 @@ public:
     Status saveState(StateWriter& writer) const override;
     Status restoreState(StateReader& reader) override;
 
+    /// A stepper's profile without a velocity limit in the robot file: rad/s on a hinge, m/s on a
+    /// slide. And the time it takes to reach its speed limit. Choices, not hardware values: a
+    /// stepper started at full speed loses steps, so the profile ramps.
+    static constexpr double kStepperSpeed = 0.5;
+    static constexpr double kStepperSlideSpeed = 0.05;
+    static constexpr double kStepperRampTime = 0.25;
+
 private:
     struct Joint {
         std::string name;
@@ -72,7 +83,12 @@ private:
         SignalId position, velocity, inertia, torque;
         double limit{0.0};
         std::string mode{"torque"};  // what `torque` above commands: torque, velocity or voltage
+        // A stepper's profile: where it is told to be and how fast that moves, and its limits.
+        double profilePosition{0.0}, profileVelocity{0.0}, start{0.0};
+        double maxSpeed{0.0}, maxAcceleration{0.0};
     };
+    void stepProfile(Joint& j, const JointTarget* target, double dt);
+
     std::shared_ptr<JointTargets> targets_;
     double bandwidthHz_;  // of the position and velocity loops (a choice, stable at 1 kHz to 50 Hz)
     std::uint64_t seenTargets_{0};

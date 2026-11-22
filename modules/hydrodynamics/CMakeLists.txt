@@ -5,7 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 
-add_library(lagrange_hydrodynamics src/Water.cpp)
+add_library(lagrange_hydrodynamics src/Water.cpp src/Surface.cpp)
 lagrange_target_defaults(lagrange_hydrodynamics)
 target_include_directories(
     lagrange_hydrodynamics
@@ -26,6 +26,13 @@ install(
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
 )
+
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_surface test/test_surface.cpp)
+    target_link_libraries(test_surface lagrange_hydrodynamics)
+    lagrange_target_defaults(test_surface)
+endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(lagrange_core)

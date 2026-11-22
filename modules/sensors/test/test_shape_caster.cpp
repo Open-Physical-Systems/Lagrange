@@ -1,12 +1,17 @@
 // The Tier 0 caster (ShapeCaster: Embree culls, the exact tests decide) must give exactly what
 // the brute-force reference gives, every shape against every ray, bit for bit (invariant 7).
+#include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/world/TreeWood.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <limits>
 #include <numbers>
 #include <random>
 #include <vector>
@@ -324,6 +329,643 @@ TEST(ShapeCaster, BoundingRadiusContainsEveryShape) {
     EXPECT_DOUBLE_EQ(boundingRadius(ShapeType::Cylinder, {0.3, 0.4, 0}), 0.5);
     EXPECT_DOUBLE_EQ(boundingRadius(ShapeType::Box, {1.0, 2.0, 2.0}), 3.0);
     EXPECT_TRUE(std::isinf(boundingRadius(ShapeType::Plane, {1, 1, 1})));
+}
+
+// Lidar over grass: the mean shortening over many beams is the closed form of the gap model,
+// grazing beams end nearer the blade tops than steep ones, no canopy changes nothing, and the
+// draws are the same on every run (counter-based streams).
+TEST(CanopyReturn, MeanShorteningMatchesTheGapModel) {
+    constexpr int kBeams = 200000;
+    for (const double h : {0.05, 0.4}) {
+        for (const double c : {1.0, 0.5, 0.1}) {
+            double sum = 0.0;
+            double sumSq = 0.0;
+            for (int i = 0; i < kBeams; ++i) {
+                random::Stream rng(7, 3, static_cast<std::uint32_t>(i));
+                const double d = canopyShortening(h, c, 20.0, rng.uniform());
+                EXPECT_GE(d, 0.0);
+                EXPECT_LE(d, h / c + 1e-12);
+                sum += d;
+                sumSq += d * d;
+            }
+            const double mean = sum / kBeams;
+            const double sd = std::sqrt(sumSq / kBeams - mean * mean);
+            const double mu = kCanopyProjection * kCanopyLeafAreaIndex / h;
+            const double path = h / c;
+            const double expected = path - (1.0 - std::exp(-mu * path)) / mu;
+            EXPECT_NEAR(canopyMeanShortening(h, c, 20.0), expected, 1e-12);
+            EXPECT_NEAR(mean, expected, 5.0 * sd / std::sqrt(kBeams)) << h << " " << c;
+        }
+    }
+    // A grazing beam's return is nearer the blade tops: the share of the path it goes into the
+    // canopy, (path - shortening) / path, is smaller than a steep beam's.
+    const double h = 0.05;
+    const double grazing = 1.0 - canopyMeanShortening(h, 0.1, 20.0) / (h / 0.1);
+    const double steep = 1.0 - canopyMeanShortening(h, 1.0, 20.0) / h;
+    EXPECT_LT(grazing, steep);
+    // The path is bounded by the range: a lidar inside the canopy.
+    EXPECT_LE(canopyMeanShortening(0.4, 0.01, 1.5), 1.5);
+}
+
+TEST(CanopyReturn, NoCanopyNoChangeAndDeterministic) {
+    for (int i = 0; i < 1000; ++i) {
+        random::Stream rng(1, 2, static_cast<std::uint32_t>(i));
+        EXPECT_EQ(canopyShortening(0.0, 0.3, 12.0, rng.uniform()), 0.0);
+    }
+    EXPECT_EQ(canopyMeanShortening(0.0, 0.3, 12.0), 0.0);
+    EXPECT_EQ(canopyShortening(0.05, 0.3, std::numeric_limits<double>::infinity(), 0.5), 0.0);
+    for (int i = 0; i < 1000; ++i) {
+        random::Stream a(11, 5, static_cast<std::uint32_t>(i));
+        random::Stream b(11, 5, static_cast<std::uint32_t>(i));
+        const double x = canopyShortening(0.05, 0.2, 9.0, a.uniform());
+        const double y = canopyShortening(0.05, 0.2, 9.0, b.uniform());
+        EXPECT_EQ(std::memcmp(&x, &y, sizeof x), 0);
+    }
+}
+
+// The surface's own leaf area index: denser canopies return nearer their top, and the default
+// overload is LAI 3.
+TEST(CanopyReturn, LeafAreaIndexOfTheSurface) {
+    const double h = 1.5;
+    for (const double lai : {1.0, 4.0, 6.0}) {
+        const double mu = kCanopyProjection * lai / h;
+        const double path = h / 0.5;
+        EXPECT_NEAR(canopyMeanShortening(h, lai, 0.5, 20.0),
+                    path - (1.0 - std::exp(-mu * path)) / mu, 1e-12);
+    }
+    EXPECT_LT(canopyMeanShortening(h, 1.0, 0.5, 20.0), canopyMeanShortening(h, 6.0, 0.5, 20.0));
+    EXPECT_EQ(canopyMeanShortening(0.4, 3.0, 0.3, 9.0), canopyMeanShortening(0.4, 0.3, 9.0));
+    EXPECT_EQ(canopyShortening(0.4, 0.0, 0.3, 9.0, 0.9), 0.0);
+}
+
+// Reeds and shrubs: a level beam over a reed bank (a box whose top is the soil, canopy 1.5 m
+// over it) crosses the canopy volume for the bank's width; the share of beams that stop in it is
+// 1 - exp(-mu L), mu = G LAI / h, and the mean depth of the stops is the closed form of a
+// truncated exponential. Above the canopy and beside the bank nothing stops.
+TEST(CanopyVolume, LevelBeamOverAReedBank) {
+    const std::array<double, 3> half{2.0, 5.0, 0.5};  // 4 m wide bank, top at z = 0.5
+    const Pose bank{{10.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    const double h = 1.5;
+    const double lai = 4.0;
+    double enter = 0.0;
+    double leave = 0.0;
+    // A drone's lidar 1 m over the soil, looking along +x at the bank.
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0}, h,
+                                 50.0, enter, leave));
+    EXPECT_NEAR(enter, 8.0, 1e-12);
+    EXPECT_NEAR(leave, 12.0, 1e-12);
+    // Clipped by the hit.
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0}, h,
+                                 9.0, enter, leave));
+    EXPECT_NEAR(leave, 9.0, 1e-12);
+    // Over the canopy's top, and beside the bank.
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 2.1}, {1.0, 0.0, 0.0}, h,
+                                  50.0, enter, leave));
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 6.0, 1.5}, {1.0, 0.0, 0.0}, h,
+                                  50.0, enter, leave));
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Box, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0}, 0.0,
+                                  50.0, enter, leave));
+    // A sphere has no canopy volume.
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Sphere, half, bank, {0.0, 0.0, 1.5}, {1.0, 0.0, 0.0},
+                                  h, 50.0, enter, leave));
+
+    constexpr int kBeams = 200000;
+    const double mu = kCanopyProjection * lai / h;
+    const double length = 4.0;
+    int stopped = 0;
+    double depth = 0.0;
+    for (int i = 0; i < kBeams; ++i) {
+        random::Stream rng(5, 9, static_cast<std::uint32_t>(i));
+        const double at = canopyVolumeStop(8.0, 12.0, h, lai, rng.uniform());
+        if (std::isfinite(at)) {
+            EXPECT_GE(at, 8.0);
+            EXPECT_LT(at, 12.0);
+            ++stopped;
+            depth += at - 8.0;
+        }
+    }
+    const double p = 1.0 - std::exp(-mu * length);
+    const double share = static_cast<double>(stopped) / kBeams;
+    EXPECT_NEAR(share, p, 5.0 * std::sqrt(p * (1.0 - p) / kBeams));
+    // E[s | s < L] = 1/mu - L exp(-mu L) / (1 - exp(-mu L)).
+    const double expected = 1.0 / mu - length * std::exp(-mu * length) / p;
+    EXPECT_NEAR(depth / stopped, expected, 0.01);
+}
+
+// Over a plane the canopy is a slab: a level beam inside it is bounded by its range, a beam
+// from above crosses h / c of it.
+TEST(CanopyVolume, SlabOverAPlane) {
+    const Pose ground{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    double enter = 0.0;
+    double leave = 0.0;
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, {0.0, 0.0, 0.5},
+                                 {0.0, 1.0, 0.0}, 1.0, 30.0, enter, leave));
+    EXPECT_EQ(enter, 0.0);
+    EXPECT_EQ(leave, 30.0);
+    EXPECT_FALSE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, {0.0, 0.0, 0.5},
+                                  {0.0, 1.0, 0.0}, 1.0, std::numeric_limits<double>::infinity(),
+                                  enter, leave));
+    const double c = 0.5;
+    const std::array<double, 3> down{std::sqrt(1.0 - c * c), 0.0, -c};
+    ASSERT_TRUE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, {0.0, 0.0, 3.0}, down,
+                                 1.0, 100.0, enter, leave));
+    EXPECT_NEAR(leave - enter, 1.0 / c, 1e-12);
+    EXPECT_NEAR(enter, 2.0 / c, 1e-12);
+}
+
+// The canopy's shape (ShapeCaster.hpp): leaf profiles integrate to one, heights vary by place
+// within their bounds with some bare ground, the top a lidar sees from above is not flat, the
+// border is ragged, a vertical beam reaches the soil with the gap fraction of its local leaf area
+// index, and the same beam always stops at the same place.
+SurfaceMaterial canopyOf(CanopyForm form, double height, double lai) {
+    SurfaceMaterial m;
+    m.canopyHeight = height;
+    m.leafAreaIndex = lai;
+    m.canopyForm = form;
+    return m;
+}
+
+constexpr std::array<CanopyForm, 3> kForms{CanopyForm::Grass, CanopyForm::Reeds, CanopyForm::Shrub};
+
+TEST(CanopyShape, LeafProfilesIntegrateToOne) {
+    constexpr int kSteps = 100000;
+    for (const CanopyForm form : kForms) {
+        double sum = 0.0;
+        for (int k = 0; k < kSteps; ++k) {
+            sum += canopyLeafProfile(form, (k + 0.5) / kSteps) / kSteps;
+        }
+        EXPECT_NEAR(sum, 1.0, 1e-6) << static_cast<int>(form);
+        EXPECT_EQ(canopyLeafProfile(form, -0.01), 0.0);
+        EXPECT_EQ(canopyLeafProfile(form, 1.01), 0.0);
+    }
+    // Grass is densest at its base, reeds and shrubs in their upper part.
+    EXPECT_GT(canopyLeafProfile(CanopyForm::Grass, 0.1), canopyLeafProfile(CanopyForm::Grass, 0.9));
+    EXPECT_GT(canopyLeafProfile(CanopyForm::Reeds, 0.7), canopyLeafProfile(CanopyForm::Reeds, 0.1));
+    EXPECT_GT(canopyLeafProfile(CanopyForm::Shrub, 0.75),
+              canopyLeafProfile(CanopyForm::Shrub, 0.2));
+}
+
+TEST(CanopyShape, HeightVariesByPlace) {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    for (const CanopyForm form : kForms) {
+        const SurfaceMaterial m = canopyOf(form, 1.0, 3.0);
+        const CanopyFormShape shape = canopyFormOf(form);
+        double sum = 0.0;
+        double sumSq = 0.0;
+        int bare = 0;
+        constexpr int kSide = 200;
+        for (int i = 0; i < kSide; ++i) {
+            for (int j = 0; j < kSide; ++j) {
+                const double f =
+                    canopyHeightFactor(m, i * shape.patch * 0.37, j * shape.patch * 0.41, kInf);
+                EXPECT_GE(f, 0.0);
+                EXPECT_LE(f, (1.0 + shape.spread) * (1.0 + shape.jitter) + 1e-12);
+                EXPECT_LE(f * m.canopyHeight, canopyTallest(m) + 1e-12);
+                sum += f;
+                sumSq += f * f;
+                bare += f < 0.05 ? 1 : 0;
+            }
+        }
+        const double n = kSide * kSide;
+        const double mean = sum / n;
+        const double sd = std::sqrt(sumSq / n - mean * mean);
+        EXPECT_GT(sd, 0.1) << static_cast<int>(form);    // not one flat height
+        EXPECT_GT(mean, 0.6) << static_cast<int>(form);  // mostly plants
+        EXPECT_GT(bare, 0) << static_cast<int>(form);    // with some bare ground
+        EXPECT_LT(bare / n, 0.5) << static_cast<int>(form);
+    }
+}
+
+TEST(CanopyShape, TopIsNotFlatAndBorderIsRagged) {
+    const SurfaceMaterial reeds = canopyOf(CanopyForm::Reeds, 1.5, 4.0);
+    const std::array<double, 3> half{10.0, 10.0, 0.5};  // a 20 m bank, its top at z = 0.5
+    const Pose bank{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    const std::array<double, 3> down{0.0, 0.0, -1.0};
+    // Straight down from 5 m over a grid of points inside the bank.
+    std::vector<double> tops;
+    for (int i = 0; i < 60; ++i) {
+        for (int j = 0; j < 60; ++j) {
+            const std::array<double, 3> from{-8.0 + i * 0.27, -8.0 + j * 0.27, 5.0};
+            double enter = 0.0;
+            double leave = 0.0;
+            ASSERT_TRUE(canopyVolumeSpan(ShapeType::Box, half, bank, from, down,
+                                         canopyTallest(reeds), 100.0, enter, leave));
+            random::Stream rng(3, 1, static_cast<std::uint32_t>(i * 60 + j));
+            const double at = canopyShapedStop(reeds, ShapeType::Box, half, bank, from, down, enter,
+                                               leave, rng.uniform());
+            if (std::isfinite(at)) {
+                const double z = from[2] - at;
+                EXPECT_GE(z, 0.5 - 1e-9);
+                EXPECT_LE(z, 0.5 + canopyTallest(reeds) + 1e-9);
+                tops.push_back(z - 0.5);
+            }
+        }
+    }
+    ASSERT_GT(tops.size(), 1000U);
+    double mean = 0.0;
+    for (const double z : tops) {
+        mean += z / static_cast<double>(tops.size());
+    }
+    double var = 0.0;
+    for (const double z : tops) {
+        var += (z - mean) * (z - mean) / static_cast<double>(tops.size());
+    }
+    EXPECT_GT(std::sqrt(var), 0.15 * reeds.canopyHeight);  // the returns are not one plane
+    // Along the border the plants end at different distances in from the edge.
+    double nearest = 1e9;
+    double farthest = 0.0;
+    for (int k = 0; k < 200; ++k) {
+        const double y = -9.0 + k * 0.09;
+        double in = 0.0;
+        while (in < 2.0 && canopyHeightFactor(reeds, 10.0 - in, y, in) < 0.5) {
+            in += 0.01;
+        }
+        nearest = std::min(nearest, in);
+        farthest = std::max(farthest, in);
+    }
+    EXPECT_GT(farthest - nearest, 0.2);
+}
+
+TEST(CanopyShape, VerticalBeamGapFractionAndDeterminism) {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    for (const CanopyForm form : kForms) {
+        const SurfaceMaterial m = canopyOf(form, 1.0, 3.0);
+        const Pose ground{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+        // A point with plants on it.
+        double x = 0.0;
+        while (canopyHeightFactor(m, x, 0.3, kInf) < 0.8) {
+            x += 0.05;
+        }
+        const double f = canopyHeightFactor(m, x, 0.3, kInf);
+        const std::array<double, 3> from{x, 0.3, 4.0};
+        const std::array<double, 3> down{0.0, 0.0, -1.0};
+        double enter = 0.0;
+        double leave = 0.0;
+        ASSERT_TRUE(canopyVolumeSpan(ShapeType::Plane, {1.0, 1.0, 1.0}, ground, from, down,
+                                     canopyTallest(m), 100.0, enter, leave));
+        constexpr int kBeams = 100000;
+        int through = 0;
+        for (int i = 0; i < kBeams; ++i) {
+            random::Stream rng(9, 4, static_cast<std::uint32_t>(i));
+            const double u = rng.uniform();
+            const double at = canopyShapedStop(m, ShapeType::Plane, {1.0, 1.0, 1.0}, ground, from,
+                                               down, enter, leave, u);
+            through += std::isfinite(at) ? 0 : 1;
+            if (i < 100) {
+                const double again = canopyShapedStop(m, ShapeType::Plane, {1.0, 1.0, 1.0}, ground,
+                                                      from, down, enter, leave, u);
+                EXPECT_EQ(std::memcmp(&at, &again, sizeof at), 0);
+            }
+        }
+        // Nilson's gap fraction with the local leaf area index LAI f, G = 0.5.
+        const double p = std::exp(-kCanopyProjection * m.leafAreaIndex * f);
+        EXPECT_NEAR(static_cast<double>(through) / kBeams, p,
+                    0.01 + 5.0 * std::sqrt(p * (1.0 - p) / kBeams))
+            << static_cast<int>(form);
+        // The same through a hit on a surface without a volume.
+        int soil = 0;
+        for (int i = 0; i < kBeams; ++i) {
+            random::Stream rng(9, 5, static_cast<std::uint32_t>(i));
+            soil += canopyShapedShortening(m, x, 0.3, 1.0, 20.0, rng.uniform()) == 0.0 ? 1 : 0;
+        }
+        EXPECT_NEAR(static_cast<double>(soil) / kBeams, p,
+                    0.01 + 5.0 * std::sqrt(p * (1.0 - p) / kBeams))
+            << static_cast<int>(form);
+    }
+}
+
+// Cut plants (ground.md "Cutting the plants"): straight down into tall grass cut to 5 cm, beams
+// stop no higher than the cut, and the same draws stop deeper than in the uncut grass.
+TEST(CanopyShape, CutPlantsStopBeamsNoHigherThanTheCut) {
+    SurfaceMaterial grass;
+    ASSERT_TRUE(surfaceMaterialPreset("tall_grass", grass));
+    const std::array<double, 3> size{5.0, 5.0, 0.5};
+    const Pose placed{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    // The cut map of collider 3: every cell within 1 m of the centre at 5 cm.
+    std::vector<double> values(kCanopyCutLength, 0.0);
+    std::size_t count = 0;
+    for (int cellX = -25; cellX < 25; ++cellX) {
+        for (int cellY = -25; cellY < 25; ++cellY) {
+            const std::size_t at = kCanopyCutHeader + (4 * count++);
+            values[at] = 3;
+            values[at + 1] = cellX;
+            values[at + 2] = cellY;
+            values[at + 3] = 0.05;
+        }
+    }
+    values[0] = 1.0;
+    values[1] = static_cast<double>(count);
+    CanopyCuts cuts;
+    cuts.load(values);
+    const double top = 0.5 + canopyTallest(grass);
+    int cutStops = 0;
+    int uncutStops = 0;
+    double cutDepth = 0.0;
+    double uncutDepth = 0.0;
+    for (int k = 0; k < 400; ++k) {
+        const double x = -0.4 + 0.002 * k;
+        const std::array<double, 3> origin{x, 0.3, top + 1.0};
+        const double u = (k + 0.5) / 400.0;
+        const double cut = canopyShapedStop(grass, ShapeType::Box, size, placed, origin,
+                                            {0.0, 0.0, -1.0}, 1.0, top + 0.5, u, &cuts, 3);
+        const double uncut = canopyShapedStop(grass, ShapeType::Box, size, placed, origin,
+                                              {0.0, 0.0, -1.0}, 1.0, top + 0.5, u);
+        if (std::isfinite(cut)) {
+            EXPECT_GE(origin[2] - cut, 0.5 - 1e-9);
+            EXPECT_LE(origin[2] - cut, 0.5 + 0.05 + 1e-9);
+            ++cutStops;
+            cutDepth += cut;
+        }
+        if (std::isfinite(uncut)) {
+            ++uncutStops;
+            uncutDepth += uncut;
+        }
+        // Another collider's map is not this one's.
+        EXPECT_EQ(canopyShapedStop(grass, ShapeType::Box, size, placed, origin, {0.0, 0.0, -1.0},
+                                   1.0, top + 0.5, u, &cuts, 4),
+                  uncut);
+    }
+    EXPECT_GT(uncutStops, 200);
+    EXPECT_LT(cutStops, uncutStops);  // stubble lets more beams through to the soil
+    EXPECT_GT(cutStops, 0);
+    EXPECT_GT(cutDepth / cutStops, uncutDepth / uncutStops);
+    // On a mesh or a height field: the path starts at the cut.
+    EXPECT_LE(canopyShapedShortening(grass, 0.0, 0.0, 1.0, 10.0, 0.999, 0.05), 0.05 + 1e-12);
+    EXPECT_EQ(canopyShapedShortening(grass, 0.0, 0.0, 1.0, 10.0, 0.999, 0.0), 0.0);
+}
+
+// Trees (ground.md "Trees"): a beam through a crown is stopped with the gap probability
+// exp(-G·LAD·s); cut cells let it through; the crown is where its sway puts it.
+TreeSpec crown() {
+    TreeSpec t;
+    t.name = "oak";
+    t.height = 10.0;
+    t.crownRadius = 3.0;
+    t.crownBase = 3.0;  // centre at 6.5 m, half height 3.5 m
+    t.leafAreaDensity = 0.5;
+    return t;
+}
+
+TEST(Crown, ABeamThroughTheCrownPassesWithTheGapProbability) {
+    const TreeSpec t = crown();
+    const double mu = kCanopyProjection * t.leafAreaDensity;  // 0.25 /m
+    // Level along x through the centre: 6 m of leaves, from x = -3 to 3.
+    const std::array<double, 3> from{-10.0, 0.0, 6.5};
+    const std::array<double, 3> dir{1.0, 0.0, 0.0};
+    int through = 0;
+    double meanStop = 0.0;
+    int stopped = 0;
+    constexpr int kDraws = 20000;
+    for (int k = 0; k < kDraws; ++k) {
+        const double u = (k + 0.5) / kDraws;
+        const double at = crownStop(t, 0, from, dir, 100.0, {}, nullptr, u);
+        if (std::isinf(at)) {
+            ++through;
+        } else {
+            EXPECT_GE(at, 7.0 - 1e-9);
+            EXPECT_LE(at, 13.0 + 1e-9);
+            meanStop += at - 7.0;
+            ++stopped;
+        }
+    }
+    const double pass = std::exp(-mu * 6.0);  // 0.223
+    EXPECT_NEAR(static_cast<double>(through) / kDraws, pass, 0.002);
+    // The mean depth of the stops: the truncated exponential's, 1/mu - 6 e^(-6mu)/(1 - e^(-6mu)).
+    const double expected = 1.0 / mu - 6.0 * pass / (1.0 - pass);
+    EXPECT_NEAR(meanStop / stopped, expected, 0.01 * expected);
+    // Over the crown, or short of it, nothing.
+    EXPECT_TRUE(std::isinf(crownStop(t, 0, {-10.0, 0.0, 11.0}, dir, 100.0, {}, nullptr, 0.5)));
+    EXPECT_TRUE(std::isinf(crownStop(t, 0, from, dir, 6.5, {}, nullptr, 0.5)));
+}
+
+TEST(Crown, CutCellsLetTheBeamThroughAndTheSwayMovesTheCrown) {
+    const TreeSpec t = crown();
+    // Every cell along the beam's line cut away (z cell 0 holds the beam at the centre height).
+    std::vector<double> values(kTreeCutLength, 0.0);
+    values[0] = 1.0;
+    std::size_t n = 0;
+    for (int x = -31; x <= 31; ++x) {
+        const std::size_t at = kTreeCutHeader + 4 * n++;
+        values[at] = 0.0;
+        values[at + 1] = x;
+        values[at + 2] = 0.0;
+        values[at + 3] = 0.0;
+    }
+    values[1] = static_cast<double>(n);
+    TreeCuts cuts;
+    cuts.load(values);
+    const std::array<double, 3> dir{1.0, 0.0, 0.0};
+    EXPECT_TRUE(std::isinf(crownStop(t, 0, {-10.0, 0.05, 6.55}, dir, 100.0, {}, &cuts, 0.99)));
+    EXPECT_FALSE(std::isinf(crownStop(t, 0, {-10.0, 0.05, 6.85}, dir, 100.0, {}, &cuts, 0.5)));
+    // Swayed 2 m along +y, a beam at y = 0 near the old edge misses; one 2 m over meets it.
+    EXPECT_TRUE(
+        std::isinf(crownStop(t, 0, {-10.0, -2.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.5)));
+    EXPECT_FALSE(
+        std::isinf(crownStop(t, 0, {-10.0, -0.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.1)));
+}
+
+// The wood in a crown (lagrange/world/TreeWood.hpp): a beam level and square to a limb, aimed at
+// its axis, stops on its bark at the distance to the axis less the limb's radius, wherever the
+// sway puts the crown; with the limb broken off at its base, it goes on past.
+TEST(Crown, ABeamStopsOnABranch) {
+    TreeSpec t = crown();
+    t.trunkDiameter = 0.4;
+    t.branchCount = 12;
+    t.maxCutDiameter = 0.01;
+    TreeWood wood;
+    wood.build({t});
+    const std::vector<BranchSegment>& segs = wood.skeleton(0).segments;
+    std::size_t i = 0;
+    while (i < segs.size() && segs[i].generation != 0) {
+        ++i;
+    }
+    ASSERT_LT(i, segs.size());
+    const BranchSegment& s = segs[i];
+    const std::array<double, 3> u = [&] {
+        const std::array<double, 3> d{s.to[0] - s.from[0], s.to[1] - s.from[1],
+                                      s.to[2] - s.from[2]};
+        const double n = std::hypot(d[0], d[1], d[2]);
+        return std::array<double, 3>{d[0] / n, d[1] / n, d[2] / n};
+    }();
+    const double level = std::hypot(u[0], u[1]);
+    const std::array<double, 3> side{u[1] / level, -u[0] / level, 0.0};
+    for (const std::array<double, 3>& sway :
+         {std::array<double, 3>{}, std::array<double, 3>{0.4, -0.3, 0.0}}) {
+        const std::array<double, 3> mid{0.5 * (s.from[0] + s.to[0]) + sway[0],
+                                        0.5 * (s.from[1] + s.to[1]) + sway[1],
+                                        0.5 * (s.from[2] + s.to[2]) + t.centreHeight()};
+        const std::array<double, 3> from{mid[0] + 10.0 * side[0], mid[1] + 10.0 * side[1], mid[2]};
+        const std::array<double, 3> dir{-side[0], -side[1], 0.0};
+        WoodHit hit;
+        ASSERT_TRUE(wood.ray(t, 0, from, dir, 100.0, sway, hit));
+        EXPECT_NEAR(hit.distance, 10.0 - 0.5 * s.diameter, 1e-9);
+        EXPECT_NEAR(hit.diameter, s.diameter, 1e-15);
+        EXPECT_NEAR(hit.normal[0] * side[0] + hit.normal[1] * side[1], 1.0, 1e-9);
+        // Short of it, nothing.
+        EXPECT_FALSE(wood.ray(t, 0, from, dir, 9.0, sway, hit));
+    }
+    // Broken off at its base (kBranchCutSignal), the limb is gone.
+    std::vector<double> values(kBranchCutLength, 0.0);
+    values[0] = 1.0;
+    values[1] = 1.0;
+    values[kBranchCutHeader + 1] = static_cast<double>(i);
+    wood.load(values);
+    EXPECT_EQ(wood.standing(0, i), 0.0);
+    const std::array<double, 3> mid{0.5 * (s.from[0] + s.to[0]), 0.5 * (s.from[1] + s.to[1]),
+                                    0.5 * (s.from[2] + s.to[2]) + t.centreHeight()};
+    WoodHit hit;
+    const bool met = wood.ray(t, 0, {mid[0] + 10.0 * side[0], mid[1] + 10.0 * side[1], mid[2]},
+                              {-side[0], -side[1], 0.0}, 100.0, {}, hit);
+    EXPECT_TRUE(!met || hit.distance > 10.0 - 0.5 * s.diameter + 1e-6);
+    // The capsule itself: from inside, 0; along the axis, the round end.
+    EXPECT_EQ(
+        rayCapsule({0.0, 0.0, 0.5}, {1.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 0.1, 10.0),
+        0.0);
+    EXPECT_NEAR(
+        rayCapsule({0.0, 0.0, 5.0}, {0.0, 0.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 0.1, 10.0),
+        3.9, 1e-12);
+}
+
+// The crowns' broad phase (CrownIndex): for many beams through an orchard of 140 swaying crowns
+// of mixed sizes and leans, its candidates are in index order, each once, and hold every crown
+// the beam crosses (brute force over all of them).
+TEST(Crown, TheIndexListsEveryCrownABeamCrosses) {
+    std::mt19937 gen(7);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::vector<TreeSpec> trees;
+    std::vector<std::array<double, 3>> sways;
+    for (int k = 0; k < 140; ++k) {
+        TreeSpec t = crown();
+        t.pose.position = {-30.0 + (60.0 * unit(gen)), -20.0 + (40.0 * unit(gen)), 0.0};
+        const double yaw = 6.28 * unit(gen);
+        const double lean = 0.2 * unit(gen);  // rad about x
+        t.pose.orientation = {
+            std::cos(yaw / 2) * std::cos(lean / 2), std::cos(yaw / 2) * std::sin(lean / 2),
+            -std::sin(yaw / 2) * std::sin(lean / 2), std::sin(yaw / 2) * std::cos(lean / 2)};
+        t.height = 3.0 + (15.0 * unit(gen));
+        t.crownBase = 0.25 * t.height;
+        t.crownRadius = 0.8 + (4.0 * unit(gen));
+        trees.push_back(t);
+        sways.push_back({0.4 * (unit(gen) - 0.5), 0.4 * (unit(gen) - 0.5), 0.0});
+    }
+    CrownIndex index;
+    index.build(trees, sways);
+    std::vector<std::uint32_t> near;
+    std::size_t crossings = 0;
+    std::size_t listed = 0;
+    for (int b = 0; b < 20000; ++b) {
+        const std::array<double, 3> from{-40.0 + (80.0 * unit(gen)), -30.0 + (60.0 * unit(gen)),
+                                         0.5 + (20.0 * unit(gen))};
+        const double az = 6.28318 * unit(gen);
+        const double el = (b % 10 == 0) ? 1.5707 : (1.2 * (unit(gen) - 0.7));  // some straight up
+        const std::array<double, 3> dir{std::cos(el) * std::cos(az), std::cos(el) * std::sin(az),
+                                        std::sin(el)};
+        const double range = b % 3 == 0 ? 1e9 : 5.0 + (60.0 * unit(gen));
+        index.candidates(from, dir, range, near);
+        listed += near.size();
+        for (std::size_t i = 1; i < near.size(); ++i) {
+            ASSERT_LT(near[i - 1], near[i]) << "in index order, once each";
+        }
+        for (std::uint32_t k = 0; k < trees.size(); ++k) {
+            if (crownCrossed(trees[k], from, dir, range, sways[k])) {
+                ++crossings;
+                ASSERT_TRUE(std::binary_search(near.begin(), near.end(), k))
+                    << "beam " << b << " crosses crown " << k;
+            }
+        }
+    }
+    std::printf("%zu crossings, %.1f candidates a beam of 140 crowns\n", crossings,
+                static_cast<double>(listed) / 20000.0);
+    EXPECT_GT(crossings, 1000U);
+    EXPECT_LT(static_cast<double>(listed) / 20000.0, 40.0) << "the index culls";
+    // crownCrossed agrees with crownStop: a crown crownStop stops in is crossed.
+    const TreeSpec t = crown();
+    EXPECT_TRUE(crownCrossed(t, {-10.0, 0.0, 6.5}, {1.0, 0.0, 0.0}, 100.0, {}));
+    EXPECT_FALSE(crownCrossed(t, {-10.0, 0.0, 11.0}, {1.0, 0.0, 0.0}, 100.0, {}));
+    EXPECT_FALSE(crownCrossed(t, {-10.0, 0.0, 6.5}, {1.0, 0.0, 0.0}, 6.5, {}));
+}
+
+// The wood's broad phase (woodBound, CrownIndex::buildSpheres): for random beams through 140
+// swaying trees' branches, every tree whose wood a beam meets (TreeWood::ray) is a candidate.
+TEST(Crown, TheWoodIndexListsEveryTreeABeamMeets) {
+    std::mt19937 gen(11);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::vector<TreeSpec> trees;
+    std::vector<std::array<double, 3>> sways;
+    for (int k = 0; k < 140; ++k) {
+        TreeSpec t = crown();
+        t.pose.position = {-30.0 + (60.0 * unit(gen)), -20.0 + (40.0 * unit(gen)), 0.0};
+        const double yaw = 6.28 * unit(gen);
+        t.pose.orientation = {std::cos(yaw / 2), 0.0, 0.0, std::sin(yaw / 2)};
+        t.height = 3.0 + (15.0 * unit(gen));
+        t.crownBase = 0.25 * t.height;
+        t.crownRadius = 0.8 + (4.0 * unit(gen));
+        t.trunkDiameter = t.crownRadius / 8.0;
+        t.branchCount = 12;
+        trees.push_back(t);
+        sways.push_back({0.4 * (unit(gen) - 0.5), 0.4 * (unit(gen) - 0.5), 0.0});
+    }
+    TreeWood wood;
+    wood.build(trees);
+    std::vector<std::array<double, 4>> spheres;
+    for (std::size_t k = 0; k < trees.size(); ++k) {
+        spheres.push_back(woodBound(trees[k], wood.skeleton(k), sways[k]));
+    }
+    CrownIndex index;
+    index.buildSpheres(spheres);
+    std::vector<std::uint32_t> near;
+    std::size_t hits = 0;
+    for (int b = 0; b < 20000; ++b) {
+        const std::array<double, 3> from{-40.0 + (80.0 * unit(gen)), -30.0 + (60.0 * unit(gen)),
+                                         0.5 + (12.0 * unit(gen))};
+        const double az = 6.28318 * unit(gen);
+        const double el = 0.8 * (unit(gen) - 0.6);
+        const std::array<double, 3> dir{std::cos(el) * std::cos(az), std::cos(el) * std::sin(az),
+                                        std::sin(el)};
+        const double range = 5.0 + (60.0 * unit(gen));
+        index.candidates(from, dir, range, near);
+        for (std::uint32_t k = 0; k < trees.size(); ++k) {
+            WoodHit hit;
+            if (wood.ray(trees[k], k, from, dir, range, sways[k], hit)) {
+                ++hits;
+                ASSERT_TRUE(std::binary_search(near.begin(), near.end(), k))
+                    << "beam " << b << " meets tree " << k << "'s wood";
+            }
+        }
+    }
+    std::printf("%zu beams met wood\n", hits);
+    EXPECT_GT(hits, 100U);
+}
+
+// Flying leaves (ground.md "Flying leaves"): a beam passing within size/2 of a leaf's centre
+// stops at the leaf's range along it; the nearest of several; none beyond the range or behind.
+TEST(FlyingLeaves, ABeamMeetsTheFirstLeafWithinHalfItsSize) {
+    std::vector<double> values(kLeavesLength, 0.0);
+    values[0] = 1.0;
+    values[1] = 2.0;
+    const std::array<std::array<double, 6>, 2> leaves{
+        std::array<double, 6>{5.0, 0.02, 1.0, 0.0, 1.0, 0.06},   // 2 cm off the beam
+        std::array<double, 6>{3.0, 0.04, 1.0, 0.0, 1.0, 0.06}};  // 4 cm off: missed
+    for (std::size_t k = 0; k < 2; ++k) {
+        for (std::size_t f = 0; f < 6; ++f) {
+            values[kLeavesHeader + (kLeavesFields * k) + f] = leaves.at(k).at(f);
+        }
+    }
+    FlyingLeaves flying;
+    flying.load(values);
+    ASSERT_FALSE(flying.empty());
+    const std::array<double, 3> dir{1.0, 0.0, 0.0};
+    EXPECT_DOUBLE_EQ(flying.stop({0.0, 0.0, 1.0}, dir, 100.0), 5.0);
+    EXPECT_TRUE(std::isinf(flying.stop({0.0, 0.0, 1.0}, dir, 4.9)));    // beyond the range
+    EXPECT_TRUE(std::isinf(flying.stop({6.0, 0.0, 1.0}, dir, 100.0)));  // behind the sensor
+    EXPECT_DOUBLE_EQ(flying.stop({0.0, 0.035, 1.0}, dir, 100.0), 3.0);  // the nearer one now
+    EXPECT_TRUE(std::isinf(flying.stop({0.0, 0.0, 2.0}, dir, 100.0)));  // over them
+    // No leaves, nothing.
+    values[0] = 2.0;
+    values[1] = 0.0;
+    flying.load(values);
+    EXPECT_TRUE(flying.empty());
+    EXPECT_TRUE(std::isinf(flying.stop({0.0, 0.0, 1.0}, dir, 100.0)));
 }
 
 }  // namespace

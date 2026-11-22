@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -29,10 +30,85 @@ SignalSpec feedback(std::string name, Unit unit) {
     return out;
 }
 
+/// kg/s, a nozzle's flow (actuators' Nozzles.cpp).
+constexpr Unit kKgPerS{{.mass = 1, .time = -1}, 1.0, QuantityKind::Unspecified};
+
+/// The unit and type of a GPIO interface's signal: the <param>s' when given, else those of the
+/// actuators domain's signal of that name (RFC 0020 §4: grippers, nozzles, servos, solenoids).
+Expected<SignalSpec, std::string> gpioSpec(const std::string& gpio,
+                                           const ControlGpio::Interface& interface) {
+    struct Known {
+        const char* leaf;
+        Unit unit;
+        bool flag;
+    };
+    static const Known kKnown[] = {
+        {"command", units::one, false},
+        {"pressure_command", units::Pa, false},
+        {"pulse_width", units::s, false},
+        {"goal_position", units::rad, false},
+        {"goal_velocity", units::rad_per_s, false},
+        {"goal_current", units::A, false},
+        {"torque_enable", units::one, false},
+        {"current", units::A, false},
+        {"voltage", units::V, false},
+        {"force", units::N, false},
+        {"position", units::m, false},
+        {"power", units::W, false},
+        {"pressure", units::Pa, false},
+        {"gap", units::m, false},
+        {"flow", kKgPerS, false},
+        {"tank_mass", units::kg, false},
+        {"present_position", units::rad, false},
+        {"present_velocity", units::rad_per_s, false},
+        {"present_load", units::N_m, false},
+        {"present_current", units::A, false},
+        {"release", units::one, false},
+        {"engaged", units::one, true},
+        {"held", units::one, true},
+        {"holding", units::one, true},
+        {"sealed", units::one, true},
+        {"overload", units::one, true},
+    };
+    SignalSpec out = spec(interface.signal, units::one);
+    const std::string leaf = interface.signal.substr(interface.signal.rfind('/') + 1);
+    bool found = false;
+    for (const Known& k : kKnown) {
+        if (leaf == k.leaf) {
+            out.unit = k.unit;
+            out.type = k.flag ? SignalType::Bool : SignalType::Scalar;
+            found = true;
+        }
+    }
+    if (!interface.unit.empty()) {
+        const UnitParse parsed = parseUnit(interface.unit);
+        if (!parsed.unit) {
+            return Unexpected{"gpio " + gpio + "/" + interface.name + ": unit '" + interface.unit +
+                              "' is not one Lagrange reads"};
+        }
+        out.unit = *parsed.unit;
+        found = true;
+    }
+    if (!interface.type.empty()) {
+        if (interface.type != "bool" && interface.type != "scalar") {
+            return Unexpected{"gpio " + gpio + "/" + interface.name + ": type '" + interface.type +
+                              "' is not bool or scalar"};
+        }
+        out.type = interface.type == "bool" ? SignalType::Bool : SignalType::Scalar;
+    }
+    if (!found) {
+        return Unexpected{"gpio " + gpio + "/" + interface.name + ": " + interface.signal +
+                          " is not an actuator signal Lagrange knows; give its <param "
+                          "name=\"unit\"> (and <param name=\"type\">bool</param> for a flag)"};
+    }
+    return out;
+}
+
 class ControlModule final : public IModule {
 public:
-    ControlModule(ControllerHost& host, std::vector<ControlJoint> joints)
-        : host_(host), joints_(std::move(joints)) {}
+    ControlModule(ControllerHost& host, std::vector<ControlJoint> joints,
+                  std::vector<ControlGpio> gpios)
+        : host_(host), joints_(std::move(joints)), gpios_(std::move(gpios)) {}
 
     // Not deterministic: commands come from controllers configured over ROS at run time.
     [[nodiscard]] ModuleInfo info() const override {
@@ -71,11 +147,70 @@ public:
                                      units::one);
             glitch.optional = true;
             joint.glitch = d.input(glitch);
+            // A joint with a servo (RFC 0020 §4.3, §5): the position command is the servo's goal
+            // (its board closes the loop), and the effort state is its present load.
+            for (const SchemaInstance* servo : world.instancesOf("ServoAPI_1")) {
+                if (servo->prim != table.prim[j]) {
+                    continue;
+                }
+                const std::string act =
+                    "act/" + std::string(world.signalInstanceName(table.prim[j])) + "/";
+                joint.servoVelocity =
+                    servo->token("act:servo:operatingMode").value_or("position") == "velocity";
+                joint.servo = true;
+                joint.torque = joint.servoVelocity
+                                   ? d.output(spec(act + "goal_velocity", units::rad_per_s))
+                                   : d.output(spec(act + "goal_position", units::rad));
+                joint.load = d.input(feedback(act + "present_load", units::N_m));
+            }
+            // A joint on a stepper (RFC 0020 §4.5): the position command goes to its driver,
+            // converted to microsteps there; the effort state is the torque it makes.
+            for (const SchemaInstance* motor : world.instancesOf("ElectricalMotorAPI_1")) {
+                const auto driven = motor->rel("elec:joint");
+                if (joint.servo || driven.size() != 1 || driven[0] != table.prim[j] ||
+                    motor->token("elec:motorType").value_or("pmsm") != "stepper") {
+                    continue;
+                }
+                joint.stepper = true;
+                joint.torque =
+                    d.output(spec(base + "/position_command", prismatic ? units::m : units::rad));
+                joint.load = d.input(feedback(base + "/torque", prismatic ? units::N : units::N_m));
+            }
             // The command: the electrical domain (or its ideal substitute) turns it into the
             // torque.
-            joint.torque =
-                d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
+            if (!joint.servo && !joint.stepper) {
+                joint.torque =
+                    d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
+            }
             signals_.push_back(joint);
+        }
+        // GPIOs (RFC 0020 §5): each interface to its signal, with the actuator signal's unit.
+        gpioSignals_.clear();
+        for (const ControlGpio& gpio : gpios_) {
+            for (const bool command : {true, false}) {
+                for (const ControlGpio::Interface& interface :
+                     command ? gpio.commands : gpio.states) {
+                    auto typed = gpioSpec(gpio.name, interface);
+                    if (!typed) {
+                        return Status::error(StatusCode::InvalidConfig, typed.error());
+                    }
+                    GpioSignal g;
+                    g.gpio = gpio.name;
+                    g.interface = interface.name;
+                    g.command = command;
+                    if (command) {
+                        g.id = d.output(*typed);
+                    } else {
+                        // Read as the controllers would sample it: the last step's value; none
+                        // when nothing in the run writes it (NaN to the controller).
+                        typed->feedback = true;
+                        typed->optional = true;
+                        typed->defaultValue = std::numeric_limits<double>::quiet_NaN();
+                        g.id = d.input(*typed);
+                    }
+                    gpioSignals_.push_back(std::move(g));
+                }
+            }
         }
         return {};
     }
@@ -85,7 +220,15 @@ public:
         periodNs_ = std::max<std::int64_t>(1'000'000'000 / rate, 1'000'000);
         lastCycleNs_ = -periodNs_;
         for (const Joint& joint : signals_) {
-            bus.write(joint.torque, 0.0);
+            // A servo keeps its goal until a controller gives one (NaN: no command).
+            bus.write(joint.torque, joint.servo || joint.stepper
+                                        ? std::numeric_limits<double>::quiet_NaN()
+                                        : 0.0);
+        }
+        for (const GpioSignal& g : gpioSignals_) {
+            if (g.command) {
+                bus.write(g.id, std::numeric_limits<double>::quiet_NaN());  // none yet
+            }
         }
         return {};
     }
@@ -101,8 +244,13 @@ public:
                 JointSlot& slot = table[joint.slot];
                 slot.position = bus.read(joint.position);
                 slot.velocity = bus.read(joint.velocity);
-                slot.effort = joint.applied;
+                slot.effort = joint.servo || joint.stepper ? bus.read(joint.load) : joint.applied;
                 slot.glitchProbability = bus.read(joint.glitch);
+            }
+            for (const GpioSignal& g : gpioSignals_) {
+                if (!g.command) {
+                    table.gpio(g.gpio).states[g.interface] = bus.read(g.id);
+                }
             }
         }
         bool cycled = false;
@@ -117,8 +265,36 @@ public:
         }
         const double dt = context.dt.seconds();
         const std::lock_guard<std::mutex> lock(table.mutex());
+        for (const GpioSignal& g : gpioSignals_) {
+            if (g.command) {
+                const GpioSlot& slot = table.gpio(g.gpio);
+                const auto value = slot.commands.find(g.interface);
+                bus.write(g.id, value != slot.commands.end()
+                                    ? value->second
+                                    : std::numeric_limits<double>::quiet_NaN());
+            }
+        }
         for (Joint& joint : signals_) {
             const JointSlot& slot = table[joint.slot];
+            if (joint.stepper) {
+                // A position command is the driver's; without one it keeps its step count.
+                bus.write(joint.torque, slot.mode == CommandMode::Position
+                                            ? slot.commandPosition
+                                            : std::numeric_limits<double>::quiet_NaN());
+                continue;
+            }
+            if (joint.servo) {
+                // Position (or, for a servo in velocity mode, velocity) commands are its goal;
+                // others it cannot follow, and it keeps its last goal.
+                double goal = std::numeric_limits<double>::quiet_NaN();
+                if (!joint.servoVelocity && slot.mode == CommandMode::Position) {
+                    goal = slot.commandPosition;
+                } else if (joint.servoVelocity && slot.mode == CommandMode::Velocity) {
+                    goal = slot.commandVelocity;
+                }
+                bus.write(joint.torque, goal);
+                continue;
+            }
             double torque = 0.0;
             if (slot.mode != joint.mode) {
                 joint.integral = 0.0;  // a new controller starts from rest
@@ -175,14 +351,26 @@ private:
         ServoGains gains;
         double effortLimit{INFINITY};
         SignalId position, velocity, torque, glitch;
+        // A servo's joint: `torque` is then its act/<s>/goal_position (or goal_velocity), and
+        // `load` its present load.
+        bool servo{false}, servoVelocity{false};
+        bool stepper{false};  // `torque` is joint/<j>/position_command, `load` joint/<j>/torque
+        SignalId load;
         CommandMode mode{CommandMode::None};
         double integral{0.0};
         double applied{0.0};
         double lastCommand{0.0};  // rad or m: the position command of the last controller cycle
         double commandRate{0.0};  // rad/s or m/s: how fast the command moved over that cycle
     };
+    struct GpioSignal {
+        std::string gpio, interface;
+        bool command{false};
+        SignalId id;
+    };
     ControllerHost& host_;
     std::vector<ControlJoint> joints_;
+    std::vector<ControlGpio> gpios_;
+    std::vector<GpioSignal> gpioSignals_;
     std::vector<Joint> signals_;
     std::int64_t periodNs_{10'000'000};
     std::int64_t lastCycleNs_{0};
@@ -195,9 +383,9 @@ JointTable& JointTable::instance() {
     return table;
 }
 
-std::unique_ptr<IModule> createControlModule(ControllerHost& host,
-                                             std::vector<ControlJoint> joints) {
-    return std::make_unique<ControlModule>(host, std::move(joints));
+std::unique_ptr<IModule> createControlModule(ControllerHost& host, std::vector<ControlJoint> joints,
+                                             std::vector<ControlGpio> gpios) {
+    return std::make_unique<ControlModule>(host, std::move(joints), std::move(gpios));
 }
 
 }  // namespace lagrange::ros2_control

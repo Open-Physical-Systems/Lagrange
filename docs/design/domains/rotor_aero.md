@@ -21,6 +21,7 @@ ground.
 | A wall beside a rotor: more inflow, less thrust, a roll towards it | the robot's own rotors | done (§2.7) |
 | Ceilings, scenery other than boxes and the ground plane | | not modelled |
 | Tethers in the wake, the drone's own included | each cable's masses (`tether/<n>/downwash`) | done (§2.9) |
+| A damaged blade: less thrust, a once-per-revolution shake | the damaged rotor's link | done (§10) |
 
 The model is `aerodynamics::Downwash` (`modules/aerodynamics/include/lagrange/aerodynamics/Downwash.hpp`),
 run by the aerodynamics domain (`AeroDrag`). It runs whenever the stage has rotors and the site
@@ -248,8 +249,15 @@ what the ends hold.
 | `rotor/<j>/air_velocity` | m/s, world | aerodynamics | rotor_aero (`bem`, config `rotor_air`) |
 | `body/<b>/wrench/aero` | N, N·m | aerodynamics | wrench sum |
 | `env/dust/downwash` | kg/m³ | aerodynamics | weather (config `downwash_dust`) |
+| `water/<w>/patch`, `air_pressure`, `air_stress` | m, Pa, Pa | aerodynamics (config `water_surface`) | hydrodynamics `surface` |
+| `water/<w>/surface`, `surface_origin`, `surface_min`, `surface_max` | m | hydrodynamics `surface` | hydrodynamics `water`, rotor_aero (config `surface_cells`) |
+| `water/<w>/outwash_peak`, `spray_rate` | m/s, kg/s | aerodynamics | scopes |
+| `rotor/<j>/spray`, `env/spray/downwash` | kg/m³ | aerodynamics | scopes |
+| `env/spray/extinction`, `env/spray/rate` | 1/m, m/s | aerodynamics | weather (config `downwash_spray`) |
+| `aero/spray_drops` | m (x, y, z per drop) | aerodynamics | server (viewer) |
 | `tether/<n>/nodes` | m, world, 3 per node | tether | aerodynamics |
 | `tether/<n>/downwash` | m/s, world, 3 per node | aerodynamics | tether (feedback) |
+| `rotor/<j>/damage` | 1 (share of one blade lost) | vegetation (branch strikes), or a plugin / `--ros-topics` | rotor_aero (optional, feedback; §10) |
 
 The modules talk only through these signals (invariant 1). The aerodynamics domain reads the
 rotors' outputs from the previous step (feedback), so there is no loop within a step.
@@ -580,3 +588,71 @@ fitted, as they fitted theirs on a test stand.
 Owed: blade flapping (coning and tilt), the frame's drag, a per-axis comparison of moments. The
 arm geometry and spin directions are from their trajectory code (`setupKingfisher.m`) and the
 logs; the rotors' height above the centre of mass is taken as zero.
+
+## 10. A damaged blade
+
+A propeller that hits something loses part of a blade. `rotor/<j>/damage` (0 to 1) is the share
+of one blade's length lost from its tip; the vegetation domain writes it when a blade strikes a
+branch (docs/physics/ground.md, "Branches"), and a plugin or a `--ros-topics` subscription can
+write it too. rotor_aero reads it at both fidelities (`coefficients` and `bem`), as an optional
+input: without a writer it reads zero and nothing changes, bit for bit. The ideal substitute
+does not read it.
+
+**Thrust and torque.** By blade elements of constant chord at constant lift and drag
+coefficients, an element at radius r gives thrust ∝ r² dr and torque ∝ r³ dr. A blade with the
+tip from (1−d)R off keeps (1−d)³ of its thrust and (1−d)⁴ of its torque, so a rotor of B blades
+keeps
+
+$$
+\frac{T}{T_0} = 1 - \frac{1-(1-d)^3}{B}, \qquad \frac{Q}{Q_0} = 1 - \frac{1-(1-d)^4}{B}
+$$
+
+(`damagedThrustShare`, `damagedTorqueShare`). 30 % off one of two blades keeps 67 % of the
+thrust. Thrust ∝ blade area (a share d/B lost, 85 % kept) is the cruder bound; a real blade
+tapers to its tip, so the truth lies between. The controller makes up the thrust by spinning the
+damaged rotor faster, as Pose, Giribet and Torre (2024, arXiv:2410.05447, §4) saw in flight with
+tip-cut propellers.
+
+**The shake.** The forces turn with the rotor (the lost piece is fixed in the rotor link's frame,
+so they turn at its speed of rotation) and go into `body/<link>/wrench/rotor`, so physics carries
+them through the joint to the frame and the IMU:
+
+- Mass imbalance (de Alvear Cárdenas and de Visser 2024, AIAA 2024-2816, eq. 7):
+  F = m_lost · r_cg · ω², pointing from the axis away from the lost piece. With the blade's mass
+  even along its length, m_lost = d · m_blade at r_cg = R (1 − d/2) (`imbalanceForce`; a tapering
+  blade carries less at its tip, so this is an upper bound).
+- Thrust asymmetry: the whole blades' thrust no longer balances about the hub, a moment
+  (T₀/B) · (3R/4) · (1 − (1−d)⁴) about the in-plane axis square to the damaged blade
+  (`thrustAsymmetryMoment`).
+- Drag asymmetry: an in-plane force (4Q₀/(3RB)) · (1 − (1−d)³) along the damaged blade's motion
+  (`dragAsymmetryForce`).
+
+de Alvear Cárdenas and de Visser find the mass imbalance's in-plane force one to three orders of
+magnitude above the aerodynamic terms, and so does this model: 20 % off a 2.6 g blade at
+600 rad/s gives 21 N of imbalance against 0.2 N of drag asymmetry and 0.14 N·m of thrust moment.
+
+**The blade's mass.** A folding propeller's file gives it (`blade_mass`). Otherwise
+`estimatedBladeMass` scales a reference propeller by R³: the APC 10x4.7 SF whose coefficients
+the samples use, 11.9 g (retailers' listing of APC's weight; TODO(verify) against APC's own
+data), its blades' share of the mass the Bebop 2 propeller's (2 × 1.11 g of 5.07 g, de Alvear
+Cárdenas and de Visser §V.B; TODO(verify) for other propellers). That gives 2.6 g a blade for the
+sample quadcopter's 10-inch propellers.
+
+**Checked.**
+
+| Check | Reference | Result |
+|---|---|---|
+| Shares of thrust and torque; imbalance; thrust moment | closed forms; the lost piece summed as 10⁵ point masses | to 1e-9 (`BladeDamage.SharesAndImbalanceFollowTheirClosedForms`) |
+| A damaged rotor in the module, its link turned to three angles | the wrench from the closed forms, the force turning with the link | to 1e-9 (`BladeDamage.TheLinkTakesTheTurningImbalance`); `bem` the same shares (`TheBemFidelityKeepsTheSameShares`) |
+| The sample quadcopter hovering 2 m up, 10 % of a blade of rotor_1 off at 3 s (MuJoCo, IMU at 250 Hz) | thrust / ω² falls by the share; the IMU spectrum peaks at the rotor's frequency | thrust / ω² × 0.8649 (share 0.8645); rotor_1 551 → 587 rad/s (93.5 Hz); accelerometer and gyro peaks at 93.25 Hz (0.25 Hz bins); 7.0 m/s² at that frequency against 0.003 m/s² whole; it keeps hovering (1.94 to 2.12 m); the same run twice bit for bit (`test_blade_damage_run`) |
+
+With 30 % off, the same drone shakes at 40 N, rotor_1's speed swings between 370 and 900 rad/s as
+the controller fights it, and it sinks from 2 m to 1.2 m before it holds: a quadcopter with a
+quarter of a blade gone could not hover in the L1Quad flights (Wu et al. 2023, arXiv:2302.07208)
+without an adaptive controller.
+
+**Owed.** A comparison with measured thrust of tip-cut propellers and with measured vibration
+amplitudes (Pose et al. report spectra, not forces); the lost mass's own weight (de Alvear
+Cárdenas and de Visser eq. 1, negligible beside the imbalance); the change of the propeller's
+inertia; a damaged blade's changed aerodynamics at `bem` beyond the shares (the table is the
+whole propeller's); damage to more than one blade.

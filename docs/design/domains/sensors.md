@@ -42,6 +42,30 @@ colour response are not those of any real camera, and rain and snow are in the p
 season says so, separately from the `--weather` fog veil. With the sedan and the full town on an Iris
 Xe the run went at about 1.3× real time, against 1.4× with the simple look.
 
+**Trees in the camera** (`TreeAPI_1`, ground.md "Trees"). Colour: the realistic look draws each
+tree as the realistic view does (`realistic.slang` `vsTree`); the simple look, and a software
+device, draw it as a trunk and the crown's 28 clumps of leaves at the same places
+(`gpu/TreeShapes.hpp`, the function the viewer's Lit and other raster shadings use, invariant 13),
+swayed by `tree/<n>/sway`, a clump shrunk by the share of it the propellers cut. Depth and instance
+id are not those meshes: the camera adds the crowns to them as its lidar sees them, so the two
+sensors agree. Each pixel's ray, up to what the render met (or the far clip), stops in a crown it
+crosses at a free path drawn from `P(s > x) = exp(−G·LAD·x)` through the cells not cut away, the
+crown at its sway (`sensors::crownStop`, the lidar's function), one draw per tree in order from the
+pixel's own Philox stream (the camera's step, entity `0x8000'0000 + (sensor << 22) + pixel`); where
+it stops the depth is that point's and the instance is the tree prim's scene index. The crown is a
+turbid volume, not leaves at fixed places, so a depth image of a crown is speckled and changes from
+frame to frame by as much as a lidar's returns do; that is the choice that keeps camera and lidar
+consistent and the CPU reference exact. The trunk, solid wood, is drawn into depth and instance id
+in either look as the simple look draws it (its prim's id); the lidar sees the stage's trunk
+collider instead, which for the open field is a 3 m cylinder of the drawn foot's radius, so the two differ
+a little (the drawn trunk tapers) and above 3 m, inside the crown. Not yet: through a fisheye's faces, in a thermal
+camera's image, and the branches and flying leaves (the lidar sees flying leaves; the camera's
+depth does not). Checked in `test_camera` (`Camera.SeesATreesCrownAsTheLidarDoes`: a round crown of
+LAD 4 at 8.6 m, 95 % of the pixels around its centre on the tree, their mean distance the entry
+plus the truncated exponential's mean within 0.2 m, the trunk's face within 3 cm, the simple look
+green there) and
+`test_raster` (`TreeShapes.ClumpsFillTheCrownSwayAndCut`).
+
 Status of `sensor_model` in v0.6 (`modules/sensors/include/lagrange/sensors/CameraModel.hpp`, CPU
 after the raster render, every tier with a Vulkan device): each part runs when
 `CameraSensorAPI_1` asks for it. Lens distortion (plumb_bob, equidistant) by remapping a wider
@@ -141,9 +165,11 @@ object in one range cell are one detection (power-weighted range, angles, radial
 the bodies' twists); SNR by the radar equation against the effective noise floor, a fixed
 threshold standing in for CFAR, noise of resolution/√(2·SNR); at most 64 detections, strongest
 first. Ground-plane hits are dropped as clutter. Checked in `test_radar`: a plate's σ = ρ·A
-within 3 %, a 10 m/s Doppler, the detection range from the radar equation. ROS:
+within 3 %, a 10 m/s Doppler, the detection range from the radar equation, ITU-R P.838-3's coefficients against its Table 5 and the two-way rain loss. ROS:
 `/<name>/detections` PointCloud2 (x, y, z, velocity, rcs, snr). The sample sedan has a front
-radar. Owed: rain attenuation, multipath and ghosts, a published RCS reference.
+radar. Rain takes the two-way path loss of ITU-R P.838-3 off each echo (`env/rain_rate`, the
+carrier frequency, `polarization_tilt`; docs/physics/sensors.md "Radar"). Owed: rain clutter,
+multipath and ghosts, a published RCS reference.
 
 Viewer: a viewer that subscribes to a radar's prim (`SubscribeSensor`; a `RadarAPI_1` radar or an
 `imaging_radar`) gets each new scan as a `SensorFrame` of points with fields x, y, z (sensor frame),
@@ -222,7 +248,7 @@ detections within 5 cm, 5 mrad, 0.1 m/s). `test_radar` pins the `RadarAPI_1` rad
 numbers bit for bit. Owed: speckle (a coherent sum per cell, which makes real point clouds of
 walls dense), sidelobes and the array's grating lobes, the one-bounce multipath paths, guard-rail
 ghosts, CA/OS-CFAR against the clutter around a cell (the threshold is fixed over the noise
-floor), rain attenuation, a published 4D-radar dataset to check against.
+floor), a published 4D-radar dataset to check against (rain attenuation is in, as for the radar).
 
 **IMU**: specific force and angular rate from `body/*/acceleration` and `body/*/twist` at the
 sensor frame, plus white noise (noise density), bias instability (first-order Gauss–Markov),
@@ -1410,11 +1436,17 @@ Lawrence Berkeley Laboratory, 1984: 0.21, 0.32 and 0.53 for rural, urban and ind
 cos of incidence, zero when one ray toward the sun meets a collider (its own body skipped), plus
 the sky by the isotropic model (1 + n_z)/2 and the ground's ρ_g·E_gh·(1 − n_z)/2. The weather:
 rain or snow (`env/rain_rate`, `env/snow_rate`) make the sky overcast; fog (`env/extinction/visible`)
-dims the beam by exp(−σ·fog_depth·m). Night is zero (no twilight, moon or lamps; cloud cover is
-not a weather signal yet). The cosine and spectral response are ideal. Full sun saturates the
+dims the beam by exp(−σ·fog_depth·m). Night is zero (no twilight or moon; cloud cover is not a
+weather signal yet). The run's lamps (`LampAPI_1`, RFC 0021 §5) add E = I·f(θ)·cos(incidence)/d²
+each, I the lamp's `lamp/<n>/intensity` and f its beam's taper (`lights::illuminance`), with one
+ray from the sensor to the lamp: a collider between them (not the sensor's own body or the
+lamp's) leaves that lamp out. Without a sun (no place and date, no weather) a sensor in a run with
+lamps reads the lamps alone. The cosine and spectral response are ideal. Full sun saturates the
 BH1750 (65535 counts, 54 612 lx); set `max_illuminance` for another part. Check: `test_kinds_light_sensor`
 (Meeus' Julian day example, the NREL SPA example within 0.02°, Kasten–Young at the horizon, the IES
-closed forms, shade and overcast).
+closed forms, shade and overcast; a spot lamp on its axis and 0.15, 0.3 and 0.45 rad off it at
+0.5, 2 and 7 m within 0.1 % of the inverse-square law, dark beyond its field, a box between lamp
+and sensor giving 0 lx, lamp and sun adding).
 
 ### sun_sensor
 
@@ -1491,7 +1523,11 @@ Signals: `visibility` (m: the meteorological optical range), `extinction` (1/m, 
 `valid`. Model: MOR = −ln 0.05 / σ ≈ 3/σ (Koschmieder with WMO's 5 % threshold, WMO-No. 8 Vol. I
 ch. 9), σ the weather's `env/extinction/visible` (fog, rain, snow and dust). The weather's
 `visibility` is at a 2 % threshold (σ = 3.912/V), so a fog of V reads an MOR of 0.766·V, as a
-real sensor would. Check: `test_kinds_visibility_sensor`.
+real sensor would. In a run with fires (RFC 0022) it adds the smoke's σ where it is
+(`env/smoke/extinction`) and writes `sign_visibility` and `light_visibility`, `S = C/σ` with C = 3
+and 8 (physics/fire.md "Smoke"); it can be fixed in the scenery (a `CustomSensorAPI_1` prim of a
+world stage). Lidars and cameras take the smoke's optical depth too, a lidar's scaled by
+633 nm/λ. Check: `test_kinds_visibility_sensor`.
 
 They are on ROS by default ("ROS topics of the built-in kinds" above); a `--ros-topics` map
 puts them elsewhere, which replaces the defaults it covers:

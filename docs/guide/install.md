@@ -15,10 +15,12 @@ source /opt/ros/lyrical/setup.bash
 lagrange amr
 ```
 
-It uses `sudo` for apt and asks before it installs anything. Set `LAGRANGE_VERSION=1.4.0` for a
+It uses `sudo` for apt and asks before it installs anything. Set `LAGRANGE_VERSION=1.5.0` for a
 given release, `LAGRANGE_DEBS=DIR` to install debs you built yourself (B below), and
 `LAGRANGE_YES=1` to skip the question. Read the script first if you like:
-[`packaging/install.sh`](../../packaging/install.sh). To remove it:
+[`packaging/install.sh`](../../packaging/install.sh). It also puts Lagrange in the app grid,
+with its icon (see [The app button](#the-app-button)). To remove it:
+`/opt/ros/lyrical/share/lagrange_viewer/desktop/install_desktop_entry.sh --uninstall`, then
 `sudo apt remove 'ros-lyrical-lagrange*'`.
 
 ## Building it yourself
@@ -159,7 +161,8 @@ source /opt/ros/lyrical/setup.bash
 source ~/lagrange_ws/install/setup.bash
 ```
 
-Then go to [Check the install](#check-the-install).
+Then go to [Check the install](#check-the-install). For an app button that opens this build,
+see [The app button](#the-app-button).
 
 ### Updating
 
@@ -196,6 +199,7 @@ On each machine (with ROS 2 Lyrical installed as in step 1):
 sudo apt install ~/lagrange_debs/*.deb
 PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install -c packaging/pip-constraints.txt mcap coacd
 source /opt/ros/lyrical/setup.bash
+/opt/ros/lyrical/share/lagrange_viewer/desktop/install_desktop_entry.sh   # the app button
 ```
 
 `packaging/test_install.sh ~/lagrange_debs` checks the debs the way a clean machine would: it
@@ -213,6 +217,32 @@ podman run --rm lagrange:dev tools/ci/tutorial_drone.sh  # the drone tutorial, w
 ```
 
 Docker reads the same file: `docker build -f packaging/container/Containerfile -t lagrange:dev .`
+
+## The app button
+
+Like Gazebo, Lagrange can sit in Ubuntu's app grid and dock: click its icon and the viewer opens
+on its launcher, with ROS 2 sourced (no terminal needed). Pin it to the dock from its right-click
+menu. The entry is `io.github.Open_Physical_Systems.Lagrange.desktop`, and the viewer's window
+carries the same app id, so the dock groups the running window under the icon (on Wayland and
+on X11).
+
+- **Quick install**: `packaging/install.sh` adds it for you (for your user; set
+  `LAGRANGE_DESKTOP=system` for every user, `none` for no entry).
+- **Debs you installed yourself**:
+  `/opt/ros/lyrical/share/lagrange_viewer/desktop/install_desktop_entry.sh`.
+- **A source build** (A): from the clone, after `colcon build`,
+
+  ```bash
+  ~/lagrange_ws/src/lagrange/tools/desktop/install_desktop_entry.sh
+  ```
+
+  It finds `~/lagrange_ws/install` (or give `--install DIR`), and the button sources that
+  install's `setup.bash`, so it opens what you last built.
+
+Both scripts take `--system` (for every user, in `/usr/share`, through `sudo`) and
+`--uninstall` (remove the entry and icons again). For your user they write
+`~/.local/share/applications/` and `~/.local/share/icons/hicolor/`. The viewer's output goes to
+`~/.local/state/lagrange/desktop.log`; if the setup it sources is gone, a notification says so.
 
 ## Check the install
 

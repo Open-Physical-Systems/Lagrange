@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::stage {
@@ -69,6 +70,42 @@ struct SchemaAttribute {
                                                          const std::string& attribute,
                                                          double value);
 
+/// The growth coefficient alpha (W/s²) of a named t² growth class, for `fire:alpha` in overlays
+/// and URDF (RFC 0022 §2): slow, medium and fast as Evans and Stroup's DETACT-T2 listing sets
+/// them (NBSIR 85-3167, 1985: 2.9306, 11.722, 46.889 W/s², 1000 Btu/s at 600, 300 and 150 s);
+/// ultrafast is 1000 Btu/s at 75 s. Nothing for another name.
+[[nodiscard]] std::optional<double> fireGrowthAlpha(std::string_view name);
+
+/// A power screw (a lead screw, a trapezoidal or ball screw, a worm on its wheel) by its thread:
+/// what the overlay's `lead_screw:` gives an ElectricalMotorAPI_1 (RFC 0020 §4.4).
+struct LeadScrew {
+    double lead{0.0};         // m of travel per turn (pitch × starts)
+    double diameter{0.0};     // m, the thread's mean (pitch) diameter
+    double friction{0.0};     // coefficient of friction on the flanks (a ball screw's: rolling)
+    double threadAngle{0.0};  // rad, the flank's half-angle: 0 square, 0.2618 (15°) metric
+                              // trapezoidal, 0.2531 (14.5°) Acme
+};
+
+/// The gear a power screw makes of a motor on a prismatic joint: gearRatio 2π/lead (motor rad
+/// per metre) and the two efficiencies of the power-screw equations (Budynas and Nisbett,
+/// Shigley's Mechanical Engineering Design, ch. 8 "The Mechanics of Power Screws"), with lead
+/// angle λ = atan(lead / (π·diameter)), the flank's angle in the normal plane
+/// αn = atan(tan α · cos λ) and friction angle φ = atan(μ / cos αn):
+///     forward (torque to force) η = tan λ / tan(λ + φ)
+///     back    (force to torque) η = tan(λ − φ) / tan λ, 0 when φ ≥ λ: self-locking.
+struct ScrewGear {
+    double gearRatio{1.0};       // rad/m
+    double efficiency{1.0};      // elec:gearEfficiency
+    double backEfficiency{1.0};  // elec:gearBackEfficiency, 0 for a self-locking screw
+    double leadAngle{0.0};       // rad, λ
+    double frictionAngle{0.0};   // rad, φ
+    [[nodiscard]] bool selfLocking() const { return backEfficiency <= 0.0; }
+};
+
+/// The screw's gear, or a message when a number is out of range (lead and diameter > 0,
+/// friction ≥ 0, thread angle 0 to < π/2).
+[[nodiscard]] Expected<ScrewGear, std::string> leadScrewGear(const LeadScrew& screw);
+
 /// Applies an overlay file (docs/design/formats.md §9) to a loaded model: the project's API
 /// schemas by name, for robots from formats without them (URDF, SDFormat, MJCF) or added to a USD
 /// one. YAML:
@@ -87,6 +124,9 @@ struct SchemaAttribute {
 ///           ElectricalBusAPI_1: { elec:bus:undervoltageTrip: 42.0 }
 ///
 /// Values take the type of the schema's property. Asset paths are relative to the overlay file.
+/// ElectricalMotorAPI_1 also takes `lead_screw: {lead, diameter, friction, thread_angle}` (m, m,
+/// 1, rad; RFC 0020 §4.4), which sets elec:gearRatio, gearEfficiency and gearBackEfficiency
+/// from leadScrewGear (and so is refused beside any of them).
 /// The result is checked as loadStage checks a stage. New prims become Xform scene prims that
 /// move with their parent and world prims named after themselves. A new prim with SensorAPI_1 and
 /// ImuAPI_1, GnssAPI_1, MagnetometerAPI_1, BarometerAPI_1 or RadarAPI_1 becomes a sensor on its

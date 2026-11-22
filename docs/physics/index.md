@@ -45,7 +45,7 @@ inside one step. See [Concepts](../guide/concepts.md) for the scheduler and subs
 | [Rigid body](rigid-body.md) | MuJoCo and Jolt: joints with damping, friction and mimic, contacts and friction, mesh colliders as hulls, contact force and joint reaction |
 | [Vehicles and wheeled bases](vehicles.md) | A car's suspension, Magic Formula tyres, brakes, steering and powertrain; the diff-drive and swerve controllers |
 | [Water](water.md) | Buoyancy, drag, currents, waves, added mass and Fossen's model with a real vehicle's coefficients |
-| [Rotors](rotors.md) | Thrust and torque of each propeller: coefficients or blade elements, ground and ceiling effect, vortex ring state |
+| [Rotors](rotors.md) | Thrust and torque of each propeller: coefficients or blade elements, ground and ceiling effect, vortex ring state, and in water as marine thrusters (an open-water chart, the wetted share) |
 | [Downwash](downwash.md) | The air a drone pushes: the jet under it, the outwash on the ground, walls and roofs, the live lattice Boltzmann box |
 | [Aerodynamics and wind](aerodynamics.md) | Drag on links, the wind and its gusts, wind fields, rain pushing links; the wind tunnel and OpenFOAM |
 | [Motors](motors.md) | Motor currents and torque from the bus voltage: the dq-frame model and its current loops |
@@ -58,7 +58,10 @@ inside one step. See [Concepts](../guide/concepts.md) for the scheduler and subs
 | [Traffic](traffic.md) | Cars following lanes and lights, lane changes, crossings, pedestrians, OpenSCENARIO |
 | [Humans](humans.md) | People as moving capsules: walking with planted feet, steering round robots and each other |
 | [Tethers](tether.md) | A cable from a winch to a drone or any body: sag, drag, snagging, tangling, its pull and its hits |
+| [Lights](lights.md) | Lamps on robots: headlights, indicators, beacons; their beam, blinking, dimming, power and heat |
+| [Actuators](actuators.md) | Suction cups and magnets: the cup's vacuum, its seal and leaks, the magnet's pull across a gap; holding by forces and friction. Lead screws: efficiencies from the thread, self-locking as a load-dependent friction. Nozzles and tanks: the jet's flow, reaction and path, the tank's weight. Servos: a hobby or smart servo's board (pulse map, dead zone, PID duty, profile, overload) on its brushed motor or the datasheet's torque line. Steppers: a chopper driver's microsteps, the pull-out curve falling with speed, steps lost to an overload without an error. Solenoids: a plunger's pull from its inductance table, the current's dip as it pulls in. Holding brakes: a power-off brake's coil, release and engage times, holding and slipping torque |
 | [Heat conduction](heat-conduction.md) | Temperatures inside each part from its material: hot spots of LEDs and chips, contacts, convection |
+| [Fire](fire.md) | Fuel items that grow, burn out, heat robots and spread; water, foam and wind put them out |
 
 Radiation is not built yet; its zero substitute stands in ([radiation.md](../design/domains/radiation.md)).
 

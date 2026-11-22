@@ -1,9 +1,12 @@
 // OpenDRIVE road networks (OpenDrive.hpp).
 #include "lagrange/opendrive/OpenDrive.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <tinyxml2.h>
 #include <tuple>
@@ -19,6 +22,18 @@ constexpr double kBrokenOff = 6.0;      // m  OpenDRIVE leaves it to <type> elem
 constexpr double kMarkLift = 0.003;     // m, road marks above the surface
 constexpr double kKerbMin = 0.005;      // m, a step between lanes drawn as a kerb face
 constexpr double kMinSlabWidth = 0.05;  // m, narrower lanes get no collider there
+// Objects and signals (illustrative sizes where the file gives none).
+constexpr double kThinObject = 0.1;       // m, an object's length or width when it gives none
+constexpr double kFlatObject = 1e-3;      // m, objects no taller than this are flat (marks)
+constexpr int kCylinderSides = 12;        // a round object drawn as a prism of this many sides
+constexpr double kSignPoleRadius = 0.04;  // m
+constexpr double kSignSize = 0.6;         // m, a sign board's width and height when not given
+constexpr double kSignDepth = 0.03;       // m, a sign board's thickness when not given
+constexpr double kHeadWidth = 0.35;       // m, a traffic light head's width when not given
+constexpr double kHeadHeight = 1.0;       // m, and its height
+constexpr double kHeadDepth = 0.3;        // m, and its depth
+constexpr double kStripe = 0.5;           // m, a crosswalk's stripes and gaps
+constexpr double kOutlineMark = 0.1;      // m, a parking space's painted border
 
 double attr(const tinyxml2::XMLElement* e, const char* name, double fallback = 0.0) {
     return e->DoubleAttribute(name, fallback);
@@ -156,6 +171,118 @@ double speedOf(const tinyxml2::XMLElement* speed) {
         return max * 0.44704;  // m/s per mph (exact)
     }
     return max;  // m/s (the default)
+}
+
+double attrOr(const tinyxml2::XMLElement* e, const char* name, double fallback) {
+    return e->Attribute(name) != nullptr ? attr(e, name) : fallback;
+}
+
+bool yes(const tinyxml2::XMLElement* e, const char* name) {
+    const std::string v = text(e, name);
+    return v == "yes" || v == "true" || v == "1";
+}
+
+Outline readOutline(const tinyxml2::XMLElement* e) {
+    Outline o;
+    const std::string closed = text(e, "closed");
+    o.closed = closed == "true" || closed == "1";
+    for (auto* c = e->FirstChildElement(); c != nullptr; c = c->NextSiblingElement()) {
+        const std::string tag = c->Name();
+        if (tag == "cornerRoad") {
+            o.corners.push_back({attr(c, "s"), attr(c, "t"), attr(c, "dz"), attr(c, "height")});
+        } else if (tag == "cornerLocal") {
+            o.local = true;
+            o.corners.push_back({attr(c, "u"), attr(c, "v"), attr(c, "z"), attr(c, "height")});
+        }
+    }
+    return o;
+}
+
+Object readObject(const tinyxml2::XMLElement* e) {
+    Object o;
+    o.id = text(e, "id");
+    o.name = text(e, "name");
+    o.type = text(e, "type");
+    o.subtype = text(e, "subtype");
+    o.s = attr(e, "s");
+    o.t = attr(e, "t");
+    o.zOffset = attr(e, "zOffset");
+    o.hdg = attr(e, "hdg");
+    o.pitch = attr(e, "pitch");
+    o.roll = attr(e, "roll");
+    o.length = attr(e, "length");
+    o.width = attr(e, "width");
+    o.height = attr(e, "height");
+    o.radius = attr(e, "radius");
+    o.dynamic = yes(e, "dynamic");
+    constexpr double kNone = std::numeric_limits<double>::quiet_NaN();
+    for (auto* r = e->FirstChildElement("repeat"); r != nullptr;
+         r = r->NextSiblingElement("repeat")) {
+        Repeat rep;
+        rep.s = attr(r, "s", o.s);
+        rep.length = attr(r, "length");
+        rep.distance = attr(r, "distance");
+        rep.tStart = attrOr(r, "tStart", o.t);
+        rep.tEnd = attrOr(r, "tEnd", rep.tStart);
+        rep.heightStart = attrOr(r, "heightStart", o.height);
+        rep.heightEnd = attrOr(r, "heightEnd", rep.heightStart);
+        rep.zOffsetStart = attrOr(r, "zOffsetStart", o.zOffset);
+        rep.zOffsetEnd = attrOr(r, "zOffsetEnd", rep.zOffsetStart);
+        rep.widthStart = attrOr(r, "widthStart", kNone);
+        rep.widthEnd = attrOr(r, "widthEnd", rep.widthStart);
+        rep.lengthStart = attrOr(r, "lengthStart", kNone);
+        rep.lengthEnd = attrOr(r, "lengthEnd", rep.lengthStart);
+        rep.radiusStart = attrOr(r, "radiusStart", kNone);
+        rep.radiusEnd = attrOr(r, "radiusEnd", rep.radiusStart);
+        rep.detach = yes(r, "detachFromReferenceLine");
+        o.repeats.push_back(rep);
+    }
+    // 1.4's single <outline> under the object, or <outlines> (1.5 on).
+    if (const auto* single = e->FirstChildElement("outline")) {
+        o.outlines.push_back(readOutline(single));
+    }
+    if (const auto* all = e->FirstChildElement("outlines")) {
+        for (auto* ol = all->FirstChildElement("outline"); ol != nullptr;
+             ol = ol->NextSiblingElement("outline")) {
+            o.outlines.push_back(readOutline(ol));
+        }
+    }
+    return o;
+}
+
+Signal readSignal(const tinyxml2::XMLElement* e) {
+    Signal g;
+    g.id = text(e, "id");
+    g.name = text(e, "name");
+    g.type = text(e, "type");
+    g.subtype = text(e, "subtype");
+    g.country = text(e, "country");
+    g.orientation = text(e, "orientation");
+    g.text = text(e, "text");
+    g.s = attr(e, "s");
+    g.t = attr(e, "t");
+    g.zOffset = attr(e, "zOffset");
+    g.hOffset = attr(e, "hOffset");
+    g.pitch = attr(e, "pitch");
+    g.roll = attr(e, "roll");
+    g.height = attr(e, "height");
+    g.width = attr(e, "width");
+    g.length = attr(e, "length");
+    g.value = attrOr(e, "value", std::numeric_limits<double>::quiet_NaN());
+    g.dynamic = yes(e, "dynamic");
+    for (auto* v = e->FirstChildElement("validity"); v != nullptr;
+         v = v->NextSiblingElement("validity")) {
+        g.validity.emplace_back(v->IntAttribute("fromLane"), v->IntAttribute("toLane"));
+    }
+    return g;
+}
+
+std::optional<int> optionalInt(const tinyxml2::XMLElement* e, const char* name) {
+    int value = 0;
+    if (e->QueryIntAttribute(name, &value) == tinyxml2::XML_SUCCESS) {
+        return value;
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -367,6 +494,24 @@ Expected<Network, std::string> parse(const std::string& xml) {
         if (road.sections.empty()) {
             return Unexpected{where + "no laneSection"};
         }
+        if (const auto* objects = r->FirstChildElement("objects")) {
+            for (auto* o = objects->FirstChildElement("object"); o != nullptr;
+                 o = o->NextSiblingElement("object")) {
+                road.objects.push_back(readObject(o));
+                for (const Outline& ol : road.objects.back().outlines) {
+                    if (ol.corners.size() < 2) {
+                        return Unexpected{where + "object " + road.objects.back().id +
+                                          ": an outline needs two corners or more"};
+                    }
+                }
+            }
+        }
+        if (const auto* signals = r->FirstChildElement("signals")) {
+            for (auto* g = signals->FirstChildElement("signal"); g != nullptr;
+                 g = g->NextSiblingElement("signal")) {
+                road.signals.push_back(readSignal(g));
+            }
+        }
         n.roads.push_back(std::move(road));
     }
     for (auto* j = top->FirstChildElement("junction"); j != nullptr;
@@ -385,7 +530,25 @@ Expected<Network, std::string> parse(const std::string& xml) {
             }
             junction.connections.push_back(std::move(connection));
         }
+        for (auto* c = j->FirstChildElement("controller"); c != nullptr;
+             c = c->NextSiblingElement("controller")) {
+            junction.controllers.push_back(
+                {text(c, "id"), text(c, "type"), optionalInt(c, "sequence")});
+        }
         n.junctions.push_back(std::move(junction));
+    }
+    // Controllers (§14.6): the signals that switch together.
+    for (auto* c = top->FirstChildElement("controller"); c != nullptr;
+         c = c->NextSiblingElement("controller")) {
+        Controller controller;
+        controller.id = text(c, "id");
+        controller.name = text(c, "name");
+        controller.sequence = optionalInt(c, "sequence");
+        for (auto* k = c->FirstChildElement("control"); k != nullptr;
+             k = k->NextSiblingElement("control")) {
+            controller.signals.push_back(text(k, "signalId"));
+        }
+        n.controllers.push_back(std::move(controller));
     }
     if (n.roads.empty()) {
         return Unexpected{std::string("no roads")};
@@ -495,6 +658,90 @@ std::array<double, 3> lanePoint(const Road& road, const LaneSection& section, in
     return {f.x - across * std::sin(f.hdg), f.y + across * std::cos(f.hdg), up};
 }
 
+namespace {
+
+/// z-y'-x'': heading, then pitch, then roll (w, x, y, z).
+std::array<double, 4> eulerQuat(double yaw, double pitch, double roll) {
+    const std::array<double, 4> qz{std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
+    const std::array<double, 4> qy{std::cos(pitch / 2.0), 0.0, std::sin(pitch / 2.0), 0.0};
+    const std::array<double, 4> qx{std::cos(roll / 2.0), std::sin(roll / 2.0), 0.0, 0.0};
+    return multiply(multiply(qz, qy), qx);
+}
+
+double lerp(double a, double b, double f) {
+    return a + (b - a) * f;
+}
+
+/// A repeat value at fraction f: from the record, or the object's own where it gives none.
+double repeated(double start, double end, double own, double f) {
+    if (std::isnan(start)) {
+        return own;
+    }
+    return lerp(start, std::isnan(end) ? start : end, f);
+}
+
+}  // namespace
+
+std::array<double, 3> surfacePoint(const Road& road, double s, double t, double up) {
+    auto p = pointAt(road, s, t);
+    p[2] += up;
+    return p;
+}
+
+Pose roadPose(const Road& road, double s, double t, double zOffset, double hdg, double pitch,
+              double roll) {
+    Pose pose;
+    pose.position = surfacePoint(road, s, t, zOffset);
+    pose.orientation = eulerQuat(referenceAt(road, s).hdg + hdg, pitch, roll);
+    return pose;
+}
+
+std::vector<Placement> placements(const Road& road, const Object& object) {
+    std::vector<Placement> out;
+    if (object.repeats.empty()) {
+        out.push_back({roadPose(road, object.s, object.t, object.zOffset, object.hdg, object.pitch,
+                                object.roll),
+                       object.length, object.width, object.height, object.radius});
+        return out;
+    }
+    for (const Repeat& r : object.repeats) {
+        if (!(r.distance > 0.0)) {
+            continue;  // continuous: drawn and collided along its path
+        }
+        const int n = static_cast<int>(std::floor(r.length / r.distance + 1e-9));
+        const auto start = surfacePoint(road, r.s, r.tStart, r.zOffsetStart);
+        const auto end = surfacePoint(road, r.s + r.length, r.tEnd, r.zOffsetEnd);
+        for (int i = 0; i <= n; ++i) {
+            const double along = i * r.distance;
+            const double f = r.length > 0.0 ? along / r.length : 0.0;
+            Placement p;
+            if (r.detach) {
+                p.pose.position = {lerp(start[0], end[0], f), lerp(start[1], end[1], f),
+                                   lerp(start[2], end[2], f)};
+                const double line = std::atan2(end[1] - start[1], end[0] - start[0]);
+                p.pose.orientation = eulerQuat(line + object.hdg, object.pitch, object.roll);
+            } else {
+                p.pose = roadPose(road, r.s + along, lerp(r.tStart, r.tEnd, f),
+                                  lerp(r.zOffsetStart, r.zOffsetEnd, f), object.hdg, object.pitch,
+                                  object.roll);
+            }
+            p.height = lerp(r.heightStart, r.heightEnd, f);
+            p.width = repeated(r.widthStart, r.widthEnd, object.width, f);
+            p.length = repeated(r.lengthStart, r.lengthEnd, object.length, f);
+            p.radius = repeated(r.radiusStart, r.radiusEnd, object.radius, f);
+            out.push_back(p);
+        }
+    }
+    return out;
+}
+
+Pose signalPose(const Road& road, const Signal& signal) {
+    // Orientation "+": for traffic along s, so the face looks back against s; hOffset turns it
+    // counter-clockwise (§14.1). "-" and "none": hOffset from the reference line's direction.
+    const double facing = (signal.orientation == "+" ? std::numbers::pi : 0.0) + signal.hOffset;
+    return roadPose(road, signal.s, signal.t, signal.zOffset, facing, signal.pitch, signal.roll);
+}
+
 bool raised(const Road& road) {
     const auto any = [](const std::vector<Poly3>& p) {
         return std::ranges::any_of(p, [](const Poly3& r) { return !r.zero(); });
@@ -532,10 +779,14 @@ public:
         m_.scene.prims.push_back(top);
         for (const Road& road : n_.roads) {
             buildRoad(road);
+            if (!road.objects.empty() || !road.signals.empty()) {
+                buildObjects(road);
+            }
         }
         if (auto status = linkLanes(); !status) {
             return Unexpected{status.error()};
         }
+        buildSignals();
         return std::move(m_);
     }
 
@@ -868,6 +1119,623 @@ private:
             Pose pose;
             pose.position = c;
             m_.world.addHullCollider(kWorldBody, std::move(*hull), pose, o_.friction);
+        }
+    }
+
+    // ---- Objects and signals -------------------------------------------------------------
+
+    using P3 = std::array<double, 3>;
+    using Meshes = std::map<std::uint32_t, TriMesh>;
+
+    /// What an object of `type` is drawn with, and whether it is paint on the road.
+    std::uint32_t objectMaterial(const std::string& type) {
+        if (type == "pole" || type == "streetLamp" || type == "gantry") {
+            return material("object_pole_steel", {0.55F, 0.56F, 0.58F, 1.0F});
+        }
+        if (type == "barrier" || type == "railing") {
+            return material("object_barrier_steel", {0.72F, 0.72F, 0.74F, 1.0F});
+        }
+        if (type == "soundBarrier" || type == "obstacle" || type == "trafficIsland") {
+            return material("object_concrete", {0.62F, 0.61F, 0.58F, 1.0F});
+        }
+        if (type == "building") {
+            return material("object_building_concrete", {0.74F, 0.7F, 0.64F, 1.0F});
+        }
+        if (type == "tree" || type == "vegetation") {
+            return material("object_tree_foliage", {0.2F, 0.42F, 0.18F, 1.0F});
+        }
+        if (type == "crosswalk" || type == "roadMark" || type == "parkingSpace") {
+            return material("mark_white", {0.92F, 0.92F, 0.88F, 1.0F});
+        }
+        if (type == "patch" || type == "roadSurface") {
+            return material("asphalt", {0.2F, 0.2F, 0.21F, 1.0F});
+        }
+        if (type == "car" || type == "van" || type == "bus" || type == "trailer" ||
+            type == "truck" || type == "motorbike" || type == "bike" || type == "train" ||
+            type == "tram" || type == "pedestrian") {
+            return material("object_vehicle_paint", {0.55F, 0.14F, 0.12F, 1.0F});
+        }
+        return material("object_other", {0.6F, 0.56F, 0.5F, 1.0F});
+    }
+
+    /// A closed convex solid from its bottom and top rings (same count, in order round it): its
+    /// sides facing out from the centre, its top up and its bottom down.
+    static void prism(TriMesh& mesh, const std::vector<P3>& bottom, const std::vector<P3>& top,
+                      bool caps = true) {
+        const std::size_t n = bottom.size();
+        P3 c{};
+        for (const auto* ring : {&bottom, &top}) {
+            for (const P3& p : *ring) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    c[k] += p[k] / static_cast<double>(2 * n);
+                }
+            }
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t j = (i + 1) % n;
+            const P3 mid{0.25 * (bottom[i][0] + bottom[j][0] + top[i][0] + top[j][0]),
+                         0.25 * (bottom[i][1] + bottom[j][1] + top[i][1] + top[j][1]),
+                         0.25 * (bottom[i][2] + bottom[j][2] + top[i][2] + top[j][2])};
+            strip(mesh, {bottom[i], top[i]}, {bottom[j], top[j]},
+                  {mid[0] - c[0], mid[1] - c[1], mid[2] - c[2]});
+        }
+        if (caps) {
+            fan(mesh, top, {0.0, 0.0, 1.0});
+            fan(mesh, bottom, {0.0, 0.0, -1.0});
+        }
+    }
+
+    /// A convex polygon as a triangle fan, its normal its own, turned to `facing`.
+    static void fan(TriMesh& mesh, const std::vector<P3>& ring, const P3& facing) {
+        for (std::size_t i = 1; i + 1 < ring.size(); ++i) {
+            triangle(mesh, ring[0], ring[i], ring[i + 1], facing);
+        }
+    }
+
+    static void triangle(TriMesh& mesh, const P3& a, const P3& b, const P3& c, const P3& facing) {
+        std::array<double, 3> n{(b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
+                                (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]),
+                                (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])};
+        const double len = std::hypot(n[0], n[1], n[2]);
+        if (!(len > 1e-12)) {
+            return;
+        }
+        const double sign =
+            n[0] * facing[0] + n[1] * facing[1] + n[2] * facing[2] < 0.0 ? -1.0 : 1.0;
+        const auto base = static_cast<std::uint32_t>(mesh.positions.size() / 3);
+        for (const P3* p : {&a, &b, &c}) {
+            for (const double v : *p) {
+                mesh.positions.push_back(static_cast<float>(v));
+            }
+            for (const double v : n) {
+                mesh.normals.push_back(static_cast<float>(sign * v / len + 0.0));
+            }
+        }
+        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
+    }
+
+    /// The ring of a box or cylinder footprint about a pose's origin, `up` along its z.
+    static std::vector<P3> ring(const Pose& pose, double length, double width, double radius,
+                                double up) {
+        std::vector<P3> out;
+        const auto at = [&](double u, double v) {
+            const P3 r = rotate(pose.orientation, {u, v, up});
+            return P3{pose.position[0] + r[0], pose.position[1] + r[1], pose.position[2] + r[2]};
+        };
+        if (radius > 0.0) {
+            for (int i = 0; i < kCylinderSides; ++i) {
+                const double a = 2.0 * std::numbers::pi * i / kCylinderSides;
+                out.push_back(at(radius * std::cos(a), radius * std::sin(a)));
+            }
+        } else {
+            const double l = (length > 0.0 ? length : kThinObject) / 2.0;
+            const double w = (width > 0.0 ? width : kThinObject) / 2.0;
+            out = {at(-l, -w), at(l, -w), at(l, w), at(-l, w)};
+        }
+        return out;
+    }
+
+    void collideBox(const Pose& pose, double length, double width, double height) {
+        Pose centre = compose(pose, Pose{{0.0, 0.0, height / 2.0}, {1.0, 0.0, 0.0, 0.0}});
+        m_.world.addCollider(kWorldBody, ShapeType::Box,
+                             {(length > 0.0 ? length : kThinObject) / 2.0,
+                              (width > 0.0 ? width : kThinObject) / 2.0, height / 2.0},
+                             centre, o_.objectFriction);
+    }
+
+    void collideCylinder(const Pose& pose, double radius, double height) {
+        Pose centre = compose(pose, Pose{{0.0, 0.0, height / 2.0}, {1.0, 0.0, 0.0, 0.0}});
+        m_.world.addCollider(kWorldBody, ShapeType::Cylinder, {radius, height / 2.0, 0.0}, centre,
+                             o_.objectFriction);
+    }
+
+    /// A convex hull of world points, posed at their centroid.
+    void collideHull(const std::vector<P3>& points) {
+        P3 c{};
+        for (const P3& p : points) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                c[k] += p[k] / static_cast<double>(points.size());
+            }
+        }
+        TriMesh cloud;
+        for (const P3& p : points) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                cloud.positions.push_back(static_cast<float>(p[k] - c[k]));
+            }
+        }
+        auto hull = convexHullOf(cloud);
+        if (!hull) {
+            return;  // flat or degenerate
+        }
+        Pose pose;
+        pose.position = c;
+        m_.world.addHullCollider(kWorldBody, std::move(*hull), pose, o_.objectFriction);
+    }
+
+    /// A flat footprint painted on the road: a crosswalk's stripes across its length, a parking
+    /// space's border, else filled.
+    void paint(TriMesh& mesh, const std::string& type, const Pose& pose, double length,
+               double width, double radius) {
+        const double lift = o_.surfaceHeight + kMarkLift;
+        const auto at = [&](double u, double v) {
+            const P3 r = rotate(pose.orientation, {u, v, 0.0});
+            return P3{pose.position[0] + r[0], pose.position[1] + r[1],
+                      pose.position[2] + r[2] + lift};
+        };
+        const double l = std::max(length, kThinObject) / 2.0;
+        const double w = std::max(width, kThinObject) / 2.0;
+        if (radius <= 0.0 && type == "crosswalk") {
+            // Stripes kStripe wide every 2·kStripe along the longer side, running along the
+            // shorter one (the walking direction is across the stripes' length).
+            const bool alongU = l >= w;
+            const double span = alongU ? l : w;
+            for (double a = -span; a + kStripe <= span + 1e-9; a += 2.0 * kStripe) {
+                if (alongU) {
+                    fan(mesh, {at(a, -w), at(a + kStripe, -w), at(a + kStripe, w), at(a, w)},
+                        {0.0, 0.0, 1.0});
+                } else {
+                    fan(mesh, {at(-l, a), at(l, a), at(l, a + kStripe), at(-l, a + kStripe)},
+                        {0.0, 0.0, 1.0});
+                }
+            }
+            return;
+        }
+        if (radius <= 0.0 && type == "parkingSpace") {
+            const double m = kOutlineMark;
+            fan(mesh, {at(-l, -w), at(l, -w), at(l, -w + m), at(-l, -w + m)}, {0.0, 0.0, 1.0});
+            fan(mesh, {at(-l, w - m), at(l, w - m), at(l, w), at(-l, w)}, {0.0, 0.0, 1.0});
+            fan(mesh, {at(-l, -w), at(-l + m, -w), at(-l + m, w), at(-l, w)}, {0.0, 0.0, 1.0});
+            return;  // open at its far end (+u), where cars drive in
+        }
+        Pose lifted = pose;
+        lifted.position[2] += lift;
+        fan(mesh, ring(lifted, length, width, radius, 0.0), {0.0, 0.0, 1.0});
+    }
+
+    /// One placed object: a box or cylinder standing from its origin, colliding; flat ones
+    /// painted.
+    void place(Meshes& meshes, const Object& object, const Placement& p) {
+        const std::uint32_t mat = objectMaterial(object.type);
+        if (p.height <= kFlatObject) {
+            paint(meshes[mat], object.type, p.pose, p.length, p.width, p.radius);
+            return;
+        }
+        prism(meshes[mat], ring(p.pose, p.length, p.width, p.radius, 0.0),
+              ring(p.pose, p.length, p.width, p.radius, p.height));
+        if (p.radius > 0.0) {
+            collideCylinder(p.pose, p.radius, p.height);
+        } else {
+            collideBox(p.pose, p.length, p.width, p.height);
+        }
+    }
+
+    /// A repeat with distance 0: one object along its path (a guard rail, a wall), its cross
+    /// section width × height, drawn every `step` and colliding as a hull every colliderStep.
+    void continuous(Meshes& meshes, const Road& road, const Object& object, const Repeat& r) {
+        const std::uint32_t mat = objectMaterial(object.type);
+        const auto start = surfacePoint(road, r.s, r.tStart, r.zOffsetStart);
+        const auto end = surfacePoint(road, r.s + r.length, r.tEnd, r.zOffsetEnd);
+        // The cross section at fraction f: its four corners, bottom left/right, top right/left.
+        const auto section = [&](double f) {
+            P3 c;
+            double hdg = 0.0;
+            if (r.detach) {
+                c = {lerp(start[0], end[0], f), lerp(start[1], end[1], f),
+                     lerp(start[2], end[2], f)};
+                hdg = std::atan2(end[1] - start[1], end[0] - start[0]);
+            } else {
+                const double s = r.s + f * r.length;
+                c = surfacePoint(road, s, lerp(r.tStart, r.tEnd, f),
+                                 lerp(r.zOffsetStart, r.zOffsetEnd, f));
+                hdg = referenceAt(road, s).hdg;
+            }
+            double w = repeated(r.widthStart, r.widthEnd, object.width, f);
+            const double radius = repeated(r.radiusStart, r.radiusEnd, object.radius, f);
+            if (!(w > 0.0)) {
+                w = radius > 0.0 ? 2.0 * radius : kThinObject;
+            }
+            const double h = lerp(r.heightStart, r.heightEnd, f);
+            const double nx = -std::sin(hdg) * w / 2.0;
+            const double ny = std::cos(hdg) * w / 2.0;
+            return std::array<P3, 4>{P3{c[0] + nx, c[1] + ny, c[2]}, P3{c[0] - nx, c[1] - ny, c[2]},
+                                     P3{c[0] - nx, c[1] - ny, c[2] + h},
+                                     P3{c[0] + nx, c[1] + ny, c[2] + h}};
+        };
+        const bool flat = std::max(r.heightStart, r.heightEnd) <= kFlatObject;
+        const int n = std::max(1, static_cast<int>(std::ceil(r.length / o_.step)));
+        std::vector<std::array<P3, 4>> rows;
+        for (int i = 0; i <= n; ++i) {
+            rows.push_back(section(static_cast<double>(i) / n));
+        }
+        if (flat) {
+            const double lift = o_.surfaceHeight + kMarkLift;
+            std::vector<P3> a, b;
+            for (auto row : rows) {
+                row[0][2] += lift;
+                row[1][2] += lift;
+                a.push_back(row[0]);
+                b.push_back(row[1]);
+            }
+            strip(meshes[mat], a, b);
+            return;
+        }
+        // Four faces along the path, each facing out of the section's centre, and end caps.
+        for (std::size_t k = 0; k < 4; ++k) {
+            std::vector<P3> a, b;
+            for (const auto& row : rows) {
+                a.push_back(row[k]);
+                b.push_back(row[(k + 1) % 4]);
+            }
+            const auto& row = rows[rows.size() / 2];
+            const auto& opposite = row[(k + 2) % 4];
+            const P3 out{0.5 * (row[k][0] + row[(k + 1) % 4][0]) - opposite[0],
+                         0.5 * (row[k][1] + row[(k + 1) % 4][1]) - opposite[1],
+                         0.5 * (row[k][2] + row[(k + 1) % 4][2]) - opposite[2]};
+            strip(meshes[mat], a, b, out);
+        }
+        for (const bool last : {false, true}) {
+            const auto& row = last ? rows.back() : rows.front();
+            const auto& other = last ? rows[rows.size() - 2] : rows[1];
+            const P3 out{row[0][0] - other[0][0], row[0][1] - other[0][1], row[0][2] - other[0][2]};
+            fan(meshes[mat], {row[0], row[1], row[2], row[3]}, out);
+        }
+        const int m = std::max(1, static_cast<int>(std::ceil(r.length / o_.colliderStep)));
+        for (int i = 0; i < m; ++i) {
+            const auto a = section(static_cast<double>(i) / m);
+            const auto b = section(static_cast<double>(i + 1) / m);
+            collideHull({a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]});
+        }
+    }
+
+    /// Ear clipping of a simple polygon in the xy plane: triangles as index triples.
+    static std::vector<std::array<std::size_t, 3>> triangulate(const std::vector<P3>& poly) {
+        std::vector<std::size_t> v(poly.size());
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            v[i] = i;
+        }
+        double area = 0.0;
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            const P3& a = poly[i];
+            const P3& b = poly[(i + 1) % poly.size()];
+            area += a[0] * b[1] - b[0] * a[1];
+        }
+        const double turn = area >= 0.0 ? 1.0 : -1.0;  // counter-clockwise: +
+        const auto cross = [&](std::size_t a, std::size_t b, std::size_t c) {
+            return turn * ((poly[b][0] - poly[a][0]) * (poly[c][1] - poly[a][1]) -
+                           (poly[b][1] - poly[a][1]) * (poly[c][0] - poly[a][0]));
+        };
+        std::vector<std::array<std::size_t, 3>> out;
+        std::size_t guard = 0;
+        while (v.size() > 3 && guard++ < 10 * poly.size() * poly.size()) {
+            bool clipped = false;
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                const std::size_t a = v[(i + v.size() - 1) % v.size()];
+                const std::size_t b = v[i];
+                const std::size_t c = v[(i + 1) % v.size()];
+                if (cross(a, b, c) <= 1e-12) {
+                    continue;  // reflex
+                }
+                bool inside = false;
+                for (const std::size_t p : v) {
+                    if (p != a && p != b && p != c && cross(a, b, p) >= 0.0 &&
+                        cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0) {
+                        inside = true;
+                        break;
+                    }
+                }
+                if (inside) {
+                    continue;
+                }
+                out.push_back({a, b, c});
+                v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
+                clipped = true;
+                break;
+            }
+            if (!clipped) {
+                break;  // not simple: what is left is dropped
+            }
+        }
+        if (v.size() == 3) {
+            out.push_back({v[0], v[1], v[2]});
+        }
+        return out;
+    }
+
+    static bool convex(const std::vector<P3>& poly) {
+        int sign = 0;
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            const P3& a = poly[i];
+            const P3& b = poly[(i + 1) % poly.size()];
+            const P3& c = poly[(i + 2) % poly.size()];
+            const double z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+            if (std::abs(z) < 1e-12) {
+                continue;
+            }
+            const int s = z > 0.0 ? 1 : -1;
+            if (sign != 0 && s != sign) {
+                return false;
+            }
+            sign = s;
+        }
+        return true;
+    }
+
+    /// An outline: a closed one is a prism (its footprint at the corners, each corner's
+    /// height up), colliding as one hull when convex, else a hull per triangle of its
+    /// footprint; flat it is painted. An open one is a wall along its corners, kThinObject
+    /// thick.
+    void outline(Meshes& meshes, const Road& road, const Object& object, const Outline& ol) {
+        const std::uint32_t mat = objectMaterial(object.type);
+        const Pose origin = roadPose(road, object.s, object.t, object.zOffset, object.hdg,
+                                     object.pitch, object.roll);
+        std::vector<P3> bottom, top;
+        for (const Corner& c : ol.corners) {
+            P3 b;
+            P3 up{0.0, 0.0, c.height};
+            if (ol.local) {
+                const P3 r = rotate(origin.orientation, {c.a, c.b, c.z});
+                b = {origin.position[0] + r[0], origin.position[1] + r[1],
+                     origin.position[2] + r[2]};
+                up = rotate(origin.orientation, up);
+            } else {
+                b = surfacePoint(road, c.a, c.b, c.z);
+            }
+            bottom.push_back(b);
+            top.push_back({b[0] + up[0], b[1] + up[1], b[2] + up[2]});
+        }
+        bool closed = ol.closed;
+        const auto same = [](const P3& a, const P3& b) {
+            return std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 1e-9;
+        };
+        if (bottom.size() > 2 && same(bottom.front(), bottom.back())) {
+            bottom.pop_back();
+            top.pop_back();
+            closed = true;
+        }
+        const bool flat = std::ranges::all_of(
+            ol.corners, [](const Corner& c) { return std::abs(c.height) <= kFlatObject; });
+        if (!closed || bottom.size() < 3) {
+            // A linear feature: per segment a wall, or a painted line.
+            const double half = kThinObject / 2.0;
+            for (std::size_t i = 0; i + 1 < bottom.size(); ++i) {
+                const P3& a = bottom[i];
+                const P3& b = bottom[i + 1];
+                const double len = std::hypot(b[0] - a[0], b[1] - a[1]);
+                if (len < 1e-9) {
+                    continue;
+                }
+                const double nx = -(b[1] - a[1]) / len * half;
+                const double ny = (b[0] - a[0]) / len * half;
+                const auto off = [&](const P3& p, double k, double up) {
+                    return P3{p[0] + k * nx, p[1] + k * ny, p[2] + up};
+                };
+                if (flat) {
+                    const double lift = o_.surfaceHeight + kMarkLift;
+                    fan(meshes[mat],
+                        {off(a, 1, lift), off(a, -1, lift), off(b, -1, lift), off(b, 1, lift)},
+                        {0.0, 0.0, 1.0});
+                    continue;
+                }
+                const double ha = top[i][2] - a[2];
+                const double hb = top[i + 1][2] - b[2];
+                const std::vector<P3> lo{off(a, 1, 0), off(a, -1, 0), off(b, -1, 0), off(b, 1, 0)};
+                const std::vector<P3> hi{off(a, 1, ha), off(a, -1, ha), off(b, -1, hb),
+                                         off(b, 1, hb)};
+                prism(meshes[mat], lo, hi);
+                std::vector<P3> all = lo;
+                all.insert(all.end(), hi.begin(), hi.end());
+                collideHull(all);
+            }
+            return;
+        }
+        const auto tris = triangulate(bottom);
+        if (flat) {
+            const double lift = o_.surfaceHeight + kMarkLift;
+            if (object.type == "parkingSpace") {
+                for (std::size_t i = 0; i < bottom.size(); ++i) {
+                    std::vector<P3> edge{bottom[i], bottom[(i + 1) % bottom.size()]};
+                    for (P3& p : edge) {
+                        p[2] += lift;
+                    }
+                    const double len = std::hypot(edge[1][0] - edge[0][0], edge[1][1] - edge[0][1]);
+                    if (len < 1e-9) {
+                        continue;
+                    }
+                    const double nx = -(edge[1][1] - edge[0][1]) / len * kOutlineMark / 2.0;
+                    const double ny = (edge[1][0] - edge[0][0]) / len * kOutlineMark / 2.0;
+                    fan(meshes[mat],
+                        {{edge[0][0] + nx, edge[0][1] + ny, edge[0][2]},
+                         {edge[0][0] - nx, edge[0][1] - ny, edge[0][2]},
+                         {edge[1][0] - nx, edge[1][1] - ny, edge[1][2]},
+                         {edge[1][0] + nx, edge[1][1] + ny, edge[1][2]}},
+                        {0.0, 0.0, 1.0});
+                }
+                return;
+            }
+            for (const auto& t : tris) {
+                triangle(meshes[mat], {bottom[t[0]][0], bottom[t[0]][1], bottom[t[0]][2] + lift},
+                         {bottom[t[1]][0], bottom[t[1]][1], bottom[t[1]][2] + lift},
+                         {bottom[t[2]][0], bottom[t[2]][1], bottom[t[2]][2] + lift},
+                         {0.0, 0.0, 1.0});
+            }
+            return;
+        }
+        prism(meshes[mat], bottom, top, false);
+        for (const auto& t : tris) {
+            triangle(meshes[mat], top[t[0]], top[t[1]], top[t[2]], {0.0, 0.0, 1.0});
+            triangle(meshes[mat], bottom[t[0]], bottom[t[1]], bottom[t[2]], {0.0, 0.0, -1.0});
+        }
+        if (convex(bottom)) {
+            std::vector<P3> all = bottom;
+            all.insert(all.end(), top.begin(), top.end());
+            collideHull(all);
+        } else {
+            for (const auto& t : tris) {
+                collideHull(
+                    {bottom[t[0]], bottom[t[1]], bottom[t[2]], top[t[0]], top[t[1]], top[t[2]]});
+            }
+        }
+    }
+
+    /// A signal: its board (a sign, or a traffic light's dark housing, whose lamps the traffic
+    /// module draws and lights at its RoadSignalAPI_1 prim) on a pole from the road surface,
+    /// both colliding.
+    void signal(Meshes& meshes, const Road& road, const Signal& g) {
+        const Pose board = signalPose(road, g);
+        const double w = g.width > 0.0 ? g.width : (g.dynamic ? kHeadWidth : kSignSize);
+        const double h = g.height > 0.0 ? g.height : (g.dynamic ? kHeadHeight : kSignSize);
+        const double d = g.length > 0.0 ? g.length : (g.dynamic ? kHeadDepth : kSignDepth);
+        const std::uint32_t face =
+            g.dynamic ? material("signal_head_housing", {0.07F, 0.07F, 0.08F, 1.0F})
+                      : material("sign_board", {0.9F, 0.9F, 0.88F, 1.0F});
+        prism(meshes[face], ring(board, d, w, 0.0, 0.0), ring(board, d, w, 0.0, h));
+        collideBox(board, d, w, h);
+        // The pole: behind the board, from the road surface to the board's top.
+        const P3 back = rotate(board.orientation, {-(d / 2.0 + kSignPoleRadius), 0.0, 0.0});
+        const auto ground = surfacePoint(road, g.s, g.t, 0.0);
+        const double top = board.position[2] + h - ground[2];
+        if (g.zOffset > kFlatObject && top > kFlatObject) {
+            Pose pole;
+            pole.position = {board.position[0] + back[0], board.position[1] + back[1], ground[2]};
+            const std::uint32_t steel = material("sign_pole_steel", {0.55F, 0.56F, 0.58F, 1.0F});
+            prism(meshes[steel], ring(pole, 0.0, 0.0, kSignPoleRadius, 0.0),
+                  ring(pole, 0.0, 0.0, kSignPoleRadius, top));
+            collideCylinder(pole, kSignPoleRadius, top);
+        }
+    }
+
+    /// A RoadSignalAPI_1 prim per dynamic signal, at the middle of its face, x out of it.
+    void buildSignals() {
+        std::uint32_t scope = kNoIndex;
+        std::map<std::string, int> taken;
+        for (const Road& road : n_.roads) {
+            for (const Signal& g : road.signals) {
+                if (!g.dynamic) {
+                    continue;
+                }
+                if (scope == kNoIndex) {
+                    ScenePrim prim;
+                    prim.name = "signals";
+                    prim.path = "/" + o_.root + "/signals";
+                    prim.parent = 0;
+                    prim.typeName = "Xform";
+                    m_.scene.prims.push_back(prim);
+                    scope = static_cast<std::uint32_t>(m_.scene.prims.size() - 1);
+                }
+                std::string name = "signal_";
+                for (const char c : g.id) {
+                    name += std::isalnum(static_cast<unsigned char>(c)) != 0 ? c : '_';
+                }
+                if (const int n = taken[name]++; n > 0) {
+                    name += "_" + std::to_string(n);
+                }
+                // The face's middle: the board's origin is its bottom centre.
+                const double h = g.height > 0.0 ? g.height : kHeadHeight;
+                const double d = g.length > 0.0 ? g.length : kHeadDepth;
+                Pose face = signalPose(road, g);
+                const auto r = rotate(face.orientation, {d / 2.0, 0.0, h / 2.0});
+                for (std::size_t k = 0; k < 3; ++k) {
+                    face.position.at(k) += r.at(k);
+                }
+                ScenePrim prim;
+                prim.name = name;
+                prim.path = m_.scene.prims[scope].path + "/" + name;
+                prim.parent = scope;
+                prim.typeName = "Xform";
+                prim.offset = face;
+                const PrimId id = m_.world.addPrim(prim.path, name);
+                m_.world.prims.poseInBody.at(id.index) = face;
+                m_.scene.prims.push_back(std::move(prim));
+
+                SchemaInstance s;
+                s.schema = "RoadSignalAPI_1";
+                s.prim = id;
+                s.tokens = {{"signal:id", g.id},
+                            {"signal:orientation", g.orientation == "+" || g.orientation == "-"
+                                                       ? g.orientation
+                                                       : std::string("none")},
+                            {"signal:type", g.type},
+                            {"signal:subtype", g.subtype}};
+                s.reals = {{"signal:s", g.s}, {"signal:t", g.t}, {"signal:height", h}};
+                s.integers = {{"signal:road", road.id}};
+                if (!g.validity.empty()) {
+                    // One range: the first validity's (several are rare, TODO(verify) whether
+                    // any published network uses more than one per signal).
+                    s.integers["signal:fromLane"] = g.validity.front().first;
+                    s.integers["signal:toLane"] = g.validity.front().second;
+                }
+                // Its controller, and that controller's place in its junction.
+                for (const Controller& c : n_.controllers) {
+                    if (std::ranges::count(c.signals, g.id) == 0) {
+                        continue;
+                    }
+                    s.tokens["signal:controller"] = c.id;
+                    std::optional<int> sequence = c.sequence;
+                    for (const Junction& j : n_.junctions) {
+                        const auto it = std::ranges::find_if(
+                            j.controllers,
+                            [&c](const JunctionController& jc) { return jc.id == c.id; });
+                        if (it != j.controllers.end()) {
+                            s.integers["signal:junction"] = j.id;
+                            sequence = it->sequence ? it->sequence : sequence;
+                            break;
+                        }
+                    }
+                    if (sequence) {
+                        s.integers["signal:sequence"] = *sequence;
+                    }
+                    break;
+                }
+                m_.world.schemaInstances.push_back(std::move(s));
+            }
+        }
+    }
+
+    void buildObjects(const Road& road) {
+        Meshes meshes;
+        for (const Object& object : road.objects) {
+            for (const Placement& p : placements(road, object)) {
+                if (object.outlines.empty() || !object.repeats.empty()) {
+                    place(meshes, object, p);
+                }
+            }
+            for (const Repeat& r : object.repeats) {
+                if (!(r.distance > 0.0) && r.length > 0.0) {
+                    continuous(meshes, road, object, r);
+                }
+            }
+            if (object.repeats.empty()) {
+                for (const Outline& ol : object.outlines) {
+                    outline(meshes, road, object, ol);
+                }
+            }
+        }
+        for (const Signal& g : road.signals) {
+            signal(meshes, road, g);
+        }
+        const std::string roadName = "road_" + std::to_string(road.id);
+        for (auto& [mat, mesh] : meshes) {
+            addMesh(roadName + "_objects_" + m_.scene.materials[mat].name, std::move(mesh), mat);
         }
     }
 

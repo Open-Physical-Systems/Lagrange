@@ -1,0 +1,403 @@
+#usda 1.0
+(
+    """Lagrange actuator schemas (RFC 0020). Codeless. Actuators that are not an electrical
+    motor's torque: grippers that hold by suction or by a magnet (phase 1). They hold by equal and
+    opposite forces on the gripper's body and the part, never by a weld: the physics engine's
+    contact carries the reaction and the friction. Servos (phase 2): a hobby PWM servo's or a smart
+    servo's board, closing a position loop on the joint's own motor."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeActuator"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "SuctionGripperAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A suction cup (vacuum gripper, RFC 0020 section 4.1) on this prim: its origin is the
+    centre of the cup's lip, and act:suction:axis points from it toward what it picks. The cup
+    and its hose are a volume of air that a vacuum generator evacuates while act/<name>/command
+    is on. It seals when its rim touches one body all round, and then pulls that body toward the
+    cup with (p_atm - p) times the cup's area. The required numbers come from the datasheet; no
+    fallback is a device value."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:suction:diameter (
+        lagrangeUnit = "m"
+        doc = "Effective diameter of the cup. Required."
+    )
+    double act:suction:volume (
+        lagrangeUnit = "m3"
+        doc = "Volume of air evacuated: the cup and its hose. Required."
+    )
+    double act:suction:flow (
+        lagrangeUnit = "kg/s"
+        doc = """Suction flow of the vacuum generator at atmospheric pressure; it falls linearly
+        to zero at ultimatePressure. Required."""
+    )
+    double act:suction:ultimatePressure (
+        lagrangeUnit = "Pa"
+        doc = "The generator's ultimate vacuum, absolute. Required."
+    )
+    double act:suction:sealGap = 0.002 (
+        lagrangeUnit = "m"
+        doc = """How far from the lip the surface may be for the cup to seal (a modelling
+        tolerance, not a device value)."""
+    )
+    double act:suction:maxTilt = 0.26 (
+        lagrangeUnit = "rad"
+        doc = """Most the surface's normal may lean from the cup's axis for it to seal (a modelling
+        tolerance, not a device value)."""
+    )
+    double act:suction:leakConductance = 0 (
+        lagrangeUnit = "m3/(s.Pa)"
+        doc = """ISO 6358 sonic conductance C of the open cup, through which air comes back in
+        when it does not seal. 0: an open cup is at atmospheric pressure at once."""
+    )
+    double3 act:suction:axis = (0, 0, 1) (
+        lagrangeUnit = "1"
+        doc = "The direction the cup faces, in this prim's frame."
+    )
+}
+
+class "MagnetGripperAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A magnetic gripper (RFC 0020 section 4.2) on this prim: an electromagnet whose two
+    poles face along act:magnet:axis from this prim's origin. Its coil is an R-L circuit driven at
+    ratedVoltage while act/<name>/command is on; the pull on a ferromagnetic part (its
+    sensmat:relativePermeability over 1) across the air gap g is B^2 A_pole / mu0 for both poles,
+    with B = mu0 N i / (2 g + l_iron / mu_r) and B at most saturation. An electropermanent magnet
+    latches: it holds as at its rated current, drawing none, until commanded off."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token act:magnet:kind = "electro" (
+        allowedTokens = ["electro", "electropermanent"]
+        doc = "electro: holds while powered; electropermanent: switched on and off, holds unpowered."
+    )
+    double act:magnet:turns (
+        lagrangeUnit = "1"
+        doc = "Turns of the coil. Required."
+    )
+    double act:magnet:poleArea (
+        lagrangeUnit = "m2"
+        doc = "Area of one pole face. Required."
+    )
+    double act:magnet:ironPathLength = 0 (
+        lagrangeUnit = "m"
+        doc = "Length of the flux path in iron: the magnet's core and the part together."
+    )
+    double act:magnet:ironPermeability (
+        lagrangeUnit = "1"
+        doc = """Relative permeability of the magnet's core, which is taken as half the iron path
+        (the part, with its sensmat:relativePermeability, the other half). Required when
+        ironPathLength is over 0."""
+    )
+    double act:magnet:saturation = 0 (
+        lagrangeUnit = "T"
+        doc = "Most flux density the iron carries (the thinner of core and part). 0: no limit."
+    )
+    double act:magnet:coilResistance (
+        lagrangeUnit = "ohm"
+        doc = "Resistance of the coil. Required."
+    )
+    double act:magnet:coilInductance = 0 (
+        lagrangeUnit = "H"
+        doc = "Inductance of the coil. 0: the current follows the voltage at once."
+    )
+    double act:magnet:ratedVoltage (
+        lagrangeUnit = "V"
+        doc = "Voltage across the coil while on. Required."
+    )
+    double3 act:magnet:axis = (0, 0, 1) (
+        lagrangeUnit = "1"
+        doc = "The direction the pole faces look, in this prim's frame."
+    )
+}
+
+class "NozzleAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A water or foam nozzle (RFC 0022 section 8) on this prim: its origin is the nozzle's
+    exit and act:nozzle:axis the jet's direction. A pump holds act:nozzle:pressure (gauge) behind
+    it while act/<name>/command opens its valve (0 to 1, the share of the full flow). The exit
+    velocity is C_d sqrt(2 dp / rho), the mass flow rho A v0 times the opening, and the jet
+    pushes the nozzle's body back with the flow times v0. The jet flies ballistically, drag-free,
+    from the exit until it meets a collider, where its water lands on a disc that widens with
+    sprayHalfAngle; a fire whose burning area the disc covers takes the water (or foam). The
+    agent comes out of the tank it names until that is empty; with no tank, from a hose that
+    never runs dry."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:nozzle:diameter (
+        lagrangeUnit = "m"
+        doc = "Bore of the nozzle's exit. Required."
+    )
+    double act:nozzle:dischargeCoefficient (
+        lagrangeUnit = "1"
+        doc = "The nozzle's discharge coefficient C_d, 0 to 1, from its datasheet. Required."
+    )
+    double act:nozzle:pressure (
+        lagrangeUnit = "Pa"
+        doc = """The pump's pressure at the nozzle, gauge, while the valve is open. Required.
+        act/<name>/pressure_command (over 0) replaces it while given."""
+    )
+    uniform token act:nozzle:agent = "water" (
+        allowedTokens = ["water", "foam", "co2"]
+        doc = """What it sprays: water, foam solution (finished foam = the solution's volume
+        times foamExpansion), or CO2 (carried and weighed; its effect on fires is RFC 0022
+        step 7)."""
+    )
+    double act:nozzle:foamExpansion = 0 (
+        lagrangeUnit = "1"
+        doc = "The foam's expansion ratio: finished foam volume per solution volume. Required for foam."
+    )
+    double act:nozzle:sprayHalfAngle = 0 (
+        lagrangeUnit = "rad"
+        doc = "Half the spray cone's angle; 0 is a solid stream."
+    )
+    double act:nozzle:pumpEfficiency = 0 (
+        lagrangeUnit = "1"
+        doc = """The pump's efficiency, 0 to 1: it then draws dp Q / efficiency (act/<name>/
+        pump_power, and the power_demand of a signal-model ElectricalLoadAPI_1 on this prim).
+        0: no pump power."""
+    )
+    double3 act:nozzle:axis = (1, 0, 0) (
+        lagrangeUnit = "1"
+        doc = "The direction the jet leaves in, in this prim's frame."
+    )
+    rel act:nozzle:tank (
+        doc = "The prim with TankAPI_1 the agent comes from. None: a hose that never runs dry."
+    )
+}
+
+class "TankAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A tank of firefighting agent (RFC 0022 section 8) on this prim, which nozzles draw
+    from. Its liquid is carried as a weight at the prim's origin, shrinking as it empties: the
+    body's own mass is the empty tank's, and the tank's inertia and sloshing are left out."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:tank:capacity (
+        lagrangeUnit = "m3"
+        doc = "The volume of agent the tank holds when full. Required."
+    )
+    double act:tank:initial = 1 (
+        lagrangeUnit = "1"
+        doc = "How full it starts, 0 to 1."
+    )
+    double act:tank:density = 998.2 (
+        lagrangeUnit = "kg/m3"
+        doc = """The agent's density; the fallback is liquid water at 20 degrees C (998.2 kg/m3,
+        NIST Chemistry WebBook, saturated water)."""
+    )
+}
+
+class "ServoAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A servo (RFC 0020 section 4.3) on this joint: the board of a hobby PWM servo or of a
+    smart (Dynamixel-class) servo. It turns its command (act/<joint>/pulse_width through the
+    pulse map, or act/<joint>/goal_position) into a duty cycle on the joint's motor:
+    u = clamp(kp e + ki integral(e) + kd de/dt, -1, 1) with e the error outside the deadband,
+    applied as u times the bus voltage to an ElectricalMotorAPI_1 (dc_brushed) on this joint in
+    voltage mode, or run by that motor's own drive in position mode. Without the electrical
+    domain (or without a motor) the torque is stallTorque (u - w/noLoadSpeed): the datasheet's
+    line between its two numbers, a DC motor's."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token act:servo:kind = "pwm" (
+        allowedTokens = ["pwm", "smart"]
+        doc = """pwm: a hobby servo, commanded by a pulse width or an angle, position only.
+        smart: a Dynamixel-class servo with operating modes, profiles and overload shutdown."""
+    )
+    uniform token act:servo:operatingMode = "position" (
+        allowedTokens = ["position", "velocity", "current"]
+        doc = """What a smart servo follows: act/<joint>/goal_position, goal_velocity (rad/s) or
+        goal_current (A; with a motor and the electrical domain only)."""
+    )
+    double act:servo:pulseMin (
+        lagrangeUnit = "s"
+        doc = "Pulse width that maps to angleMin. Required for pwm."
+    )
+    double act:servo:pulseMax (
+        lagrangeUnit = "s"
+        doc = "Pulse width that maps to angleMax. Required for pwm."
+    )
+    double act:servo:angleMin (
+        lagrangeUnit = "rad"
+        doc = "Joint position at pulseMin. Required for pwm."
+    )
+    double act:servo:angleMax (
+        lagrangeUnit = "rad"
+        doc = "Joint position at pulseMax. Required for pwm."
+    )
+    double act:servo:deadband = 0 (
+        lagrangeUnit = "rad"
+        doc = "Position error the board does not act on."
+    )
+    double act:servo:kp (
+        lagrangeUnit = "1/rad"
+        doc = "Duty cycle per radian of position error. Required."
+    )
+    double act:servo:ki = 0 (
+        lagrangeUnit = "1/(rad.s)"
+        doc = "Duty cycle per radian-second of integrated error."
+    )
+    double act:servo:kd = 0 (
+        lagrangeUnit = "s/rad"
+        doc = "Duty cycle per radian per second of error rate (on the measured velocity)."
+    )
+    double act:servo:velocityKp = 0 (
+        lagrangeUnit = "s/rad"
+        doc = "Velocity mode: duty cycle per rad/s of velocity error. Required for that mode."
+    )
+    double act:servo:velocityKi = 0 (
+        lagrangeUnit = "1/rad"
+        doc = "Velocity mode: duty cycle per radian of integrated velocity error."
+    )
+    double act:servo:profileVelocity = 0 (
+        lagrangeUnit = "rad/s"
+        doc = "Most speed of the set point on its way to the goal. 0: none (a step)."
+    )
+    double act:servo:profileAcceleration = 0 (
+        lagrangeUnit = "rad/s2"
+        doc = "Most acceleration of the set point. 0: none."
+    )
+    double act:servo:resolution = 0 (
+        lagrangeUnit = "rad"
+        doc = "Step of the position sensing (potentiometer or encoder). 0: exact."
+    )
+    double act:servo:stallTorque (
+        lagrangeUnit = "N.m"
+        doc = "Torque at full duty and standstill, at the joint. Required without a motor."
+    )
+    double act:servo:noLoadSpeed (
+        lagrangeUnit = "rad/s"
+        doc = "Speed at full duty and no load, at the joint. Required without a motor."
+    )
+    double act:servo:overloadTime = 0 (
+        lagrangeUnit = "s"
+        doc = """Smart servo: how long the output may stay saturated (full duty or the current
+        limit) before the overload shutdown turns the torque off. 0: never."""
+    )
+    double act:servo:maxTemperature = 0 (
+        lagrangeUnit = "K"
+        doc = """Smart servo: winding temperature (thermal/<motor>/temperature) at which the
+        overheating shutdown turns the torque off. 0: never."""
+    )
+}
+
+class "SolenoidAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A solenoid (RFC 0020 section 4.6) on this prismatic joint: a plunger in a coil whose
+    inductance L(x) grows as the plunger goes in. The joint's position x is the plunger's travel
+    into the coil, 0 at rest and stroke fully in; its limits are the stops. With the flux linkage
+    as the coil's state, v = R i + d(L(x) i)/dt, and the joint is pushed along +x by
+    F = 1/2 i^2 dL/dx - (springPreload + springRate x). The command act/<joint>/command (0 to 1)
+    puts that share of ratedVoltage across the coil."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double[] act:solenoid:inductanceStrokes (
+        lagrangeUnit = "m"
+        doc = """The strokes of the inductance table, rising, from 0 or less to the stroke or
+        more (RFC 0020's inductanceTable, its first column). Required."""
+    )
+    double[] act:solenoid:inductances (
+        lagrangeUnit = "H"
+        doc = """The coil's inductance at each of inductanceStrokes; linear between them.
+        Required."""
+    )
+    double act:solenoid:resistance (
+        lagrangeUnit = "ohm"
+        doc = "The coil's resistance. Required."
+    )
+    double act:solenoid:springRate = 0 (
+        lagrangeUnit = "N/m"
+        doc = "The return spring's rate."
+    )
+    double act:solenoid:springPreload = 0 (
+        lagrangeUnit = "N"
+        doc = "The return spring's push at rest (x = 0), towards rest."
+    )
+    double act:solenoid:stroke (
+        lagrangeUnit = "m"
+        doc = "The plunger's travel, rest to fully in. Required."
+    )
+    double act:solenoid:ratedVoltage (
+        lagrangeUnit = "V"
+        doc = "The voltage across the coil at a command of 1. Required."
+    )
+}
+
+class "BrakeAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A holding brake (RFC 0020, "Also worth adding") on this revolute, continuous or
+    prismatic joint: spring-applied, power-off, released by a coil (an R-L circuit with a
+    freewheeling diode). The command act/<joint>/release (0 to 1) puts that share of ratedVoltage
+    on the coil; the armature lets go at releaseCurrent and is applied again at dropoutCurrent.
+    Applied, it holds the joint with up to holdingTorque at rest and dynamicTorque while it
+    slips (holdingForce and dynamicForce on a prismatic joint)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double act:brake:holdingTorque (
+        lagrangeUnit = "N.m"
+        doc = "Static holding torque. Required on a revolute or continuous joint."
+    )
+    double act:brake:dynamicTorque (
+        lagrangeUnit = "N.m"
+        doc = "Torque while the joint slips. No fallback: holdingTorque."
+    )
+    double act:brake:holdingForce (
+        lagrangeUnit = "N"
+        doc = "Static holding force. Required on a prismatic joint."
+    )
+    double act:brake:dynamicForce (
+        lagrangeUnit = "N"
+        doc = "Force while the joint slips. No fallback: holdingForce."
+    )
+    double act:brake:coilResistance (
+        lagrangeUnit = "ohm"
+        doc = "The coil's resistance. Required."
+    )
+    double act:brake:coilInductance = 0 (
+        lagrangeUnit = "H"
+        doc = "The coil's inductance. 0: the current follows the voltage at once."
+    )
+    double act:brake:ratedVoltage (
+        lagrangeUnit = "V"
+        doc = "The voltage on the coil at a command of 1. Required."
+    )
+    double act:brake:releaseCurrent (
+        lagrangeUnit = "A"
+        doc = "The coil current at which the armature pulls in. No fallback: 0.7 of the rated current."
+    )
+    double act:brake:dropoutCurrent (
+        lagrangeUnit = "A"
+        doc = "The coil current at which the springs apply it again. No fallback: 0.3 of the rated current."
+    )
+}

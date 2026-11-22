@@ -116,7 +116,7 @@ points at the driven joint).
 
 | Attribute | Type | Unit | Fallback | Meaning |
 |---|---|---|---|---|
-| `elec:motorType` | token | — | `pmsm` | `pmsm`, `bldc`, `dc_brushed`, `induction` (later) |
+| `elec:motorType` | token | — | `pmsm` | `pmsm`, `bldc`, `dc_brushed`, `stepper` (RFC 0020 §4.5, appended after 1.0: a two-phase hybrid stepper on a chopper driver; `torqueConstant` is then the torque per phase ampere), `induction` (later) |
 | `elec:windingResistance` | double | ohm | — | Phase (or armature) resistance at `referenceTemperature` |
 | `elec:inductance` | double | H | — | d-axis (or armature) inductance |
 | `elec:inductanceQ` | double | H | = `inductance` | q-axis inductance (salient machines) |
@@ -126,6 +126,7 @@ points at the driven joint).
 | `elec:rotorInertia` | double | kg·m² | `0.0` | Added to the joint's armature inertia |
 | `elec:gearRatio` | double | 1 | `1.0` | Motor revolutions per joint revolution |
 | `elec:gearEfficiency` | double | 1 | `1.0` | 0…1 |
+| `elec:gearBackEfficiency` | double | 1 | `-1.0` | 0…1 when the load drives the motor (0: self-locking), or −1: as `gearEfficiency`. Set, the back-driven losses are the joint friction `joint/<j>/friction_limit` (RFC 0020 §4.4; added after 1.0) |
 | `elec:maxCurrent` | double | A | — | Drive current limit (peak) |
 | `elec:referenceTemperature` | double | K | `298.15` | |
 | `elec:resistanceTempCoeff` | double | 1/K | `0.00393` | Copper, per kelvin (source: standard value for annealed copper at 20 °C; cite in code) |
@@ -136,6 +137,10 @@ points at the driven joint).
 | `elec:behaviorModel` | asset | — | none | Optional FMU that replaces the built-in model |
 | `elec:joint` | rel | — | — | Driven joint prim |
 | `elec:powerPort` | rel | — | — | Port or bus the drive draws from |
+| `elec:stepper:rotorTeeth` | int | 1 | `50` | A stepper's rotor teeth: a full step is 90°/N_r (added after 1.0) |
+| `elec:stepper:detentTorque` | double | N·m | `0.0` | Detent torque amplitude, `−T_d·sin(4·N_r·θ)` |
+| `elec:stepper:holdCurrent` | double | A | = `maxCurrent` | The driver's current at standstill (peak per phase) |
+| `elec:stepper:microsteps` | int | 1 | `1` | Microsteps per full step |
 
 ```usda
 class "PortAPI_1" (
@@ -309,6 +314,8 @@ wrong way and gives little thrust, as on a real vehicle.
 | `aero:rotor:direction` | token | — | — (`cw`, `ccw`) |
 | `aero:rotor:propeller` | asset | — | none (propeller file, §3.3.1; required for the `bem` fidelity) |
 | `aero:rotor:mount` | token | — | `puller` (`puller`: thrust along the joint axis, which points from the motor to the propeller; `pusher`: against it) |
+| `aero:rotor:advanceRatios` | double[] | 1 | none: an open-water chart's J, rising (added after 1.0); with it `T = K_T(J)·ρ·n²·D⁴`, `Q = K_Q(J)·ρ·n²·D⁵` replace the static coefficients |
+| `aero:rotor:thrustCoeffs`, `torqueCoeffs` | double[] | 1 | none: K_T and K_Q at each J |
 
 ```usda
 class "AeroAPI_1" (
@@ -554,6 +561,7 @@ class "RadiationAPI_1" (
 | `sensmat:relativePermeability` | double | 1 | `1.0` | Magnetic permeability relative to vacuum |
 | `sensmat:thermalEmissivity` | double | 1 | `0.9` | Long-wave IR emissivity (thermal cameras) |
 | `sensmat:frictionWetScale` | double | 1 | `0.7` | Multiplier on friction when wet (weather coupling) |
+| `sensmat:airPermeability` | double | m/(Pa·s) | `0.0` | Air permeance: what a suction cup on it leaks (RFC 0020; added in 1.x). 0 is airtight |
 
 ```usda
 class "SensorMaterialAPI_1" (
@@ -573,6 +581,7 @@ class "SensorMaterialAPI_1" (
     double sensmat:relativePermeability = 1.0 ( lagrangeUnit = "1" )
     double sensmat:thermalEmissivity = 0.9 ( lagrangeUnit = "1" )
     double sensmat:frictionWetScale = 0.7 ( lagrangeUnit = "1" )
+    double sensmat:airPermeability = 0.0 ( lagrangeUnit = "m/(Pa.s)" )
 }
 ```
 
@@ -705,6 +714,23 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
 | `lane:junction` | bool | — | `false` | A junction's connecting road |
 | `lane:successors`, `lane:predecessors` | rel | — | — | Lanes it continues into, and those leading into it |
 
+**`RoadSignalAPI_1`** (single-apply, added in 1.x: schema addition approved by the owner on
+2026-11-22). One per traffic light (an OpenDRIVE dynamic signal), on an Xform at the middle of the
+light's face, its x axis out of the face towards the traffic it governs.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `signal:id` | string | — | `""` | The OpenDRIVE signal id |
+| `signal:road` | int | 1 | `0` | The road it stands on |
+| `signal:s`, `signal:t` | double | m | `0` | Where on the road: s is the stop line of the lanes it governs |
+| `signal:orientation` | token | — | `+` | `+` traffic along s (right lanes), `-` against s (left lanes), `none` both |
+| `signal:type`, `signal:subtype` | string | — | `""` | OpenDRIVE type and subtype (country specific) |
+| `signal:fromLane`, `signal:toLane` | int | 1 | `0` | The lanes it governs (OpenDRIVE `<validity>`); both 0: every driving lane of its orientation's side |
+| `signal:controller` | string | — | `""` | The OpenDRIVE controller that switches it; empty: none |
+| `signal:junction` | int | 1 | `-1` | The junction whose `<controller>` list names that controller |
+| `signal:sequence` | int | 1 | `-1` | That controller's `sequence` there (else the controller's own); lower turns green first; -1: none given |
+| `signal:height` | double | m | `0` | The light's head height; its lamps a third of it apart. 0: not given (1 m) |
+
 **OpenDRIVE import** (v0.6). An own reader covers the subset that carries geometry and lanes:
 - **Reference lines:** line, arc, spiral (clothoid, by Gauss–Legendre integration), poly3 and
   paramPoly3 (both by arc length).
@@ -712,6 +738,7 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
   offset, lane sections with width polynomials, lane heights (`<height>`) and `@level`, road
   marks.
 - **Links:** lane, road and junction links.
+- **Objects and signals** (after 1.4): `<object>` with `<repeat>` and outlines, `<signal>` (below).
 
 **Cross section.** Superelevation is the roll of the cross section about the reference line, a
 cubic in s (rad), positive falling to the right (ASAM OpenDRIVE 1.8 §10.5.2). t is measured
@@ -725,7 +752,7 @@ requires) stays level at the height of the first level lane's inner border. Road
 faces, road marks and the lanes' `lane:centreLine` (its z) all follow the cross section, and the
 meshes' normals are the surface's.
 
-Objects and signals are not read yet. Road surfaces become meshes per lane type, road marks
+Road surfaces become meshes per lane type, road marks
 become thin meshes (broken marks are 3 m on and 6 m off, illustrative), and every driving,
 biking, parking or sidewalk lane becomes a `RoadLaneAPI_1` prim with its links. A road on the
 ground (no elevation, superelevation or lane height) has no colliders: its surfaces lie 1 cm
@@ -736,6 +763,55 @@ surface and 0.3 m thick (`ConvertOptions::colliderStep`, `colliderDepth`), writt
 in its lanes' heights. A raised road below z = 0 is under the ground plane, which is hit first:
 lift such a network with its elevation. Sample: `assets/worlds/banked_ring` (a 5 m ring 1.5 m
 up, 5° of bank falling to the inside, a 0.15 m kerb).
+
+**Objects** (`<objects><object>`, ASAM OpenDRIVE 1.8 §13). An object's origin is at its s and
+t on the road surface (`pointAt`: elevation and superelevation, not lane heights), `zOffset`
+above it; it is turned by `hdg` from the road's direction there, then `pitch` and `roll`
+(z-y'-x''). The standard does not say where the origin sits in the bounding box: the importer
+takes it as the bottom centre, the box `length` along u, `width` along v, `height` up (a
+missing length or width is 0.1 m), or a cylinder of `radius`. `<repeat>` places a copy every
+`distance` m from its `s` over its `length` (⌊length/distance⌋ + 1 copies), t, zOffset,
+height, width, length and radius linear from their start to their end values (the standard
+leaves the interpolation open), the object's own where a record gives none; distance 0 is one
+continuous object along the path (a guard rail, a wall), its cross section width × height;
+`detachFromReferenceLine` runs it on the straight line from start to end. With repeats the
+object itself is not placed again. An outline (`<outline>` under the object, as in 1.4, or
+`<outlines>`) of `cornerRoad` (s, t, dz on the road surface) or `cornerLocal` (u, v, z in the
+object's frame) corners supersedes the box: a closed one is a prism up each corner's `height`,
+an open one a wall 0.1 m thick along its corners. Standing objects (taller than 1 mm) are fixed
+scenery on the world: a box collider for a box (which the rotor downwash also takes as an
+obstacle), a cylinder for a round one, a convex hull for an outline (a hull per triangle of a
+concave footprint, by ear clipping) and every 2 m of a continuous repeat; flat ones are paint
+1.3 cm above the surface, without colliders: a crosswalk box as stripes 0.5 m wide across its
+longer side, a parking space as its border (open at +u), anything else filled. They are drawn
+as one mesh per road and material, `road_<id>_objects_<material>`, the material from the type
+(`pole`, `streetLamp`, `gantry` steel; `barrier`, `railing` steel; `soundBarrier`, `obstacle`,
+`trafficIsland` concrete; `building`; `tree`, `vegetation` foliage; `crosswalk`, `roadMark`,
+`parkingSpace` white paint; `patch`, `roadSurface` asphalt; vehicles and people painted; other
+types grey). Not read: `<objectReference>`, `<tunnel>`, `<bridge>`, `<skeleton>`, `<material>`,
+`<markings>`, `<borders>`, `validity` and `parkingSpace` access.
+
+**Signals** (`<signals><signal>`, §14). A signal's board has its bottom centre at s and t on the
+road surface, `zOffset` up, and faces the traffic it applies to: orientation `+` (traffic along
+s) looks back against s, `-` and `none` along it, turned counter-clockwise by `hOffset`, then
+`pitch` and `roll`. It is `width` wide and `height` tall (0.6 m by 0.6 m when not given, 3 cm
+thick); a dynamic signal (`dynamic="yes"`, a traffic light) is a dark housing (0.35 m by 1.0 m
+by 0.3 m when not given) whose lamps the traffic module draws and lights. A steel pole (radius
+4 cm) behind it rises from the road surface to its top when zOffset is above the road. Board and
+pole collide.
+
+A dynamic signal is also a `RoadSignalAPI_1` prim, `/<root>/signals/signal_<id>`, at the middle
+of its face (its board's origin plus half its depth out and half its height up). Its first
+`<validity fromLane toLane>` (§14.3) gives the lanes it governs; without one, every driving lane
+of the side its orientation faces. Its controller is the first top-level `<controller>` whose
+`<control signalId>` names it (§14.6), and that controller's place in its junction is the
+`sequence` of the junction's `<controller id>` entry that names it (else the top-level
+controller's own `sequence`). The traffic module (traffic.md §8) then takes its lights from
+these prims: vehicles stop at each signal's s on the lanes it governs, a controller's signals
+turn together and a junction's controllers take turns. A world without them keeps the lights
+the traffic module places by the junctions' geometry. Not read: `<signalReference>` (a signal
+governing another road), a second `<validity>`, `<dependency>` and `<reference>`, the control
+`type`, and the signals' country codes and values.
 
 ### 3.12 `schemas/tether/schema.usda`
 
@@ -839,6 +915,313 @@ In a URDF, on the link (read by the server and `lagrange_import`, which writes t
 `<thermal_material>` takes `preset`, `conductivity`, `density`, `specific_heat`, `emissivity`,
 `conductivity_along`, `axis`, `contact_conductance`, `initial_temperature`, `max_temperature`;
 `<heat_source>` takes `name` (required), `power`, `power_signal`, `efficiency`, `xyz`, `size`.
+
+### 3.14 `schemas/fire/schema.usda`
+
+Added in 1.x by RFC 0022 and simulated by the fire domain (`modules/fire/`,
+docs/physics/fire.md).
+
+**`FireAPI_1`** (single-apply), on a fuel item's prim (a pallet, a pool tray, a bin). Its collider
+gives the burning footprint and the flame's base (the top of the colliders at the prim's origin, or
+of every collider of a link whose own prim it is); its pose places it, and it moves with its body.
+Required values come from the fuel's data, with a source; none is a fallback.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `fire:preset` | token | — | — | A fuel preset; explicit attributes override it. The presets ship empty until their cited values are confirmed (RFC 0022 Q3) |
+| `fire:class` | token | — | `a` | `a` solids, `b` flammable liquids (water does not put it out), `c` energised equipment (water raises `hazard`), OSHA 29 CFR 1910.155(c) |
+| `fire:growth` | token | — | `t_squared` | `t_squared` or `pool` |
+| `fire:alpha` | double | W/s² | — | Growth coefficient; required for `t_squared` |
+| `fire:hrrPerArea` | double | W/m² | — | At full involvement; required for `t_squared` |
+| `fire:area` | double | m² | the colliders' footprint | Burning area at full involvement |
+| `fire:fuelMass` | double | kg | — | Required |
+| `fire:heatOfCombustion` | double | J/kg | — | Effective; required |
+| `fire:radiativeFraction` | double | 1 | — | χ_r, 0 to 1; required |
+| `fire:sootYield` | double | kg/kg | — | Required |
+| `fire:poolBurningRate` | double | kg/(m²·s) | — | ṁ''∞; required for `pool` |
+| `fire:poolExtinction` | double | 1/m | — | kβ; required for `pool` |
+| `fire:flameTemperature` | double | K | — | For thermal cameras (required once cameras see flames, RFC 0022 step 5) |
+| `fire:flameAbsorption` | double | 1/m | — | Soot absorption κ of the flame (as above) |
+| `fire:ignitionTemperature` | double | K | — | It ignites when the `ThermalAPI_1` node on its prim reaches this |
+| `fire:ignitionTime` | double | s | `-1` | When the run ignites it; below 0 not at all |
+| `fire:blowOffSpeed` | double | m/s | — | Air speed at the flame that blows it out, measured; none: never |
+| `fire:blowOffMaxHrr` | double | W | — | Blow-off only below this HRR |
+| `fire:criticalWaterRate` | double | kg/(m²·s) | — | Water rate that stops its growth; required for classes `a`, `c` |
+| `fire:oxygenLimit` | double | 1 | — | Oxygen mole fraction it goes out below (compartments, RFC 0022 step 7) |
+| `fire:decayFraction` | double | 1 | `0.2` | Share of the fuel over which Q falls with the remaining mass |
+| `fire:hrrCurve` | double[] | — | — | `t, Q` pairs (s, W): a measured curve that replaces the growth law |
+| `fire:foamBlanketThickness` | double | m | — | Finished foam depth that covers the burning area; none: foam does nothing |
+
+An overlay or a URDF may give `fire:alpha` as a t² growth class: `slow`, `medium`, `fast` (2.9306,
+11.722, 46.889 W/s², NBSIR 85-3167) or `ultrafast` (1000 Btu/s at 75 s, TODO(verify) against NFPA
+72's annex).
+
+```yaml
+apply:
+  - prim: pallet
+    schemas:
+      FireAPI_1:
+        fire:alpha: fast
+        fire:hrrPerArea: 1.0e6
+        fire:fuelMass: 25.0
+        fire:heatOfCombustion: 1.2e7
+        fire:radiativeFraction: 0.3
+        fire:sootYield: 0.015
+        fire:criticalWaterRate: 0.03
+        fire:ignitionTime: 0.0
+```
+
+In a URDF, on the link (snake case; `hrr_curve` is `"t Q t Q ..."`):
+
+```xml
+<gazebo reference="pallet">
+  <fire alpha="fast" hrr_per_area="1.0e6" fuel_mass="25" heat_of_combustion="1.2e7"
+        radiative_fraction="0.3" soot_yield="0.015" critical_water_rate="0.03" ignition_time="0"/>
+</gazebo>
+```
+
+The numbers above show the form only; a fuel's own values come from its data with their source.
+
+### 3.15 `schemas/light/schema.usda`
+
+Added in 1.x by RFC 0021 and run by the lights domain (`modules/lights/`, docs/physics/lights.md).
+
+**`LampAPI_1`** (single-apply). The prim's frame places the lamp; its light leaves along +X, the
+forward axis of URDF links (SDFormat's `<light>` points along −Z and is turned on import). It
+moves with its body.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `lamp:kind` | token | — | `spot` | `spot` (a cone), `point` (all round), `beacon` (a spot turning about +Z) |
+| `lamp:luminousIntensity` | double | cd | `0` | On the axis at full command. Required, over 0 |
+| `lamp:beamAngle` | double | rad | `0` | Full angle to 50 % of the axis value. Required for `spot` and `beacon` |
+| `lamp:fieldAngle` | double | rad | `0` | Full angle to 10 %, dark beyond; `0` is twice `beamAngle` |
+| `lamp:colorTemperature` | double | K | `0` | CCT; `0`: `lamp:color` instead |
+| `lamp:color` | color3f | 1 | `(1, 1, 1)` | Linear sRGB chromaticity of a coloured lamp |
+| `lamp:luminousEfficacy` | double | lm/W | `0` | Lumens per watt. Required (over 0) when the lamp is a load |
+| `lamp:heatFraction` | double | 1 | `1` | Share of the power that heats the lamp's thermal node |
+| `lamp:riseTime` | double | s | `0` | First-order lag of the output |
+| `lamp:blinkFrequency` | double | Hz | `0` | While blinking; `0` is steady |
+| `lamp:blinkDuty` | double | 1 | `0.5` | Share of each blink period it is on |
+| `lamp:rotationSpeed` | double | rad/s | `0` | A beacon's turning speed |
+| `lamp:voltageExponent` | double | 1 | `0` | Output ∝ (V/V₀)ⁿ below V₀, the bus voltage at the start |
+| `lamp:initialCommand` | double | 1 | `0` | Brightness 0–1 at t = 0, held until a command |
+
+Power: `ElectricalLoadAPI_1` with `elec:load:model = signal` on the same prim (its
+`elec:load:power` is what the bus draws when the lights domain is off). Heat: a `ThermalAPI_1`
+node on the same prim, which takes `lamp/<n>/loss_power` by name.
+
+In a URDF, `<gazebo reference="L"><lamp name= kind= intensity= beam_angle= field_angle=
+color_temperature= color="r g b" efficacy= heat_fraction= rise_time= blink_frequency= blink_duty=
+rotation_speed= voltage_exponent= initial= xyz= rpy=/></gazebo>` adds a prim `name` on link `L`.
+SDFormat's `<light>` inside a `<link>` is read as a lamp: `point` or `spot` (inner and outer angle
+as beam and field angle), colour from `<diffuse>`, `<light_on>` as the initial command. Its
+`<intensity>` has no unit, so the lamp gets a stated placeholder of 100 cd per unit, with a note;
+put the datasheet value in the USD that `lagrange_import` writes. A directional light is skipped.
+
+An overlay places lamps with a `lamps:` list, since an overlay's new prims have no pose
+otherwise:
+
+```yaml
+lamps:
+  - name: headlamp
+    link: base_link
+    xyz: [0.32, 0.0, 0.18]     # m, in the link
+    rpy: [0.0, 0.1, 0.0]       # rad, URDF's fixed axes
+    schemas:
+      LampAPI_1:
+        lamp:luminousIntensity: 1500.0
+        lamp:beamAngle: 0.35
+        lamp:colorTemperature: 5700.0
+        lamp:luminousEfficacy: 100.0
+      ElectricalLoadAPI_1:
+        elec:load:model: signal
+        elec:load:power: 5.0
+        elec:powerPort: dc_48v
+```
+
+### 3.16 `schemas/actuator/schema.usda`
+
+Added in 1.x by RFC 0020 (phase 1: grippers; phase 2: servos) and simulated by the actuators domain
+(`modules/actuators/`, docs/physics/actuators.md). A gripper holds by an equal and opposite pair
+of forces on its body and the part, never by a weld.
+
+**`SuctionGripperAPI_1`** (single-apply). The prim's origin is the centre of the cup's lip.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:suction:diameter` | double | m | — | Effective diameter. Required |
+| `act:suction:volume` | double | m³ | — | Cup and hose. Required |
+| `act:suction:flow` | double | kg/s | — | The generator's suction at atmospheric pressure. Required |
+| `act:suction:ultimatePressure` | double | Pa | — | The generator's ultimate vacuum, absolute. Required |
+| `act:suction:sealGap` | double | m | `0.002` | A modelling tolerance, not a device value |
+| `act:suction:maxTilt` | double | rad | `0.26` | Same |
+| `act:suction:leakConductance` | double | m³/(s·Pa) | `0` | ISO 6358 `C` of the open cup; 0: an open cup vents at once |
+| `act:suction:axis` | double3 | 1 | `(0, 0, 1)` | Where the cup faces, in the prim's frame |
+
+**`ServoAPI_1`** (single-apply, on a revolute or continuous joint; RFC 0020 §4.3). A hobby PWM
+servo's or smart servo's board; its motor is the joint's `ElectricalMotorAPI_1` (`dc_brushed`,
+`elec:controlMode` `voltage` or `position`), or none (the ideal fidelity).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:servo:kind` | token | — | `pwm` | `pwm` or `smart` |
+| `act:servo:operatingMode` | token | — | `position` | `position`, `velocity` or `current` (smart only) |
+| `act:servo:pulseMin`, `pulseMax` | double | s | — | Pulse widths of the map's ends. Required for `pwm` |
+| `act:servo:angleMin`, `angleMax` | double | rad | — | Joint positions they map to. Required for `pwm` |
+| `act:servo:deadband` | double | rad | `0` | Dead zone of the error |
+| `act:servo:kp` | double | 1/rad | — | Duty per rad of error. Required |
+| `act:servo:ki`, `kd` | double | 1/(rad·s), s/rad | `0` | |
+| `act:servo:velocityKp`, `velocityKi` | double | s/rad, 1/rad | `0` | Velocity mode's PI; `velocityKp` required for it |
+| `act:servo:profileVelocity`, `profileAcceleration` | double | rad/s, rad/s² | `0` | 0: none |
+| `act:servo:resolution` | double | rad | `0` | Position sensing step |
+| `act:servo:stallTorque`, `noLoadSpeed` | double | N·m, rad/s | — | Required for the ideal fidelity (no motor, or electrical off) |
+| `act:servo:overloadTime` | double | s | `0` | Smart: saturated this long, torque off; 0: never |
+| `act:servo:maxTemperature` | double | K | `0` | Smart: winding temperature for the overheating shutdown; 0: never |
+
+`elec:controlMode`'s token `position` (appended) makes the motor's drive run this loop itself on
+`joint/<j>/position_command`.
+
+**`BrakeAPI_1`** (single-apply, on a revolute, continuous or prismatic joint; RFC 0020 "Also worth
+adding"). A spring-applied, power-off holding brake released by a coil.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:brake:holdingTorque`, `dynamicTorque` | double | N·m | —, = holding | Static and slipping torque. Holding required on a hinge |
+| `act:brake:holdingForce`, `dynamicForce` | double | N | —, = holding | The same on a slide |
+| `act:brake:coilResistance` | double | ohm | — | Required |
+| `act:brake:coilInductance` | double | H | `0` | |
+| `act:brake:ratedVoltage` | double | V | — | On the coil at a command of 1. Required |
+| `act:brake:releaseCurrent` | double | A | 0.7 of `V/R` | The armature pulls in |
+| `act:brake:dropoutCurrent` | double | A | 0.3 of `V/R` | The springs apply it again |
+
+**`SolenoidAPI_1`** (single-apply, on a prismatic joint; RFC 0020 §4.6). A plunger in a coil: the
+joint's position is the plunger's stroke into it, 0 at rest; its limits are the stops.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:solenoid:inductanceStrokes` | double[] | m | — | The table's strokes, rising, covering 0 to `stroke`. Required (RFC 0020's `inductanceTable`, split so that each column has a unit) |
+| `act:solenoid:inductances` | double[] | H | — | The coil's inductance at each, over 0. Required |
+| `act:solenoid:resistance` | double | ohm | — | Required |
+| `act:solenoid:springRate` | double | N/m | `0` | The return spring |
+| `act:solenoid:springPreload` | double | N | `0` | Its push at rest |
+| `act:solenoid:stroke` | double | m | — | Required |
+| `act:solenoid:ratedVoltage` | double | V | — | Across the coil at a command of 1. Required |
+
+**`MagnetGripperAPI_1`** (single-apply). The prim's origin is the centre of the pole faces.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:magnet:kind` | token | — | `electro` | `electro` or `electropermanent` (holds unpowered) |
+| `act:magnet:turns` | double | 1 | — | Required |
+| `act:magnet:poleArea` | double | m² | — | Each of two poles. Required |
+| `act:magnet:ironPathLength` | double | m | `0` | Core and part together |
+| `act:magnet:ironPermeability` | double | 1 | — | The core's μr; required with an iron path |
+| `act:magnet:saturation` | double | T | `0` | Most flux the iron carries; 0: no limit |
+| `act:magnet:coilResistance` | double | ohm | — | Required |
+| `act:magnet:coilInductance` | double | H | `0` | |
+| `act:magnet:ratedVoltage` | double | V | — | Required |
+| `act:magnet:axis` | double3 | 1 | `(0, 0, 1)` | Where the poles face |
+
+A part's porosity and iron are its `SensorMaterialAPI_1`'s `sensmat:airPermeability` and
+`sensmat:relativePermeability`, on its link's prim. An overlay applies the grippers like any
+other schema:
+
+```yaml
+apply:
+  - prim: suction_cup
+    schemas:
+      SuctionGripperAPI_1:
+        act:suction:diameter: 0.03
+        act:suction:volume: 1.5e-5
+        act:suction:flow: 6.0e-5
+        act:suction:ultimatePressure: 15000.0
+        act:suction:axis: [0.0, 0.0, 1.0]
+```
+
+In a URDF, on the link (read by the server):
+
+```xml
+<gazebo reference="suction_cup">
+  <suction_cup diameter="0.03" volume="1.5e-5" flow="6.0e-5" ultimate_pressure="15000" axis="0 0 1"/>
+</gazebo>
+<gazebo reference="box">
+  <sensor_material air_permeability="2e-6" relative_permeability="1"/>
+</gazebo>
+```
+
+`<suction_cup>` takes `diameter`, `volume`, `flow`, `ultimate_pressure` (required), `seal_gap`,
+`max_tilt`, `leak_conductance`, `axis`, `name` and `xyz`; `<magnet_gripper>` takes `kind`,
+`turns`, `pole_area`, `iron_path_length`, `iron_permeability`, `saturation`, `coil_resistance`,
+`coil_inductance`, `rated_voltage`, `axis`, `name` and `xyz`. Without `name` and `xyz` the gripper
+is on the link's own prim and is named after the link; with either it is a prim of its own under
+the link, at `xyz` (default its origin), named `name` (default: the element's name).
+
+**`NozzleAPI_1`** (single-apply, RFC 0022 §8). The prim's origin is the nozzle's exit.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:nozzle:diameter` | double | m | — | The exit's bore. Required |
+| `act:nozzle:dischargeCoefficient` | double | 1 | — | `C_d`, 0 to 1. Required |
+| `act:nozzle:pressure` | double | Pa | — | The pump's gauge pressure at the nozzle. Required |
+| `act:nozzle:agent` | token | — | `water` | `water`, `foam` or `co2` |
+| `act:nozzle:foamExpansion` | double | 1 | `0` | Finished foam per solution volume; required for foam |
+| `act:nozzle:sprayHalfAngle` | double | rad | `0` | 0: a solid stream |
+| `act:nozzle:pumpEfficiency` | double | 1 | `0` | 0: no pump power |
+| `act:nozzle:axis` | double3 | 1 | `(1, 0, 0)` | The jet's direction in the prim's frame |
+| `act:nozzle:tank` | rel | — | — | A prim with `TankAPI_1`; none: a hose |
+
+**`TankAPI_1`** (single-apply). Its agent is a weight at the prim's origin.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:tank:capacity` | double | m³ | — | Required |
+| `act:tank:initial` | double | 1 | `1` | How full it starts |
+| `act:tank:density` | double | kg/m³ | `998.2` | Water at 20 °C |
+
+In a URDF, on the links:
+
+```xml
+<gazebo reference="tank_link">
+  <water_tank name="tank" capacity="0.04" initial="1"/>
+</gazebo>
+<gazebo reference="tilt_link">
+  <nozzle name="nozzle" xyz="0.12 0 0" axis="1 0 0" diameter="0.008" discharge_coefficient="0.95"
+          pressure="50000" agent="water" spray_half_angle="0.03" pump_efficiency="0.5" tank="tank"/>
+</gazebo>
+```
+
+`<water_tank>` takes `capacity`, `initial`, `density`, `name` and `xyz`; `<nozzle>` takes
+`diameter`, `discharge_coefficient`, `pressure`, `agent`, `foam_expansion`, `spray_half_angle`,
+`pump_efficiency`, `axis`, `tank` (a `<water_tank>`'s name, or its link's when it has none), `name`
+and `xyz`, placed as the grippers are.
+
+
+### 3.17 Trees (`TreeAPI_1`, `schemas/world/schema.usda`)
+
+**`TreeAPI_1`** (single-apply, on an Xform at the foot of the trunk, z up; added after 1.0, approved
+by the owner on 2026-11-22). The trunk is whatever collider the stage gives the tree; the crown is
+no collider but an ellipsoid of leaves over `crownBase` with semi-axes (`crownRadius`,
+`crownRadius`, (`height` − `crownBase`)/2), docs/physics/ground.md "Trees".
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `tree:height` | double | m | — | Foot to the top of the crown. Required |
+| `tree:crownRadius` | double | m | — | The crown's horizontal semi-axis. Required |
+| `tree:crownBase` | double | m | 0.3 `height` | Where the crown starts |
+| `tree:trunkDiameter` | double | m | `crownRadius`/8 | For drawing |
+| `tree:leafAreaDensity` | double | m²/m³ | `1` | Drag on what moves through, the lidars' gap probability |
+| `tree:dragCoefficient` | double | 1 | `0.3` | Of the crown's side area, for its sway |
+| `tree:naturalFrequency` | double | Hz | `0.5` | The first sway mode |
+| `tree:dampingRatio` | double | 1 | `0.1` | The first sway mode |
+| `tree:crownMass` | double | kg | 2 kg/m³ × crown volume | The sway mode's mass |
+| `tree:cutEnergy` | double | J/m³ | `2000` | Spent by a propeller cutting through the crown |
+| `tree:leafArea` | double | m² | `0.003` | One leaf, to count the leaves a cut sheds |
+| `tree:branchCount` | int | 1 | `12` | Limbs leaving the trunk in the crown besides the leader; each forks down to 4 mm twigs (ground.md "Branches") |
+| `tree:woodCutEnergy` | double | J/m² | `50000` | Spent by a propeller severing a twig, per m² of its cross-section |
+| `tree:maxCutDiameter` | double | m | `0.01` | The thickest wood a propeller cuts; thicker stops it (a strike) |
+
+Every fallback is TODO(verify) against measurements of the species.
 
 ## 4. Sample robot: differential-drive AMR
 
@@ -1721,6 +2104,11 @@ Any other sensor type (a camera or a lidar) is refused with a message naming the
 dropped: it belongs in the robot file's own `<sensor>` or its USD, so lidars on an MJCF robot
 still need USD for now.
 
+`ElectricalMotorAPI_1` also takes `lead_screw: {lead, diameter, friction, thread_angle}` (m, m,
+1, rad; RFC 0020 §4.4), which sets `elec:gearRatio` (2π/lead), `gearEfficiency` and
+`gearBackEfficiency` from the thread, and is refused beside any of them
+(docs/physics/actuators.md "Lead screws").
+
 ### 9.1 A SPICE netlist as an overlay
 
 `--overlay` also takes a netlist (`.cir`, `.sp`, `.spice`, `.net`, `.ckt`, `io/stage/src/Netlist.cpp`), so one file is the circuit for ngspice and the power system of a run. It becomes the same schemas an overlay file makes, at load. A netlist from KiCad comes through `kicad-cli sch export netlist --format spice`.
@@ -1761,7 +2149,13 @@ The attributes are the keys of §9.1's `*lagrange` lines, which the netlist may 
 SHA-256 and licence, and `ros2 run lagrange_assets fetch_assets [ID...]` downloads them into
 `$LAGRANGE_ASSET_DIR` (default `~/.local/share/lagrange/assets/<id>/`) with the licence and a
 NOTICE. Robot files name them `lagrange-asset://<id>/<file>`; an asset that is not fetched is a
-note, and the link shows a magenta box in its place. **Textures** are not drawn: the importer
+note, and the link shows a magenta box in its place. An asset's `derive:` entry makes more files
+from the fetched ones, without the network: `wheel_split` (`assets/scripts/wheel_split.py`) cuts a
+one-piece car mesh into a body and one mesh per wheel, re-centred on its wheel centre, by the
+triangles inside each wheel's cylinder, so that the wheels spin and steer on screen (the Lexus's
+`lexus_body.dae` and `lexus_wheel_*.dae`). The parts are remade, byte for byte the same, whenever
+they are missing or stale: on the next `fetch_assets`, by `fetch_assets --derive`, and by
+`lagrange lexus` before it starts. **Textures** are not drawn: the importer
 bakes a textured part into parts of one colour each (each triangle takes the texture's colour
 under it, PNG or JPEG, embedded or a file next to the mesh; the triangles are grouped into 16
 colours at most by k-means), which keeps the viewer protocol unchanged.

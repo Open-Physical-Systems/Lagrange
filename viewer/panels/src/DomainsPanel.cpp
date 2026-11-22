@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <imgui_internal.h>  // the list's clip rectangle (InnerClipRect)
 #include <iterator>
 #include <map>
 #include <string>
@@ -111,9 +112,12 @@ public:
         if (ImGui::BeginTable("##domains", 6, kTableFlags)) {
             setupColumns();
             headerRow();
-            for (const DomainInfo& info : profile->domains) {
-                if (format::isPhysicsDomain(info.name)) {
-                    row(session, info, kRowHeight);
+            // The physics domains, then the other domains this run has (fire, lights, ...).
+            for (const bool physics : {true, false}) {
+                for (const DomainInfo& info : profile->domains) {
+                    if (physics ? format::isPhysicsDomain(info.name) : inRun(session, info)) {
+                        row(session, info, kRowHeight);
+                    }
                 }
             }
             ImGui::EndTable();
@@ -128,7 +132,7 @@ public:
             if (ImGui::BeginTable("##modules", 6, kTableFlags)) {
                 setupColumns();
                 for (const DomainInfo& info : profile->domains) {
-                    if (!format::isPhysicsDomain(info.name)) {
+                    if (!format::isPhysicsDomain(info.name) && !inRun(session, info)) {
                         row(session, info, kModuleRowHeight);
                     }
                 }
@@ -151,6 +155,11 @@ public:
     }
 
 private:
+    static bool inRun(const ProfileSession& session, const DomainInfo& info) {
+        const DomainView* view = session.find(info.name);
+        return view != nullptr && format::isRunDomain(*view, &info);
+    }
+
     void row(ProfileSession& session, const DomainInfo& info, float logicalHeight) {
         const DomainView* view = session.find(info.name);
         if (view == nullptr) {
@@ -209,8 +218,10 @@ private:
             const float span =
                 ImGui::GetContentRegionAvail().x + px(84.0F) + px(66.0F) + 4.0F * cell - px(8.0F);
             const ImVec2 at = ImGui::GetCursorScreenPos();
-            ImGui::PushClipRect(ImVec2(at.x, at.y - height), ImVec2(at.x + span, at.y + height),
-                                false);
+            // Across the columns, but never below or above the scrolled list it is in.
+            const ImRect list = ImGui::GetCurrentWindow()->InnerClipRect;
+            ImGui::PushClipRect(ImVec2(at.x, std::max(at.y - height, list.Min.y)),
+                                ImVec2(at.x + span, std::min(at.y + height, list.Max.y)), false);
             ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
             ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
             fit::text(info.unavailableReason, span);

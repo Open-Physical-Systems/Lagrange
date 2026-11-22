@@ -4,7 +4,9 @@
 
 Each file comes from the upstream repository at a pinned commit and must match its SHA-256;
 the licence and a NOTICE land next to it. Robot files name the files
-`lagrange-asset://<id>/<file>` (formats.md §9). Usage: fetch_assets [ID...] [--list] [--force]
+`lagrange-asset://<id>/<file>` (formats.md §9). An asset's `derive:` files are then made from
+the fetched ones (wheel_split.py), again whenever they are missing or stale.
+Usage: fetch_assets [ID...] [--list] [--force] [--derive]
 """
 
 import argparse
@@ -79,7 +81,24 @@ def fetch(asset_id: str, asset: dict, root: Path, force: bool) -> bool:
         " (LICENSE).\nFetched for Lagrange by fetch_assets; not part of Lagrange's own"
         " sources.\n"
     )
-    return ok
+    return ok and make_derived(asset_id, asset, root)
+
+
+def make_derived(asset_id: str, asset: dict, root: Path) -> bool:
+    """Makes the asset's derived files from its fetched ones; no network."""
+    out = root / asset_id
+    for kind, spec in asset.get("derive", {}).items():
+        if kind != "wheel_split":
+            print(f"FAILED: {asset_id}: unknown derive '{kind}'", file=sys.stderr)
+            return False
+        if not (out / spec["source"]).is_file():
+            print(f"{asset_id}: not fetched; run fetch_assets {asset_id}", file=sys.stderr)
+            return False
+        from wheel_split import derive
+
+        if derive(out, spec):
+            print(f"{asset_id}: split {spec['source']} into its body and wheels")
+    return True
 
 
 def main() -> int:
@@ -87,6 +106,9 @@ def main() -> int:
     parser.add_argument("ids", nargs="*", help="assets to fetch (default: all)")
     parser.add_argument("--list", action="store_true", help="list the assets and exit")
     parser.add_argument("--force", action="store_true", help="download again")
+    parser.add_argument(
+        "--derive", action="store_true", help="only make the derived files (no network)"
+    )
     args = parser.parse_args()
     assets = yaml.safe_load(manifest_path().read_text())["assets"]
     if args.list:
@@ -98,6 +120,9 @@ def main() -> int:
         print(f"unknown asset(s): {', '.join(unknown)}; see --list", file=sys.stderr)
         return 2
     root = asset_dir()
+    if args.derive:
+        ok = all([make_derived(i, assets[i], root) for i in (args.ids or list(assets))])
+        return 0 if ok else 1
     ok = all([fetch(i, assets[i], root, args.force) for i in (args.ids or list(assets))])
     print(f"assets in {root}" if ok else "some files failed their checksum")
     return 0 if ok else 1

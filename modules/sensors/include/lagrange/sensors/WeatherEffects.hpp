@@ -79,6 +79,25 @@ void applyCameraWeather(std::span<std::uint8_t> rgba, std::span<const float> dep
 /// (`fieldDepth`, when given: per pixel, a fog field's optical depth along the pixel's ray up to
 /// its depth, added to σ·d.)
 
+/// Smoke (RFC 0022 §4, §6): the fire domain's `env/smoke/extinction` field is σ at 633 nm, the
+/// wavelength its specific extinction coefficient was measured at (Mulholland and Croarkin, Fire
+/// and Materials 24, 2000: 8700 m²/kg). Soot extinguishes as (λ_vis/λ)^a with a = 1 from 543.5
+/// to 1565 nm (Zhu, Choi, Mulholland et al., Proc. Combust. Inst. 29, 2002: the dimensionless
+/// extinction constant K_m·ρ_s·λ roughly constant), so a lidar at λ sees σ·(633 nm/λ). The
+/// thermal band is not measured (TODO(verify)): thermal cameras do not take smoke yet.
+inline constexpr double kSmokeFieldWavelength = 633e-9;  // m
+inline constexpr double kSootWavelengthExponent = 1.0;
+/// The factor that takes the smoke field's σ to a wavelength λ (m); 1 for λ ≤ 0.
+[[nodiscard]] double smokeBandScale(double wavelength);
+
+/// The visibility factors C of S = C/σ (FDS 6.11.1 User's Guide eq. 22.23, VISIBILITY_FACTOR,
+/// citing Mulholland, "Smoke Production and Properties", SFPE Handbook 3rd ed., 2002): a
+/// light-reflecting sign and a light-emitting one.
+inline constexpr double kVisibilityReflecting = 3.0;
+inline constexpr double kVisibilityEmitting = 8.0;
+/// S = C/σ (m); +inf in clear air.
+[[nodiscard]] double smokeVisibility(double extinction, double factor);
+
 /// The air light of the veil (overcast sky), 8-bit RGB.
 inline constexpr std::uint8_t kAirLight[3]{190, 194, 200};
 

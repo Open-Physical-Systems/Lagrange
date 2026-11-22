@@ -120,7 +120,8 @@ def test_open_rover_test_sees_its_scene(tmp_path):
 # Test ▾ → A sample world → warehouse_small (the menu opens to the left at the window's edge).
 TEST_CHEVRON = "1515,48"
 SAMPLE_WORLD = "1480,134"
-WAREHOUSE_SMALL = "1310,321"  # one row lower since banked_ring joined the sample worlds (#417)
+# 17 px a row: below banked_ring (#417), warehouse_fire (#441), reed_channel (#450), orchard.
+WAREHOUSE_SMALL = "1310,372"
 
 
 def test_test_runs_in_a_sample_world_from_the_menu(tmp_path):

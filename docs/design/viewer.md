@@ -99,12 +99,119 @@ flowchart LR
   the scene in HDR (Cook-Torrance GGX from each material's metallic and roughness, sky light by
   Lazarov's split-sum, grain where a surface is rough), sky, water, see-through things, then ambient
   occlusion, bloom, ACES tone map and FXAA, with overlays drawn on top. A water prim is one with
-  `WaterAPI_1`: Gerstner waves whose height follows the site's wind, ripples, Fresnel reflection,
-  depth-based colour, caustics, foam where it meets things. Limits: what the water looks like does
+  `WaterAPI_1`: Gerstner waves whose height follows the site's wind, capillary ripples from the
+  air's friction velocity by Cox and Munk (resolved per pixel, the rest as Beckmann facets of the
+  same slope variance), exact Fresnel per facet over eight facets a pixel (the mirror pass's
+  image at the distance its depth, binding 10, gives, else the sky), the sun's glitter, Snell
+  refraction to the bottom with pure water's absorption and backscatter, and dissolved organic
+  matter by `--water-cdom A440` (water.md "How the water looks"), caustics, foam where it meets
+  things. The water's far sides (its skirt facing away) are not drawn: the water pass writes no
+  depth, and they would draw over its surface. Limits: what the water looks like does
   not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
-  no wake; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
+  no wake. The physics' own surface under a rotor's downwash (water.md) is drawn: the server's
+  `water/surface` volume lifts the first water body by $\eta$ and its slope shades it (per pixel,
+  in place of the made-up ripples there, on top of the swell; `RealisticWaterSurface`, binding 8 of
+  `realistic.slang`; the server's `water/friction_velocity` volume roughens it where the outwash
+  rubs it), and the spray's water near the surface (`aero/spray`) foams it where the
+  outwash tears it off (0.3 m of drops over it, full foam at 2 g/m², a drawing choice).
+  `--water-relief X` shades it X times as steep, its height true (1 by default: as the physics
+  has it).
+  It is also the Environment workspace's `water/surface` field layer, whose Overlays *contrast*
+  (linear, symlog over four decades, or high-pass: less the mean over 7 × 7 cells; `--slice
+  water/surface:xy:highpass`) shows sub-millimetre rings beside a dimple of centimetres, and its
+  spray the Overlays row *spray · drops*: streaks where the aerodynamics domain's drops are,
+  coloured by the map (`--overlays spray`; downwash.md §5b); without it the realistic view draws
+  the drops only as mist (one by one, 50 to 450 µm drops are under a third of a pixel from a
+  metre or more away, so they are seen only together): the
+  `aero/spray` box (binding 9, `RealisticSpray`) is marched along each view ray (24 steps), its
+  extinction 3/(ρ_w D) per kg/m³ over the equal shares of 50, 150 and 450 µm drops (29.6 /m per
+  kg/m³, Q_ext = 2), and what it takes out is replaced by the daylight's white. Without wind the realistic
+  water is still (no swell, caustics or drifting foam below 3 m/s; no ripples below a friction
+  velocity of 4.5 cm/s), and
+  `--water-relief` scales only the slopes; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
+  Vegetation: on a surface whose material names `reeds` or `shrub` the realistic renderer draws
+  real geometry, a clump per cell of a world grid over the surface's top (0.22 m for reeds, 0.7 m
+  for shrubs; its bounds' top face, level and axis-aligned like water): reeds as 12 curved, tapered
+  blades (a seed head on about one clump in three), a shrub as 60 leaves in a dome, both made in
+  the vertex shader from the vertex and instance index (`vsVeg`, no buffers; the same clump in the
+  same cell on every machine). Every blade and leaf bends with `groundAir` (the site wind, and the
+  rotor outwash when it reaches it), tips most (with the square of the height along it), each
+  clump at its own stiffness and sway; it is lit and shadowed like the meshes (it receives the
+  sun's shadow, it does not cast one yet), with some sun through the leaves from behind, and
+  reflects in the water. Clumps shrink away before 70 m (reeds) and 110 m (shrubs), far ones with
+  fewer blades, and at most 60 000 clumps a frame are drawn (the reach shrinks to fit): about
+  1.5 ms of GPU (3.3 ms in an 8 m/s wind's view) for the `reed_channel` sample at 1280x800 on an
+  RTX 4060 Laptop. Tiers: Tier 0 has no realistic view (Lit), so no vegetation; a software device
+  asked for the realistic view draws a sixteenth of the clumps out to half the distance; Tier 1 and
+  2 draw it all. It writes the realistic pass's depth (so it hides what is behind it in the image),
+  but a camera sensor's depth and instance ids come from its own raster pass of the scene's
+  meshes, which has no vegetation: depth, ids, lidar and the CPU reference stay as they were.
+  Grass blades: on grass (lawn, tall, wet, dry grass) the same pipeline draws a tile of 48 real
+  blades in every cell of a world grid near the eye (`vsGrassBlade`; 0.12 m tiles out to 8 m for
+  a lawn, about 3300 blades per m², 0.16 m to 10 m for dry grass, 0.3 m to 24 m for tall grass),
+  over the ground's own parallax canopy: each a tapered strip of three segments and a pointed tip
+  at its own place, facing, height and curl, bent by `grassBend` (wind, gusts, rotor outwash,
+  rain), ended at the cut of `vegetation/cut`. Further off the blades thin out and sink into the
+  ground, taking the flat lawn's colour; the ground between them is drawn as the canopy's shade
+  (`frame.cutLevel.z`), and under tall grass the parallax canopy is left out. Only surfaces whose
+  bounds are thinner than 0.6 m get blades (a flat field, not a terrain tile or hill, whose top
+  face is not its ground); they are left out of the water's mirror and are not drawn on a
+  software device. At most 24 000 tiles a frame (the reach shrinks to fit): the `lawn_test`
+  field at 1600x1000 on an RTX 4060 Laptop takes about 5.6 ms a frame against 2.4 ms with the
+  parallax alone. Seen from behind, a blade's or leaf's normal is turned round its upright axis
+  (not reversed), so it stays lit from the sky. Blade counts, sizes and colours are drawing
+  choices, TODO(verify) against photographs of turf and meadow.
+  Sample world `assets/worlds/reed_channel/reed_channel.usda`.
+  Trees (ground.md "Trees"): every `TreeAPI_1` prim is drawn as a tree by the same pipeline
+  (`vsTree`), made from its numbers and a seed from its name alone: a tapered trunk with a root
+  flare from its foot through the crown base into the crown, seven main branches out to the
+  crown's main clumps, a twig to each of 21 more clumps, and a crown of leaf cards (600 per m³ of
+  crown, at most 16 000 a tree, each a spray of three leaves of about 9 cm) in those clumps inside
+  the crown's ellipsoid, where the physics has its leaves, coloured per
+  clump and per leaf, darker deep inside and underneath, autumn colours in fall and a few dead
+  leaves in winter. The crown sways by `tree/<n>/sway` (a point at height z moves by
+  sway·(z / centre height)^1.5: the trunk bends, the top moves most) and each leaf flutters in the
+  air at it (`groundAir`). Leaves in a crown cell a propeller cut (`vegetation/tree_cut`, served
+  as the field volume of that name, a row of (tree prim, cell) per cut cell; uploaded as an
+  open-addressed table, binding 12) are not drawn and the leaves beside them are drawn torn and
+  pale, so the cut shows as a bruised hollow (the crown's inner leaves stay behind it). Flying leaves
+  (`vegetation/leaves`, Leaves.hpp, served likewise; binding 13) are drawn as single leaf cards at
+  the orientation the physics gives them. Trees and flying leaves are drawn into the sun's two
+  cascades too (a depth-only pipeline on `vsTree`), so they cast dappled shadows and shade
+  themselves; they are in the water's mirror. Beyond 14 m from the crown the cards get fewer
+  (as 1/d², at least 400) and larger, every tree's together capped at 240 000 a frame (6000 on a
+  software device, where a tree has at most 1500); the trees in the view take theirs first,
+  nearest first, and those out of it (still drawn into the sun's cascades) what is left, so the
+  rows behind the eye do not leave the far trees in front bare (the `orchard` sample's 140). The sample's four trees add about 0.1 ms to the
+  3D view's GPU time seen from 40 m, 0.36 ms with tree_1 filling the view at 8 m (0.47 to 0.83 ms)
+  and 0.67 ms at 3 m, at 1600x1000 on an RTX 4060 Laptop. The viewer takes the numbers from the prims' attributes (`GetAttributes`,
+  with Trees.hpp's fallbacks) and the sway by signal subscription; camera sensors take them
+  from the world and the bus (`RasterCamera::setTrees`). Depth and instance ids see the trunks of
+  the simple look, not the realistic tree (the camera adds the crowns to them as its lidar sees
+  them, sensors.md "Trees in the camera").
+  The other shadings (Lit, Unlit, Wireframe, Thermal, Current; not Collision) and the cameras'
+  simple look draw each tree with the plain mesh pipeline as a tapered trunk and the crown's 28
+  clumps of leaves, ellipsoids at the places and sizes `vsTree` gives them (`gpu/TreeShapes.hpp`,
+  its hash ported bit for bit), swayed the same way and each shrunk by the share of its volume in
+  cut cells (gone under 30 %), so a cut shows as a bite; the viewer watches the sway and the cut
+  volume in those shadings too.
+  The open field's trees keep only their trunk colliders, so the procedural tree is the only one
+  drawn. Counts, sizes and colours are drawing choices, TODO(verify) against photographs of
+  broadleaf crowns.
+  Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
+  I/d²) in a storage buffer, each adding E = I·f(θ)·cos/d² through the same GGX as the sun, its
+  colour from its colour temperature (Planck through the CIE 1931 functions,
+  `gpu::colorOfTemperature`) or `lamp:color`, unshadowed. One calibration ties the renderer's
+  units to lux: the drawn sun is the light_sensor's clear-sky beam at its elevation
+  (`gpu::realisticUnitsPerLux`). The sky's horizontal illuminance (`env/sky_illuminance`, lx; NaN
+  or absent: the drawn day) scales the sun and the sky, and the picture adapts by up to 1024×
+  (`gpu::realisticAdaptation`, a drawing choice); a camera's sensor model divides its exposure by
+  that gain, so a night frame has the scene's electrons. The viewer finds lamps as prims with
+  `LampAPI_1` in the snapshot, reads their `lamp:` attributes over `GetAttributes` and their
+  `lamp/<n>/intensity` over the signal subscription (no protocol change). The simple look
+  (`mesh.slang`, Tier 0) draws neither lamps nor night.
   Rain and snow (`falling`, `fallingKind` in the shader): the run's rain from EnvironmentState and
   its snow from the signals `env/snow_rate` and `env/snow_cover` (the environment message has no
   snow; no protocol change) fall through the world as drops on a lattice that moves with the wind

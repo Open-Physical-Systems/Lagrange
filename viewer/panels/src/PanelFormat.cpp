@@ -41,7 +41,9 @@ void domainDetail(const DomainView& view, char* buffer, std::size_t size) {
     char dt[24];
     step(view.dtNs, dt, sizeof(dt));
     if (view.mode.empty()) {
-        std::snprintf(buffer, size, "%s%s", dt, pending);
+        // A module with neither a mode nor a step of its own (fire, actuators): as the Domains
+        // table says, "built-in".
+        std::snprintf(buffer, size, "%s%s", view.dtNs > 0 ? dt : "built-in", pending);
     } else if (view.dtNs > 0) {
         std::snprintf(buffer, size, "%s · %s%s", view.mode.c_str(), dt, pending);
     } else {
@@ -59,6 +61,12 @@ bool isPhysicsDomain(std::string_view name) {
         }
     }
     return false;
+}
+
+bool isRunDomain(const DomainView& view, const DomainInfo* info) {
+    return !isPhysicsDomain(view.name) &&
+           (view.pending ||
+            (info != nullptr && (info->enabled || (view.inProfile && info->available))));
 }
 
 }  // namespace lagrange::viewer::format

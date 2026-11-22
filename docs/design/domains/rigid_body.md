@@ -143,6 +143,14 @@ profile's `rigid_body: {backend: NAME}`. Its contract is §3 and §5, binding:
   world, or one of its ancestors', is not fixed): `body/<b>/pose`, `twist` (world_local),
   `acceleration` (proper acceleration, body frame: what an IMU feels).
 - **Inputs**: `joint/<j>/torque` and `load_torque` (window average, optional);
+  `joint/<j>/friction_limit` (N or N·m, the latest value, optional, since RFC 0020): a Coulomb
+  friction limit for the step added to the joint's own (`JointDynamicsAPI_1`) friction, which a
+  screw's or worm's gear sets from its load (MuJoCo: the dof's `frictionloss`, its friction row
+  stiffened to `solimp` 0.9999 and `solref` 2·dt while the input has a writer, rebuilt with
+  `mj_step1` when the value changes; Jolt 5.6: `SliderConstraint::SetMaxFrictionForce`,
+  `HingeConstraint::SetMaxFrictionTorque`). `constraint_torque` includes the friction the joint
+  applied (MuJoCo's `qfrc_constraint` row; on Jolt the limit's and the motor part's impulses, the
+  motor part being the joint's friction);
   `body/<b>/external_wrench` (world_local, at the body origin, optional);
   `body/<b>/pose_command` for kinematic bodies (optional: without one the body stays);
   `env/friction_scale` (optional, default 1).
@@ -194,6 +202,9 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 | A stack of three boxes | stands for 10 s: the top box within 1 cm of its place |
 | The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
 | Determinism and state | two runs bit-identical; a saved state restored runs on bit-identically |
+| A self-locking screw | the sample screw lift's Tr12x2 (`friction_limit` from the electrical domain) holds 100 kg for 60 s with its motor shorted: settles within 0.1 mm, then moves < 0.5 mm |
+| A joint limit is a stop | a 1 kg arm lying on its hinge's limit under 2.94 N·m within 2e-3 rad of it, a 20 g slider pushed onto its limit with 2.5 N within 0.2 mm: MuJoCo 1.3e-8 rad and 5.0e-8 m (its limits at a 2-step time constant and the stiffest impedance; at its default 20 ms reference they gave 7.4e-4 rad and 2.5 mm), Jolt 3.6e-5 rad and 1.6e-9 m |
+| A back-drivable screw | its 16x5 ball screw under 20 kg, motor shorted, sinks at `η_back·m·g·R/((2π/lead)²·Kt²)` within 2 %, and on bit for bit from a restored checkpoint |
 
 MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
 `modules/rigid_body/jolt_backend/src/jolt_plugin.cpp`, `--plugin lagrange_jolt`) pass it; Jolt and
@@ -209,22 +220,46 @@ and a restore only when streamed tiles come or go.
 ### 8.1 Energy on Jolt: joints as constraints, and sub-steps
 
 A free pendulum (1 kg, 1 m, from 1 rad, 1 ms) keeps its energy within 0.07 % over 60 s on
-MuJoCo, and loses 16.4 % on Jolt (`docs/validation/comparison.md`). The loss is Jolt's method,
-not a setting of Lagrange's:
+MuJoCo. On Jolt it lost 16.4 % up to v1.4.0 (`docs/validation/comparison.md`). The loss
+was Jolt's method, not a setting of Lagrange's:
 
 - Lagrange gives Jolt no damping: body linear and angular damping are zero
   (`mLinearDamping`, `mAngularDamping`, whose defaults are 0.05), the hinge has no friction
-  (`mMaxFrictionTorque` is the joint's, 0 here) and no motor, and the body never sleeps. Jolt's
-  solver settings change nothing measurable: no position steps, Baumgarte 0 or 1, 30 velocity
-  steps, warm start off all give 16.3–16.4 %.
+  (`mMaxFrictionTorque` is the joint's, 0 here) and no motor, the angular velocity is not
+  clamped (`mMaxAngularVelocity`), and the body never sleeps. Jolt's solver settings change
+  nothing measurable: no position steps, Baumgarte 0 or 1, 30 velocity steps, warm start off
+  all give 16.3–16.4 %.
 - MuJoCo, DART and Bullet's multibody solve a robot in joint coordinates. Jolt keeps every body
   free and holds a joint by projecting the velocities at each step (sequential impulses). Over a
   step the body turns by ω Δt, so that share of its velocity is radial at the next step, and the
-  projection takes it off: (ω Δt)² of the kinetic energy per step, O(Δt) per second. The same
-  scheme in double precision on a point mass (semi-implicit Euler, velocity projection, position
-  projection) loses 16.35 % of this pendulum's energy in 60 s; Jolt loses 16.38 %.
+  projection takes it off as an inelastic impulse: (ω Δt)² of the kinetic energy per step,
+  O(Δt) per second. The same scheme in double precision on a point mass (semi-implicit Euler,
+  velocity projection, position projection) loses 16.35 % of this pendulum's energy in 60 s;
+  Jolt lost 16.38 %.
+- **The backend gives half of that impulse back** (`measureJointTurn`, `kHingeTurnShare`).
+  Before each Jolt step it takes each hinge anchor's velocity error made by the turn alone:
+  the velocities as they are, on the anchor's arms now less on its arms of the last step, where
+  the solve made them agree (ω₂ × Δr₂ − ω₁ × Δr₁; no gravity, effort, or error left over, so
+  nothing is given back twice). After the step it applies the impulses that change those
+  errors by −½ of themselves, equal and opposite on the two bodies, solved together for a
+  chain (Gauss-Seidel, 10 passes), and counts them in the joint's reaction. With a share e
+  given back, the next projection takes ½ ((1 − e) ω Δt)² of the energy and the share puts
+  back ½ (e ω Δt)², so ½ is the one share that keeps it to leading order (the velocities then
+  run along the step's middle, as in the midpoint rule). Measured (`APendulumKeepsItsEnergy`,
+  `ADoublePendulumKeepsItsEnergy` in test_jolt): the pendulum keeps 99.87 % from 1 rad,
+  99.96 % from 2 rad and 100.00 % from 3 rad (before: 83.6 %, 64.9 %, 60.4 %); a double
+  pendulum, 30 s, ends at 100.02 % from 1 rad and from 2 rad (chaotic; 99.1–100.8 % on the
+  way), where it lost 7.1 % and 40.7 %. A share of 0.4 loses 3.9 % and 0.6 gains 4.0 %; each
+  anchor's share given back on its own, without the chain solve, made the double pendulum blow
+  up. The arms are each body's attachment point turned by its rotation alone: taken from world
+  positions, float rounding far from the origin read as a turn (a floating-origin rebase moved
+  the AMR's trajectory by 0.2 mm). Sliders are left as they were (a slide does not turn its
+  body).
 - The period is not hurt: within 0.02 ppm of the exact one at 0.05 rad. A pendulum swinging
   freely for a minute is the worst case; a driven joint gets its energy back from the motor.
+- Jolt runs have new state hashes since this change: a Jolt run is still bit-for-bit
+  repeatable, and a saved state carries each hinge's last arms so a restored run goes on
+  bit-identically.
 
 `domains.rigid_body.substeps: N` (profile, 1 to 64, default 1; Jolt only, MuJoCo has nothing to
 divide) runs N Jolt steps of Δt/N per scheduler step, collision detection included, so it costs
@@ -233,19 +268,22 @@ are the constraint impulses averaged over the N sub-steps, over Δt/N (Jolt's to
 start afresh each sub-step, so a step listener adds each one up before the next solve; the last
 sub-step alone left part of a swinging pendulum's pull to "contact", 4 % of m·g at 4 sub-steps;
 `SubstepsKeepTheReactionAndInventNoContact` and `SubstepsInventNoContactOnASwingingPendulum` in
-test_jolt). Measured on the pendulum and the comparison's scenes (one core):
+test_jolt). Measured on the pendulum and the comparison's scenes (one core; energy before the
+half given back, then with it):
 
-| substeps | energy after 60 s | 200 boxes, real-time factor | AMR in the warehouse, real-time factor |
-|---|---|---|---|
-| 1 | −16.4 % | 2.35 | 68.6 |
-| 2 | −9.0 % | 1.29 | 41.6 |
-| 4 | −5.3 % | 0.66 | 23.8 |
-| 16 | −2.3 % | | |
+| substeps | energy after 60 s, before | energy after 60 s, now | 200 boxes, real-time factor | AMR in the warehouse, real-time factor |
+|---|---|---|---|---|
+| 1 | −16.4 % | −0.13 % | 2.35 | 68.6 |
+| 2 | −9.0 % | −0.14 % | 1.29 | 41.6 |
+| 4 | −5.3 % | −0.65 % | 0.66 | 23.8 |
+| 8 | −3.2 % | −1.0 % | | |
+| 16 | −2.3 % | −1.3 % | | |
 
-In single precision the gain falls off beyond a few sub-steps (the double-precision model gives
-−4.65 % at 4). Use MuJoCo, the default and the deterministic reference, where energy over long
-free motion matters. `Jolt.APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt` holds
-the loss to the model and sub-steps to it; `Conformance.APendulumKeepsItsPeriodAndEnergy` holds
+Sub-steps no longer help the energy: a loss that grows with their count, about 0.6 % at 4 and
+1.3 % at 16, was there before too (the double-precision model of the projection gives −4.65 %
+at 4, Jolt −5.3 %) and is not the projection's; TODO(verify) its cause. They still shorten the
+step for contacts and stiff joints. `Jolt.APendulumKeepsItsEnergy` holds the loss under 1 % from
+1, 2 and 3 rad and any gain under 0.5 %; `Conformance.APendulumKeepsItsPeriodAndEnergy` holds
 every backend to the bound in the table above.
 
 Jolt is built with `DOUBLE_PRECISION=OFF` (`vendor/jolt_vendor`). Its free fall after 1 s is

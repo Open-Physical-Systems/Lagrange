@@ -9,6 +9,7 @@
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 #include <limits>
 #include <numbers>
+#include <vector>
 
 #include <yaml-cpp/yaml.h>
 
@@ -54,9 +55,20 @@ std::string whyNotRunnable(const std::string& domain) {
         {"hydrodynamics",
          "the stage has no water (WaterAPI_1, --water); disable hydrodynamics and name a "
          "substitute"},
+        {"vegetation",
+         "the world has no reeds, shrubs or tall grass (a fixed box or plane with a canopy: "
+         "sensmat:preset reeds, shrub, tall_grass); disable vegetation and name a substitute "
+         "(zero)"},
         {"tether",
          "the stage has no tethers (TetherAPI_1, --tether); disable tether and name a "
          "substitute (zero)"},
+        {"fire", "the stage has no fires (FireAPI_1); disable fire and name a substitute (zero)"},
+        {"lights",
+         "the stage has no lamps (LampAPI_1); disable lights and name a substitute (zero)"},
+        {"actuators",
+         "the stage has no grippers, nozzles or servos (SuctionGripperAPI_1, "
+         "MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1); disable actuators and name a substitute "
+         "(zero, constant or ideal)"},
     };
     if (const auto found = kNeeds.find(domain); found != kNeeds.end()) {
         return domain + " cannot run here: " + found->second;
@@ -154,9 +166,35 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
 
     if (!schemaJson.empty()) {
         try {
-            const auto schema = jsonschema::make_json_schema(jsoncons::json::parse(schemaJson));
+            const jsoncons::json schemaDocument = jsoncons::json::parse(schemaJson);
+            const auto schema = jsonschema::make_json_schema(schemaDocument);
+            // A domain this server runs that the installed schema does not know: the schema
+            // (package lagrange_profiles) is older than the server, as in an overlay that rebuilt
+            // lagrange_server alone. Say that, once per domain, instead of the schema's
+            // "additional property"; the rest of the profile is still checked.
+            jsoncons::json checked = profile;
+            if (checked.contains("domains") && checked["domains"].is_object() &&
+                schemaDocument.contains("properties") &&
+                schemaDocument["properties"].contains("domains") &&
+                schemaDocument["properties"]["domains"].contains("properties")) {
+                const jsoncons::json& known = schemaDocument["properties"]["domains"]["properties"];
+                std::vector<std::string> unknown;
+                for (const auto& member : checked["domains"].object_range()) {
+                    const std::string name(member.key());
+                    if (!known.contains(name) && context.substitutes.contains(name)) {
+                        unknown.push_back(name);
+                    }
+                }
+                for (const std::string& name : unknown) {
+                    error(check, "/domains/" + name,
+                          "the profile schema (package lagrange_profiles) is older than this "
+                          "server and does not know the domain '" +
+                              name + "'; build and source lagrange_profiles with lagrange_server");
+                    checked["domains"].erase(name);
+                }
+            }
             schema.validate(
-                profile,
+                checked,
                 [&check](const jsonschema::validation_message& message) -> jsonschema::walk_result {
                     std::string text = message.message();
                     if (text.size() > 200) {
@@ -205,8 +243,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 if (domain.contains("turbulence") && domain["turbulence"].is_string()) {
                     settings.aerodynamics["turbulence"] = domain["turbulence"].as<std::string>();
                 }
-                if (domain.contains("downwash") && domain["downwash"].is_bool()) {
-                    settings.aerodynamics["downwash"] = domain["downwash"].as<bool>();
+                for (const char* key : {"downwash", "downwash_water", "downwash_spray"}) {
+                    if (domain.contains(key) && domain[key].is_bool()) {
+                        settings.aerodynamics[key] = domain[key].as<bool>();
+                    }
                 }
                 if (domain.contains("downwash_model") && domain["downwash_model"].is_string()) {
                     settings.aerodynamics["downwash_model"] =

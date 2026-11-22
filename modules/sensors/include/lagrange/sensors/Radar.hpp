@@ -20,6 +20,22 @@ namespace lagrange::sensors {
 [[nodiscard]] double radarSnr(double txPower, double gain, double frequency, double rcs,
                               double range, double noiseFloor);
 
+/// Rain's specific attenuation by Recommendation ITU-R P.838-3 (03/2005): γ = k·R^α (dB/km) at
+/// rain rate R (mm/h), with k and α from its equations (2) and (3) and Tables 1–4 (curve fits
+/// to scattering calculations, 1–1000 GHz), combined for a path at elevation `elevation` and a
+/// polarisation tilted `tilt` from the horizontal by its equations (4) and (5) (45° for circular).
+struct RainCoefficients {
+    double k{0.0};      // (dB/km)/(mm/h)^α
+    double alpha{0.0};  // 1
+};
+[[nodiscard]] RainCoefficients rainCoefficients(double frequency, double elevation, double tilt);
+/// γ in dB/km at `frequency` (Hz) and `rainRate` (mm/h).
+[[nodiscard]] double rainAttenuation(double frequency, double rainRate, double elevation,
+                                     double tilt);
+/// The share of the power left after the way out and back through `range` m of rain whose
+/// specific attenuation is `dbPerKm`: 10^(−2·γ·R/10⁴).
+[[nodiscard]] double rainRoundTrip(double dbPerKm, double range);
+
 /// One detection, as sensor/<n>/detections carries it (6 numbers): range (m), azimuth and
 /// elevation (rad, in the sensor frame, x forward, z up), radial velocity (m/s, positive
 /// receding), radar cross-section (m²) and signal-to-noise ratio (linear).

@@ -161,7 +161,7 @@ def test_an_inspector_edit_appears_in_the_history_tab(amr) -> None:
     # Select the motor, type a new current limit, Apply, then open the History tab.
     script = ";".join(
         [
-            "40:click:1460,668",  # the Inspector's maxCurrent field
+            "40:click:1460,694",  # the Inspector's maxCurrent field (below gearBackEfficiency)
             "42:key:ctrl+a",
             "44:text:10",
             "46:key:enter",

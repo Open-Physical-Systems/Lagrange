@@ -78,6 +78,34 @@ if(BUILD_TESTING)
     )
     lagrange_target_defaults(test_ros2_control)
     lagrange_test_ros_domain(test_ros2_control 74)
+    # GPIO interfaces (RFC 0020 §5) driven by gpio_controllers' GpioCommandController.
+    find_package(control_msgs REQUIRED)
+    ament_add_gtest(
+        test_gpio
+        test/test_gpio.cpp
+        ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        TIMEOUT 120
+    )
+    target_link_libraries(
+        test_gpio
+        lagrange_ros2_control
+        rclcpp::rclcpp
+        ${control_msgs_TARGETS}
+    )
+    target_compile_definitions(
+        test_gpio
+        PRIVATE
+            LAGRANGE_TEST_GPIO_PARAMS="${CMAKE_CURRENT_SOURCE_DIR}/test/gpio_controllers.yaml"
+    )
+    lagrange_target_defaults(test_gpio)
+    lagrange_test_ros_domain(test_gpio 75)
+    # Each starts a controller manager and runs the spawner: side by side under load the
+    # spawners time out, so ctest runs them one after the other.
+    set_tests_properties(
+        test_ros2_control
+        test_gpio
+        PROPERTIES RESOURCE_LOCK lagrange_controller_manager
+    )
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

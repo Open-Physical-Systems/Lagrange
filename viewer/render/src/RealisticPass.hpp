@@ -28,6 +28,12 @@ public:
 private:
     gpu::RealisticRenderer renderer_;
     std::vector<gpu::RealisticDraw> draws_;
+    std::vector<gpu::RealisticLamp> lamps_;        // this frame's (RenderOptions::lamps)
+    std::vector<gpu::AirRotor> rotors_;            // this frame's (RenderOptions::rotors)
+    std::vector<gpu::RealisticTree> trees_;        // this frame's (RenderOptions::trees)
+    std::vector<gpu::RealisticTreeCut> treeCuts_;  // RenderOptions::treeCuts, when it changes
+    std::shared_ptr<const std::vector<RenderOptions::TreeCut>> treeCutsOf_;
+    std::vector<gpu::RealisticLeaf> leaves_;  // this frame's (RenderOptions::leaves)
     // What does not change between frames of one stage: per drawn prim, its index and its draw
     // without the pose, made again when the stage's generation changes.
     std::shared_ptr<const SceneStatics> staticsOf_;

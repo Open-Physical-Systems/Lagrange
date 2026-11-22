@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -72,6 +74,103 @@ struct RenderOptions {
     /// server's aero/wind_speed volume around the robot and drawn as streaks coloured by speed.
     bool airflow{false};
     float airflowMax{0.0F};  ///< m/s, the speed the colour map tops out at (set by the app).
+    /// Spray off water (downwash.md §5b): the server's aero/spray volume drawn as falling streaks.
+    bool spray{false};
+    /// The water's moving surface (water.md "The surface under a rotor"), from the server's
+    /// water/surface volume, and the foam where its spray is torn off (aero/spray): the
+    /// realistic view lifts and shades the first body of water by them. Null: the still level.
+    struct WaterSurface {
+        std::uint32_t cells{0};         ///< a side
+        double cell{0.0};               ///< m
+        std::array<double, 2> first{};  ///< region frame: the first cell's centre, m
+        std::vector<float> heights;     ///< m over the still level, row order
+        std::vector<float> foam;        ///< 0-1 per cell, or empty
+        /// The air's friction velocity on the water (m/s; x for every cell, then y), from the
+        /// server's water/friction_velocity volume, or empty.
+        std::vector<float> friction;
+    };
+    std::shared_ptr<const WaterSurface> waterSurface;
+    /// Plants cut by propellers (the server's vegetation/cut volume; ground.md "Cutting the
+    /// plants"), drawn by the realistic view no taller than their cut tops.
+    struct CutPlants {
+        std::array<std::uint32_t, 2> cells{};  ///< along x and y
+        double cell{0.0};                      ///< m
+        std::array<double, 2> first{};         ///< region frame: the first cell's centre, m
+        double level{0.0};                     ///< m, region z the tops are given over
+        std::vector<float> tops;               ///< m over `level`, x fastest; NaN: not cut
+    };
+    std::shared_ptr<const CutPlants> cutPlants;
+    /// Trees (TreeAPI_1; ground.md "Trees"), drawn by the realistic view as trees: from the
+    /// stage's tree:* attributes, the prim's pose and tree/<n>/sway.
+    struct Tree {
+        std::array<double, 3> foot{};                           ///< region frame, m
+        std::array<float, 4> rotation{1.0F, 0.0F, 0.0F, 0.0F};  ///< w, x, y, z
+        double height{0.0};                                     ///< m
+        double crownRadius{0.0};                                ///< m
+        double crownBase{0.0};                                  ///< m over the foot
+        double trunkDiameter{0.0};                              ///< m
+        std::array<double, 3> sway{};  ///< world, m: the crown centre's displacement
+        std::uint32_t seed{0};         ///< its look
+        bool operator==(const Tree&) const = default;
+    };
+    std::vector<Tree> trees;
+    /// Crown cells propellers cut (the server's vegetation/tree_cut volume): no leaves there.
+    struct TreeCut {
+        std::uint32_t tree{0};               ///< index into `trees`
+        std::array<std::int32_t, 3> cell{};  ///< Trees.hpp's crown cell (0.1 m, unswayed)
+    };
+    std::shared_ptr<const std::vector<TreeCut>> treeCuts;
+    /// Flying leaves (the server's vegetation/leaves volume; Leaves.hpp).
+    struct Leaf {
+        std::array<double, 3> position{};  ///< region frame, m
+        float yaw{0.0F};                   ///< rad
+        float pitch{0.0F};                 ///< rad
+        float size{0.0F};                  ///< m
+    };
+    std::shared_ptr<const std::vector<Leaf>> leaves;
+    /// The spray's water per cell (aero/spray, kg/m³), drawn by the realistic view as mist.
+    struct Spray {
+        std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz
+        double cell{0.0};                      ///< m
+        std::array<double, 3> first{};         ///< region frame: the first cell's centre, m
+        std::vector<float> water;              ///< kg/m³, x fastest
+    };
+    std::shared_ptr<const Spray> spray3d;
+    /// How much the realistic view scales the moving surface's heights and slopes: 1 as the
+    /// physics has them (--water-relief; more shows sub-millimetre ripples, a drawing choice).
+    float waterRelief{1.0F};
+    /// The water's coloured dissolved organic matter (CDOM): its absorption at 440 nm, 1/m
+    /// (--water-cdom; 0: pure water). The realistic view absorbs by it as well (water.md).
+    float waterCdom{0.0F};
+    /// Lamps (RFC 0021 §4), lighting the realistic view: from the scene's LampAPI_1 prims, their
+    /// attributes and their lamp/<n>/intensity signals (RFC 0021 §7).
+    struct Lamp {
+        std::array<double, 3> position{};           ///< region frame, m
+        std::array<double, 3> axis{1.0, 0.0, 0.0};  ///< where the beam points, unit
+        double intensity{0.0};                      ///< cd on the axis, now
+        double beamAngle{0.0};                      ///< rad, full angle to 50 %
+        double fieldAngle{0.0};                     ///< rad, full angle to 10 %
+        bool point{false};                          ///< the same all round
+        double colorTemperature{0.0};               ///< K; 0: color
+        std::array<float, 3> color{1.0F, 1.0F, 1.0F};
+        bool operator==(const Lamp&) const = default;
+    };
+    std::vector<Lamp> lamps;
+    /// Rotors (RotorAPI_1) whose outwash bends grass and vegetation in the realistic view
+    /// (gpu/GroundAir.hpp): their link's pose and rotor/<j>/thrust, induced_velocity and
+    /// thrust_axis signals.
+    struct Rotor {
+        std::array<double, 3> hub{};         ///< region frame, m
+        std::array<double, 3> thrustAxis{};  ///< unit
+        double radius{0.0};                  ///< m
+        double induced{0.0};                 ///< m/s
+        double thrust{0.0};                  ///< N
+        std::uint32_t group{0};              ///< its robot (root prim)
+        bool operator==(const Rotor&) const = default;
+    };
+    std::vector<Rotor> rotors;
+    /// The sky's horizontal illuminance (lx, env/sky_illuminance); NaN: the drawn day.
+    double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
 };
 
 /// The year the realistic view draws: the one picked, or with Summer (the default), the weather's:

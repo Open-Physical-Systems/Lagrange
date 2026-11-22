@@ -26,6 +26,10 @@ struct RotorParams {
     double thrustCoeff{0.0};  // CT, T = CT·ρ·n²·D⁴, n in rev/s
     double powerCoeff{0.0};   // CP, Q = CP·ρ·n²·D⁵ / (2π)
     double spinSign{1.0};     // +1 ccw: ω > 0 about the joint axis makes thrust; −1 cw
+    /// An open-water chart (aero:rotor:advanceRatios, thrustCoeffs, torqueCoeffs): K_T(J) and
+    /// K_Q(J) at advance ratios J = V_a/(n·D), T = K_T·ρ·n²·D⁴, Q = K_Q·ρ·n²·D⁵, linear between
+    /// points and held at the ends. Empty: the static CT and CP (K_T = CT, K_Q = CP/2π at J = 0).
+    std::vector<double> advance, thrustTable, torqueTable;
 };
 
 /// Static thrust (N, along the joint axis) and shaft torque (N·m, about the joint axis, opposing
@@ -36,6 +40,22 @@ struct Load {
     double torque{0.0};
 };
 [[nodiscard]] Load staticLoad(const RotorParams& p, double omega, double rho);
+
+/// Thrust and torque as staticLoad, from the open-water chart at the advance ratio of `axial`,
+/// the hub's speed through the fluid along the thrust direction (m/s; the fluid arriving from
+/// the front is positive). Without a chart, staticLoad's.
+[[nodiscard]] Load advanceLoad(const RotorParams& p, double omega, double rho, double axial);
+
+/// The advance ratio J = V_a/(n·D) at joint speed `omega` (rad/s), held to ±kMaxAdvance where
+/// the rotor hardly turns.
+inline constexpr double kMaxAdvance = 10.0;
+[[nodiscard]] double advanceRatio(const RotorParams& p, double omega, double axial);
+
+/// The share of a rotor's disc under a water surface (0 to 1): the circular segment below it,
+/// with the hub `depth` under the surface (negative above it) and the disc reaching `extent` up
+/// and down from the hub (R times the sine of its tilt from the horizontal; 0 for a horizontal
+/// disc, which is in or out whole).
+[[nodiscard]] double immersion(double depth, double extent);
 
 /// Cheeseman–Bennett ground effect (aerodynamics.md §2): T/T∞ = 1 / (1 − (R / 4z)²) at height
 /// z above the ground. Below z = kGroundEffectMinHeight·R the factor is held at its value there
@@ -56,11 +76,55 @@ inline constexpr double kCeilingMaxRatio = 20.0;   // δ
 inline constexpr double kCeilingReach = 6.0;       // ×R
 [[nodiscard]] double ceilingEffect(double radius, double distance);
 
+/// Blade damage (rotor_aero.md §10): rotor/<j>/damage d (0 to 1) is the fraction of one blade's
+/// length lost from its tip, as a branch strike leaves it (modules/vegetation, Branches) and as
+/// de Alvear Cárdenas and de Visser (2024, "Blade Element Theory Model for UAV Blade Damage
+/// Simulation", AIAA SciTech 2024, AIAA 2024-2816) parametrise it. The other blades are whole.
+///
+/// Aerodynamics, by blade elements of constant chord at constant lift and drag coefficients:
+/// an element at radius r gives thrust ∝ r² dr and torque ∝ r³ dr, so the damaged blade keeps
+/// (1−d)³ of its thrust and (1−d)⁴ of its torque, and the rotor of B blades keeps
+/// damagedThrustShare and damagedTorqueShare of its own. Thrust ∝ blade area (a share d/B lost)
+/// is the cruder bound below it; real blades taper to the tip, so the truth lies between.
+/// TODO(verify): against measured thrust of tip-cut propellers (Pose, Giribet and Torre 2024,
+/// arXiv:2410.05447, measured the loss in flight only qualitatively: the damaged rotor speeds
+/// up to make up the thrust).
+[[nodiscard]] double damagedThrustShare(double damage, int blades);
+[[nodiscard]] double damagedTorqueShare(double damage, int blades);
+
+/// The once-per-revolution forces of a damaged rotor, in its plane, turning with it:
+/// - mass imbalance, de Alvear Cárdenas and de Visser (2024) eq. 7: F = m_lost·r_cg·ω², pointing
+///   from the axis away from the lost piece (towards the heavy side), with the blade's mass
+///   spread evenly along its length, so m_lost = d·m_blade at r_cg = R·(1 − d/2) (a tapering
+///   blade carries less at its tip: an upper bound);
+/// - thrust asymmetry: the whole blades' thrust no longer balances about the hub, a moment
+///   (T/B)·(3R/4)·(1 − (1−d)⁴) about the in-plane axis square to the damaged blade, T the thrust
+///   the undamaged rotor would give (the lost thrust's moment, by the same elements);
+/// - drag asymmetry: the lost tip's drag no longer balances the others', an in-plane force
+///   (4Q/(3RB))·(1 − (1−d)³) along the damaged blade's motion, Q the undamaged shaft torque.
+[[nodiscard]] double imbalanceForce(double bladeMass, double radius, double damage, double omega);
+[[nodiscard]] double thrustAsymmetryMoment(double thrust, double radius, double damage, int blades);
+[[nodiscard]] double dragAsymmetryForce(double torque, double radius, double damage, int blades);
+
+/// One blade's mass (kg) when the propeller file gives none (a folding propeller's blade_mass):
+/// scaled from a reference propeller by R³ (geometric similarity). The reference is the APC
+/// 10x4.7 SF whose coefficients the sample quadcopter uses: 11.9 g (retailers' listing of APC's
+/// weight; TODO(verify) against APC's own data sheet), 127 mm radius; its blades' share of the
+/// mass is the Bebop 2 propeller's, 2 × 1.11 g of 5.07 g (de Alvear Cárdenas and de Visser 2024,
+/// §V.B; TODO(verify) for other propellers: the hub's share varies).
+inline constexpr double kReferencePropellerMass = 0.0119;   // kg
+inline constexpr double kReferencePropellerRadius = 0.127;  // m
+inline constexpr double kBladeMassShare = 2.0 * 1.11 / 5.07;
+[[nodiscard]] double estimatedBladeMass(double radius, int blades);
+
 /// The rotor_aero domain at the `coefficients` fidelity (docs/design/domains/aerodynamics.md):
 /// every joint with RotorAPI_1 is a propeller whose static thrust and shaft torque follow its
 /// coefficients, with a first-order inflow lag (config "inflow_time_constant", s; 0, the
 /// default, for none) and ground effect against the world's ground plane (config
-/// "ground_effect", default true).
+/// "ground_effect", default true), or against a body of water's surface where one (WaterAPI_1)
+/// is under the hub (config "water_surface", default true); with config "surface_cells" and
+/// "surface_cell" (the water domain moves its surface) it reads water/<w>/surface and
+/// surface_origin and measures the height to the moving surface.
 ///
 /// Per rotor joint j with child link c it reads joint/<j>/velocity and body/<c>/pose, and writes
 /// rotor/<j>/thrust (N), rotor/<j>/aero_torque (N·m, on the rotor about its axis),
@@ -89,6 +153,13 @@ inline constexpr double kCeilingReach = 6.0;       // ×R
 /// wrench with the thrust. With config "rotor_air" (the aerodynamics domain computes it) each
 /// rotor reads its own air, rotor/<j>/air_velocity (the wind plus other robots' downwash at its
 /// hub), instead: a drone under another loses thrust in its wake.
+///
+/// At either fidelity (not the ideal substitute) each rotor reads rotor/<j>/damage, optional
+/// (zero without a writer): its thrust and torque keep damagedThrustShare and
+/// damagedTorqueShare, and the mass imbalance, thrust and drag asymmetry above go into the
+/// link's wrench, turning with the link (the lost piece fixed in its frame), so the frame and its
+/// IMU shake at the rotor's speed of rotation. The blade's mass is a folding propeller's
+/// blade_mass, else estimatedBladeMass.
 ///
 /// Not yet: blade flapping of rigid propellers beyond the hub moment, the wake's skew (inflow
 /// uniform per annulus), ground effect over scenery other than the ground plane.
@@ -122,8 +193,12 @@ private:
         std::shared_ptr<const PropellerTable> propeller;  // bem fidelity
         std::optional<FoldingBlade> folding;              // folding blades
         double bladeAngle{0.0};                           // rad, last step's (folding)
-        SignalId velocity, pose, twist, bladeAngleOut;
+        int blades{2};
+        double bladeMass{0.0};             // kg, one blade (blade damage)
+        std::array<double, 3> bladeDir{};  // the damaged blade, child frame, unit, ⊥ axis
+        SignalId velocity, pose, twist, bladeAngleOut, damageIn;
         SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut, axisOut, airIn;
+        SignalId immersionOut, advanceOut;  // marine thrusters
     };
 
     bool ideal_;
@@ -145,6 +220,16 @@ private:
         std::array<double, 3> half{};
     };
     std::vector<Ceiling> ceilings_;
+    struct Pond {  // a body of water (WaterAPI_1): its still surface, world frame
+        std::array<double, 3> centre{};
+        double halfX{0.0}, halfY{0.0};
+        double depth{0.0};         // m, from the surface down
+        double density{0.0};       // kg/m³
+        SignalId heights, origin;  // its moving surface, when the water domain runs one
+    };
+    std::vector<Pond> water_;
+    int surfaceCells_{0};      // the moving surface's grid (config "surface_cells")
+    double surfaceCell_{0.0};  // m (config "surface_cell")
     std::vector<Rotor> rotors_;
 };
 

@@ -2,12 +2,14 @@
 #include "kinds/KindModule.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/gpu/Realistic.hpp"
+#include "lagrange/lights/Lamp.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
 #include "lagrange/sensors/Fisheye.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Kinds.hpp"
+#include "lagrange/sensors/MovingWater.hpp"
 #include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
@@ -15,8 +17,10 @@
 #include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/thermal/Materials.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
+#include "lagrange/world/TreeWood.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -316,6 +320,68 @@ SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame 
     return out;
 }
 
+/// The bodies of water whose surface moves (config "water_surface", with "surface_cells" and
+/// "surface_cell": the hydrodynamics domain's patch, water.md), each with its inputs
+/// water/<w>/surface and surface_origin (feedback, optional: still until they come), in the
+/// order of world.instancesOf("WaterAPI_1").
+struct MovingWaterInputs {
+    std::vector<MovingWater> water;
+    std::vector<SignalId> heights, origins;
+
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
+        water.clear();
+        heights.clear();
+        origins.clear();
+        if (!config.get<bool>("water_surface").value_or(false)) {
+            return {};
+        }
+        const auto cells = config.get<std::int64_t>("surface_cells").value_or(0);
+        const double cell = config.get<double>("surface_cell").value_or(0.0);
+        if (cells < 2 || !(cell > 0.0)) {
+            return {};
+        }
+        for (const SchemaInstance* w : world.instancesOf("WaterAPI_1")) {
+            constexpr double kDefaultSize = 10.0;  // m, as the water domain reads it
+            const Vec3 middle = world.raw().prims.poseInBody.at(w->prim.index).position;
+            const double halfX = w->real("water:sizeX").value_or(kDefaultSize) / 2.0;
+            const double halfY = w->real("water:sizeY").value_or(kDefaultSize) / 2.0;
+            MovingWater m;
+            m.level = middle[2];
+            m.lo = {middle[0] - halfX, middle[1] - halfY};
+            m.hi = {middle[0] + halfX, middle[1] + halfY};
+            m.cell = cell;
+            water.push_back(m);
+            const std::string base =
+                "water/" + world.raw().prims.instanceNames.at(w->prim.index) + "/";
+            SignalSpec surface =
+                spec(base + "surface", SignalType::ScalarArray, units::m, "world_local");
+            surface.arrayLength = static_cast<std::uint32_t>(cells * cells);
+            surface.optional = surface.feedback = true;
+            SignalSpec origin = surface;
+            origin.name = base + "surface_origin";
+            origin.arrayLength = 2;
+            origin.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            heights.push_back(d.input(surface));
+            origins.push_back(d.input(origin));
+        }
+        return {};
+    }
+    /// Reads this step's surfaces; false when none moves.
+    bool read(const SignalBus& bus) {
+        bool any = false;
+        for (std::size_t k = 0; k < water.size(); ++k) {
+            MovingWater& m = water[k];
+            m.heights = bus.readN(heights[k]);
+            const std::span<const double> corner = bus.readN(origins[k]);
+            m.cells = static_cast<std::uint32_t>(std::lround(std::sqrt(m.heights.size())));
+            m.corner = corner.size() == 2 ? std::array<double, 2>{corner[0], corner[1]}
+                                          : std::array<double, 2>{std::nan(""), std::nan("")};
+            any = m.prepare() || any;
+        }
+        return any;
+    }
+};
+
 double setting(const World::Sensors& sensors, std::uint32_t sensor, const char* key,
                double fallback) {
     const auto& map = sensors.settings[sensor];
@@ -474,6 +540,84 @@ public:
             clutter_.reflectivity =
                 setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
         }
+        // The fires' smoke (config "smoke": a fire domain runs, RFC 0022 §4): its field's σ at
+        // 633 nm, scaled to the lidar's wavelength, along each beam and at the sensor.
+        smoke_ = config.get<bool>("smoke").value_or(false) && !groundTruth_;
+        if (smoke_) {
+            SignalSpec field = spec("env/smoke/extinction", SignalType::Field3D, units::per_m);
+            field.feedback = true;
+            field.optional = true;
+            smokeField_ = d.input(field);
+            smokeScale_ = smokeBandScale(setting(sensors, sensor_, "wavelength", 905e-9));
+            if (!weather_) {  // the clutter's settings, as in weather
+                clutter_.pulseLength =
+                    setting(sensors, sensor_, "pulse_length", clutter_.pulseLength);
+                clutter_.beamDiameter =
+                    setting(sensors, sensor_, "beam_diameter", clutter_.beamDiameter);
+                clutter_.reflectivity =
+                    setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
+            }
+        }
+        // Plants cut by propellers (ground.md "Cutting the plants"): the vegetation domain's map,
+        // optional, so a run without it (or with vegetation off) sees them uncut.
+        canopyCut_ = SignalId{};
+        if (!groundTruth_ && std::ranges::any_of(raw.colliders.material, [&](std::uint32_t m) {
+                return m != kNoMaterial && raw.surfaceMaterials.at(m).canopyHeight > 0.0;
+            })) {
+            SignalSpec cut = spec(std::string(kCanopyCutSignal), SignalType::ScalarArray, units::m);
+            cut.arrayLength = kCanopyCutLength;
+            cut.optional = true;
+            cut.feedback = true;
+            canopyCut_ = d.input(cut);
+        }
+        // Trees (ground.md "Trees"): crowns are turbid volumes at their sway, without the cells
+        // the propellers cut. Both inputs optional: without the vegetation domain, still and whole.
+        trees_.clear();
+        treeSway_.clear();
+        treeCut_ = SignalId{};
+        branchCut_ = SignalId{};
+        flyingIn_ = SignalId{};
+        if (!groundTruth_) {
+            std::string treeError;
+            trees_ = treesOf(raw, treeError);
+            wood_.build(trees_);
+            for (const TreeSpec& t : trees_) {
+                SignalSpec sway =
+                    spec("tree/" + t.name + "/sway", SignalType::Vec3, units::m, "world_local");
+                sway.optional = true;
+                sway.feedback = true;
+                sway.defaultValue = 0.0;
+                treeSway_.push_back(d.input(sway));
+            }
+            if (!trees_.empty()) {
+                SignalSpec cut =
+                    spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
+                cut.arrayLength = kTreeCutLength;
+                cut.optional = true;
+                cut.feedback = true;
+                treeCut_ = d.input(cut);
+                surfaceMaterialPreset("shrub", leaves_);
+                // The wood in the crowns (lagrange/world/TreeWood.hpp), less what broke off.
+                SignalSpec broken =
+                    spec(std::string(kBranchCutSignal), SignalType::ScalarArray, units::one);
+                broken.arrayLength = kBranchCutLength;
+                broken.optional = true;
+                broken.feedback = true;
+                branchCut_ = d.input(broken);
+                surfaceMaterialPreset("bark", bark_);
+                SignalSpec flying = spec(std::string(kLeavesSignal), SignalType::ScalarArray,
+                                         units::one, "world_local");
+                flying.arrayLength = kLeavesLength;
+                flying.optional = true;
+                flying.feedback = true;
+                flyingIn_ = d.input(flying);
+            }
+            sways_.assign(trees_.size(), {});
+        }
+        // The water's moving surface (water.md): beams meet it at η, not at the still level.
+        if (!groundTruth_) {
+            return movingWater_.declare(world, config, d);
+        }
         return {};
     }
 
@@ -501,11 +645,16 @@ public:
                 shape.pose = compose(rest_[owner.index], colliders.poseInBody[c]);
                 shape.body = -1;
             }
+            if (shape.material != nullptr && shape.material->canopyHeight > 0.0 &&
+                (shape.type == ShapeType::Box || shape.type == ShapeType::Plane)) {
+                canopyVolumes_.push_back(static_cast<std::uint32_t>(shapes_.size()));
+            }
             shapes_.push_back(shape);
         }
         // Water is no collider, but a lidar sees its surface: a mirror (or a box of depth below it,
         // from under water). What enters it is absorbed: no return from the bottom.
         waterMaterials_.clear();
+        firstWaterShape_ = shapes_.size();
         const std::vector<const SchemaInstance*> waters = world.instancesOf("WaterAPI_1");
         waterMaterials_.reserve(waters.size());
         for (const SchemaInstance* w : waters) {
@@ -570,6 +719,35 @@ public:
             bus.writeN(intensities_, intensity_);
             return {};
         }
+        if (canopyCut_.valid()) {
+            cuts_.load(bus.readN(canopyCut_));
+        }
+        if (treeCut_.valid()) {
+            treeCuts_.load(bus.readN(treeCut_));
+        }
+        if (branchCut_.valid()) {
+            wood_.load(bus.readN(branchCut_));
+        }
+        if (flyingIn_.valid()) {
+            flying_.load(bus.readN(flyingIn_));
+        }
+        for (std::size_t k = 0; k < treeSway_.size(); ++k) {
+            const std::span<const double> w = bus.readN(treeSway_[k]);
+            sways_[k] =
+                w.size() == 3 ? std::array<double, 3>{w[0], w[1], w[2]} : std::array<double, 3>{};
+        }
+        crownIndex_.build(trees_, sways_);
+        if (!wood_.empty()) {
+            // The wood's broad phase: a sphere round each tree's skeleton (its top-level
+            // subtrees' spheres together), at the tree's sway.
+            woodSpheres_.resize(trees_.size());
+            for (std::size_t k = 0; k < trees_.size(); ++k) {
+                woodSpheres_[k] = k < wood_.trees()
+                                      ? woodBound(trees_[k], wood_.skeleton(k), sways_[k])
+                                      : std::array<double, 4>{};
+            }
+            woodIndex_.buildSpheres(woodSpheres_);
+        }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
         sweep(sensor);
         // Place every shape once per scan, not once per beam.
@@ -587,22 +765,169 @@ public:
         } else {
             castOnCpu(context);
         }
+        // The water's moving surface: the casts met its box at the still level; each beam is
+        // moved onto η (or onto a crest in front of what it hit), in double on either tier.
+        const bool movingWater = movingWater_.read(bus);
+        if (movingWater) {
+            tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
+                const Pose& from = columnPose_[i % layout_.horizontal];
+                const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
+                for (std::size_t w = 0; w < movingWater_.water.size(); ++w) {
+                    const std::size_t shape = firstWaterShape_ + w;
+                    bool on = false;
+                    const double t = rayOntoWater(movingWater_.water[w], from.position, dir,
+                                                  nearest_[i], hitShape_[i] == shape, &on);
+                    if (on) {
+                        nearest_[i] = t;
+                        hitShape_[i] = static_cast<std::uint32_t>(shape);
+                    }
+                }
+            });
+        }
         // What each hit returns, from its surface; a surface too faint for the lidar drops out.
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
             intensity_[i] = 0.0;
-            if (hitShape_[i] == kNoShapeHit || !std::isfinite(nearest_[i])) {
+            const Pose& from = columnPose_[i % layout_.horizontal];
+            const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
+            // Reeds and shrubs (ShapeCaster.hpp canopyVolumeSpan): a beam can stop in a canopy
+            // volume before its hit, or with no hit at all; one draw per canopy crossed, in
+            // collider order, from the beam's own stream. The same post-step serves the GPU tier.
+            const bool hit = hitShape_[i] != kNoShapeHit && std::isfinite(nearest_[i]);
+            double stop = std::numeric_limits<double>::infinity();
+            std::uint32_t stopShape = kNoShapeHit;
+            bool leaves = false;
+            bool wood = false;
+            double woodCosine = 1.0;
+            if (!canopyVolumes_.empty() || !trees_.empty()) {
+                random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
+                const double reach = hit ? nearest_[i] : maxRange_;
+                for (const std::uint32_t k : canopyVolumes_) {
+                    const Shape& canopy = shapes_[k];
+                    double enter = 0.0;
+                    double leave = 0.0;
+                    if (!canopyVolumeSpan(canopy.type, canopy.size, placed_[k], from.position, dir,
+                                          canopyTallest(*canopy.material), reach, enter, leave)) {
+                        continue;
+                    }
+                    // The shaped canopy (ShapeCaster.hpp "The canopy's shape"): plants of
+                    // varying height, gaps, a ragged border, leaf area by height.
+                    const double at = canopyShapedStop(
+                        *canopy.material, canopy.type, canopy.size, placed_[k], from.position, dir,
+                        enter, leave, rng.uniform(), cuts_.empty() ? nullptr : &cuts_, k);
+                    if (at < stop) {
+                        stop = at;
+                        stopShape = k;
+                    }
+                }
+                // Crowns (ShapeCaster.hpp crownStop): one draw per crown the beam crosses, in
+                // tree order, among the broad phase's candidates (CrownIndex).
+                thread_local std::vector<std::uint32_t> near;
+                crownIndex_.candidates(from.position, dir, std::min(reach, stop), near);
+                for (const std::uint32_t k : near) {
+                    const double range = std::min(reach, stop);
+                    if (!crownCrossed(trees_[k], from.position, dir, range, sways_[k])) {
+                        continue;
+                    }
+                    const double at =
+                        crownStop(trees_[k], k, from.position, dir, range, sways_[k],
+                                  treeCuts_.empty() ? nullptr : &treeCuts_, rng.uniform());
+                    if (at < stop) {
+                        stop = at;
+                        leaves = true;
+                    }
+                }
+                // The wood in the crowns (TreeWood::ray): bark, nearer than the leaves; only the
+                // trees whose wood's sphere the beam passes over (woodIndex_), in tree order.
+                if (!wood_.empty()) {
+                    woodIndex_.candidates(from.position, dir, std::min(reach, stop), near);
+                } else {
+                    near.clear();
+                }
+                for (const std::uint32_t k : near) {
+                    WoodHit w;
+                    if (wood_.ray(trees_[k], k, from.position, dir, std::min(reach, stop),
+                                  sways_[k], w) &&
+                        w.distance < stop) {
+                        stop = w.distance;
+                        wood = true;
+                        leaves = false;
+                        stopShape = kNoShapeHit;
+                        woodCosine =
+                            -(dir[0] * w.normal[0] + dir[1] * w.normal[1] + dir[2] * w.normal[2]);
+                    }
+                }
+                // Flying leaves (ShapeCaster.hpp FlyingLeaves): the first the beam meets.
+                if (!flying_.empty()) {
+                    const double at = flying_.stop(from.position, dir, std::min(reach, stop));
+                    if (at < stop) {
+                        stop = at;
+                        leaves = true;
+                        wood = false;
+                        stopShape = kNoShapeHit;
+                    }
+                }
+            }
+            if (wood) {
+                nearest_[i] = stop;
+                hitShape_[i] = kNoShapeHit;  // no collider: a branch in a crown
+                const LidarReturn back =
+                    lidarReturn(bark_, true, wavelength1550_, std::clamp(woodCosine, 0.0, 1.0),
+                                stop, maxRange_, referenceReflectivity_);
+                intensity_[i] = back.intensity;
+                if (!back.detected) {
+                    nearest_[i] = kNoHit;
+                }
+                return;
+            }
+            if (leaves) {
+                nearest_[i] = stop;
+                hitShape_[i] = kNoShapeHit;  // no collider: a leaf in a crown
+                const LidarReturn back =
+                    lidarReturn(leaves_, true, wavelength1550_, kCanopyLeafCosine, stop, maxRange_,
+                                referenceReflectivity_);
+                intensity_[i] = back.intensity;
+                if (!back.detected) {
+                    nearest_[i] = kNoHit;
+                }
+                return;
+            }
+            static const SurfaceMaterial kDefault{};
+            if (stopShape != kNoShapeHit) {
+                nearest_[i] = stop;
+                hitShape_[i] = stopShape;
+                const LidarReturn back =
+                    lidarReturn(*shapes_[stopShape].material, true, wavelength1550_,
+                                kCanopyLeafCosine, stop, maxRange_, referenceReflectivity_);
+                intensity_[i] = back.intensity;
+                if (!back.detected) {
+                    nearest_[i] = kNoHit;
+                }
+                return;
+            }
+            if (!hit) {
                 return;
             }
             const Shape& shape = shapes_[hitShape_[i]];
-            const Pose& from = columnPose_[i % layout_.horizontal];
-            const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
             const Vec3 at{from.position[0] + dir[0] * nearest_[i],
                           from.position[1] + dir[1] * nearest_[i],
                           from.position[2] + dir[2] * nearest_[i]};
-            const Vec3 n = surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
-                                         shape.hull, shape.field);
+            const std::size_t water = hitShape_[i] - firstWaterShape_;
+            const Vec3 n = movingWater && hitShape_[i] >= firstWaterShape_ &&
+                                   water < movingWater_.water.size() &&
+                                   movingWater_.water[water].cells >= 2
+                               ? movingWater_.water[water].normalAt(at[0], at[1])
+                               : surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
+                                               shape.hull, shape.field);
             const double cosine = -(dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2]);
-            static const SurfaceMaterial kDefault{};
+            // Grass: the return comes from the blades over the soil (ShapeCaster.hpp), with the
+            // surface's own leaf area index. On the GPU tier too: the hit comes back from the ray
+            // scan and is shortened here, on the CPU. Boxes and planes did it above, as volumes.
+            if (shape.material != nullptr && shape.material->canopyHeight > 0.0 &&
+                shape.type != ShapeType::Box && shape.type != ShapeType::Plane) {
+                random::Stream rng(context.seed, context.stepIndex, kCanopyStream + i);
+                nearest_[i] -= canopyShapedShortening(*shape.material, at[0], at[1], cosine,
+                                                      nearest_[i], rng.uniform());
+            }
             const LidarReturn back = lidarReturn(
                 shape.material != nullptr ? *shape.material : kDefault, shape.material != nullptr,
                 wavelength1550_, cosine, nearest_[i], maxRange_, referenceReflectivity_);
@@ -611,15 +936,22 @@ public:
                 nearest_[i] = kNoHit;
             }
         });
-        if (weather_) {
-            // A fog field: its optical depth along each beam up to the hit, and its value at the
-            // sensor for the clutter near it (taken as the extinction at the lidar's wavelength).
-            const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
+        if (weather_ || smoke_) {
+            // A fog field and the smoke: their optical depth along each beam up to the hit, and
+            // their value at the sensor for the clutter near it (taken as the extinction at the
+            // lidar's wavelength; smoke's backscatter as fog's, RFC 0022 §4).
+            const std::shared_ptr<const fields::Field> fog =
+                weather_ ? fogFieldSignal_.read(bus, fogField_) : nullptr;
+            const std::shared_ptr<const fields::Field> smoke =
+                smoke_ ? smokeFieldSignal_.read(bus, smokeField_) : nullptr;
             const fields::Vec3 at = sensor.position;
-            const double local = field ? field->sampleScalar(at) : 0.0;
-            const SensorWeather w{bus.read(extinction_), bus.read(fogExtinction_) + local,
-                                  bus.read(rainRate_) + (kSnowClutter * bus.read(snowRate_)),
-                                  bus.read(contamination_)};
+            const double local = (fog ? fog->sampleScalar(at) : 0.0) +
+                                 (smoke ? smokeScale_ * smoke->sampleScalar(at) : 0.0);
+            const SensorWeather w =
+                weather_ ? SensorWeather{bus.read(extinction_), bus.read(fogExtinction_) + local,
+                                         bus.read(rainRate_) + (kSnowClutter * bus.read(snowRate_)),
+                                         bus.read(contamination_)}
+                         : SensorWeather{0.0, local, 0.0, 0.0};
             tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
                 // Its own stream, so that the range noise below is the same with or without.
                 random::Stream rng(context.seed, context.stepIndex, kWeatherStream + i);
@@ -627,13 +959,15 @@ public:
                 const double u2 = rng.uniform();
                 const double u3 = rng.uniform();
                 double depth = 0.0;
-                if (field && std::isfinite(nearest_[i])) {
+                if ((fog || smoke) && std::isfinite(nearest_[i])) {
                     const Pose& from = columnPose_[i % layout_.horizontal];
                     const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
                     const double to = std::min(nearest_[i], maxRange_);
                     const Vec3& o = from.position;
-                    depth = field->integrate(
-                        o, {o[0] + dir[0] * to, o[1] + dir[1] * to, o[2] + dir[2] * to});
+                    const fields::Vec3 end{o[0] + dir[0] * to, o[1] + dir[1] * to,
+                                           o[2] + dir[2] * to};
+                    depth = (fog ? fog->integrate(o, end) : 0.0) +
+                            (smoke ? smokeScale_ * smoke->integrate(o, end) : 0.0);
                 }
                 const double hit = nearest_[i];
                 nearest_[i] =
@@ -931,6 +1265,7 @@ private:
 
     static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;       // + beam
     static constexpr std::uint32_t kTransmissionStream = 0x4000'0000U;  // + beam × passes + pass
+    static constexpr std::uint32_t kCanopyStream = 0x2000'0000U;        // + beam
     static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
     static constexpr std::uint32_t kMaxPasses = 6;
     static constexpr double kPastSurfaceM = 1e-4;
@@ -946,13 +1281,36 @@ private:
     std::vector<std::array<float, 3>> beamDirections_, beamOrigins_;
     SignalId intensities_;
     std::vector<SurfaceMaterial> waterMaterials_;  // reserved before shapes_ point into it
+    std::size_t firstWaterShape_{0};               // shapes_ from here on are the water's boxes
+    MovingWaterInputs movingWater_;
     std::vector<std::uint32_t> hitShape_;
+    std::vector<std::uint32_t> canopyVolumes_;  // shapes_ with a canopy volume (boxes, planes)
+    SignalId canopyCut_;                        // the vegetation domain's cut map, when it runs
+    CanopyCuts cuts_;
+    std::vector<TreeSpec> trees_;  // crowns the beams cross (ground.md "Trees")
+    CrownIndex crownIndex_;        // their broad phase, per scan
+    CrownIndex woodIndex_;         // the wood's, per scan
+    std::vector<std::array<double, 4>> woodSpheres_;
+    std::vector<SignalId> treeSway_;            // tree/<n>/sway, the vegetation domain's
+    std::vector<std::array<double, 3>> sways_;  // this scan's
+    SignalId treeCut_;                          // vegetation/tree_cut
+    TreeCuts treeCuts_;
+    TreeWood wood_;           // the crowns' branches (lagrange/world/TreeWood.hpp)
+    SignalId branchCut_;      // vegetation/branch_cut
+    SurfaceMaterial bark_;    // a branch's return: the bark preset's
+    SignalId flyingIn_;       // vegetation/leaves
+    FlyingLeaves flying_;     // this scan's
+    SurfaceMaterial leaves_;  // a leaf's return: the shrub preset's
     std::vector<double> intensity_;
     bool wavelength1550_{false};
     double referenceReflectivity_{0.1};
     bool weather_{false};
     LidarClutter clutter_;
     SignalId extinction_, fogExtinction_, rainRate_, snowRate_, contamination_, fogField_;
+    bool smoke_{false};
+    SignalId smokeField_;
+    double smokeScale_{1.0};  // the smoke field's σ (633 nm) at the lidar's wavelength
+    fields::FieldSignal smokeFieldSignal_;
     // Flakes return more false echoes than the same water as drops: taken as this much rain.
     // Illustrative: no published snow-to-rain clutter ratio was found (Rasshofer, Spies and Spies,
     // Adv. Radio Sci. 9, 2011, give snow's extinction, not its false echoes).
@@ -1228,6 +1586,137 @@ public:
                 }
                 hinges_.push_back(id);
             }
+            // The run's lamps and the sky (RFC 0021 §4, §6): what lights the realistic look.
+            std::string error;
+            std::vector<lights::LampSpec> lamps = lights::lampsOf(world, error);
+            if (!error.empty()) {
+                return Status::error(StatusCode::InvalidConfig, "camera " + name_ + ": " + error);
+            }
+            lamps_.clear();
+            for (lights::LampSpec& lamp : lamps) {
+                SeenLamp& seen = lamps_.emplace_back();
+                if (lamp.body != kWorldBody) {
+                    watch(lamp.body.index);
+                }
+                SignalSpec intensity =
+                    spec("lamp/" + lamp.name + "/intensity", SignalType::Scalar, units::cd);
+                intensity.feedback = true;  // last step's light: no ordering asked of the lamps
+                intensity.optional = true;
+                intensity.defaultValue = 0.0;
+                seen.intensity = d.input(intensity);
+                if (lamp.colorTemperature > 0.0) {
+                    seen.color = gpu::colorOfTemperature(lamp.colorTemperature);
+                } else {
+                    // lamp:color, normalised to luminance 1 (Rec. 709 weights, sRGB's Y row).
+                    const std::array<double, 3>& c = lamp.color;
+                    const double y = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        seen.color.at(k) = y > 0.0 ? static_cast<float>(c.at(k) / y) : 0.0F;
+                    }
+                }
+                seen.spec = std::move(lamp);
+            }
+            SignalSpec sky = spec("env/sky_illuminance", SignalType::Scalar, units::lx);
+            sky.feedback = true;
+            sky.optional = true;
+            sky.defaultValue = std::numeric_limits<double>::quiet_NaN();
+            skyIlluminance_ = d.input(sky);
+            // The rotors (RotorAPI_1), whose outwash bends the grass the camera sees
+            // (gpu/GroundAir.hpp): rotor_aero's thrust, induced velocity and axis, last step's.
+            rotors_.clear();
+            const World::Joints& joints = raw.joints;
+            const World::Bodies& bodies = raw.bodies;
+            for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
+                const auto j = static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) -
+                                                        joints.prim.begin());
+                const auto radius = s->real("aero:rotor:radius");
+                if (j >= joints.prim.size() || !radius || *radius <= 0.0) {
+                    continue;
+                }
+                SeenRotor& r = rotors_.emplace_back();
+                r.body = joints.child[j].index;
+                r.radius = *radius;
+                std::size_t root = r.body;
+                for (std::size_t guard = 0; guard < bodies.parent.size(); ++guard) {
+                    const BodyId p = bodies.parent[root];
+                    if (p == kWorldBody) {
+                        break;
+                    }
+                    root = p.index;
+                }
+                r.group = root;
+                watch(r.body);
+                const std::string base =
+                    "rotor/" + std::string(world.signalInstanceName(s->prim)) + "/";
+                const auto optional = [&](SignalSpec in) {
+                    in.feedback = true;
+                    in.optional = true;
+                    return d.input(in);
+                };
+                r.thrust = optional(spec(base + "thrust", SignalType::Scalar, units::N));
+                r.induced =
+                    optional(spec(base + "induced_velocity", SignalType::Scalar, units::m_per_s));
+                r.axis = optional(
+                    spec(base + "thrust_axis", SignalType::Vec3, units::one, "world_local"));
+            }
+            // The trees (ground.md "Trees"), drawn as trees by the realistic look: their sway,
+            // cut crown cells and flying leaves, last step's; without the vegetation domain,
+            // still and whole.
+            std::string treeError;
+            seenTrees_ = treesOf(raw, treeError);
+            treeSway_.clear();
+            treeCut_ = SignalId{};
+            leaves_ = SignalId{};
+            drawnTrees_.clear();
+            treeIds_.clear();
+            for (const TreeSpec& t : seenTrees_) {
+                // Its crown's instance id: the tree prim's scene index.
+                const std::string& path = t.prim.index < raw.prims.paths.size()
+                                              ? raw.prims.paths[t.prim.index]
+                                              : std::string();
+                const auto at = std::ranges::find(scene_->primPaths, path);
+                treeIds_.push_back(
+                    at == scene_->primPaths.end() || path.empty()
+                        ? gpu::kNoInstance
+                        : static_cast<std::uint32_t>(at - scene_->primPaths.begin()));
+                SignalSpec sway =
+                    spec("tree/" + t.name + "/sway", SignalType::Vec3, units::m, "world_local");
+                sway.optional = true;
+                sway.feedback = true;
+                sway.defaultValue = 0.0;
+                treeSway_.push_back(d.input(sway));
+                gpu::RealisticTree& drawn = drawnTrees_.emplace_back();
+                drawn.foot = t.pose.position;
+                drawn.rotation = {static_cast<float>(t.pose.orientation[0]),
+                                  static_cast<float>(t.pose.orientation[1]),
+                                  static_cast<float>(t.pose.orientation[2]),
+                                  static_cast<float>(t.pose.orientation[3])};
+                drawn.height = t.height;
+                drawn.crownRadius = t.crownRadius;
+                drawn.crownBase = t.crownBase;
+                drawn.trunkDiameter = t.trunkDiameter;
+                // The viewer's seed (App.cpp followTrees): the same tree in both.
+                std::uint32_t seed = 2166136261U;
+                for (const char c : t.name) {
+                    seed = (seed ^ static_cast<unsigned char>(c)) * 16777619U;
+                }
+                drawn.seed = seed & 0xffffffU;
+                drawn.id = treeIds_.back();
+            }
+            if (!seenTrees_.empty()) {
+                SignalSpec cut =
+                    spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
+                cut.arrayLength = kTreeCutLength;
+                cut.optional = true;
+                cut.feedback = true;
+                treeCut_ = d.input(cut);
+                SignalSpec leaves =
+                    spec(std::string(kLeavesSignal), SignalType::ScalarArray, units::one);
+                leaves.arrayLength = kLeavesLength;
+                leaves.optional = true;
+                leaves.feedback = true;
+                leaves_ = d.input(leaves);
+            }
         }
         const auto image = [&](const char* what, Unit unit) {
             SignalSpec out =
@@ -1237,6 +1726,12 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        // The water's moving surface (water.md): the depth meets it at η.
+        if (!groundTruth_) {
+            if (Status ok = movingWater_.declare(world, config, d); !ok.ok()) {
+                return ok;
+            }
+        }
         if (setting(sensors, sensor_, "thermal", 0.0) != 0.0 && !groundTruth_) {
             if (Status ok = declareThermal(world, config, d); !ok.ok()) {
                 return ok;
@@ -1260,6 +1755,15 @@ public:
             SignalSpec field = spec("env/extinction/field", SignalType::Field3D, units::per_m);
             field.feedback = true;
             fogField_ = d.input(field);
+        }
+        // The fires' smoke (config "smoke", RFC 0022 §6): the field is σ in the visible, as the
+        // veil takes it. A thermal camera's band is not measured for soot (TODO(verify)).
+        smoke_ = config.get<bool>("smoke").value_or(false) && !groundTruth_ && !thermal_;
+        if (smoke_) {
+            SignalSpec field = spec("env/smoke/extinction", SignalType::Field3D, units::per_m);
+            field.feedback = true;
+            field.optional = true;
+            smokeField_ = d.input(field);
         }
         return {};
     }
@@ -1357,6 +1861,20 @@ public:
         }
         sensorPose_ = sensor;
         frameContext_ = context;
+        light(bus, context.t.seconds());
+        // The realistic look draws the water's moving surface (the first body of water's).
+        if (renderer_ && !movingWater_.water.empty()) {
+            gpu::RealisticWaterSurface surface;
+            if (movingWater_.read(bus) && movingWater_.water.front().cells >= 2) {
+                const MovingWater& w = movingWater_.water.front();
+                waterHeights_.assign(w.heights.begin(), w.heights.end());
+                surface.cells = w.cells;
+                surface.cell = w.cell;
+                surface.first = {w.corner[0] + w.cell / 2.0, w.corner[1] + w.cell / 2.0};
+                surface.heights = waterHeights_;
+            }
+            renderer_->setWaterSurface(surface);
+        }
         if (fisheye_) {
             // Each face of the cube from the camera's place, turned to look through it.
             for (std::size_t f = 0; f < faceRenderers_.size(); ++f) {
@@ -1434,21 +1952,32 @@ private:
     /// What follows the render: the far clip, the weather's veil, the thermal image, and the
     /// images out.
     Status finishFrame(SignalBus& bus) {
+        if (!fisheye_ && movingWater_.read(bus)) {
+            waterDepth();
+        }
+        // The crowns, as the lidar sees them (not yet through a fisheye's faces, nor in a
+        // thermal camera's image).
+        if (!fisheye_ && !thermal_ && !seenTrees_.empty()) {
+            crownDepth();
+        }
         for (float& depth : images_.depth) {
             if (depth > far_) {
                 depth = std::numeric_limits<float>::infinity();
                 // The colour keeps whatever was drawn: a far clip limits the range, not the view.
             }
         }
-        if (weather_) {
-            const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
-            if (field) {
-                fieldDepth(*field, sensorPose_);
+        if (weather_ || smoke_) {
+            const std::shared_ptr<const fields::Field> fog =
+                weather_ ? fogFieldSignal_.read(bus, fogField_) : nullptr;
+            const std::shared_ptr<const fields::Field> smoke =
+                smoke_ ? smokeFieldSignal_.read(bus, smokeField_) : nullptr;
+            if (fog || smoke) {
+                fieldDepth(fog.get(), smoke.get(), sensorPose_);
             } else {
                 fieldDepth_.clear();
             }
-            applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
-                               bus.read(contamination_), fieldDepth_);
+            applyCameraWeather(images_.rgba, images_.depth, weather_ ? bus.read(extinction_) : 0.0,
+                               weather_ ? bus.read(contamination_) : 0.0, fieldDepth_);
         }
         if (thermal_ && !gpuThermal_) {
             stepThermal(frameContext_, bus);
@@ -1708,6 +2237,63 @@ private:
         });
     }
 
+    /// The lamps and the sky of this frame, to every renderer of the camera (RFC 0021 §4, §6).
+    void light(const SignalBus& bus, double t) {
+        drawnLamps_.clear();
+        for (const SeenLamp& seen : lamps_) {
+            const double intensity = bus.read(seen.intensity);
+            if (!(intensity > 0.0)) {
+                continue;
+            }
+            const lights::LampSpec& spec = seen.spec;
+            const Pose pose = spec.body == kWorldBody
+                                  ? spec.poseInBody
+                                  : compose(bodyPose(bus, spec.body.index), spec.poseInBody);
+            gpu::RealisticLamp& lamp = drawnLamps_.emplace_back();
+            lamp.position = pose.position;
+            lamp.axis = rotate(pose.orientation, lights::beamAxis(spec, t));
+            lamp.intensity = intensity;
+            lamp.beamAngle = spec.beamAngle;
+            lamp.fieldAngle = spec.fieldAngle;
+            lamp.point = spec.kind == lights::LampKind::Point;
+            lamp.color = seen.color;
+        }
+        const double sky = skyIlluminance_.valid() ? bus.read(skyIlluminance_)
+                                                   : std::numeric_limits<double>::quiet_NaN();
+        if (renderer_) {
+            renderer_->setLighting(drawnLamps_, sky);
+        }
+        for (const auto& face : faceRenderers_) {
+            face->setLighting(drawnLamps_, sky);
+        }
+        drawnRotors_.clear();
+        for (const SeenRotor& seen : rotors_) {
+            if (!seen.thrust.valid() || !seen.induced.valid() || !seen.axis.valid()) {
+                continue;
+            }
+            const std::span<const double> a = bus.readN(seen.axis);
+            gpu::AirRotor& r = drawnRotors_.emplace_back();
+            r.hub = bodyPose(bus, seen.body).position;
+            r.thrustAxis = {a[0], a[1], a[2]};
+            r.radius = seen.radius;
+            r.induced = bus.read(seen.induced);
+            r.thrust = bus.read(seen.thrust);
+            r.group = seen.group;
+        }
+        if (renderer_) {
+            renderer_->setAir(drawnRotors_);
+        }
+        for (const auto& face : faceRenderers_) {
+            face->setAir(drawnRotors_);
+        }
+        trees(bus);
+        // The render is brightened as the dark asks (gpu::realisticAdaptation): the sensor
+        // model takes it out again, so its electrons stay those of the scene's light.
+        if (model_ && renderer_ && scene_->raster->realistic()) {
+            model_->setRenderGain(gpu::realisticAdaptation(sky));
+        }
+    }
+
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
         if (b >= poses_.size() || !poses_[b].valid()) {
             return b < rest_.size() ? rest_[b] : Pose{};
@@ -1735,7 +2321,154 @@ public:
 
 private:
     std::shared_ptr<const CameraScene> scene_;
-    std::vector<SignalId> hinges_;           // per drawable; invalid: rigid
+    std::vector<SignalId> hinges_;  // per drawable; invalid: rigid
+    /// A lamp of the run as the camera draws it (RFC 0021 §4).
+    struct SeenLamp {
+        lights::LampSpec spec;
+        SignalId intensity;  // lamp/<n>/intensity, cd
+        std::array<float, 3> color{1.0F, 1.0F, 1.0F};
+    };
+    std::vector<SeenLamp> lamps_;
+    std::vector<gpu::RealisticLamp> drawnLamps_;  // this frame's
+    /// A rotor whose outwash the camera draws in the grass (gpu/GroundAir.hpp).
+    struct SeenRotor {
+        std::uint32_t body{0};  // its link
+        double radius{0.0};     // m
+        std::size_t group{0};   // its robot's root body
+        SignalId thrust, induced, axis;
+    };
+    std::vector<SeenRotor> rotors_;
+    std::vector<gpu::AirRotor> drawnRotors_;  // this frame's
+    /// The trees of the run as the realistic look draws them (ground.md "Trees").
+    std::vector<TreeSpec> seenTrees_;
+    std::vector<SignalId> treeSway_;  // tree/<n>/sway
+    SignalId treeCut_, leaves_;       // kTreeCutSignal, kLeavesSignal
+    std::vector<gpu::RealisticTree> drawnTrees_;
+    std::vector<gpu::RealisticTreeCut> drawnCuts_;
+    std::vector<gpu::RealisticLeaf> drawnLeaves_;
+    double cutVersion_{-1.0};
+    std::vector<std::uint32_t> treeIds_;  // per tree: its crown's instance id (scene prim)
+    TreeCuts crownCuts_;                  // the cut cells, for the crowns in depth
+    static constexpr std::uint32_t kCrownStream = 0x8000'0000U;  // + (sensor << 22) + pixel
+
+    /// The crowns in the depth and instance images, as the lidar sees them (ShapeCaster.hpp
+    /// crownStop): each pixel's ray, up to what the render met, stops in a crown it crosses at
+    /// an optical depth drawn from its own stream, one draw per crossed crown in order, at the
+    /// tree's sway and without its cut cells; where it stops, the depth is there and the instance
+    /// is the tree's prim. The colour is the look's (realistic: its trees; simple: TreeShapes.hpp).
+    void crownDepth() {
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        const std::size_t pixels = static_cast<std::size_t>(w) * h;
+        if (images_.depth.size() != pixels || images_.instance.size() != pixels) {
+            return;
+        }
+        // The crowns' broad phase (ShapeCaster.hpp CrownIndex), at their sway as trees() read
+        // it: each ray tests only the crowns over whose cells it passes.
+        std::vector<std::array<double, 3>> sways;
+        for (std::size_t k = 0; k < seenTrees_.size(); ++k) {
+            sways.push_back(k < drawnTrees_.size() ? drawnTrees_[k].sway : std::array<double, 3>{});
+        }
+        CrownIndex index;
+        index.build(seenTrees_, sways);
+        const Vec3 eye = camera_.position;
+        const StepContext& context = frameContext_;
+        const std::uint32_t stream = kCrownStream + ((sensor_ & 0x1ffU) << 22U);
+        const TreeCuts* cuts = crownCuts_.empty() ? nullptr : &crownCuts_;
+        tbb::parallel_for(std::uint32_t{0}, h, [&](std::uint32_t v) {
+            for (std::uint32_t u = 0; u < w; ++u) {
+                const std::size_t i = (static_cast<std::size_t>(v) * w) + u;
+                // The ray in the world, z 1 in the optical frame, and its length per unit depth.
+                const Vec3 ray = rotate(camera_.orientation, {(u - camera_.cx) / camera_.fx,
+                                                              (v - camera_.cy) / camera_.fy, 1.0});
+                const double length =
+                    std::sqrt((ray[0] * ray[0]) + (ray[1] * ray[1]) + (ray[2] * ray[2]));
+                const Vec3 dir{ray[0] / length, ray[1] / length, ray[2] / length};
+                const float depth = images_.depth[i];
+                double reach = (std::isfinite(depth) ? static_cast<double>(depth) : far_) * length;
+                thread_local std::vector<std::uint32_t> near;
+                index.candidates(eye, dir, reach, near);
+                if (near.empty()) {
+                    continue;
+                }
+                random::Stream rng(context.seed, context.stepIndex,
+                                   stream + static_cast<std::uint32_t>(i & 0x3fffffU));
+                std::uint32_t hit = kNoIndex;
+                for (const std::uint32_t k : near) {
+                    if (!crownCrossed(seenTrees_[k], eye, dir, reach, sways[k])) {
+                        continue;  // a draw only for the crowns it crosses, as the lidar's
+                    }
+                    const double at =
+                        crownStop(seenTrees_[k], k, eye, dir, reach, sways[k], cuts, rng.uniform());
+                    if (at < reach) {
+                        reach = at;
+                        hit = static_cast<std::uint32_t>(k);
+                    }
+                }
+                if (hit != kNoIndex) {
+                    images_.depth[i] = static_cast<float>(reach / length);
+                    images_.instance[i] = treeIds_[hit];
+                }
+            }
+        });
+    }
+
+    /// This frame's trees, cut cells and flying leaves to every renderer of the camera.
+    void trees(const SignalBus& bus) {
+        if (drawnTrees_.empty()) {
+            return;
+        }
+        for (std::size_t k = 0; k < drawnTrees_.size() && k < treeSway_.size(); ++k) {
+            if (treeSway_[k].valid()) {
+                const std::span<const double> v = bus.readN(treeSway_[k]);
+                for (std::size_t c = 0; c < 3 && c < v.size(); ++c) {
+                    drawnTrees_[k].sway.at(c) = std::isfinite(v[c]) ? v[c] : 0.0;
+                }
+            }
+        }
+        if (treeCut_.valid()) {
+            const std::span<const double> map = bus.readN(treeCut_);
+            crownCuts_.load(map);
+            if (map.size() >= kTreeCutHeader && map[0] != cutVersion_) {
+                cutVersion_ = map[0];
+                drawnCuts_.clear();
+                const auto count = static_cast<std::size_t>(std::max(0.0, map[1]));
+                for (std::size_t k = 0; k < count; ++k) {
+                    const std::size_t at = kTreeCutHeader + (4 * k);
+                    if (at + 3 >= map.size()) {
+                        break;
+                    }
+                    drawnCuts_.push_back({static_cast<std::uint32_t>(map[at]),
+                                          {static_cast<std::int32_t>(map[at + 1]),
+                                           static_cast<std::int32_t>(map[at + 2]),
+                                           static_cast<std::int32_t>(map[at + 3])}});
+                }
+            }
+        }
+        drawnLeaves_.clear();
+        if (leaves_.valid()) {
+            const std::span<const double> list = bus.readN(leaves_);
+            const std::size_t count =
+                list.size() < kLeavesHeader
+                    ? 0
+                    : std::min(static_cast<std::size_t>(std::max(0.0, list[1])),
+                               (list.size() - kLeavesHeader) / kLeavesFields);
+            for (std::size_t k = 0; k < count; ++k) {
+                const std::size_t at = kLeavesHeader + (kLeavesFields * k);
+                drawnLeaves_.push_back({{list[at], list[at + 1], list[at + 2]},
+                                        static_cast<float>(list[at + 3]),
+                                        static_cast<float>(list[at + 4]),
+                                        static_cast<float>(list[at + 5])});
+            }
+        }
+        if (renderer_) {
+            renderer_->setTrees(drawnTrees_, drawnCuts_, drawnLeaves_);
+        }
+        for (const auto& face : faceRenderers_) {
+            face->setTrees(drawnTrees_, drawnCuts_, drawnLeaves_);
+        }
+    }
+    SignalId skyIlluminance_;                // env/sky_illuminance, lx; NaN: the drawn day
     gpu::PinholeCamera camera_;              // the output's pinhole (before the sensor model)
     std::unique_ptr<CameraModel> model_;     // null when no part of the sensor model is on
     std::unique_ptr<FisheyeRemap> fisheye_;  // a fisheye's cube faces and remap; else null
@@ -1752,9 +2485,47 @@ private:
     std::vector<gpu::RasterInstance> instances_;
     gpu::RasterImages images_;
     SignalId image_, depth_, instance_;
-    /// A fog field's optical depth along each pixel's ray up to its depth (the far clip for the
-    /// sky), integrated once per kFieldBlock² pixels and shared across the block.
-    void fieldDepth(const fields::Field& field, const Pose& sensor) {
+    /// The depth image on the water's moving surface: a pixel that met the still level inside
+    /// the water goes on to η, and one whose ray passes a crest first stops on it. Rays in the
+    /// optical frame have z 1, so the distance along them is the depth.
+    void waterDepth() {
+        constexpr double kOnLevel = 2e-3;  // m: a depth this near the still level is the water's
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        if (images_.depth.size() != static_cast<std::size_t>(w) * h) {
+            return;
+        }
+        const Vec3 eye = camera_.position;
+        tbb::parallel_for(std::uint32_t{0}, h, [&](std::uint32_t v) {
+            for (std::uint32_t u = 0; u < w; ++u) {
+                float& depth = images_.depth[static_cast<std::size_t>(v) * w + u];
+                const Vec3 ray = rotate(camera_.orientation, {(u - camera_.cx) / camera_.fx,
+                                                              (v - camera_.cy) / camera_.fy, 1.0});
+                const double z = std::isfinite(depth) ? static_cast<double>(depth)
+                                                      : std::numeric_limits<double>::infinity();
+                for (const MovingWater& water : movingWater_.water) {
+                    if (water.cells < 2) {
+                        continue;
+                    }
+                    const Vec3 at{eye[0] + ray[0] * z, eye[1] + ray[1] * z, eye[2] + ray[2] * z};
+                    const bool onLevel = std::isfinite(z) &&
+                                         std::abs(at[2] - water.level) < kOnLevel &&
+                                         at[0] >= water.lo[0] && at[0] <= water.hi[0] &&
+                                         at[1] >= water.lo[1] && at[1] <= water.hi[1];
+                    bool on = false;
+                    const double t = rayOntoWater(water, eye, ray, z, onLevel, &on);
+                    if (on) {
+                        depth = static_cast<float>(t);
+                    }
+                }
+            }
+        });
+    }
+
+    /// The optical depth of a fog field and the smoke (either may be null) along each pixel's
+    /// ray up to its depth (the far clip for the sky), integrated once per kFieldBlock² pixels
+    /// and shared across the block.
+    void fieldDepth(const fields::Field* fog, const fields::Field* smoke, const Pose& sensor) {
         constexpr std::uint32_t kFieldBlock = 8;
         const std::uint32_t w = camera_.width;
         const std::uint32_t h = camera_.height;
@@ -1772,8 +2543,10 @@ private:
                 const Vec3 ray = rotate(optical, {(u - camera_.cx) / camera_.fx * z,
                                                   (v - camera_.cy) / camera_.fy * z, z});
                 const fields::Vec3 from = sensor.position;
-                const auto tau = static_cast<float>(
-                    field.integrate(from, {from[0] + ray[0], from[1] + ray[1], from[2] + ray[2]}));
+                const fields::Vec3 to{from[0] + ray[0], from[1] + ray[1], from[2] + ray[2]};
+                const auto tau =
+                    static_cast<float>((fog != nullptr ? fog->integrate(from, to) : 0.0) +
+                                       (smoke != nullptr ? smoke->integrate(from, to) : 0.0));
                 for (std::uint32_t y = by * kFieldBlock; y < std::min(h, (by + 1) * kFieldBlock);
                      ++y) {
                     for (std::uint32_t x = bx * kFieldBlock;
@@ -1785,9 +2558,14 @@ private:
         });
     }
 
+    MovingWaterInputs movingWater_;
+    std::vector<float> waterHeights_;  // the surface for the realistic look, in float
     bool weather_{false};
     SignalId extinction_, contamination_, fogField_;
     fields::FieldSignal fogFieldSignal_;
+    bool smoke_{false};
+    SignalId smokeField_;
+    fields::FieldSignal smokeFieldSignal_;
     std::vector<float> fieldDepth_;
     // The thermal camera.
     struct Surface {
@@ -1942,6 +2720,10 @@ std::shared_ptr<CameraScene> createCameraScene(const Model& model,
             }
         }
         scene->drawables.push_back(drawable);
+    }
+    scene->primPaths.reserve(model.scene.prims.size());
+    for (const ScenePrim& prim : model.scene.prims) {
+        scene->primPaths.push_back(prim.path);
     }
     scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error, look,
                                              reuse ? reuse->raster : nullptr);

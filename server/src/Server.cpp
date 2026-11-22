@@ -1,15 +1,23 @@
 #include "Recorder.hpp"
+#include "lagrange/actuators/Brakes.hpp"
+#include "lagrange/actuators/Grippers.hpp"
+#include "lagrange/actuators/Nozzles.hpp"
+#include "lagrange/actuators/Servos.hpp"
+#include "lagrange/actuators/Solenoids.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/fire/Fires.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/humans/Body.hpp"
 #include "lagrange/humans/Humans.hpp"
+#include "lagrange/hydrodynamics/Surface.hpp"
 #include "lagrange/hydrodynamics/Water.hpp"
 #include "lagrange/importers/Importers.hpp"
+#include "lagrange/lights/Lights.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
 #include "lagrange/meshes/MeshImport.hpp"
@@ -47,11 +55,15 @@
 #include "lagrange/thermal/ThermalConduction.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
+#include "lagrange/vegetation/Vegetation.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
+#include "lagrange/world/CanopyCut.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/RoadLanes.hpp"
+#include "lagrange/world/Trees.hpp"
 
 #include <algorithm>
 #include <array>
@@ -110,10 +122,38 @@ constexpr std::int64_t kSceneUpdatePeriodNs = 8'000'000;
 constexpr const char* kFogField = "weather/fog_density";
 constexpr const char* kWindField = "weather/wind";
 constexpr const char* kFluxField = "emi/flux_density";
+constexpr const char* kSmokeField = "fire/smoke_extinction";  // env/smoke/extinction (RFC 0022)
 // The air's speed: wind, gusts and the rotors' downwash and outwash (rotor_aero.md §5).
 constexpr const char* kAirField = "aero/wind_speed";
 // RFC 0012: the cells of every link with a thermal material, as FieldVolumes in its frame.
 constexpr const char* kThermalCellsField = "thermal/cells";
+// The water's moving surface under the downwash (water.md), one FieldVolume of nz 1 over the
+// first body of water's patch, and the spray off it (downwash.md §5b), its water per cell.
+constexpr const char* kWaterSurfaceField = "water/surface";
+// Plants cut by propellers (ground.md "Cutting the plants"): the cut tops in a world grid, for
+// the realistic view. Sent only when the cuts change.
+constexpr const char* kCutField = "vegetation/cut";
+constexpr std::uint32_t kMaxCutSide = 512;  // cells a side of the grid sent
+// Trees (ground.md "Trees") for the realistic view: the crown cells propellers cut, a FieldVolume
+// one component, ny = nz = 1, nx = 4 per cell: (the tree's scene prim, cell x, y, z) with the
+// cells of Trees.hpp (kTreeCutCell, the crown's own unswayed frame); a single NaN when none is
+// cut. Sent when the cuts change and every few seconds.
+constexpr const char* kTreeCutField = "vegetation/tree_cut";
+// The flying leaves (Leaves.hpp) likewise: nx = 6 per leaf, (x, y, z) less the volume's origin
+// (region frame, m), yaw, pitch (rad), size (m); a single NaN when none flies. Sent when they move.
+constexpr const char* kLeavesField = "vegetation/leaves";
+constexpr const char* kSprayField = "aero/spray";
+/// The air's friction velocity on the water (u* = τ/√(ρ·|τ|), m/s, x and y per cell of the
+/// moving surface's patch): what raises the ripples the realistic look draws (water.md).
+constexpr const char* kWaterFrictionField = "water/friction_velocity";
+// The surface's grid, the same for the water, aerodynamics and rotor domains.
+constexpr std::int64_t kSurfaceCells = 128;
+constexpr double kSurfaceCell = 0.03;  // m
+constexpr double kSurfaceStep = 0.04;  // s
+// The spray's volume for the viewer: 40 × 40 × 10 cells of 0.15 m round its drops.
+constexpr std::uint32_t kSprayNx = 40;
+constexpr std::uint32_t kSprayNz = 10;
+constexpr double kSprayCell = 0.15;    // m
 constexpr double kAirSliceCell = 0.1;  // m: a drone is about half a metre across
 // The air around the robot for the viewer's particles: 28 × 28 × 20 cells of 0.2 m, from 3.4 m
 // below the robot to 0.6 m above it, five times a second.
@@ -480,6 +520,11 @@ struct Session {
     // The slices this viewer wants: per field and orientation (a viewer may watch the air both
     // from above and from the side).
     std::map<std::pair<std::string, int>, FieldWant> fields;
+    double cutVersion{-1.0};      // the vegetation/canopy_cut version last sent as kCutField
+    double treeCutVersion{-1.0};  // the vegetation/tree_cut version last sent as kTreeCutField
+    Clock::time_point treeCutSent{};
+    double leavesVersion{-1.0};   // the vegetation/leaves version last sent as kLeavesField
+    Clock::time_point cutSent{};  // when: sent again every few seconds (a rebuilt run restarts it)
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
     void send(const v1::Envelope& envelope) {
@@ -488,13 +533,63 @@ struct Session {
     }
 };
 
+/// Each lamp's ROS topics (RFC 0021 §9) beside a --ros-topics map: /lights/<n>/command
+/// (Float64, 0-1, its initialCommand until the first message), /lights/<n>/blink (Bool) and
+/// /lights/<n>/state (Float64, the output as a share of full, latched, sent on change). A lamp
+/// whose signal or topic the map already uses keeps the map's.
+void addLampTopics(const WorldView& world, ros2::TopicMaps& maps) {
+    const auto taken = [&maps](const std::string& signal, const std::string& topic) {
+        for (const auto* list : {&maps.publish, &maps.subscribe}) {
+            for (const ros2::TopicMap& map : *list) {
+                if (map.signal == signal || map.topic == topic) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    for (const SchemaInstance* s : world.instancesOf("LampAPI_1")) {
+        const std::string name(world.signalInstanceName(s->prim));
+        if (name.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") !=
+            std::string::npos) {
+            continue;  // not a ROS topic name
+        }
+        const std::string signal = "lamp/" + name + "/";
+        const std::string topic = "/lights/" + name + "/";
+        if (!taken(signal + "command", topic + "command")) {
+            ros2::TopicMap command;
+            command.signal = signal + "command";
+            command.topic = topic + "command";
+            command.type = "std_msgs/msg/Float64";
+            command.initial = std::clamp(s->real("lamp:initialCommand").value_or(0.0), 0.0, 1.0);
+            maps.subscribe.push_back(std::move(command));
+        }
+        if (!taken(signal + "blink", topic + "blink")) {
+            ros2::TopicMap blink;
+            blink.signal = signal + "blink";
+            blink.topic = topic + "blink";
+            blink.type = "std_msgs/msg/Bool";
+            maps.subscribe.push_back(std::move(blink));
+        }
+        if (!taken(signal + "level", topic + "state")) {
+            ros2::TopicMap state;
+            state.signal = signal + "level";
+            state.topic = topic + "state";
+            state.type = "std_msgs/msg/Float64";
+            state.latched = true;
+            maps.publish.push_back(std::move(state));
+        }
+    }
+}
+
 /// The domains a profile names, in the order of profiles/schema.json and the mock server.
 struct DomainRow {
     const char* domain;
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 15> kDomains{{
+constexpr std::array<DomainRow, 19> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -510,6 +605,10 @@ constexpr std::array<DomainRow, 15> kDomains{{
     {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
     {"tether", "zero", "constant"},
+    {"vegetation", "zero", "constant"},
+    {"fire", "zero", "constant"},
+    {"lights", "zero", "constant"},
+    {"actuators", "zero", "constant"},  // never holds; `ideal` too (RFC 0020 §3.3)
 }};
 
 /// Writes a robot given as text to a temporary file the loaders read (defined below).
@@ -721,7 +820,7 @@ struct Server::Impl {
     Clock::time_point lastVolumes{Clock::now()};
     Clock::time_point lastEmit{Clock::now()};  // the last emit() to viewers
     std::uint64_t thermalVolumeTick{0};        // volume periods, for kThermalVolumeEvery
-    mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal;
+    mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal, smokeFieldSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
     SimTime statsSimTime{};
@@ -856,16 +955,24 @@ struct Server::Impl {
             }
         }
         if (jointControlled()) {
-            // Off, nothing simulates the motors: every joint takes a torque.
-            next->add(std::make_unique<JointControl>(
-                jointTargets,
+            // Off, nothing simulates the motors: every joint takes a torque. A joint with a servo
+            // (RFC 0020 §4.3) follows its servo instead: joint control leaves it out.
+            std::map<std::string, std::string> modes =
                 off("electrical") ? std::map<std::string, std::string>{}
-                                  : electrical::driveModes(WorldView(robot.world)),
-                options.jointLoopHz));
+                                  : electrical::driveModes(WorldView(robot.world));
+            for (const std::string& joint : servoJoints()) {
+                modes[joint] = "servo";
+            }
+            // A solenoid's plunger (RFC 0020 §4.6) is pushed by its coil and spring only.
+            for (const std::string& joint : solenoidJoints()) {
+                modes[joint] = "servo";
+            }
+            next->add(std::make_unique<JointControl>(jointTargets, std::move(modes),
+                                                     options.jointLoopHz));
         } else if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
-            next->add(ros2_control::createControlModule(*controllers, controlJoints));
-        } else if (robot.actuatedJoints.size() == 2) {
+            next->add(ros2_control::createControlModule(*controllers, controlJoints, controlGpios));
+        } else if (robot.actuatedJoints.size() == 2 && servoJoints().empty()) {
             std::function<std::optional<VelocityCommand>()> external;
             if (bridge) {
                 external = [this]() -> std::optional<VelocityCommand> {
@@ -959,6 +1066,24 @@ struct Server::Impl {
                           ModuleConfig(traffic));
             }
         }
+        // The water's moving surface under the rotors' downwash (downwash.md §5a, water.md):
+        // with water, rotors, the downwash and the air density, unless the profile turns
+        // aerodynamics.downwash_water off. The water, aerodynamics and rotor domains share its
+        // grid.
+        const auto flagOn = [&settings](const char* key) {
+            const auto it = settings.aerodynamics.find(key);
+            return it == settings.aerodynamics.end() || !std::holds_alternative<bool>(it->second) ||
+                   std::get<bool>(it->second);
+        };
+        const bool waterSurface =
+            !WorldView(robot.world).instancesOf("WaterAPI_1").empty() && !off("hydrodynamics") &&
+            hasRotors() && !off("aerodynamics") && flagOn("downwash") && flagOn("downwash_water") &&
+            (settings.aerodynamics.contains("air_density") || settings.airDensityKgM3);
+        const auto surfaceGrid = [](ModuleConfigData& config) {
+            config.values["surface_cells"] = kSurfaceCells;
+            config.values["surface_cell"] = kSurfaceCell;
+            config.values["surface_step"] = kSurfaceStep;
+        };
         // Water: floats and drags what enters it; off, it is only a surface to the sensors.
         if (!WorldView(robot.world).instancesOf("WaterAPI_1").empty() && !off("hydrodynamics")) {
             ModuleConfigData water;
@@ -971,7 +1096,26 @@ struct Server::Impl {
             for (const auto& [body, coefficients] : options.hydroCoefficients) {
                 water.values["fossen:" + body] = coefficients;
             }
+            if (waterSurface) {
+                water.values["surface"] = true;
+                surfaceGrid(water);
+                ModuleConfigData surface;
+                surfaceGrid(surface);
+                next->add(std::make_unique<hydrodynamics::SurfaceWaves>(), ModuleConfig(surface));
+            }
             next->add(std::make_unique<hydrodynamics::Water>(), ModuleConfig(water));
+        }
+        // Reeds, shrubs and tall grass: their stems drag what pushes through them, in the site's
+        // air (no air density, no drag; ground.md "Reeds and shrubs"). Off: none.
+        if (hasVegetation() && !off("vegetation")) {
+            ModuleConfigData stems;
+            if (settings.airDensityKgM3) {
+                stems.values["density"] = *settings.airDensityKgM3;
+            }
+            if (options.leafLitter > 0) {
+                stems.values["leaf_litter"] = static_cast<double>(options.leafLitter);
+            }
+            next->add(std::make_unique<vegetation::Vegetation>(), ModuleConfig(stems));
         }
         // Tethers (RFC 0011): cables from their anchors to bodies, against every collider. Drag
         // needs the site's air density; without it they hang in still, massless air.
@@ -982,6 +1126,121 @@ struct Server::Impl {
             }
             if (!(off("tether") && addPluginSubstitute("tether", cables))) {
                 next->add(std::make_unique<tether::Tethers>(off("tether")), ModuleConfig(cables));
+            }
+        }
+        // Lamps (RFC 0021): switched, dimmed and blinked; power from their bus, heat into their
+        // thermal node. Off: the profile's substitute, zero (dark) by default, or constant.
+        if (hasLamps()) {
+            const auto token = settings.substituteTokens.find("lights");
+            const std::string asked =
+                token == settings.substituteTokens.end() ? std::string() : token->second;
+            if (!(off("lights") && addPluginSubstitute("lights"))) {
+                const std::optional<lights::Mode> substitute = lights::Lights::substitute(asked);
+                if (off("lights") && !substitute) {
+                    return Unexpected{"lights: no substitute " + asked +
+                                      "; zero, constant or a plugin's"};
+                }
+                next->add(std::make_unique<lights::Lights>(off("lights") ? *substitute
+                                                                         : lights::Mode::Model));
+            }
+        }
+        // Grippers (RFC 0020): suction cups and magnets, holding parts by force pairs found by
+        // rays in the run's colliders at the bodies' poses.
+        if (hasGrippers()) {
+            ModuleConfigData grip;
+            if (settings.ambientTemperatureK) {
+                grip.values[actuators::Grippers::kTemperatureKey] = *settings.ambientTemperatureK;
+            }
+            if (const auto site = options.site.find("pressure"); site != options.site.end()) {
+                grip.values[actuators::Grippers::kPressureKey] = site->second;
+            }
+            if (!(off("actuators") && addPluginSubstitute("actuators", grip))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const actuators::Grippers::Mode mode =
+                    !off("actuators") ? actuators::Grippers::Mode::Full
+                    : token != settings.substituteTokens.end() && token->second == "ideal"
+                        ? actuators::Grippers::Mode::Ideal
+                        : actuators::Grippers::Mode::Never;
+                auto scene = std::make_shared<sensors::BodyScene>(robot.world);
+                next->add(std::make_unique<actuators::Grippers>(
+                              mode, [scene](const SignalBus& bus) { return &scene->at(bus); },
+                              actuatorCommands),
+                          ModuleConfig(grip));
+            }
+        }
+        // Nozzles and tanks (RFC 0022 §8): jets traced through the run's colliders at the
+        // bodies' poses; the fire domain reads where they land.
+        if (hasNozzles()) {
+            ModuleConfigData spray;
+            if (!(off("actuators") && !hasGrippers() && addPluginSubstitute("actuators", spray))) {
+                auto scene = std::make_shared<sensors::BodyScene>(robot.world);
+                // `ideal` sprays as the model does (a nozzle has no dynamics to idealise);
+                // `zero` and `constant` keep every valve shut.
+                const auto token = settings.substituteTokens.find("actuators");
+                const bool ideal =
+                    token != settings.substituteTokens.end() && token->second == "ideal";
+                next->add(std::make_unique<actuators::Nozzles>(
+                              off("actuators") && !ideal ? actuators::Nozzles::Mode::Shut
+                                                         : actuators::Nozzles::Mode::Full,
+                              [scene](const SignalBus& bus) { return &scene->at(bus); },
+                              actuatorCommands),
+                          ModuleConfig(spray));
+            }
+        }
+        // Servos (RFC 0020 §4.3): each servo joint's board, on its motor when the electrical
+        // domain runs, else on the datasheet's torque line. Before the electrical substitute,
+        // which passes on the torque commands declared above it.
+        if (hasServos()) {
+            ModuleConfigData board;
+            board.values[actuators::Servos::kElectricalKey] =
+                hasPowerSystem() && !off("electrical") ? 1.0 : 0.0;
+            if (!(off("actuators") && !hasGrippers() && !hasNozzles() &&
+                  addPluginSubstitute("actuators", board))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const std::string preset =
+                    token != settings.substituteTokens.end() ? token->second : "zero";
+                const actuators::Servos::Mode mode =
+                    !off("actuators")      ? actuators::Servos::Mode::Full
+                    : preset == "ideal"    ? actuators::Servos::Mode::Ideal
+                    : preset == "constant" ? actuators::Servos::Mode::Hold
+                                           : actuators::Servos::Mode::Off;
+                next->add(std::make_unique<actuators::Servos>(mode, servoCommands),
+                          ModuleConfig(board));
+            }
+        }
+        // Holding brakes (RFC 0020, "Also worth adding"): each joint's friction limit while the
+        // springs apply the disc; released by powering its coil.
+        if (hasBrakes()) {
+            ModuleConfigData hold;
+            if (!(off("actuators") && !hasGrippers() && !hasNozzles() && !hasServos() &&
+                  addPluginSubstitute("actuators", hold))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const std::string preset =
+                    token != settings.substituteTokens.end() ? token->second : "zero";
+                const actuators::Brakes::Mode mode =
+                    !off("actuators")      ? actuators::Brakes::Mode::Full
+                    : preset == "ideal"    ? actuators::Brakes::Mode::Ideal
+                    : preset == "constant" ? actuators::Brakes::Mode::Hold
+                                           : actuators::Brakes::Mode::Off;
+                next->add(std::make_unique<actuators::Brakes>(mode, actuatorCommands),
+                          ModuleConfig(hold));
+            }
+        }
+        // Solenoids (RFC 0020 §4.6): each plunger's coil and spring, as a force on its slide.
+        // Before the electrical substitute, which passes on the torque commands declared above.
+        if (hasSolenoids()) {
+            ModuleConfigData coil;
+            if (!(off("actuators") && !hasGrippers() && !hasNozzles() && !hasServos() &&
+                  !hasBrakes() && addPluginSubstitute("actuators", coil))) {
+                const auto token = settings.substituteTokens.find("actuators");
+                const bool ideal =
+                    token != settings.substituteTokens.end() && token->second == "ideal";
+                const actuators::Solenoids::Mode mode = !off("actuators")
+                                                            ? actuators::Solenoids::Mode::Full
+                                                        : ideal ? actuators::Solenoids::Mode::Ideal
+                                                                : actuators::Solenoids::Mode::Off;
+                next->add(std::make_unique<actuators::Solenoids>(mode, actuatorCommands),
+                          ModuleConfig(coil));
             }
         }
         // People (RFC 0009): moved like traffic agents, around the robots.
@@ -1008,12 +1267,14 @@ struct Server::Impl {
         // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
         // their drive and steering commands into joint torques.
         if (hasVehicles()) {
-            auto [ground, friction] = groundQuery();
+            std::vector<double> rolling;
+            auto [ground, friction] = groundQuery(&rolling);
             ModuleConfigData vehicle;
             vehicle.values["tire_model"] = appliedTireModel.value_or("pacejka");
             if (!(off("vehicle_dynamics") && addPluginSubstitute("vehicle_dynamics", vehicle))) {
                 next->add(std::make_unique<vehicle_dynamics::VehicleDynamics>(
-                              off("vehicle_dynamics"), std::move(ground), std::move(friction)),
+                              off("vehicle_dynamics"), std::move(ground), std::move(friction),
+                              std::move(rolling)),
                           ModuleConfig(vehicle));
             }
         }
@@ -1051,6 +1312,33 @@ struct Server::Impl {
             }
         } else if (!idealTorqueLast && !addPluginSubstitute("electrical")) {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
+        }
+        // Fire (RFC 0022), before thermal, which finds its heat by name: fire_radiation/<node>/
+        // loss_power. Radiation is blocked by the fixed scenery.
+        if (hasFires()) {
+            ModuleConfigData burning;
+            if (settings.airDensityKgM3) {
+                burning.values["air_density"] = *settings.airDensityKgM3;
+            }
+            if (settings.ambientTemperatureK) {
+                burning.values["ambient_temperature"] = *settings.ambientTemperatureK;
+            }
+            if (!options.fireWater.empty()) {
+                burning.values["water_schedule"] = options.fireWater;
+            }
+            if (!(off("fire") && addPluginSubstitute("fire", burning))) {
+                const auto token = settings.substituteTokens.find("fire");
+                const fire::Fires::Mode mode =
+                    !off("fire") ? fire::Fires::Mode::Simulate
+                    : token != settings.substituteTokens.end() && token->second == "constant"
+                        ? fire::Fires::Mode::Constant
+                        : fire::Fires::Mode::Zero;
+                std::vector<std::uint32_t> colliders;
+                auto scenery = fixedScenery(&colliders);
+                next->add(
+                    std::make_unique<fire::Fires>(mode, std::move(scenery), std::move(colliders)),
+                    ModuleConfig(burning));
+            }
         }
         // Thermal, after electrical: it reads the losses. It needs the site's ambient
         // temperature; without one nothing stands in, and the electrical network keeps its
@@ -1132,6 +1420,9 @@ struct Server::Impl {
                 downwashWanted) {
                 weather.values["downwash_dust"] = true;
             }
+            if (waterSurface && flagOn("downwash_spray")) {
+                weather.values["downwash_spray"] = true;  // the spray off water, downwash.md §5b
+            }
             const ModuleConfig config(weather);
             if (weather::Weather::hasSite(WorldView(robot.world), config)) {
                 if (!(off("weather") && addPluginSubstitute("weather", weather))) {
@@ -1157,8 +1448,23 @@ struct Server::Impl {
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }
+            if (waterSurface) {
+                aero.values["water_surface"] = true;
+                surfaceGrid(aero);
+            }
             // The rotors' downwash on the tethers (RFC 0011 step 6): each cable's node count,
             // so the domain can read its nodes and write the air at them.
+            // The rotors' downwash at each fire's base (RFC 0022 §5.2), as for the tethers.
+            if (hasFires() && !off("fire") && hasRotors()) {
+                std::string problem;
+                std::vector<std::string> names;
+                for (const fire::FireSpec& f : fire::firesOf(WorldView(robot.world), problem)) {
+                    names.push_back(f.name);
+                }
+                if (!names.empty()) {
+                    aero.values["fire_names"] = std::move(names);
+                }
+            }
             if (hasTethers() && !off("tether") && hasRotors()) {
                 std::string problem;
                 std::vector<std::string> nodes;
@@ -1204,6 +1510,15 @@ struct Server::Impl {
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             // With the weather the air's density is its own (temperature, pressure, humidity).
             air.values.emplace(rotor_aero::kWeatherAirKey, weatherAir);
+            if (waterSurface) {
+                surfaceGrid(air);  // the ground effect over the moving surface
+            }
+            // Over water the ground effect takes the water's surface, unless the profile says
+            // aerodynamics.downwash_water: false.
+            if (const auto it = settings.aerodynamics.find("downwash_water");
+                it != settings.aerodynamics.end() && std::holds_alternative<bool>(it->second)) {
+                air.values.emplace("water_surface", std::get<bool>(it->second));
+            }
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));
             if (options.ardupilotPort) {
@@ -1310,6 +1625,11 @@ struct Server::Impl {
         };
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
+        sensing.values["smoke"] = hasFires();  // the fires' smoke field (RFC 0022 §4)
+        if (waterSurface) {
+            sensing.values["water_surface"] = true;  // lidars and cameras meet it at η (water.md)
+            surfaceGrid(sensing);
+        }
         if (siteTemperature) {
             sensing.values["ambient_temperature"] = *siteTemperature;
         }
@@ -1403,6 +1723,9 @@ struct Server::Impl {
         settings.streamingUnloadRadius = appliedUnloadRadius;
         settings.streamingCollisionRadius = appliedCollisionRadius;
         settings.aerodynamics = appliedAerodynamics;
+        if (!options.downwashWater) {
+            settings.aerodynamics.try_emplace("downwash_water", false);
+        }
         settings.rotorAero = appliedRotorAero;
         settings.thermal = appliedThermal;
         settings.weather = appliedWeather;
@@ -1427,6 +1750,10 @@ struct Server::Impl {
     // Of the robot itself: a passive car spawned beside an arm takes nothing from the arm.
     bool jointControllable{true};
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
+    /// Gripper commands from the API (Server::commandActuator), outliving rebuilds.
+    std::shared_ptr<actuators::Commands> actuatorCommands = std::make_shared<actuators::Commands>();
+    /// Servo commands from the API (Server::commandJoint on a servo joint), outliving rebuilds.
+    std::shared_ptr<actuators::Commands> servoCommands = std::make_shared<actuators::Commands>();
     // Stateless modules ("domain/name") left out of the run because the state restored last was
     // saved before a later release added them (Scheduler::addedSince, formats.md §11).
     std::set<std::string> leftOut;
@@ -1719,14 +2046,63 @@ struct Server::Impl {
 
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
+    bool hasVegetation() const {
+        // A wrong tree is named by the vegetation domain at its start.
+        return !vegetation::canopiesOf(robot.world).empty() ||
+               std::ranges::any_of(robot.world.schemaInstances,
+                                   [](const SchemaInstance& s) { return s.schema == "TreeAPI_1"; });
+    }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
+    bool hasFires() const { return !WorldView(robot.world).instancesOf("FireAPI_1").empty(); }
+    bool hasLamps() const { return !WorldView(robot.world).instancesOf("LampAPI_1").empty(); }
+    /// Whether the stage has grippers (RFC 0020).
+    bool hasGrippers() const {
+        const WorldView view(robot.world);
+        return !view.instancesOf("SuctionGripperAPI_1").empty() ||
+               !view.instancesOf("MagnetGripperAPI_1").empty();
+    }
+    /// Whether the stage has nozzles (RFC 0022 §8).
+    bool hasNozzles() const { return !WorldView(robot.world).instancesOf("NozzleAPI_1").empty(); }
+    /// Whether the stage has servos (RFC 0020 §4.3), and the joints they turn.
+    bool hasServos() const { return !WorldView(robot.world).instancesOf("ServoAPI_1").empty(); }
+    std::vector<std::string> servoJoints() const {
+        std::vector<std::string> out;
+        const WorldView view(robot.world);
+        const World::Joints& joints = robot.world.joints;
+        for (const SchemaInstance* s : view.instancesOf("ServoAPI_1")) {
+            const auto j = std::find(joints.prim.begin(), joints.prim.end(), s->prim);
+            if (j != joints.prim.end()) {
+                out.push_back(joints.names[static_cast<std::size_t>(j - joints.prim.begin())]);
+            }
+        }
+        return out;
+    }
+    /// Whether the stage has holding brakes (RFC 0020, "Also worth adding").
+    bool hasBrakes() const { return !WorldView(robot.world).instancesOf("BrakeAPI_1").empty(); }
+    /// Whether the stage has solenoids (RFC 0020 §4.6), and the joints they push.
+    bool hasSolenoids() const {
+        return !WorldView(robot.world).instancesOf("SolenoidAPI_1").empty();
+    }
+    std::vector<std::string> solenoidJoints() const {
+        std::vector<std::string> out;
+        const WorldView view(robot.world);
+        const World::Joints& joints = robot.world.joints;
+        for (const SchemaInstance* s : view.instancesOf("SolenoidAPI_1")) {
+            const auto j = std::find(joints.prim.begin(), joints.prim.end(), s->prim);
+            if (j != joints.prim.end()) {
+                out.push_back(joints.names[static_cast<std::size_t>(j - joints.prim.begin())]);
+            }
+        }
+        return out;
+    }
     bool hasWater() const { return !WorldView(robot.world).instancesOf("WaterAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
-    /// plane, with each shape's friction coefficient.
-    std::pair<std::shared_ptr<const services::SceneQuery>, std::vector<double>> groundQuery()
-        const {
+    /// plane, with each shape's friction coefficient (its surface material's frictionScale
+    /// applied) and, into `rolling` when given, its surface's rolling-resistance coefficient.
+    std::pair<std::shared_ptr<const services::SceneQuery>, std::vector<double>> groundQuery(
+        std::vector<double>* rolling = nullptr) const {
         const World& world = robot.world;
         const std::vector<Pose> rest = restPoses(world);
         const std::vector<bool> moving = movingBodies(world);
@@ -1750,7 +2126,13 @@ struct Server::Impl {
                               ? &world.heightfields.at(world.colliders.hull[c])
                               : nullptr;
             shapes.push_back(shape);
-            friction.push_back(world.colliders.friction[c]);
+            const std::uint32_t m = world.colliders.material[c];
+            const SurfaceMaterial surface =
+                m < world.surfaceMaterials.size() ? world.surfaceMaterials[m] : SurfaceMaterial{};
+            friction.push_back(world.colliders.friction[c] * surface.frictionScale);
+            if (rolling != nullptr) {
+                rolling->push_back(surface.rollingResistance);
+            }
         }
         auto caster = std::make_shared<sensors::ShapeCaster>();
         caster->update(shapes);
@@ -1764,7 +2146,8 @@ struct Server::Impl {
     }
     /// A scene query over the fixed scenery's shapes (not the ground plane, not what moves), for
     /// the walls between radios.
-    std::shared_ptr<const services::SceneQuery> fixedScenery() const {
+    std::shared_ptr<const services::SceneQuery> fixedScenery(
+        std::vector<std::uint32_t>* colliderOfShape = nullptr) const {
         const World& world = robot.world;
         const std::vector<Pose> rest = restPoses(world);
         const std::vector<bool> moving = movingBodies(world);
@@ -1788,6 +2171,9 @@ struct Server::Impl {
                               ? &world.heightfields.at(world.colliders.hull[c])
                               : nullptr;
             shapes.push_back(shape);
+            if (colliderOfShape != nullptr) {
+                colliderOfShape->push_back(static_cast<std::uint32_t>(c));
+            }
         }
         if (shapes.empty()) {
             return nullptr;
@@ -2691,6 +3077,34 @@ struct Server::Impl {
                 overlay.set_data(std::move(bytes));
             }
         }
+        // Every nozzle's jet (RFC 0022 §8) while it sprays, drawn as a line as the EMI wires are
+        // until the viewer draws streams (RFC 0022 step 8, Overlay KIND_PATH).
+        if (scheduler && hasNozzles()) {
+            std::string problem;
+            for (const actuators::NozzleSpec& z :
+                 actuators::nozzlesOf(WorldView(robot.world), problem).nozzles) {
+                const SignalId path = scheduler->bus().find("act/" + z.name + "/path");
+                if (!path.valid()) {
+                    continue;
+                }
+                const std::span<const double> xyz = scheduler->bus().readN(path);
+                std::size_t count = 0;
+                while (3 * count + 2 < xyz.size() && std::isfinite(xyz[3 * count])) {
+                    ++count;
+                }
+                if (count < 2) {
+                    continue;
+                }
+                constexpr double kDrawnRadius = 0.01;  // m: a stream, to see where it goes
+                v1::Overlay& overlay = *d.add_overlays();
+                overlay.set_kind(v1::Overlay::KIND_CABLE);
+                overlay.set_count(static_cast<std::uint32_t>(count));
+                std::string bytes((1 + 3 * count) * sizeof(double), '\0');
+                std::memcpy(bytes.data(), &kDrawnRadius, sizeof(double));
+                std::memcpy(bytes.data() + sizeof(double), xyz.data(), 3 * count * sizeof(double));
+                overlay.set_data(std::move(bytes));
+            }
+        }
         return envelope;
     }
 
@@ -3362,9 +3776,25 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "traffic" && hasTraffic()) {
                 yaml += substituted("traffic") ? "  traffic: {enabled: false, substitute: zero}\n"
                                                : "  traffic: {enabled: true, backend: builtin}\n";
+            } else if (std::string_view(row.domain) == "fire" && hasFires()) {
+                const auto token = appliedSubstituteTokens.find("fire");
+                const bool steady =
+                    token != appliedSubstituteTokens.end() && token->second == "constant";
+                yaml += !substituted("fire") ? "  fire: {enabled: true}\n"
+                        : steady             ? "  fire: {enabled: false, substitute: constant}\n"
+                                             : "  fire: {enabled: false, substitute: zero}\n";
             } else if (std::string_view(row.domain) == "tether" && hasTethers()) {
                 yaml += substituted("tether") ? "  tether: {enabled: false, substitute: zero}\n"
                                               : "  tether: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "lights" && hasLamps()) {
+                yaml += substituted("lights") ? "  lights: {enabled: false, substitute: zero}\n"
+                                              : "  lights: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "actuators" &&
+                       (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids() ||
+                        hasBrakes())) {
+                yaml += substituted("actuators")
+                            ? "  actuators: {enabled: false, substitute: zero}\n"
+                            : "  actuators: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -3375,12 +3805,20 @@ struct Server::Impl {
                 yaml += substituted("hydrodynamics")
                             ? "  hydrodynamics: {enabled: false, substitute: zero}\n"
                             : "  hydrodynamics: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "vegetation" && hasVegetation()) {
+                yaml += substituted("vegetation")
+                            ? "  vegetation: {enabled: false, substitute: zero}\n"
+                            : "  vegetation: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
                        std::string_view(row.domain) == "rotor_aero" ||
                        std::string_view(row.domain) == "hydrodynamics" ||
-                       std::string_view(row.domain) == "tether") {
+                       std::string_view(row.domain) == "tether" ||
+                       std::string_view(row.domain) == "vegetation" ||
+                       std::string_view(row.domain) == "fire" ||
+                       std::string_view(row.domain) == "lights" ||
+                       std::string_view(row.domain) == "actuators") {
                 continue;  // not in the profile of a ground robot
             } else {
                 yaml += "  " + std::string(row.domain) +
@@ -3473,7 +3911,15 @@ struct Server::Impl {
             : domain == "rotor_aero"    ? "not used by this robot (no RotorAPI_1)"
             : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
-                                        : "no module in this build yet; the substitute stands in");
+            : domain == "vegetation"
+                ? "no reeds, shrubs, tall grass or trees in the world (a canopy preset on a fixed "
+                  "box or plane, TreeAPI_1)"
+            : domain == "fire" ? "no fires in the stage (FireAPI_1)"
+            : domain == "actuators"
+                ? "no grippers, nozzles, servos, solenoids or brakes in the stage "
+                  "(SuctionGripperAPI_1, MagnetGripperAPI_1, NozzleAPI_1, ServoAPI_1, "
+                  "SolenoidAPI_1, BrakeAPI_1)"
+                : "no module in this build yet; the substitute stands in");
     }
 
     /// Measured CPU per simulated second of each domain (ms), from the last statistics report:
@@ -4633,6 +5079,25 @@ struct Server::Impl {
         if (appliedGravity) {
             model.world.gravityLocal = {0.0, 0.0, -*appliedGravity};
         }
+        // A solenoid's slide (RFC 0020 §4.6) is driven by its coil, a brake's joint (RFC 0020,
+        // "Also worth adding") held by it, whatever its file says: the engines take a force and a
+        // friction limit only on an actuated joint.
+        std::vector<const SchemaInstance*> driven =
+            WorldView(model.world).instancesOf("SolenoidAPI_1");
+        for (const SchemaInstance* brake : WorldView(model.world).instancesOf("BrakeAPI_1")) {
+            driven.push_back(brake);
+        }
+        for (const SchemaInstance* solenoid : driven) {
+            World::Joints& joints = model.world.joints;
+            const auto j = std::find(joints.prim.begin(), joints.prim.end(), solenoid->prim);
+            if (j != joints.prim.end()) {
+                const auto index = static_cast<std::size_t>(j - joints.prim.begin());
+                if (!joints.actuated[index]) {
+                    joints.actuated[index] = true;
+                    model.actuatedJoints.push_back(joints.names[index]);
+                }
+            }
+        }
         // Joint control: every hinge and slide of the robot takes a command, whatever its file
         // says (a plain URDF has no <ros2_control> block to say so).
         jointControllable = WorldView(model.world).instancesOf("VehicleAPI_1").empty() &&
@@ -5295,6 +5760,42 @@ struct Server::Impl {
         if (joints.mimic[index] != kNoMimic) {
             return joint + " copies another joint (mimic): command that one";
         }
+        // A servo's joint (RFC 0020 §4.3) follows its servo: the command is the servo's goal,
+        // with or without joint control.
+        {
+            std::string problem;
+            const bool powered = hasPowerSystem() && !options.substituted.contains("electrical");
+            for (const actuators::ServoSpec& servo :
+                 actuators::servosOf(WorldView(robot.world), powered, problem)) {
+                if (servo.joint != joint) {
+                    continue;
+                }
+                using OperatingMode = actuators::ServoParams::OperatingMode;
+                const OperatingMode follows = servo.params.mode;
+                const bool fits = (follows == OperatingMode::Position && mode == "position") ||
+                                  (follows == OperatingMode::Velocity && mode == "velocity");
+                if (!fits) {
+                    return joint + " is turned by a servo in " +
+                           (follows == OperatingMode::Position   ? "position"
+                            : follows == OperatingMode::Velocity ? "velocity"
+                                                                 : "current") +
+                           " mode: it takes " +
+                           (follows == OperatingMode::Position   ? "position"
+                            : follows == OperatingMode::Velocity ? "velocity"
+                                                                 : "act/<servo>/goal_current") +
+                           " commands";
+                }
+                if (mode == "position" && servo.lower < servo.upper &&
+                    (value < servo.lower || value > servo.upper)) {
+                    value = std::clamp(value, servo.lower, servo.upper);
+                    if (limit != nullptr) {
+                        *limit = "its range";
+                    }
+                }
+                servoCommands->set(servo.name + "/" + mode, value);
+                return {};
+            }
+        }
         if (!options.jointControl) {
             return "joint control is off in this run: nothing takes joint commands "
                    "(Simulation(..., joint_control=True), lagrange_server --joint-control)";
@@ -5645,6 +6146,18 @@ struct Server::Impl {
         if (hasTethers()) {
             context.modules.insert("tether");
         }
+        if (hasVegetation()) {
+            context.modules.insert("vegetation");
+        }
+        if (hasFires()) {
+            context.modules.insert("fire");
+        }
+        if (hasLamps()) {
+            context.modules.insert("lights");
+        }
+        if (hasGrippers() || hasNozzles() || hasServos() || hasSolenoids() || hasBrakes()) {
+            context.modules.insert("actuators");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -5664,6 +6177,10 @@ struct Server::Impl {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
             if (std::string_view(row.domain) == "rigid_body") {
                 context.substitutes[row.domain].insert("replay");  // bench mode
+            }
+            if (std::string_view(row.domain) == "actuators") {
+                context.substitutes[row.domain].insert("ideal");     // holds with no dynamics
+                context.substitutes[row.domain].insert("constant");  // never holds; servos stay
             }
         }
         for (const PluginModule& module : plugins) {
@@ -5960,6 +6477,7 @@ struct Server::Impl {
     DriveCommand* driveCommand{nullptr};
     std::unique_ptr<ros2_control::ControllerHost> controllers;  // with --ros2-control
     std::vector<ros2_control::ControlJoint> controlJoints;
+    std::vector<ros2_control::ControlGpio> controlGpios;  // RFC 0020 §5
 
     /// The World workspace: the robot as the one agent, at its simulated position.
     /// The weather values the run uses: the command line's, then the applied profile's.
@@ -6072,6 +6590,24 @@ struct Server::Impl {
               conduction != nullptr,
               "no link has a thermal material (ThermalMaterialAPI_1), or the site's ambient "
               "temperature is not given");
+        field(kSmokeField, "smoke extinction", "fire", units::per_m, 1, hasFires(),
+              "the stage has no fires (FireAPI_1)");
+        field(kWaterSurfaceField, "water surface", "hydrodynamics", units::m, 1,
+              waterSurfaceSignal().valid(),
+              "the water's surface does not move: it needs water, rotors with their downwash "
+              "and the site's air density");
+        field(kWaterFrictionField, "friction velocity on the water", "aerodynamics", units::m_per_s,
+              2, waterSurfaceSignal().valid() && waterStressSignal().valid(),
+              "the air does not rub the water: it needs the water's moving surface");
+        field(kSprayField, "spray", "aerodynamics", units::kg_per_m3, 1,
+              scheduler != nullptr && scheduler->bus().find("aero/spray_drops").valid(),
+              "no spray: it needs the water's moving surface and aerodynamics.downwash_spray");
+        field(kCutField, "cut plants", "vegetation", units::m, 1, cutSignal().valid(),
+              "nothing cuts plants: it needs a canopy (grass, reeds, shrubs) and rotors");
+        field(kTreeCutField, "cut tree crowns", "vegetation", units::one, 1,
+              treeCutSignal().valid(), "no tree is cut: it needs trees (TreeAPI_1) and rotors");
+        field(kLeavesField, "flying leaves", "vegetation", units::m, 1, leavesSignal().valid(),
+              "no leaves fly: it needs trees (TreeAPI_1) and the vegetation domain");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -6405,7 +6941,421 @@ struct Server::Impl {
 
     /// The air's velocity in a box around the robot (kAirField only), for the viewer's
     /// particles: kVolumeNx² × kVolumeNz cells, down to the ground.
+    /// The first body of water's moving surface on the bus (water/<w>/surface), or none.
+    SignalId waterSurfaceSignal(std::string* water = nullptr) const {
+        if (scheduler == nullptr) {
+            return {};
+        }
+        for (const SchemaInstance* s : WorldView(robot.world).instancesOf("WaterAPI_1")) {
+            const std::string& name = robot.world.prims.instanceNames.at(s->prim.index);
+            if (const SignalId id = scheduler->bus().find("water/" + name + "/surface");
+                id.valid()) {
+                if (water != nullptr) {
+                    *water = name;
+                }
+                return id;
+            }
+        }
+        return {};
+    }
+
+    /// The water's surface (kWaterSurfaceField): its patch's heights over the still level, a
+    /// FieldVolume one cell high at that level.
+    std::optional<v1::Envelope> waterSurfaceVolume() const {
+        std::string water;
+        const SignalId heights = waterSurfaceSignal(&water);
+        if (!heights.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> eta = scheduler->bus().readN(heights);
+        const std::span<const double> corner =
+            scheduler->bus().readN(scheduler->bus().find("water/" + water + "/surface_origin"));
+        const auto n = static_cast<std::size_t>(kSurfaceCells);
+        if (eta.size() != n * n || corner.size() != 2 || !std::isfinite(corner[0])) {
+            return std::nullopt;
+        }
+        double level = 0.0;
+        for (const hydrodynamics::WaterBody& w : hydrodynamics::waterOf(WorldView(robot.world))) {
+            if (w.name == water) {
+                level = w.surface[2];
+            }
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(kWaterSurfaceField);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_nx(static_cast<std::uint32_t>(n));
+        volume.set_ny(static_cast<std::uint32_t>(n));
+        volume.set_nz(1);
+        volume.set_cell_m(kSurfaceCell);
+        volume.set_components(1);
+        volume.set_origin_x(corner[0] + kSurfaceCell / 2.0);
+        volume.set_origin_y(corner[1] + kSurfaceCell / 2.0);
+        volume.set_origin_z(level);
+        std::vector<float> values(eta.size());
+        float hi = 0.0F;
+        for (std::size_t i = 0; i < eta.size(); ++i) {
+            values[i] = static_cast<float>(eta[i]);
+            hi = std::max(hi, std::abs(values[i]));
+        }
+        volume.set_value_max(hi);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The air's stress on the first body of water with a moving surface (water/<w>/air_stress,
+    /// Pa, x for every cell then y), or none.
+    SignalId waterStressSignal() const {
+        std::string water;
+        if (!waterSurfaceSignal(&water).valid()) {
+            return {};
+        }
+        return scheduler->bus().find("water/" + water + "/air_stress");
+    }
+
+    /// The air's friction velocity on the water (kWaterFrictionField): u* = τ/√(ρ·|τ|) from
+    /// the aerodynamics domain's stress on the moving surface's cells, in the same grid as
+    /// waterSurfaceVolume, two components (x, y). ρ is the weather's air density when it runs,
+    /// else the site's.
+    std::optional<v1::Envelope> waterFrictionVolume() const {
+        const SignalId stressId = waterStressSignal();
+        if (!stressId.valid()) {
+            return std::nullopt;
+        }
+        std::optional<v1::Envelope> envelope = waterSurfaceVolume();
+        if (!envelope) {
+            return std::nullopt;
+        }
+        const std::span<const double> stress = scheduler->bus().readN(stressId);
+        v1::FieldVolume& volume = *envelope->mutable_field_volume();
+        const std::size_t n = static_cast<std::size_t>(volume.nx()) * volume.ny();
+        if (stress.size() != 2 * n) {
+            return std::nullopt;
+        }
+        double rho = appliedAirDensity ? *appliedAirDensity : options.airDensityKgM3.value_or(0.0);
+        if (const SignalId air = scheduler->bus().find("env/air_density"); air.valid()) {
+            const double v = scheduler->bus().read(air);
+            rho = std::isfinite(v) && v > 0.0 ? v : rho;
+        }
+        if (!(rho > 0.0)) {
+            return std::nullopt;
+        }
+        volume.set_field(kWaterFrictionField);
+        volume.set_components(2);
+        std::vector<float> values(2 * n);  // x, y per cell, interleaved
+        float hi = 0.0F;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double tx = stress[i];
+            const double ty = stress[n + i];
+            const double t = std::hypot(tx, ty);
+            const double scale = t > 0.0 && std::isfinite(t) ? 1.0 / std::sqrt(rho * t) : 0.0;
+            values[2 * i] = static_cast<float>(tx * scale);
+            values[2 * i + 1] = static_cast<float>(ty * scale);
+            hi = std::max(hi, static_cast<float>(t * scale));
+        }
+        volume.set_value_max(hi);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The spray off water (kSprayField): its drops' water per cell (kg/m³) in a box round
+    /// them, from aero/spray_drops and aero/spray_mass.
+    std::optional<v1::Envelope> sprayVolume() const {
+        if (scheduler == nullptr) {
+            return std::nullopt;
+        }
+        const SignalId at = scheduler->bus().find("aero/spray_drops");
+        const SignalId mass = scheduler->bus().find("aero/spray_mass");
+        if (!at.valid() || !mass.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> x = scheduler->bus().readN(at);
+        const std::span<const double> m = scheduler->bus().readN(mass);
+        // The box: centred on the drops' mean, from the lowest of them up.
+        double cx = 0.0;
+        double cy = 0.0;
+        double low = std::numeric_limits<double>::infinity();
+        std::size_t count = 0;
+        for (std::size_t i = 0; 3 * i + 2 < x.size() && i < m.size(); ++i) {
+            if (!std::isfinite(x[3 * i])) {
+                break;
+            }
+            cx += x[3 * i];
+            cy += x[3 * i + 1];
+            low = std::min(low, x[3 * i + 2]);
+            ++count;
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(kSprayField);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_nx(kSprayNx);
+        volume.set_ny(kSprayNx);
+        volume.set_nz(kSprayNz);
+        volume.set_cell_m(kSprayCell);
+        volume.set_components(1);
+        const double half = (kSprayNx - 1) * kSprayCell / 2.0;
+        volume.set_origin_x((count > 0 ? cx / static_cast<double>(count) : 0.0) - half);
+        volume.set_origin_y((count > 0 ? cy / static_cast<double>(count) : 0.0) - half);
+        volume.set_origin_z(count > 0 ? low + kSprayCell / 2.0 : 0.0);
+        std::vector<float> values(static_cast<std::size_t>(kSprayNx) * kSprayNx * kSprayNz, 0.0F);
+        const double cellVolume = kSprayCell * kSprayCell * kSprayCell;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto index = [&](double v, double origin) {
+                return static_cast<long>(std::floor((v - origin) / kSprayCell + 0.5));
+            };
+            const long col = index(x[3 * i], volume.origin_x());
+            const long row = index(x[3 * i + 1], volume.origin_y());
+            const long layer = index(x[3 * i + 2], volume.origin_z());
+            if (col < 0 || row < 0 || layer < 0 || col >= kSprayNx || row >= kSprayNx ||
+                layer >= kSprayNz) {
+                continue;
+            }
+            values[static_cast<std::size_t>((layer * kSprayNx + row) * kSprayNx + col)] +=
+                static_cast<float>(m[i] / cellVolume);
+        }
+        volume.set_value_max(values.empty() ? 0.0F : *std::ranges::max_element(values));
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The vegetation domain's cut map (lagrange/world/CanopyCut.hpp), when it runs.
+    SignalId cutSignal() const {
+        return scheduler != nullptr ? scheduler->bus().find(std::string(kCanopyCutSignal))
+                                    : SignalId{};
+    }
+
+    /// The cut plants (kCutField) as a FieldVolume one cell high: per cell of a world grid over
+    /// the cut cells, the plants' cut top in world z less origin_z (the lowest soil), NaN where
+    /// nothing is cut. Cells of 4 cm, coarser (keeping the lowest top) when the cuts spread over
+    /// more than kMaxCutSide cells. `version` gets the map's version.
+    std::optional<v1::Envelope> cutVolume(double* version = nullptr) const {
+        const SignalId id = cutSignal();
+        if (!id.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> map = scheduler->bus().readN(id);
+        if (map.size() < kCanopyCutHeader) {
+            return std::nullopt;
+        }
+        if (version != nullptr) {
+            *version = map[0];
+        }
+        const World::Colliders& colliders = robot.world.colliders;
+        struct Top {
+            double x, y, z, soil;
+        };
+        std::vector<Top> tops;
+        const auto count = static_cast<std::size_t>(std::max(0.0, map[1]));
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::size_t at = kCanopyCutHeader + (4 * k);
+            if (at + 3 >= map.size()) {
+                break;
+            }
+            const auto c = static_cast<std::size_t>(map[at]);
+            if (c >= colliders.body.size() || colliders.body[c] != kWorldBody) {
+                continue;
+            }
+            const double soil = colliders.shape[c] == ShapeType::Box ? colliders.size[c][2] : 0.0;
+            const Pose& pose = colliders.poseInBody[c];
+            const std::array<double, 3> top =
+                compose(pose, Pose{{(map[at + 1] + 0.5) * kCanopyCutCell,
+                                    (map[at + 2] + 0.5) * kCanopyCutCell, soil + map[at + 3]},
+                                   {1.0, 0.0, 0.0, 0.0}})
+                    .position;
+            const double ground =
+                compose(pose, Pose{{0.0, 0.0, soil}, {1.0, 0.0, 0.0, 0.0}}).position[2];
+            tops.push_back({top[0], top[1], top[2], ground});
+        }
+        std::array<double, 2> lo{std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::infinity()};
+        std::array<double, 2> hi{-lo[0], -lo[1]};
+        double base = std::numeric_limits<double>::infinity();
+        for (const Top& t : tops) {
+            lo = {std::min(lo[0], t.x), std::min(lo[1], t.y)};
+            hi = {std::max(hi[0], t.x), std::max(hi[1], t.y)};
+            base = std::min(base, t.soil);
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(kCutField);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_components(1);
+        if (tops.empty()) {  // nothing cut yet (or after a reset): one cell, not cut
+            const float none = std::numeric_limits<float>::quiet_NaN();
+            volume.set_nx(1);
+            volume.set_ny(1);
+            volume.set_nz(1);
+            volume.set_cell_m(kCanopyCutCell);
+            std::string bytes(reinterpret_cast<const char*>(&none), sizeof(none));
+            volume.mutable_values()->set_size(bytes.size());
+            volume.mutable_values()->set_inline_(std::move(bytes));
+            return envelope;
+        }
+        const double extent = std::max(hi[0] - lo[0], hi[1] - lo[1]);
+        const double cell =
+            std::max(kCanopyCutCell, extent / static_cast<double>(kMaxCutSide - 1) * 1.0001);
+        const auto nx = static_cast<std::uint32_t>(std::floor((hi[0] - lo[0]) / cell)) + 1;
+        const auto ny = static_cast<std::uint32_t>(std::floor((hi[1] - lo[1]) / cell)) + 1;
+        std::vector<float> values(static_cast<std::size_t>(nx) * ny,
+                                  std::numeric_limits<float>::quiet_NaN());
+        float most = 0.0F;
+        for (const Top& t : tops) {
+            const auto column =
+                std::min(nx - 1, static_cast<std::uint32_t>((t.x - lo[0]) / cell + 0.5));
+            const auto row =
+                std::min(ny - 1, static_cast<std::uint32_t>((t.y - lo[1]) / cell + 0.5));
+            float& v = values[static_cast<std::size_t>(row) * nx + column];
+            const auto z = static_cast<float>(t.z - base);
+            v = std::isnan(v) ? z : std::min(v, z);
+            most = std::max(most, z);
+        }
+        volume.set_nx(nx);
+        volume.set_ny(ny);
+        volume.set_nz(1);
+        volume.set_cell_m(cell);
+        volume.set_origin_x(lo[0]);
+        volume.set_origin_y(lo[1]);
+        volume.set_origin_z(base);
+        volume.set_value_max(most);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    SignalId treeCutSignal() const {
+        return scheduler != nullptr ? scheduler->bus().find(std::string(kTreeCutSignal))
+                                    : SignalId{};
+    }
+    SignalId leavesSignal() const {
+        return scheduler != nullptr ? scheduler->bus().find(std::string(kLeavesSignal))
+                                    : SignalId{};
+    }
+
+    /// A FieldVolume of one row of numbers (kTreeCutField, kLeavesField); a single NaN when
+    /// `values` is empty.
+    v1::Envelope rowVolume(const char* name, std::vector<float> values,
+                           const std::array<double, 3>& origin, double cell) const {
+        if (values.empty()) {
+            values.push_back(std::numeric_limits<float>::quiet_NaN());
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(name);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_components(1);
+        volume.set_nx(static_cast<std::uint32_t>(values.size()));
+        volume.set_ny(1);
+        volume.set_nz(1);
+        volume.set_cell_m(cell);
+        volume.set_origin_x(origin[0]);
+        volume.set_origin_y(origin[1]);
+        volume.set_origin_z(origin[2]);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The trees' cut crown cells (kTreeCutField), each with its tree's scene prim. `version`
+    /// gets the map's version.
+    std::optional<v1::Envelope> treeCutVolume(double* version = nullptr) const {
+        const SignalId id = treeCutSignal();
+        if (!id.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> map = scheduler->bus().readN(id);
+        if (map.size() < kTreeCutHeader) {
+            return std::nullopt;
+        }
+        if (version != nullptr) {
+            *version = map[0];
+        }
+        std::string treeError;
+        const std::vector<TreeSpec> trees = treesOf(robot.world, treeError);
+        std::vector<float> values;
+        const auto count = static_cast<std::size_t>(std::max(0.0, map[1]));
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::size_t at = kTreeCutHeader + (4 * k);
+            if (at + 3 >= map.size()) {
+                break;
+            }
+            const auto tree = static_cast<std::size_t>(map[at]);
+            if (tree >= trees.size()) {
+                continue;
+            }
+            const std::uint32_t prim = scenePrimOf(trees[tree].prim);
+            if (prim == kNoIndex) {
+                continue;
+            }
+            values.insert(values.end(),
+                          {static_cast<float>(prim), static_cast<float>(map[at + 1]),
+                           static_cast<float>(map[at + 2]), static_cast<float>(map[at + 3])});
+        }
+        return rowVolume(kTreeCutField, std::move(values), {}, kTreeCutCell);
+    }
+
+    /// The flying leaves (kLeavesField), positions from the first leaf's.
+    std::optional<v1::Envelope> leavesVolume(double* version = nullptr) const {
+        const SignalId id = leavesSignal();
+        if (!id.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> list = scheduler->bus().readN(id);
+        if (list.size() < kLeavesHeader) {
+            return std::nullopt;
+        }
+        if (version != nullptr) {
+            *version = list[0];
+        }
+        const std::size_t count = std::min(static_cast<std::size_t>(std::max(0.0, list[1])),
+                                           (list.size() - kLeavesHeader) / kLeavesFields);
+        std::array<double, 3> origin{};
+        if (count > 0) {
+            origin = {list[kLeavesHeader], list[kLeavesHeader + 1], list[kLeavesHeader + 2]};
+        }
+        std::vector<float> values;
+        values.reserve(count * kLeavesFields);
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::size_t at = kLeavesHeader + (kLeavesFields * k);
+            for (std::size_t c = 0; c < kLeavesFields; ++c) {
+                values.push_back(static_cast<float>(list[at + c] - (c < 3 ? origin.at(c) : 0.0)));
+            }
+        }
+        return rowVolume(kLeavesField, std::move(values), origin, 0.01);
+    }
+
     std::optional<v1::Envelope> fieldVolume(const std::string& name) const {
+        if (name == kCutField) {
+            return cutVolume();
+        }
+        if (name == kTreeCutField) {
+            return treeCutVolume();
+        }
+        if (name == kLeavesField) {
+            return leavesVolume();
+        }
+        if (name == kWaterSurfaceField) {
+            return waterSurfaceVolume();
+        }
+        if (name == kSprayField) {
+            return sprayVolume();
+        }
+        if (name == kWaterFrictionField) {
+            return waterFrictionVolume();
+        }
         if (name != kAirField || !aeroRuns()) {
             return std::nullopt;
         }
@@ -6456,24 +7406,91 @@ struct Server::Impl {
         if (name == kAirField) {
             return airSlice(height, orientation);
         }
-        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField) {
-            return std::nullopt;  // only the air and |B| have vertical slices
+        if (name == kWaterSurfaceField || name == kSprayField || name == kWaterFrictionField) {
+            // A layer of their volume: the water's one, or the spray's nearest `height`.
+            if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL) {
+                return std::nullopt;
+            }
+            const std::optional<v1::Envelope> box = name == kWaterSurfaceField
+                                                        ? waterSurfaceVolume()
+                                                    : name == kSprayField ? sprayVolume()
+                                                                          : waterFrictionVolume();
+            if (!box) {
+                return std::nullopt;
+            }
+            const v1::FieldVolume& volume = box->field_volume();
+            const auto layer = static_cast<std::uint32_t>(
+                std::clamp(std::lround((height - volume.origin_z()) / volume.cell_m()), 0L,
+                           static_cast<long>(volume.nz()) - 1));
+            const std::size_t cells = static_cast<std::size_t>(volume.nx()) * volume.ny();
+            const std::string& all = volume.values().inline_();
+            const std::size_t components = std::max<std::size_t>(volume.components(), 1);
+            if (all.size() < (layer + 1) * cells * components * sizeof(float)) {
+                return std::nullopt;
+            }
+            std::vector<float> values(cells);
+            if (components == 1) {
+                std::memcpy(values.data(), all.data() + layer * cells * sizeof(float),
+                            cells * sizeof(float));
+            } else {
+                // A vector's slice is its magnitude.
+                std::vector<float> vectors(cells * components);
+                std::memcpy(vectors.data(), all.data() + layer * cells * components * sizeof(float),
+                            vectors.size() * sizeof(float));
+                for (std::size_t i = 0; i < cells; ++i) {
+                    double sum = 0.0;
+                    for (std::size_t c = 0; c < components; ++c) {
+                        sum += static_cast<double>(vectors[i * components + c]) *
+                               vectors[i * components + c];
+                    }
+                    values[i] = static_cast<float>(std::sqrt(sum));
+                }
+            }
+            v1::Envelope envelope;
+            v1::FieldSlice& slice = *envelope.mutable_field_slice();
+            slice.set_field(name);
+            slice.mutable_sim_time()->set_ns(scheduler->now().ns);
+            slice.set_width(volume.nx());
+            slice.set_height(volume.ny());
+            slice.set_components(1);
+            slice.set_origin_x(volume.origin_x());
+            slice.set_origin_y(volume.origin_y());
+            slice.set_cell_m(volume.cell_m());
+            slice.set_height_m(volume.origin_z() + layer * volume.cell_m());
+            const auto [lo, hi] = std::ranges::minmax(values);
+            slice.set_value_min(lo);
+            slice.set_value_max(hi);
+            std::string bytes(reinterpret_cast<const char*>(values.data()),
+                              values.size() * sizeof(float));
+            slice.mutable_values()->set_size(bytes.size());
+            slice.mutable_values()->set_inline_(std::move(bytes));
+            return envelope;
         }
-        if (scheduler == nullptr ||
-            (name != kFogField && name != kWindField && name != kFluxField)) {
+        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField &&
+            name != kSmokeField) {
+            return std::nullopt;  // only the air, |B| and smoke have vertical slices
+        }
+        if (scheduler == nullptr || (name != kFogField && name != kWindField &&
+                                     name != kFluxField && name != kSmokeField)) {
             return std::nullopt;
         }
         if (name == kFluxField && !emiRuns()) {
             return std::nullopt;
         }
-        const bool fog = name == kFogField;
+        const bool smoke = name == kSmokeField;
+        const bool fog = name == kFogField || smoke;  // both scalar extinctions
         const bool flux = name == kFluxField;
         const SignalBus& bus = scheduler->bus();
-        const SignalId gridId = bus.find(fog ? "env/extinction/field" : "env/wind/velocity_field");
-        const std::shared_ptr<const fields::Field> grid =
-            gridId.valid() ? (fog ? fogFieldSignal : windFieldSignal).read(bus, gridId) : nullptr;
+        const SignalId gridId = bus.find(smoke ? "env/smoke/extinction"
+                                         : fog ? "env/extinction/field"
+                                               : "env/wind/velocity_field");
+        const std::shared_ptr<const fields::Field> grid = gridId.valid() ? (smoke ? smokeFieldSignal
+                                                                            : fog ? fogFieldSignal
+                                                                                  : windFieldSignal)
+                                                                               .read(bus, gridId)
+                                                                         : nullptr;
         const std::optional<aerodynamics::Wind> wind = runWind();
-        if (fog && !bus.find("env/extinction/visible").valid()) {
+        if (smoke ? !gridId.valid() : fog && !bus.find("env/extinction/visible").valid()) {
             return std::nullopt;
         }
         if (!fog && !flux && !grid && !wind) {
@@ -6523,7 +7540,7 @@ struct Server::Impl {
         slice.set_cell_m(cellM);
         std::vector<float> values;
         values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight * components);
-        const double uniform = fog ? bus.read(bus.find("env/extinction/visible")) : 0.0;
+        const double uniform = fog && !smoke ? bus.read(bus.find("env/extinction/visible")) : 0.0;
         double lo = std::numeric_limits<double>::infinity();
         double hi = 0.0;
         for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
@@ -7862,6 +8879,154 @@ Status Server::load() {
             }
             settings.signalTopics = std::move(*maps);
         }
+        if (settings.signalTopics.lampTopics) {
+            addLampTopics(WorldView(s.robot.world), settings.signalTopics);
+        }
+        // Every gripper's default topics (RFC 0020 §5), unless the map already uses the topic or
+        // the signal: /<g>/command in, /<g>/state (holding) and /<g>/pressure or /<g>/current out.
+        {
+            std::string problem;
+            ros2::TopicMaps& maps = settings.signalTopics;
+            const auto taken = [&maps](const std::string& topic, const std::string& signal) {
+                for (const auto* list : {&maps.publish, &maps.subscribe}) {
+                    for (const ros2::TopicMap& m : *list) {
+                        if (m.topic == topic || m.signal == signal) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+            const auto add = [&](std::vector<ros2::TopicMap>& list, std::string signal,
+                                 std::string topic, std::string type, std::string frame) {
+                if (taken(topic, signal)) {
+                    return;
+                }
+                ros2::TopicMap m;
+                m.signal = std::move(signal);
+                m.topic = std::move(topic);
+                m.type = std::move(type);
+                m.frame = std::move(frame);
+                list.push_back(std::move(m));
+            };
+            for (const actuators::GripperSpec& g :
+                 actuators::grippersOf(WorldView(s.robot.world), problem)) {
+                const std::string act = "act/" + g.name + "/";
+                const std::string topic = "/" + g.name + "/";
+                add(maps.subscribe, act + "command", topic + "command", "std_msgs/msg/Bool", "");
+                add(maps.publish, act + "held", topic + "state", "std_msgs/msg/Bool", "");
+                if (g.kind == actuators::GripperSpec::Kind::Suction) {
+                    add(maps.publish, act + "pressure", topic + "pressure",
+                        "sensor_msgs/msg/FluidPressure", g.name);
+                } else {
+                    add(maps.publish, act + "current", topic + "current", "std_msgs/msg/Float64",
+                        "");
+                }
+            }
+            // Every nozzle's (RFC 0022 §8): /<z>/command (the valve, 0 to 1) and
+            // /<z>/pressure_command (Pa) in; /<z>/tank (kg), /<z>/flow (kg/s) and /<z>/impact
+            // (where the jet lands, m, in the world frame of the ground truth; NaN when it does
+            // not) out.
+            const actuators::NozzleSet nozzles =
+                actuators::nozzlesOf(WorldView(s.robot.world), problem);
+            for (const actuators::NozzleSpec& z : nozzles.nozzles) {
+                const std::string act = "act/" + z.name + "/";
+                const std::string topic = "/" + z.name + "/";
+                add(maps.subscribe, act + "command", topic + "command", "std_msgs/msg/Float64", "");
+                add(maps.subscribe, act + "pressure_command", topic + "pressure_command",
+                    "std_msgs/msg/Float64", "");
+                for (ros2::TopicMap& m : maps.subscribe) {
+                    if (m.signal == act + "pressure_command") {
+                        m.unit = "Pa";
+                    }
+                }
+                add(maps.publish, act + "tank_mass", topic + "tank", "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "flow", topic + "flow", "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "impact", topic + "impact",
+                    "geometry_msgs/msg/Vector3Stamped", "world");
+            }
+            // Every servo's (RFC 0020 §4.3): /<s>/goal_position (rad), /<s>/pulse_width (s) and
+            // /<s>/torque_enable in, /<s>/present_position, present_load and overload out. With
+            // ros2_control the controllers own the goals. Goals start as NaN (none yet: the servo
+            // holds where it is) and torque enabled.
+            const auto input = [&](const std::string& signal, const std::string& topic,
+                                   const char* type, const char* unit, double initial) {
+                if (taken(topic, signal)) {
+                    return;
+                }
+                ros2::TopicMap m;
+                m.signal = signal;
+                m.topic = topic;
+                m.type = type;
+                m.unit = unit;
+                m.initial = initial;
+                maps.subscribe.push_back(std::move(m));
+            };
+            constexpr double kNone = std::numeric_limits<double>::quiet_NaN();
+            const bool powered =
+                s.hasPowerSystem() && !s.options.substituted.contains("electrical");
+            for (const actuators::ServoSpec& servo :
+                 actuators::servosOf(WorldView(s.robot.world), powered, problem)) {
+                const std::string act = "act/" + servo.name + "/";
+                const std::string topic = "/" + servo.name + "/";
+                using OperatingMode = actuators::ServoParams::OperatingMode;
+                if (s.options.ros2ControlParams.empty()) {
+                    if (servo.params.mode == OperatingMode::Velocity) {
+                        input(act + "goal_velocity", topic + "goal_velocity",
+                              "std_msgs/msg/Float64", "rad/s", kNone);
+                    } else if (servo.params.mode == OperatingMode::Current) {
+                        input(act + "goal_current", topic + "goal_current", "std_msgs/msg/Float64",
+                              "A", kNone);
+                    } else {
+                        input(act + "goal_position", topic + "goal_position",
+                              "std_msgs/msg/Float64", "rad", kNone);
+                    }
+                    if (servo.params.kind == actuators::ServoParams::Kind::Pwm) {
+                        input(act + "pulse_width", topic + "pulse_width", "std_msgs/msg/Float64",
+                              "s", kNone);
+                    }
+                }
+                input(act + "torque_enable", topic + "torque_enable", "std_msgs/msg/Bool", "1",
+                      1.0);
+                add(maps.publish, act + "present_position", topic + "present_position",
+                    "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "present_load", topic + "present_load",
+                    "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "overload", topic + "overload", "std_msgs/msg/Bool", "");
+            }
+            // Every brake's: /<b>/release (Bool: power the coil) in, /<b>/engaged out.
+            for (const actuators::BrakeSpec& brake :
+                 actuators::brakesOf(WorldView(s.robot.world), problem)) {
+                const std::string act = "act/" + brake.name + "/";
+                const std::string topic = "/" + brake.name + "/";
+                input(act + "release", topic + "release", "std_msgs/msg/Bool", "1", 0.0);
+                add(maps.publish, act + "engaged", topic + "engaged", "std_msgs/msg/Bool", "");
+            }
+            // Every solenoid's (RFC 0020 §4.6): /<s>/command (0 to 1) in, /<s>/current (A) and
+            // /<s>/position (m, the plunger's) out.
+            for (const actuators::SolenoidSpec& solenoid :
+                 actuators::solenoidsOf(WorldView(s.robot.world), problem)) {
+                const std::string act = "act/" + solenoid.name + "/";
+                const std::string topic = "/" + solenoid.name + "/";
+                input(act + "command", topic + "command", "std_msgs/msg/Float64", "1", 0.0);
+                add(maps.publish, act + "current", topic + "current", "std_msgs/msg/Float64", "");
+                add(maps.publish, act + "position", topic + "position", "std_msgs/msg/Float64", "");
+            }
+        }
+        // A GPIO of the <ros2_control> block (RFC 0020 §5) owns the signals its command
+        // interfaces write: their default topics would be a second writer.
+        if (!s.options.ros2ControlParams.empty() &&
+            importers::formatOf(s.options.robotPath) == importers::Format::Urdf) {
+            if (auto gpios = ros2_control::controlGpios(readFile(s.options.robotPath))) {
+                for (const ros2_control::ControlGpio& gpio : *gpios) {
+                    for (const ros2_control::ControlGpio::Interface& command : gpio.commands) {
+                        std::erase_if(
+                            settings.signalTopics.subscribe,
+                            [&](const ros2::TopicMap& m) { return m.signal == command.signal; });
+                    }
+                }
+            }
+        }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
@@ -7876,6 +9041,11 @@ Status Server::load() {
             if (!joints) {
                 return Status::error(StatusCode::InvalidConfig, joints.error());
             }
+            auto gpios = ros2_control::controlGpios(urdf);
+            if (!gpios) {
+                return Status::error(StatusCode::InvalidConfig, gpios.error());
+            }
+            s.controlGpios = std::move(*gpios);
             auto host = ros2_control::ControllerHost::start(urdf, s.options.ros2ControlParams);
             if (!host) {
                 return Status::error(StatusCode::InvalidConfig, host.error());
@@ -8054,6 +9224,39 @@ Status Server::setSite(const std::string& name, double value) {
     return impl_->setSite(name, value);
 }
 
+bool Server::commandActuator(const std::string& name, double value) {
+    std::string error;
+    for (const actuators::GripperSpec& g :
+         actuators::grippersOf(WorldView(impl_->robot.world), error)) {
+        if (g.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    for (const actuators::NozzleSpec& z :
+         actuators::nozzlesOf(WorldView(impl_->robot.world), error).nozzles) {
+        if (z.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    for (const actuators::BrakeSpec& b :
+         actuators::brakesOf(WorldView(impl_->robot.world), error)) {
+        if (b.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    for (const actuators::SolenoidSpec& s :
+         actuators::solenoidsOf(WorldView(impl_->robot.world), error)) {
+        if (s.name == name) {
+            impl_->actuatorCommands->set(name, value);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {
     return impl_->commandJoint(joint, mode, value).empty();
 }
@@ -8165,6 +9368,9 @@ Status Server::start() {
                   std::to_string(s.controllers->updateRateHz()) + " Hz drives " +
                   std::to_string(s.controlJoints.size()) +
                   " joints through lagrange_ros2_control/LagrangeSystem; spawn its controllers");
+    } else if (s.jointControlled()) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "joint control: every driven joint takes /joint_commands (or holds where it is)");
     } else if (s.robot.actuatedJoints.size() == 2) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "diff drive on " + s.robot.actuatedJoints[0] + " and " + s.robot.actuatedJoints[1] +
@@ -8322,6 +9528,51 @@ void Server::runOnce(int timeoutMs) {
                     if (s.thermalVolumeTick % kThermalVolumeEvery == 0) {
                         for (const v1::Envelope& volume : s.thermalVolumes()) {
                             session->send(volume);
+                        }
+                    }
+                } else if (want.volume && key.first == kCutField) {
+                    // Only when the cuts changed (or to a viewer that has none yet).
+                    const SignalId cut = s.cutSignal();
+                    const double now = cut.valid() && !s.scheduler->bus().readN(cut).empty()
+                                           ? s.scheduler->bus().readN(cut)[0]
+                                           : -1.0;
+                    constexpr auto kCutRefresh = std::chrono::seconds(3);
+                    if (now != session->cutVersion ||
+                        Clock::now() - session->cutSent > kCutRefresh) {
+                        double version = -1.0;
+                        if (auto volume = s.cutVolume(&version)) {
+                            session->send(*volume);
+                            session->cutVersion = version;
+                            session->cutSent = Clock::now();
+                        }
+                    }
+                } else if (want.volume && key.first == kTreeCutField) {
+                    // As the cut plants: when the cuts changed, and every few seconds.
+                    const SignalId cut = s.treeCutSignal();
+                    const double now = cut.valid() && !s.scheduler->bus().readN(cut).empty()
+                                           ? s.scheduler->bus().readN(cut)[0]
+                                           : -1.0;
+                    constexpr auto kTreeCutRefresh = std::chrono::seconds(3);
+                    if (now != session->treeCutVersion ||
+                        Clock::now() - session->treeCutSent > kTreeCutRefresh) {
+                        double version = -1.0;
+                        if (auto volume = s.treeCutVolume(&version)) {
+                            session->send(*volume);
+                            session->treeCutVersion = version;
+                            session->treeCutSent = Clock::now();
+                        }
+                    }
+                } else if (want.volume && key.first == kLeavesField) {
+                    // Whenever they moved.
+                    const SignalId leaves = s.leavesSignal();
+                    const double now = leaves.valid() && !s.scheduler->bus().readN(leaves).empty()
+                                           ? s.scheduler->bus().readN(leaves)[0]
+                                           : -1.0;
+                    if (now != session->leavesVersion) {
+                        double version = -1.0;
+                        if (auto volume = s.leavesVolume(&version)) {
+                            session->send(*volume);
+                            session->leavesVersion = version;
                         }
                     }
                 } else if (want.volume) {

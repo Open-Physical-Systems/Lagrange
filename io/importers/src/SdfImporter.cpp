@@ -3,6 +3,7 @@
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -20,6 +21,7 @@
 #include <sdf/Joint.hh>
 #include <sdf/JointAxis.hh>
 #include <sdf/Lidar.hh>
+#include <sdf/Light.hh>
 #include <sdf/Link.hh>
 #include <sdf/Material.hh>
 #include <sdf/Model.hh>
@@ -47,9 +49,15 @@ using detail::Description;
 using detail::Geom;
 using detail::GeomType;
 using detail::JointDesc;
+using detail::LampDesc;
 using detail::LinkDesc;
 using detail::SensorDesc;
 using detail::VisualDesc;
+
+// SDFormat's <intensity> is "Scale factor to set the relative power of a light" (light.sdf), with
+// no unit, so a lamp read from it gets this many candela per unit: a stated placeholder, not a
+// measurement, until the lamp's datasheet value is put in its USD (RFC 0021 §2).
+constexpr double kPlaceholderCandelaPerIntensity = 100.0;
 
 // libsdformat's stand-ins for "no limit": axis limits of ±1e16 and effort/velocity of -1.
 constexpr double kUnlimited = 1e16;
@@ -132,6 +140,9 @@ public:
             }
             for (std::uint64_t s = 0; s < link.SensorCount(); ++s) {
                 readSensor(*link.SensorByIndex(s), out);
+            }
+            for (std::uint64_t k = 0; k < link.LightCount(); ++k) {
+                readLight(*link.LightByIndex(k), out);
             }
             d.links.push_back(std::move(out));
             if (!fixed) {
@@ -523,6 +534,55 @@ private:
                 out.settings["distortion_" + name] = *value;
             }
         }
+    }
+
+    /// A <light> in a <link> (SDFormat 1.6 and later) as a lamp (RFC 0021): point or spot, the
+    /// spot's inner and outer angles as its beam and field angles, its colour from <diffuse>, its
+    /// beam turned from SDFormat's <direction> (default 0 0 -1) onto the lamp's +X.
+    void readLight(const sdf::Light& light, LinkDesc& link) {
+        if (light.Type() == sdf::LightType::DIRECTIONAL) {
+            detail::note(model_, "light '" + light.Name() +
+                                     "': a directional light on a link is not a lamp; skipped");
+            return;
+        }
+        LampDesc out;
+        out.name = flat(light.Name());
+        gz::math::Pose3d pose;
+        if (sdf::Errors errors = light.SemanticPose().Resolve(pose); !errors.empty()) {
+            detail::note(model_, "light '" + light.Name() + "': " + errorText(errors));
+        }
+        out.pose = poseOf(pose);
+        out.reals["lamp:luminousIntensity"] = light.Intensity() * kPlaceholderCandelaPerIntensity;
+        out.reals["lamp:initialCommand"] = light.LightOn() ? 1.0 : 0.0;
+        const gz::math::Color diffuse = light.Diffuse();
+        out.realArrays["lamp:color"] = {diffuse.R(), diffuse.G(), diffuse.B()};
+        if (light.Type() == sdf::LightType::SPOT) {
+            out.tokens["lamp:kind"] = "spot";
+            // TODO(verify): light.sdf says "angle covered by" the cones, read here as full angles.
+            const double outer = light.SpotOuterAngle().Radian();
+            const double inner = light.SpotInnerAngle().Radian();
+            out.reals["lamp:fieldAngle"] = outer;
+            out.reals["lamp:beamAngle"] = inner > 0.0 && inner < outer ? inner : 0.5 * outer;
+            gz::math::Vector3d d = light.Direction();
+            if (d.Length() > 0.0) {
+                d.Normalize();
+                // The shortest turn taking +X onto d, after the light's own pose.
+                const gz::math::Quaterniond turn(
+                    gz::math::Vector3d::UnitX.Cross(d).Length() < 1e-12
+                        ? (d.X() > 0.0 ? gz::math::Quaterniond::Identity
+                                       : gz::math::Quaterniond(0, 0, 0, 1))
+                        : gz::math::Quaterniond(gz::math::Vector3d::UnitX.Cross(d).Normalized(),
+                                                std::acos(std::clamp(d.X(), -1.0, 1.0))));
+                out.pose = poseOf(gz::math::Pose3d(pose.Pos(), pose.Rot() * turn));
+            }
+        } else {
+            out.tokens["lamp:kind"] = "point";
+        }
+        detail::note(model_, "light '" + light.Name() +
+                                 "': SDFormat gives no photometric intensity; the lamp has " +
+                                 std::to_string(kPlaceholderCandelaPerIntensity) +
+                                 " cd per unit of <intensity>, a placeholder (RFC 0021 §2)");
+        link.lamps.push_back(std::move(out));
     }
 
     void readSensor(const sdf::Sensor& sensor, LinkDesc& link) {

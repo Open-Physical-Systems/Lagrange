@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
+#include <numbers>
 #include <optional>
 #include <string_view>
 
@@ -95,7 +97,10 @@ SignalSpec optionalInput(std::string name, Unit unit, double fallback) {
 std::map<std::string, std::string> driveModes(const WorldView& world) {
     std::map<std::string, std::string> out;
     for (const SchemaInstance* s : world.instancesOf("ElectricalMotorAPI_1")) {
-        const std::string mode(s->token("elec:controlMode").value_or("torque"));
+        std::string mode(s->token("elec:controlMode").value_or("torque"));
+        if (s->token("elec:motorType").value_or("pmsm") == "stepper") {
+            mode = "stepper";  // its driver takes position_command (RFC 0020 §4.5)
+        }
         const auto joint = s->rel("elec:joint");
         if (mode != "torque" && joint.size() == 1) {
             out[std::string(world.signalInstanceName(joint[0]))] = mode;
@@ -115,6 +120,7 @@ Duration ElectricalNetwork::preferredStep() const {
 Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& config,
                                   SignalDeclarer& d) {
     motors_.clear();
+    steppers_.clear();
     batteries_.clear();
     buses_.clear();
     loads_.clear();
@@ -288,6 +294,54 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             continue;
         }
         const std::string_view type = s->token("elec:motorType").value_or("pmsm");
+        if (type == "stepper") {
+            // A two-phase hybrid stepper on a chopper driver (RFC 0020 §4.5).
+            Stepper stepper;
+            stepper.name = motor.name;
+            StepperParams& sp = stepper.params;
+            sp.motor.dq = false;
+            sp.motor.resistance = *r;
+            sp.motor.inductanceD = sp.motor.inductanceQ = *l;
+            sp.motor.torqueConstant = *kt;
+            sp.motor.maxCurrent = *imax;
+            sp.motor.gearRatio = s->real("elec:gearRatio").value_or(1.0);
+            sp.motor.gearEfficiency = s->real("elec:gearEfficiency").value_or(1.0);
+            sp.motor.referenceTemperature =
+                s->real("elec:referenceTemperature").value_or(kAmbientK);
+            sp.motor.resistanceTempCoeff = s->real("elec:resistanceTempCoeff").value_or(0.0);
+            sp.rotorTeeth = static_cast<int>(s->integer("elec:stepper:rotorTeeth").value_or(50));
+            sp.microsteps = static_cast<int>(s->integer("elec:stepper:microsteps").value_or(1));
+            sp.detentTorque = s->real("elec:stepper:detentTorque").value_or(0.0);
+            sp.holdCurrent = s->real("elec:stepper:holdCurrent").value_or(*imax);
+            if (sp.rotorTeeth < 1 || sp.microsteps < 1 || sp.motor.gearRatio <= 0.0 ||
+                sp.motor.gearEfficiency <= 0.0 || sp.detentTorque < 0.0 || sp.holdCurrent < 0.0 ||
+                *r <= 0.0 || *l < 0.0) {
+                problems.add(where,
+                             "a stepper needs rotorTeeth, microsteps, gearRatio, gearEfficiency "
+                             "and windingResistance above zero, and detentTorque, holdCurrent "
+                             "and inductance not below zero");
+                continue;
+            }
+            stepper.joint = name(joint[0]);
+            const auto j = std::find(joints.names.begin(), joints.names.end(), stepper.joint);
+            if (j == joints.names.end()) {
+                problems.add(where,
+                             "elec:joint " + path(joint[0]) + " is not a joint of the robot");
+                continue;
+            }
+            const auto index = static_cast<std::size_t>(j - joints.names.begin());
+            stepper.slide = joints.type[index] == JointType::Prismatic;
+            stepper.state.origin = joints.initialPosition[index];
+            stepper.worldInertia = jointInertia(world, index);
+            const auto bus = busThrough(s, "elec:powerPort");
+            if (!bus) {
+                continue;
+            }
+            stepper.bus = *bus;
+            motorJoint[stepper.joint] = true;
+            steppers_.push_back(std::move(stepper));
+            continue;
+        }
         p.dq = type != "dc_brushed";
         p.resistance = *r;
         p.inductanceD = *l;
@@ -296,12 +350,22 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         p.polePairs = static_cast<int>(s->integer("elec:polePairs").value_or(1));
         p.gearRatio = s->real("elec:gearRatio").value_or(1.0);
         p.gearEfficiency = s->real("elec:gearEfficiency").value_or(1.0);
+        p.gearBackEfficiency = s->real("elec:gearBackEfficiency").value_or(-1.0);
         p.maxCurrent = *imax;
         p.referenceTemperature = s->real("elec:referenceTemperature").value_or(kAmbientK);
         p.resistanceTempCoeff = s->real("elec:resistanceTempCoeff").value_or(0.0);
         p.currentLoopBandwidth = s->real("elec:currentLoopBandwidth").value_or(6283.0);
         if (p.polePairs < 1 || p.gearRatio <= 0.0 || p.gearEfficiency <= 0.0) {
             problems.add(where, "polePairs, gearRatio and gearEfficiency must be positive");
+            continue;
+        }
+        // −1 (the fallback) leaves it unset; anything else is a fraction (RFC 0020 §4.4).
+        if (p.gearBackEfficiency != -1.0 &&
+            !(p.gearBackEfficiency >= 0.0 && p.gearBackEfficiency <= 1.0)) {
+            problems.add(where, "elec:gearBackEfficiency is " +
+                                    std::to_string(p.gearBackEfficiency) +
+                                    ": it must be from 0 (self-locking) to 1, or -1 for the same "
+                                    "as gearEfficiency");
             continue;
         }
         if (const auto ke = s->real("elec:backEmfConstant")) {
@@ -317,9 +381,39 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             }
         }
         const std::string_view control = s->token("elec:controlMode").value_or("torque");
-        motor.mode = control == "velocity"  ? Motor::Mode::Velocity
-                     : control == "voltage" ? Motor::Mode::Voltage
-                                            : Motor::Mode::Torque;
+        motor.mode = control == "velocity"   ? Motor::Mode::Velocity
+                     : control == "voltage"  ? Motor::Mode::Voltage
+                     : control == "position" ? Motor::Mode::Position
+                                             : Motor::Mode::Torque;
+        if (motor.mode == Motor::Mode::Position) {
+            // A smart servo's loop on its own drive (RFC 0020 §4.3): its gains are the joint's
+            // ServoAPI_1, on a brushed motor whose winding the duty drives directly.
+            const SchemaInstance* servo = nullptr;
+            for (const SchemaInstance* candidate : world.instancesOf("ServoAPI_1")) {
+                if (joint.size() == 1 && candidate->prim == joint[0]) {
+                    servo = candidate;
+                }
+            }
+            const auto kp = servo != nullptr ? servo->real("act:servo:kp") : std::nullopt;
+            if (p.dq || servo == nullptr || !kp || !(*kp > 0.0)) {
+                problems.add(where,
+                             "elec:controlMode position needs a dc_brushed motor and ServoAPI_1 "
+                             "with act:servo:kp > 0 on its joint");
+                continue;
+            }
+            motor.servo.kp = *kp;
+            motor.servo.ki = servo->real("act:servo:ki").value_or(0.0);
+            motor.servo.kd = servo->real("act:servo:kd").value_or(0.0);
+            motor.servo.deadband = servo->real("act:servo:deadband").value_or(0.0);
+            motor.servo.resolution = servo->real("act:servo:resolution").value_or(0.0);
+            if (motor.servo.ki < 0.0 || motor.servo.kd < 0.0 || motor.servo.deadband < 0.0 ||
+                motor.servo.resolution < 0.0) {
+                problems.add(where,
+                             "the joint's ServoAPI_1 gains, deadband and resolution must "
+                             "not be negative");
+                continue;
+            }
+        }
         motor.velocityBandwidth = s->real("elec:velocityLoopBandwidth").value_or(kVelocityLoopRadS);
         if (motor.velocityBandwidth <= 0.0) {
             problems.add(where, "elec:velocityLoopBandwidth must be positive");
@@ -477,6 +571,13 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             m.velocityCommand = d.input(scalar(joint + "velocity_command", speed));
         } else if (m.mode == Motor::Mode::Voltage) {
             m.voltageCommand = d.input(scalar(joint + "voltage_command", units::V));
+        } else if (m.mode == Motor::Mode::Position) {
+            const Unit length = m.slide ? units::m : units::rad;
+            m.positionCommand = d.input(scalar(joint + "position_command", length));
+            SignalSpec position = scalar(joint + "position", length);
+            position.hold = Hold::LinearExtrapolate;
+            position.feedback = true;
+            m.position = d.input(position);
         } else {
             // A drive nothing commands makes no torque (a robot without a controller).
             SignalSpec command = scalar(joint + "torque_command", effort);
@@ -494,6 +595,20 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             d.input(optionalInput("thermal/" + m.name + "/temperature", units::K, kAmbientK));
         m.derating = d.input(optionalInput("thermal/" + m.name + "/derating", units::one, 1.0));
         m.torque = d.output(scalar(joint + "torque", effort));
+        if (m.params.screw()) {
+            // A screw's back-driven losses are a friction on the joint that grows with its load
+            // (RFC 0020 §4.4). The load is what the joint's motion leaves of its other forces:
+            // effective inertia × acceleration − the drive's force − the constraints' (friction
+            // and limits), all from physics.
+            SignalSpec acceleration = optionalInput(
+                joint + "acceleration", m.slide ? units::m_per_s2 : units::rad_per_s2, 0.0);
+            acceleration.feedback = true;
+            m.acceleration = d.input(acceleration);
+            SignalSpec constraint = optionalInput(joint + "constraint_torque", effort, 0.0);
+            constraint.feedback = true;
+            m.constraintTorque = d.input(constraint);
+            m.frictionLimit = d.output(scalar(joint + "friction_limit", effort));
+        }
         m.currentD = d.output(scalar(motor + "current_d", units::A));
         m.currentQ = d.output(scalar(motor + "current_q", units::A));
         m.voltageD = d.output(scalar(motor + "voltage_d", units::V));
@@ -501,6 +616,60 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         m.busCurrent = d.output(scalar(motor + "bus_current", units::A));
         m.loss = d.output(scalar(motor + "loss_power", units::W));
         m.fault = d.output(scalar(motor + "fault", units::one));
+    }
+    for (Stepper& m : steppers_) {
+        const std::string joint = "joint/" + m.joint + "/";
+        const std::string motor = "motor/" + m.name + "/";
+        const Unit length = m.slide ? units::m : units::rad;
+        const Unit speed = m.slide ? units::m_per_s : units::rad_per_s;
+        const double none = std::numeric_limits<double>::quiet_NaN();
+        // Every command is optional: a stepper nothing commands holds where it started.
+        SignalSpec position = scalar(joint + "position_command", length);
+        position.optional = true;
+        position.defaultValue = none;
+        position.hold = Hold::LinearExtrapolate;  // a controller's 1 ms updates, in between
+        m.positionCommand = d.input(position);
+        SignalSpec target = scalar(joint + "step_target", units::one);
+        target.type = SignalType::Int;
+        target.optional = true;
+        target.defaultValue = none;
+        m.stepTarget = d.input(target);
+        SignalSpec rate = scalar(joint + "step_rate", units::Hz);
+        rate.optional = true;
+        rate.defaultValue = 0.0;
+        m.stepRate = d.input(rate);
+        SignalSpec enable = scalar(joint + "stepper_enable", units::one);
+        enable.type = SignalType::Bool;
+        enable.optional = true;
+        enable.defaultValue = 1.0;
+        m.enable = d.input(enable);
+        SignalSpec at = scalar(joint + "position", length);
+        at.hold = predict_ ? Hold::ZeroOrder : Hold::LinearExtrapolate;
+        at.feedback = true;
+        m.position = d.input(at);
+        SignalSpec velocity = scalar(joint + "velocity", speed);
+        velocity.hold = predict_ ? Hold::ZeroOrder : Hold::LinearExtrapolate;
+        velocity.feedback = true;
+        m.velocity = d.input(velocity);
+        m.effectiveInertia = d.input(
+            optionalInput(joint + "effective_inertia", m.slide ? units::kg : units::kg_m2, 0.0));
+        m.temperature =
+            d.input(optionalInput("thermal/" + m.name + "/temperature", units::K, kAmbientK));
+        m.derating = d.input(optionalInput("thermal/" + m.name + "/derating", units::one, 1.0));
+        m.torque = d.output(scalar(joint + "torque", m.slide ? units::N : units::N_m));
+        m.currentA = d.output(scalar(motor + "current_a", units::A));
+        m.currentB = d.output(scalar(motor + "current_b", units::A));
+        m.voltageA = d.output(scalar(motor + "voltage_a", units::V));
+        m.voltageB = d.output(scalar(motor + "voltage_b", units::V));
+        m.busCurrent = d.output(scalar(motor + "bus_current", units::A));
+        m.loss = d.output(scalar(motor + "loss_power", units::W));
+        m.fault = d.output(scalar(motor + "fault", units::one));
+        SignalSpec steps = scalar(motor + "steps", units::one);
+        steps.type = SignalType::Int;
+        m.steps = d.output(steps);
+        SignalSpec lost = scalar(motor + "lost_steps", units::one);
+        lost.type = SignalType::Int;
+        m.lost = d.output(lost);
     }
     for (FmuMotor& m : fmuMotors_) {
         SignalSpec current = scalar("motor/" + m.name + "/bus_current", units::A);
@@ -642,8 +811,24 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         m.predicted = m.loadEstimate = m.lastSample = m.torqueSum = 0.0;
         m.stepsSince = 0;
         m.synced = false;
+        m.lastTorque = 0.0;
+        if (m.params.screw()) {
+            bus.write(m.frictionLimit, 0.0);
+        }
         for (const SignalId id : {m.torque, m.currentD, m.currentQ, m.voltageD, m.voltageQ,
                                   m.busCurrent, m.loss, m.fault}) {
+            bus.write(id, 0.0);
+        }
+    }
+    for (Stepper& m : steppers_) {
+        const double origin = m.state.origin;
+        m.state = StepperState{};
+        m.state.origin = m.state.position = origin;
+        m.rateFraction = m.loadEstimate = m.lastSample = m.torqueSum = 0.0;
+        m.stepsSince = 0;
+        m.synced = false;
+        for (const SignalId id : {m.torque, m.currentA, m.currentB, m.voltageA, m.voltageB,
+                                  m.busCurrent, m.loss, m.fault, m.steps, m.lost}) {
             bus.write(id, 0.0);
         }
     }
@@ -1036,12 +1221,33 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         } else if (m.mode == Motor::Mode::Voltage) {
             asked = bus.read(m.voltageCommand);
         }
+        bool servoOff = false;
+        if (m.mode == Motor::Mode::Position) {
+            // The servo's loop (RFC 0020 §4.3): a duty on the bus voltage, the armature current
+            // held to the drive's limit; NaN: torque off, the winding open.
+            const double target = bus.read(m.positionCommand);
+            servoOff = !std::isfinite(target);
+            double u = 0.0;
+            if (!servoOff) {
+                double uMin = -1.0;
+                double uMax = 1.0;
+                currentLimitedDuty(m.params, m.params.resistanceAt(bus.read(m.temperature)),
+                                   node.voltage, in.jointVelocity,
+                                   m.params.maxCurrent * std::clamp(bus.read(m.derating), 0.0, 1.0),
+                                   uMin, uMax);
+                u = servoDuty(m.servo, m.servoIntegral, target, bus.read(m.position),
+                              in.jointVelocity, dt, uMin, uMax);
+            } else {
+                m.servoIntegral = 0.0;
+            }
+            asked = u * node.voltage;
+        }
         if (node.brownout) {
             m.tripped = true;
         } else if (m.tripped && std::abs(asked) < kResetTorqueNm) {
             m.tripped = false;
         }
-        if (m.mode == Motor::Mode::Voltage) {
+        if (m.mode == Motor::Mode::Voltage || m.mode == Motor::Mode::Position) {
             in.voltageMode = true;
             in.voltageCommand = asked;
         } else if (m.mode == Motor::Mode::Velocity) {
@@ -1064,7 +1270,7 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
             in.torqueCommand = std::clamp(wanted, -limit, limit);
         }
         const bool overvoltageOff = node.overvoltageTripped && node.brakeResistance <= 0.0;
-        const bool off = m.tripped || overvoltageOff;
+        const bool off = m.tripped || overvoltageOff || servoOff;
         in.busVoltage = node.voltage;
         in.temperature = bus.read(m.temperature);
         in.derating = bus.read(m.derating);
@@ -1080,6 +1286,14 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
             }
         }
         buses_[m.bus].sink += out.busCurrent;
+        if (m.params.screw()) {
+            const double inertia =
+                bus.read(m.effectiveInertia) > 0.0 ? bus.read(m.effectiveInertia) : m.worldInertia;
+            const double load =
+                inertia * bus.read(m.acceleration) - m.lastTorque - bus.read(m.constraintTorque);
+            bus.write(m.frictionLimit, screwFrictionLimit(m.params, out.jointTorque, load, sample));
+        }
+        m.lastTorque = out.jointTorque;
         bus.write(m.torque, out.jointTorque);
         bus.write(m.currentD, m.state.id);
         bus.write(m.currentQ, m.state.iq);
@@ -1089,6 +1303,7 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         bus.write(m.loss, out.lossPower);
         bus.write(m.fault, m.tripped ? 1.0 : (overvoltageOff ? 2.0 : 0.0));
     }
+    stepSteppers(dt, bus);
     for (const FmuMotor& m : fmuMotors_) {
         buses_[m.bus].sink += bus.read(m.busCurrent);
     }
@@ -1197,12 +1412,114 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
     return {};
 }
 
+void ElectricalNetwork::stepSteppers(double dt, SignalBus& bus) {
+    for (Stepper& m : steppers_) {
+        StepperState& s = m.state;
+        const StepperParams& p = m.params;
+        // The step count: a position, else a count, else a rate (RFC 0020 §4.5).
+        const double before = s.steps;
+        const double position = bus.read(m.positionCommand);
+        const double target = bus.read(m.stepTarget);
+        if (std::isfinite(position)) {
+            s.steps = std::round((position - s.origin) * p.microstepsPerJoint());
+            m.rateFraction = 0.0;
+        } else if (std::isfinite(target)) {
+            s.steps = std::round(target);
+            m.rateFraction = 0.0;
+        } else {
+            m.rateFraction += bus.read(m.stepRate) * dt;
+            const double whole = std::trunc(m.rateFraction);
+            s.steps += whole;
+            m.rateFraction -= whole;
+        }
+        s.stillFor = s.steps == before ? s.stillFor + dt : 0.0;
+
+        const double samplePosition = bus.read(m.position);
+        const double sample = bus.read(m.velocity);
+        const double effective = bus.read(m.effectiveInertia);
+        const double inertia = effective > 0.0 ? effective : m.worldInertia;
+        StepperInputs in;
+        if (predict_ && inertia > 0.0) {
+            // The rotor between physics updates: resync every H, the load from the last window.
+            if (!m.synced || m.stepsSince >= exchangeSteps_) {
+                if (m.synced && m.stepsSince > 0) {
+                    const double window = m.stepsSince * dt;
+                    m.loadEstimate =
+                        m.torqueSum / m.stepsSince - inertia * (sample - m.lastSample) / window;
+                }
+                s.position = samplePosition;
+                s.velocity = sample;
+                m.lastSample = sample;
+                m.torqueSum = 0.0;
+                m.stepsSince = 0;
+                m.synced = true;
+            }
+            in.inertia = inertia;
+            in.loadTorque = m.loadEstimate;
+        } else {
+            s.position = samplePosition;
+            s.velocity = sample;
+        }
+        const Bus& node = buses_[m.bus];
+        const bool overvoltageOff = node.overvoltageTripped && node.brakeResistance <= 0.0;
+        in.busVoltage = node.voltage;
+        in.temperature = bus.read(m.temperature);
+        in.enabled = bus.read(m.enable) > 0.5 && !node.brownout && !overvoltageOff;
+        StepperParams derated = p;
+        const double derating = std::clamp(bus.read(m.derating), 0.0, 1.0);
+        derated.motor.maxCurrent *= derating;
+        derated.holdCurrent *= derating;
+        // The step must resolve the electrical frequency N_r·ω (RFC 0020 §4.5: 20 steps a period).
+        constexpr double kStepsPerPeriod = 20.0;
+        const double electricalSpeed = std::abs(p.electricalPerJoint() * s.velocity);
+        if (!m.warned && electricalSpeed * dt > 2.0 * std::numbers::pi / kStepsPerPeriod) {
+            m.warned = true;
+            services::log(services::LogLevel::Warning, kSource,
+                          m.name + ": the stepper turns at " +
+                              std::to_string(electricalSpeed / (2.0 * std::numbers::pi)) +
+                              " Hz electrical, fewer than 20 electrical steps a period; use a "
+                              "smaller electrical dt");
+        }
+        const StepperOutputs out = stepStepper(derated, s, in, dt);
+        if (in.inertia > 0.0) {
+            m.torqueSum += out.jointTorque;
+            ++m.stepsSince;
+        }
+        buses_[m.bus].sink += out.busCurrent;
+        bus.write(m.torque, out.jointTorque);
+        bus.write(m.currentA, s.ia);
+        bus.write(m.currentB, s.ib);
+        bus.write(m.voltageA, out.va);
+        bus.write(m.voltageB, out.vb);
+        bus.write(m.busCurrent, out.busCurrent);
+        bus.write(m.loss, out.lossPower);
+        bus.write(m.fault, node.brownout ? 1.0 : (overvoltageOff ? 2.0 : 0.0));
+        bus.write(m.steps, s.steps);
+        bus.write(m.lost, static_cast<double>(lostSteps(p, s, samplePosition)));
+    }
+}
+
 Status ElectricalNetwork::saveState(StateWriter& writer) const {
     for (const Motor& m : motors_) {
         writer.put(m.state);
         writer.put(m.tripped);
         writer.put(m.velocityIntegral);
         writer.put(m.predicted);
+        writer.put(m.loadEstimate);
+        writer.put(m.lastSample);
+        writer.put(m.torqueSum);
+        writer.put(m.stepsSince);
+        writer.put(m.synced);
+        if (m.params.screw()) {
+            writer.put(m.lastTorque);
+        }
+        if (m.mode == Motor::Mode::Position) {
+            writer.put(m.servoIntegral);
+        }
+    }
+    for (const Stepper& m : steppers_) {
+        writer.put(m.state);
+        writer.put(m.rateFraction);
         writer.put(m.loadEstimate);
         writer.put(m.lastSample);
         writer.put(m.torqueSum);
@@ -1238,6 +1555,17 @@ Status ElectricalNetwork::restoreState(StateReader& reader) {
         ok = ok && reader.get(m.state) && reader.get(m.tripped) && reader.get(m.velocityIntegral) &&
              reader.get(m.predicted) && reader.get(m.loadEstimate) && reader.get(m.lastSample) &&
              reader.get(m.torqueSum) && reader.get(m.stepsSince) && reader.get(m.synced);
+        if (m.params.screw()) {
+            ok = ok && reader.get(m.lastTorque);
+        }
+        if (m.mode == Motor::Mode::Position) {
+            ok = ok && reader.get(m.servoIntegral);
+        }
+    }
+    for (Stepper& m : steppers_) {
+        ok = ok && reader.get(m.state) && reader.get(m.rateFraction) &&
+             reader.get(m.loadEstimate) && reader.get(m.lastSample) && reader.get(m.torqueSum) &&
+             reader.get(m.stepsSince) && reader.get(m.synced);
     }
     for (Battery& b : batteries_) {
         ok = ok && reader.get(b.state.soc) && reader.get(b.state.v1) && reader.get(b.state.v2) &&
@@ -1260,6 +1588,9 @@ Status ElectricalNetwork::restoreState(StateReader& reader) {
 std::vector<std::string> ElectricalNetwork::motors() const {
     std::vector<std::string> out;
     for (const Motor& m : motors_) {
+        out.push_back(m.name);
+    }
+    for (const Stepper& m : steppers_) {
         out.push_back(m.name);
     }
     return out;

@@ -217,8 +217,26 @@ inertia (`elec:velocityLoopBandwidth`, illustrative), held by the current limit;
 limit. Those two commands are required: `--joint-control` writes them (`Server::commandJoint`, and
 `/joint_commands`, whose `effort` field carries volts for a voltage motor), a plugin or `--ros-topics`
 can too, and the built-in drive controllers and ros2_control, which write torques, stop the start with
-`MissingInput`. On a prismatic joint the drive is linear: `elec:gearRatio` is motor radians per metre
+`MissingInput`. `position` (RFC 0020 §4.3, a smart servo whose loop runs on its own drive; brushed
+motors only) follows `joint/<j>/position_command` with the gains, dead zone and sensing step of the
+joint's `ServoAPI_1` (`servoDuty`), its duty times the bus voltage on the winding and the armature
+current held to `elec:maxCurrent` (`currentLimitedDuty`); the servo module writes the set point, NaN
+for torque off (the winding open); docs/physics/actuators.md "Servos". On a prismatic joint the drive is linear: `elec:gearRatio` is motor radians per metre
 (2π over a screw's lead), and torque, speed and inertia at the joint are force, m/s and mass.
+A screw's two efficiencies (RFC 0020 §4.4): with `elec:gearBackEfficiency` set, the gear's
+back-driven losses become the joint friction `joint/<j>/friction_limit` = (1 − η_back)·|load|
+(the load from physics' acceleration, effective inertia and constraint force), written while the
+load drives or stands against the screw, so a self-locking screw (0) holds with the motor off;
+the overlay's `lead_screw:` sets the gear from the thread (docs/physics/actuators.md "Lead
+screws", `test_models` `LeadScrew.*`).
+A stepper (`elec:motorType = stepper`, RFC 0020 §4.5): two phases on a chopper driver
+(`stepStepper`): the microstep table's currents, reached each step by the voltage the exact R–L
+solution needs, held to ±V_bus; back-EMF and detent torque; the rotor integrated between physics
+updates on the joint's effective inertia (the speed prediction extended to the angle), so a load
+past the torque–angle curve's peak slips whole electrical periods. Commands
+`joint/<j>/position_command`, `step_target`, `step_rate`, `stepper_enable`; out
+`motor/<m>/current_a|current_b|steps|lost_steps`; docs/physics/actuators.md "Steppers",
+`test_stepper`.
 Checked against the closed forms: stall and no-load in voltage mode, steady speed under load in
 velocity mode, on a hinge and a slide (`server/test/test_motor_modes.cpp`).
 

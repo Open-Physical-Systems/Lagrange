@@ -140,6 +140,7 @@ added mass and damping, such as the BlueROV2 Heavy's. [Water](../physics/water.m
 | Sample warehouse | Racks, pallets, walls | `lagrange amr` |
 | AMR_FMS warehouse | 60 m × 40 m, docks | `lagrange swerve` |
 | Open field | 50 m field, a landing pad, trees, a shed | `lagrange quad` |
+| Orchard | 8 rows of 15 fruit trees, a forest edge (140 trees that sway, get cut and are seen by lidars), mown alleys, tall grass, a landing pad | `lagrange assets/robots/quad_x500/quad_x500.usda assets/worlds/orchard/orchard.usda --spawn -36,0,0.1 --air-density 1.225` |
 | Drone building | A 12 m building to fly beside and over | `lagrange run profiles/examples/quad_x500_downwash.yaml` |
 | Power line | A 400 A line next to a hovering drone | [Tutorial: weather, interference and radio links](tutorial-environment.md) |
 | City block | OpenDRIVE roads, a junction, buildings, traffic | `lagrange sedan` |

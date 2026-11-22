@@ -51,6 +51,10 @@ namespace lagrange::viewer {
 
 namespace {
 
+/// The desktop app id (reverse DNS of the project's GitHub organisation, Flathub's rule for
+/// io.github ids: '-' becomes '_'). The desktop entry's file name and StartupWMClass match it.
+constexpr const char* kDesktopAppId = "io.github.Open_Physical_Systems.Lagrange";
+
 // The lidar bird's-eye view's two tones (design 06-sensors: the sensor colour, strong and
 // attenuated), and the intensity between them; the viewport overlay draws in the same.
 const ImVec4 kLidarStrong = theme::kDomainColor[static_cast<int>(theme::Domain::Sensors)];
@@ -920,8 +924,14 @@ public:
         buildSensorOverlays();
         buildRadarOverlays();
         buildAirflow();
+        buildSpray();  // after the airflow: its drops go in the same overlay slot
+        followWaterSurface();
+        followCutPlants();
+        followTrees();
         buildCables();
         followWeather();
+        followLamps();
+        followRotors();
         // The 3D view is drawn again only when something it shows changed: a new frame of the
         // scene, the camera, the size, the options or an overlay. The display may run at 144 Hz
         // while the scene changes at 50 Hz, or not at all when paused; the GPU it would spend
@@ -1017,9 +1027,15 @@ public:
                    a.snowMmPerH == b.snowMmPerH && a.snowCover == b.snowCover && a.wind == b.wind &&
                    a.temperatureLow == b.temperatureLow && a.temperatureHigh == b.temperatureHigh &&
                    a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
-                   a.airflow == b.airflow && a.airflowMax == b.airflowMax &&
-                   sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
-                   a.heatCovered == b.heatCovered;
+                   a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
+                   a.waterSurface == b.waterSurface && a.waterRelief == b.waterRelief &&
+                   a.waterCdom == b.waterCdom && a.spray3d == b.spray3d &&
+                   a.cutPlants == b.cutPlants && a.trees == b.trees && a.treeCuts == b.treeCuts &&
+                   a.leaves == b.leaves && sameValues(a.temperature, b.temperature) &&
+                   sameValues(a.current, b.current) && a.heatCovered == b.heatCovered &&
+                   a.lamps == b.lamps &&
+                   (a.skyIlluminance == b.skyIlluminance ||
+                    (std::isnan(a.skyIlluminance) && std::isnan(b.skyIlluminance)));
         }
         // NaN (no value) equals NaN here, unlike with ==.
         static bool sameValues(const std::vector<float>& a, const std::vector<float>& b) {
@@ -1129,6 +1145,226 @@ public:
         renderOptions_.snowCover = fresh(snowCover_);
     }
 
+    /// The lamps and the sky the realistic view is lit by (RFC 0021 §4, §7): every prim with
+    /// LampAPI_1, its lamp: attributes (GetAttributes) and its lamp/<name>/intensity signal, and
+    /// env/sky_illuminance when the run has it. Only through the protocol (invariant 14).
+    void followLamps() {
+        renderOptions_.lamps.clear();
+        const auto frame = scene_;
+        if (!frame || !frame->statics) {
+            renderOptions_.skyIlluminance = std::numeric_limits<double>::quiet_NaN();
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        if (statics.generation != lampGeneration_) {
+            lampGeneration_ = statics.generation;
+            lamps_.clear();
+            std::vector<std::uint32_t> prims;
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const PrimData& prim = statics.prims[i];
+                if (std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(), "LampAPI_1") ==
+                    prim.apiSchemas.end()) {
+                    continue;
+                }
+                SceneLamp& lamp = lamps_.emplace_back();
+                lamp.prim = static_cast<std::uint32_t>(i);
+                lamp.intensity = client_.subscribe("lamp/" + prim.name + "/intensity");
+                prims.push_back(lamp.prim);
+            }
+            // The trees' tree:* attributes in the same request (followTrees): a second one would
+            // be taken for the inspector's.
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const std::vector<std::string>& schemas = statics.prims[i].apiSchemas;
+                if (std::find(schemas.begin(), schemas.end(), "TreeAPI_1") != schemas.end()) {
+                    prims.push_back(static_cast<std::uint32_t>(i));
+                }
+            }
+            if (!prims.empty()) {
+                client_.requestAttributesOf(prims);
+            }
+            lampAttributes_.reset();
+        }
+        const auto attributes = client_.attributesOf();
+        if (attributes != lampAttributes_) {
+            lampAttributes_ = attributes;
+            for (SceneLamp& lamp : lamps_) {
+                const auto it = attributes->find(lamp.prim);
+                if (it == attributes->end()) {
+                    continue;
+                }
+                const auto number = [&](const char* name, double fallback) {
+                    for (const AttributeInfo& a : it->second.attributes) {
+                        if (a.name == name && !a.numbers.empty()) {
+                            return a.numbers.front();
+                        }
+                    }
+                    return fallback;
+                };
+                for (const AttributeInfo& a : it->second.attributes) {
+                    if (a.name == "lamp:kind") {
+                        lamp.point = a.value == "point";
+                        lamp.beacon = a.value == "beacon";
+                    } else if (a.name == "lamp:color" && a.numbers.size() == 3) {
+                        lamp.look.color = {static_cast<float>(a.numbers[0]),
+                                           static_cast<float>(a.numbers[1]),
+                                           static_cast<float>(a.numbers[2])};
+                    }
+                }
+                lamp.look.beamAngle = number("lamp:beamAngle", 0.0);
+                lamp.look.fieldAngle = number("lamp:fieldAngle", 2.0 * lamp.look.beamAngle);
+                lamp.look.colorTemperature = number("lamp:colorTemperature", 0.0);
+                lamp.rotationSpeed = number("lamp:rotationSpeed", 0.0);
+                lamp.look.point = lamp.point;
+                lamp.known = true;
+            }
+        }
+        const double seconds = static_cast<double>(frame->simTimeNs) * 1e-9;
+        for (const SceneLamp& lamp : lamps_) {
+            if (!lamp.known || !lamp.intensity || lamp.prim >= frame->transforms.size()) {
+                continue;
+            }
+            const double intensity = lamp.intensity->latest();
+            if (!(intensity > 0.0)) {
+                continue;
+            }
+            const Transform& at = frame->transforms[lamp.prim];
+            RenderOptions::Lamp drawn = lamp.look;
+            drawn.position = at.position;
+            drawn.intensity = intensity;
+            // The beam leaves along the prim's +X; a beacon's turns about its +Z (RFC 0021 §2).
+            const double turn = lamp.beacon ? lamp.rotationSpeed * seconds : 0.0;
+            drawn.axis = rotated(at.rotation, {std::cos(turn), std::sin(turn), 0.0});
+            renderOptions_.lamps.push_back(drawn);
+        }
+        const auto catalog = client_.catalog();
+        if (catalog != skyCatalog_) {
+            skyCatalog_ = catalog;
+            if (catalog && !skyIlluminance_ && catalog->find("env/sky_illuminance") != nullptr) {
+                skyIlluminance_ = client_.subscribe("env/sky_illuminance");
+            }
+        }
+        renderOptions_.skyIlluminance =
+            skyIlluminance_ ? skyIlluminance_->latest() : std::numeric_limits<double>::quiet_NaN();
+    }
+
+    /// The rotors whose outwash bends the realistic view's grass (gpu/GroundAir.hpp), from the
+    /// signal catalog only (invariant 14; joints are not scene prims): every rotor/<j>/thrust,
+    /// with its induced_velocity and thrust_axis, and its hub at the prim of joint/<j>/* (the
+    /// joint's child link, Server::primOfSignal). The disc radius from momentum theory, as
+    /// rotor_aero writes v_i: R = √(T / (2ρπ v_i²)) (Leishman 2006, §2.2), ρ env/air_density
+    /// when the run has it, else ISA sea level (ICAO Doc 7488), the air rotors fly in by default.
+    void followRotors() {
+        renderOptions_.rotors.clear();
+        const auto frame = scene_;
+        if (!frame || !frame->statics) {
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        const auto catalog = client_.catalog();
+        if (catalog != rotorCatalog_) {
+            rotorCatalog_ = catalog;
+            for (SceneRotor& rotor : rotors_) {
+                for (const auto& b :
+                     {rotor.thrust, rotor.induced, rotor.axis[0], rotor.axis[1], rotor.axis[2]}) {
+                    if (b) {
+                        client_.unsubscribe(b);
+                    }
+                }
+            }
+            rotors_.clear();
+            airDensity_.reset();
+            if (catalog) {
+                const std::string head = "rotor/";
+                const std::string tail = "/thrust";
+                for (const SignalInfo& info : catalog->signals) {
+                    const std::string& n = info.name;
+                    if (n.size() <= head.size() + tail.size() || n.rfind(head, 0) != 0 ||
+                        n.compare(n.size() - tail.size(), tail.size(), tail) != 0) {
+                        continue;
+                    }
+                    const std::string joint =
+                        n.substr(head.size(), n.size() - head.size() - tail.size());
+                    std::uint32_t link = kNone;
+                    const std::string jointHead = "joint/" + joint + "/";
+                    for (const SignalInfo& other : catalog->signals) {
+                        if (other.name.rfind(jointHead, 0) == 0 && other.prim != kNone) {
+                            link = other.prim;
+                            break;
+                        }
+                    }
+                    const std::string base = head + joint + "/";
+                    if (link == kNone || catalog->find(base + "induced_velocity") == nullptr ||
+                        catalog->find(base + "thrust_axis") == nullptr) {
+                        continue;
+                    }
+                    SceneRotor& rotor = rotors_.emplace_back();
+                    rotor.name = joint;
+                    rotor.link = link;
+                    rotor.thrust = client_.watchSignal(base + "thrust");
+                    rotor.induced = client_.watchSignal(base + "induced_velocity");
+                    for (std::uint32_t k = 0; k < 3; ++k) {
+                        rotor.axis[k] = client_.watchSignal(base + "thrust_axis", k);
+                    }
+                    std::fprintf(stderr, "lagrange_viewer: rotor %s on prim %u for the outwash\n",
+                                 joint.c_str(), link);
+                }
+                if (!rotors_.empty() && catalog->find("env/air_density") != nullptr) {
+                    airDensity_ = client_.watchSignal("env/air_density");
+                }
+            }
+        }
+        // ISA sea-level density, kg/m³ (ICAO Doc 7488/3), when the run gives none.
+        constexpr double kSeaLevelDensity = 1.225;
+        const double rho =
+            airDensity_ && airDensity_->latest() > 0.0 ? airDensity_->latest() : kSeaLevelDensity;
+        for (const SceneRotor& rotor : rotors_) {
+            if (!rotor.thrust || !rotor.induced || !rotor.axis[0] || !rotor.axis[1] ||
+                !rotor.axis[2] || rotor.link >= frame->transforms.size() ||
+                rotor.link >= statics.prims.size()) {
+                continue;
+            }
+            RenderOptions::Rotor drawn;
+            drawn.hub = frame->transforms[rotor.link].position;
+            drawn.thrustAxis = {rotor.axis[0]->latest(), rotor.axis[1]->latest(),
+                                rotor.axis[2]->latest()};
+            drawn.induced = rotor.induced->latest();
+            drawn.thrust = rotor.thrust->latest();
+            if (!(drawn.thrust > 0.0) || !(drawn.induced > 0.0) || !std::isfinite(drawn.thrust)) {
+                continue;
+            }
+            drawn.radius = std::sqrt(
+                drawn.thrust / (2.0 * rho * std::numbers::pi * drawn.induced * drawn.induced));
+            // Its robot: the top prim above its link.
+            std::uint32_t root = rotor.link;
+            for (std::size_t guard = 0; guard < statics.prims.size(); ++guard) {
+                const std::uint32_t up = statics.prims[root].parent;
+                if (up == kNone || up >= statics.prims.size()) {
+                    break;
+                }
+                root = up;
+            }
+            drawn.group = root;
+            renderOptions_.rotors.push_back(drawn);
+        }
+        if (std::getenv("LAGRANGE_DEBUG_OUTWASH") != nullptr && !renderOptions_.rotors.empty()) {
+            const RenderOptions::Rotor& r = renderOptions_.rotors.front();
+            std::fprintf(stderr, "outwash: %zu rotors, T %.2f N, v_i %.2f m/s, R %.3f m, z %.2f\n",
+                         renderOptions_.rotors.size(), r.thrust, r.induced, r.radius, r.hub[2]);
+        }
+    }
+
+    /// `v` turned by the unit quaternion `q` (w, x, y, z).
+    static std::array<double, 3> rotated(const std::array<float, 4>& q,
+                                         const std::array<double, 3>& v) {
+        const double w = q[0], x = q[1], y = q[2], z = q[3];
+        return {(1 - 2 * (y * y + z * z)) * v[0] + 2 * (x * y - w * z) * v[1] +
+                    2 * (x * z + w * y) * v[2],
+                2 * (x * y + w * z) * v[0] + (1 - 2 * (x * x + z * z)) * v[1] +
+                    2 * (y * z - w * x) * v[2],
+                2 * (x * z - w * y) * v[0] + 2 * (y * z + w * x) * v[1] +
+                    (1 - 2 * (x * x + y * y)) * v[2]};
+    }
+
     /// Airflow particles (rotor_aero.md §5): kAirParticles points moved through the server's
     /// box of the air's velocity around the robot (FieldVolume of aero/wind_speed) and drawn as
     /// streaks, one batch per colour of the design's field map (viridis) by speed. New ones are
@@ -1220,6 +1456,436 @@ public:
                                             static_cast<float>(p.at[2] - volume->origin[2])};
             out.insert(out.end(), {head[0] - v[0] * kTrailS, head[1] - v[1] * kTrailS,
                                    head[2] - v[2] * kTrailS, head[0], head[1], head[2]});
+        }
+    }
+
+    /// Spray off water (downwash.md §5b): the server's box of the spray's water per cell
+    /// (FieldVolume of aero/spray, kg/m³, from the aerodynamics domain's drops), drawn as short
+    /// falling streaks, as many in a cell as its water holds marks of kMarkKg, at places fixed per
+    /// cell, coloured as the field map by the cell's water against the box's most. Added to the
+    /// airflow's overlay slot.
+    void buildSpray() {
+        constexpr double kMarkKg = 2e-6;   // kg of water per streak drawn
+        constexpr double kDecades = 3.0;   // of water per cell the shades span
+        constexpr int kMostPerCell = 12;   // streaks
+        constexpr float kStreakM = 0.03F;  // a streak's length
+        constexpr float kFallMps = 0.8F;   // how fast the streaks go down in their cell
+        constexpr int kColours = 4;
+        static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
+                                                  theme::hex(0x21918C), theme::hex(0x5EC962),
+                                                  theme::hex(0xFDE725)};
+        // The realistic view draws the drops as mist whenever the run has spray; the Overlays
+        // row draws them as streaks coloured by the map.
+        const bool asWater = !renderOptions_.spray && foamStream_ != nullptr;
+        if (!renderOptions_.spray && !asWater) {
+            if (sprayStream_ && !foamStream_) {
+                (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
+            }
+            sprayStream_.reset();
+            return;
+        }
+        if (asWater) {
+            // The realistic view draws the drops as what they look like at the distances it is
+            // seen from: mist (realistic.slang's spray march, their extinction). A drop of
+            // 50 to 450 µm subtends 0.15 mrad at 3 m, under a third of a 1080p pixel (about
+            // 0.5 mrad at 60°): one by one they are not seen, only together. No streaks.
+            sprayStream_.reset();
+            return;
+        }
+        if (!sprayStream_) {
+            sprayStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = sprayStream_->latestVolume();
+        if (!volume || volume->components != 1U || volume->valueMax <= 0.0F) {
+            return;
+        }
+        sprayTime_ += std::clamp(ImGui::GetIO().DeltaTime, 0.0F, 0.1F);
+        const std::size_t first = airflowOverlays_.size();
+        airflowOverlays_.resize(first + kColours);
+        for (int c = 0; c < kColours; ++c) {
+            const float t = (static_cast<float>(c) + 0.5F) / kColours * 4.0F;
+            const auto index = std::min(static_cast<std::size_t>(t), std::size_t{3});
+            const float blend = t - static_cast<float>(index);
+            const ImVec4& a = kStops.at(index);
+            const ImVec4& b = kStops.at(index + 1);
+            OverlayLines& lines = airflowOverlays_[first + static_cast<std::size_t>(c)];
+            lines.origin = volume->origin;
+            lines.color = {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
+                           a.z + (b.z - a.z) * blend, 1.0F};
+            lines.vertices.clear();
+        }
+        const double cellVolume = volume->cellM * volume->cellM * volume->cellM;
+        const auto cell = static_cast<float>(volume->cellM);
+        for (std::uint32_t z = 0; z < volume->nz; ++z) {
+            for (std::uint32_t y = 0; y < volume->ny; ++y) {
+                for (std::uint32_t x = 0; x < volume->nx; ++x) {
+                    const std::size_t i =
+                        (static_cast<std::size_t>(z) * volume->ny + y) * volume->nx + x;
+                    const float water = volume->values[i];
+                    if (!(water > 0.0F)) {
+                        continue;
+                    }
+                    // As many streaks as the cell's water holds marks (none for less than
+                    // half a mark: a lone parcel far out is not drawn as a cell full of drops),
+                    // shaded on a log scale over kDecades below the box's most, so that the
+                    // thin spray far out does not read as dense as the cloud at the drone.
+                    const int marks = std::min(
+                        kMostPerCell, static_cast<int>(std::lround(water * cellVolume / kMarkKg)));
+                    if (marks == 0) {
+                        continue;
+                    }
+                    const double share =
+                        1.0 + std::log10(std::max(water / volume->valueMax, 1e-9F)) / kDecades;
+                    const int c = std::clamp(static_cast<int>(share * kColours), 0, kColours - 1);
+                    std::vector<float>& out =
+                        airflowOverlays_[first + static_cast<std::size_t>(c)].vertices;
+                    for (int m = 0; m < marks; ++m) {
+                        // A fixed place in the cell per mark (a hash of the cell and the mark).
+                        std::uint32_t h = static_cast<std::uint32_t>(i) * 2654435761U +
+                                          static_cast<std::uint32_t>(m) * 40503U;
+                        const auto next = [&h] {
+                            h ^= h << 13U;
+                            h ^= h >> 17U;
+                            h ^= h << 5U;
+                            return static_cast<float>(h & 0xFFFFU) / 65535.0F - 0.5F;
+                        };
+                        const float px = (static_cast<float>(x) + next()) * cell;
+                        const float py = (static_cast<float>(y) + next()) * cell;
+                        const float fall =
+                            std::fmod(sprayTime_ * kFallMps + (next() + 0.5F) * cell, cell);
+                        const float pz = (static_cast<float>(z) + 0.5F) * cell - fall;
+                        out.insert(out.end(), {px, py, pz + kStreakM, px, py, pz});
+                    }
+                }
+            }
+        }
+    }
+
+    /// The water's moving surface for the realistic view (water.md "The surface under a rotor"):
+    /// the server's water/surface volume (the first body of water's patch, heights over the still
+    /// level), the air's friction velocity on it (the ripples and whitecaps, water_optics) and
+    /// the aero/spray volume (the mist). Watched only while the realistic view draws and the run
+    /// has them; only through the protocol.
+    void followWaterSurface() {
+        const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
+        const auto available = [&](const char* name) {
+            return info && std::ranges::any_of(info->fields, [&](const EnvironmentInfo::Field& f) {
+                       return f.name == name && f.available;
+                   });
+        };
+        const bool wanted = renderOptions_.shading == Shading::Realistic;
+        if (!wanted || !available(kWaterSurfaceField)) {
+            if (surfaceStream_) {
+                (void)client_.watchField(kWaterSurfaceField, 0.0, SliceOrientation::Horizontal,
+                                         false);
+                surfaceStream_.reset();
+            }
+            if (foamStream_ && !sprayStream_) {
+                (void)client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, false);
+            }
+            foamStream_.reset();
+            if (frictionStream_) {
+                (void)client_.watchField(kWaterFrictionField, 0.0, SliceOrientation::Horizontal,
+                                         false);
+                frictionStream_.reset();
+            }
+            frictionOf_.reset();
+            renderOptions_.waterSurface.reset();
+            renderOptions_.spray3d.reset();
+            surfaceOf_.reset();
+            return;
+        }
+        if (!surfaceStream_) {
+            surfaceStream_ =
+                client_.watchField(kWaterSurfaceField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        if (!foamStream_ && available(kSprayField)) {
+            foamStream_ = client_.watchField(kSprayField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = surfaceStream_->latestVolume();
+        if (!frictionStream_ && available(kWaterFrictionField)) {
+            frictionStream_ =
+                client_.watchField(kWaterFrictionField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> spray =
+            foamStream_ ? foamStream_->latestVolume() : nullptr;
+        const std::shared_ptr<const FieldVolumeData> friction =
+            frictionStream_ ? frictionStream_->latestVolume() : nullptr;
+        if (!volume || volume->components != 1U || volume->nx != volume->ny || volume->nz != 1U ||
+            volume->values.size() != static_cast<std::size_t>(volume->nx) * volume->ny) {
+            return;
+        }
+        if (volume == surfaceOf_ && spray == foamOf_ && friction == frictionOf_) {
+            return;  // nothing new
+        }
+        surfaceOf_ = volume;
+        foamOf_ = spray;
+        frictionOf_ = friction;
+        renderOptions_.spray3d.reset();
+        if (spray && spray->components == 1U && spray->cellM > 0.0 && spray->valueMax > 0.0 &&
+            spray->values.size() == static_cast<std::size_t>(spray->nx) * spray->ny * spray->nz) {
+            auto mist = std::make_shared<RenderOptions::Spray>();
+            mist->cells = {spray->nx, spray->ny, spray->nz};
+            mist->cell = spray->cellM;
+            mist->first = spray->origin;
+            mist->water = spray->values;
+            renderOptions_.spray3d = std::move(mist);
+        }
+        auto look = std::make_shared<RenderOptions::WaterSurface>();
+        look->cells = volume->nx;
+        look->cell = volume->cellM;
+        look->first = {volume->origin[0], volume->origin[1]};
+        look->heights = volume->values;
+        // The air's friction velocity in the same grid, interleaved x, y per cell: x for every
+        // cell, then y (RealisticWaterSurface::friction).
+        const std::size_t cells = look->heights.size();
+        if (friction && friction->components == 2U && friction->nx == volume->nx &&
+            friction->ny == volume->ny && friction->values.size() == 2 * cells &&
+            std::abs(friction->origin[0] - volume->origin[0]) < 1e-6 &&
+            std::abs(friction->origin[1] - volume->origin[1]) < 1e-6) {
+            look->friction.resize(2 * cells);
+            for (std::size_t i = 0; i < cells; ++i) {
+                look->friction[i] = friction->values[2 * i];
+                look->friction[cells + i] = friction->values[2 * i + 1];
+            }
+        }
+        renderOptions_.waterSurface = std::move(look);
+    }
+
+    /// Plants cut by propellers for the realistic view (ground.md "Cutting the plants"): the
+    /// server's vegetation/cut volume, the cut tops in a grid. Watched only while the realistic
+    /// view draws and the run has it; only through the protocol.
+    void followCutPlants() {
+        const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
+        const bool available =
+            info && std::ranges::any_of(info->fields, [&](const EnvironmentInfo::Field& f) {
+                return f.name == kCutField && f.available;
+            });
+        if (renderOptions_.shading != Shading::Realistic || !available) {
+            if (cutStream_) {
+                (void)client_.watchField(kCutField, 0.0, SliceOrientation::Horizontal, false);
+                cutStream_.reset();
+            }
+            cutOf_.reset();
+            renderOptions_.cutPlants.reset();
+            return;
+        }
+        if (!cutStream_) {
+            cutStream_ = client_.watchField(kCutField, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = cutStream_->latestVolume();
+        if (!volume || volume == cutOf_) {
+            return;
+        }
+        cutOf_ = volume;
+        if (volume->components != 1U || volume->nz != 1U || volume->nx == 0U || volume->ny == 0U ||
+            volume->cellM <= 0.0 ||
+            volume->values.size() != static_cast<std::size_t>(volume->nx) * volume->ny) {
+            renderOptions_.cutPlants.reset();  // nothing cut (yet, or after a reset)
+            return;
+        }
+        auto cut = std::make_shared<RenderOptions::CutPlants>();
+        cut->cells = {volume->nx, volume->ny};
+        cut->cell = volume->cellM;
+        cut->first = {volume->origin[0], volume->origin[1]};
+        cut->level = volume->origin[2];
+        cut->tops = volume->values;
+        renderOptions_.cutPlants = std::move(cut);
+    }
+
+    /// Trees for the 3D view (ground.md "Trees"), only through the protocol (invariant 14): the
+    /// TreeAPI_1 prims of the scene, their tree:* attributes (asked for with the lamps', with
+    /// Trees.hpp's fallbacks), their poses, tree/<n>/sway and the server's vegetation/tree_cut
+    /// volume (watched while a shading draws them: all but Collision), and vegetation/leaves
+    /// (the realistic view's flying leaves).
+    void followTrees() {
+        renderOptions_.trees.clear();
+        const auto frame = scene_;
+        if (!frame || !frame->statics) {
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        const bool realistic = renderOptions_.shading == Shading::Realistic;
+        const auto stopSway = [&] {
+            for (SceneTree& tree : trees_) {
+                for (std::shared_ptr<ScopeBuffer>& b : tree.sway) {
+                    if (b) {
+                        client_.unsubscribe(b);
+                        b.reset();
+                    }
+                }
+            }
+            treeCatalog_.reset();
+        };
+        if (statics.generation != treeGeneration_) {
+            treeGeneration_ = statics.generation;
+            stopSway();
+            trees_.clear();
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const PrimData& prim = statics.prims[i];
+                if (std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(), "TreeAPI_1") ==
+                    prim.apiSchemas.end()) {
+                    continue;
+                }
+                SceneTree& tree = trees_.emplace_back();
+                tree.prim = static_cast<std::uint32_t>(i);
+                tree.name = prim.name;
+                // Its look's seed: from its name, so it is the same tree in every run.
+                std::uint32_t seed = 2166136261U;
+                for (const char c : prim.name) {
+                    seed = (seed ^ static_cast<unsigned char>(c)) * 16777619U;
+                }
+                tree.seed = seed & 0xffffffU;
+            }
+            treeAttributes_.reset();
+        }
+        const auto watch = [&](std::shared_ptr<FieldStream>& stream, const char* name,
+                               bool wanted) {
+            const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
+            const bool available =
+                wanted && info && std::ranges::any_of(info->fields, [&](const auto& f) {
+                    return f.name == name && f.available;
+                });
+            if (available && !stream) {
+                stream = client_.watchField(name, 0.0, SliceOrientation::Horizontal, true);
+            } else if (!available && stream) {
+                (void)client_.watchField(name, 0.0, SliceOrientation::Horizontal, false);
+                stream.reset();
+            }
+            return available;
+        };
+        // Every shading draws the trees but Collision (realistic.slang vsTree in the realistic
+        // view, gpu/TreeShapes.hpp's trunk and clumps in the others), swayed and cut alike.
+        const bool drawn = renderOptions_.shading != Shading::Collision && !trees_.empty();
+        if (!drawn) {
+            stopSway();
+        }
+        if (!watch(treeCutStream_, kTreeCutField, drawn)) {
+            treeCutsOf_.reset();
+            renderOptions_.treeCuts.reset();
+        }
+        if (!watch(leavesStream_, kLeavesField, realistic)) {
+            leavesOf_.reset();
+            renderOptions_.leaves.reset();
+        }
+        if (trees_.empty()) {
+            return;
+        }
+        // Their numbers, with the fallbacks of TreeAPI_1 (lagrange/world/Trees.hpp treesOf).
+        const auto attributes = client_.attributesOf();
+        if (attributes != treeAttributes_) {
+            treeAttributes_ = attributes;
+            for (SceneTree& tree : trees_) {
+                const auto it = attributes->find(tree.prim);
+                if (it == attributes->end()) {
+                    continue;
+                }
+                const auto number = [&](const char* name, double fallback) {
+                    for (const AttributeInfo& a : it->second.attributes) {
+                        if (a.name == name && !a.numbers.empty()) {
+                            return a.numbers.front();
+                        }
+                    }
+                    return fallback;
+                };
+                constexpr double kCrownBaseShare = 0.3;  // Trees.hpp kTreeCrownBaseShare
+                constexpr double kTrunkShare = 0.125;    // Trees.hpp kTreeTrunkShare
+                tree.height = number("tree:height", 0.0);
+                tree.crownRadius = number("tree:crownRadius", 0.0);
+                tree.crownBase = number("tree:crownBase", kCrownBaseShare * tree.height);
+                tree.trunkDiameter = number("tree:trunkDiameter", kTrunkShare * tree.crownRadius);
+                tree.known = tree.height > 0.0 && tree.crownRadius > 0.0 && tree.crownBase >= 0.0 &&
+                             tree.crownBase < tree.height;
+            }
+        }
+        if (drawn) {
+            const auto catalog = client_.catalog();
+            if (catalog && catalog != treeCatalog_) {
+                stopSway();
+                treeCatalog_ = catalog;
+                for (SceneTree& tree : trees_) {
+                    const std::string name = "tree/" + tree.name + "/sway";
+                    if (catalog->find(name) != nullptr) {
+                        for (std::uint32_t k = 0; k < 3; ++k) {
+                            tree.sway.at(k) = client_.watchSignal(name, k);
+                        }
+                    }
+                }
+            }
+        }
+        for (const SceneTree& tree : trees_) {
+            if (!tree.known || tree.prim >= frame->transforms.size()) {
+                continue;
+            }
+            const Transform& at = frame->transforms[tree.prim];
+            RenderOptions::Tree& out = renderOptions_.trees.emplace_back();
+            out.foot = at.position;
+            out.rotation = at.rotation;
+            out.height = tree.height;
+            out.crownRadius = tree.crownRadius;
+            out.crownBase = tree.crownBase;
+            out.trunkDiameter = tree.trunkDiameter;
+            out.seed = tree.seed;
+            for (std::size_t k = 0; k < 3; ++k) {
+                const auto& b = tree.sway.at(k);
+                const double v = b ? b->latest() : 0.0;
+                out.sway.at(k) = std::isfinite(v) ? v : 0.0;
+            }
+        }
+        // The cut cells, by their tree's scene prim.
+        if (treeCutStream_) {
+            const std::shared_ptr<const FieldVolumeData> volume = treeCutStream_->latestVolume();
+            if (volume && volume != treeCutsOf_) {
+                treeCutsOf_ = volume;
+                auto cuts = std::make_shared<std::vector<RenderOptions::TreeCut>>();
+                if (volume->components == 1U && volume->ny == 1U && volume->nz == 1U) {
+                    const std::vector<float>& v = volume->values;
+                    for (std::size_t at = 0; at + 3 < v.size(); at += 4) {
+                        if (!std::isfinite(v[at])) {
+                            continue;
+                        }
+                        const auto prim = static_cast<std::uint32_t>(v[at]);
+                        const auto it = std::ranges::find(trees_, prim, &SceneTree::prim);
+                        if (it == trees_.end()) {
+                            continue;
+                        }
+                        // Its index among the trees drawn (those whose numbers are known).
+                        std::uint32_t index = 0;
+                        for (auto t = trees_.begin(); t != it; ++t) {
+                            index += t->known ? 1U : 0U;
+                        }
+                        cuts->push_back({index,
+                                         {static_cast<std::int32_t>(v[at + 1]),
+                                          static_cast<std::int32_t>(v[at + 2]),
+                                          static_cast<std::int32_t>(v[at + 3])}});
+                    }
+                }
+                renderOptions_.treeCuts = std::move(cuts);
+            }
+        }
+        // The flying leaves.
+        if (leavesStream_) {
+            const std::shared_ptr<const FieldVolumeData> volume = leavesStream_->latestVolume();
+            if (volume && volume != leavesOf_) {
+                leavesOf_ = volume;
+                auto leaves = std::make_shared<std::vector<RenderOptions::Leaf>>();
+                constexpr std::size_t kFields = 6;  // Leaves.hpp kLeavesFields
+                if (volume->components == 1U && volume->ny == 1U && volume->nz == 1U) {
+                    const std::vector<float>& v = volume->values;
+                    for (std::size_t at = 0; at + kFields <= v.size(); at += kFields) {
+                        if (!std::isfinite(v[at]) || !std::isfinite(v[at + 5])) {
+                            continue;
+                        }
+                        leaves->push_back(
+                            {{volume->origin[0] + v[at], volume->origin[1] + v[at + 1],
+                              volume->origin[2] + v[at + 2]},
+                             v[at + 3],
+                             v[at + 4],
+                             v[at + 5]});
+                    }
+                }
+                renderOptions_.leaves = std::move(leaves);
+            }
         }
     }
 
@@ -1951,9 +2617,12 @@ public:
                                names.find("radar") != std::string::npos;
         renderOptions_.airflow =
             renderOptions_.airflow || names.find("airflow") != std::string::npos;
+        renderOptions_.spray = renderOptions_.spray || names.find("spray") != std::string::npos;
     }
     /// The field and plane the Slice 2D panel starts on ("aero/wind_speed:xz").
     void setSlice(std::string slice) { slice_ = std::move(slice); }
+    void setWaterRelief(float relief) { renderOptions_.waterRelief = relief; }
+    void setWaterCdom(float a440) { renderOptions_.waterCdom = a440; }
     void setSeason(const std::string& name) {
         if (name == "fall") {
             renderOptions_.season = Season::Fall;
@@ -2032,6 +2701,7 @@ private:
             any = true;
         }
         if (!any) {
+            applyStartView();  // a world of only large things: --camera still holds
             return;
         }
         double size = 0.0;
@@ -2047,6 +2717,10 @@ private:
             }
             renderOptions_.follow = true;
         }
+        applyStartView();
+    }
+
+    void applyStartView() {
         if (startView_) {
             camera_.target = {(*startView_)[0], (*startView_)[1], (*startView_)[2]};
             camera_.distance = (*startView_)[3];
@@ -2115,7 +2789,60 @@ private:
     std::vector<OverlayLines> cableOverlays_;  // the scene's cables (RFC 0011)
     std::shared_ptr<const SignalCatalog> snowCatalog_;
     std::shared_ptr<ScopeBuffer> snowRate_, snowCover_;
+    struct SceneLamp {  // per LampAPI_1 prim (RFC 0021 §7)
+        std::uint32_t prim{0};
+        std::shared_ptr<ScopeBuffer> intensity;  // lamp/<name>/intensity
+        RenderOptions::Lamp look;                // its attributes; pose and output per frame
+        bool point{false}, beacon{false}, known{false};
+        double rotationSpeed{0.0};  // rad/s, a beacon's
+    };
+    std::vector<SceneLamp> lamps_;
+    struct SceneRotor {  // per rotor/<j>/thrust (gpu/GroundAir.hpp)
+        std::string name;
+        std::uint32_t link{kNone};  // the prim of joint/<j>/*: its child link
+        std::shared_ptr<ScopeBuffer> thrust, induced;
+        std::array<std::shared_ptr<ScopeBuffer>, 3> axis;  // thrust_axis x, y, z
+    };
+    std::vector<SceneRotor> rotors_;
+    std::shared_ptr<ScopeBuffer> airDensity_;  // env/air_density, kg/m³
+    std::shared_ptr<const SignalCatalog> rotorCatalog_;
+    std::uint64_t lampGeneration_{0};
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> lampAttributes_;
+    std::shared_ptr<const SignalCatalog> skyCatalog_;
+    std::shared_ptr<ScopeBuffer> skyIlluminance_;  // env/sky_illuminance, lx
     static constexpr const char* kAirField = "aero/wind_speed";
+    static constexpr const char* kSprayField = "aero/spray";
+    std::shared_ptr<FieldStream> sprayStream_;
+    static constexpr const char* kWaterSurfaceField = "water/surface";
+    static constexpr const char* kCutField = "vegetation/cut";
+    std::shared_ptr<FieldStream> cutStream_;  // the realistic view's cut plants
+    /// A tree of the scene (TreeAPI_1), for the realistic view (followTrees).
+    struct SceneTree {
+        std::uint32_t prim{kNone};
+        std::string name;
+        double height{0.0}, crownRadius{0.0}, crownBase{0.0}, trunkDiameter{0.0};
+        bool known{false};  // its tree:* attributes arrived and make a tree
+        std::uint32_t seed{0};
+        std::array<std::shared_ptr<ScopeBuffer>, 3> sway;  // tree/<n>/sway x, y, z
+    };
+    std::vector<SceneTree> trees_;
+    std::uint64_t treeGeneration_{0};
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> treeAttributes_;
+    std::shared_ptr<const SignalCatalog> treeCatalog_;
+    static constexpr const char* kTreeCutField = "vegetation/tree_cut";
+    static constexpr const char* kLeavesField = "vegetation/leaves";
+    std::shared_ptr<FieldStream> treeCutStream_;
+    std::shared_ptr<const FieldVolumeData> treeCutsOf_;
+    std::shared_ptr<FieldStream> leavesStream_;
+    std::shared_ptr<const FieldVolumeData> leavesOf_;
+    std::shared_ptr<const FieldVolumeData> cutOf_;  // what cutPlants was made of
+    std::shared_ptr<FieldStream> surfaceStream_;    // the realistic view's moving water
+    std::shared_ptr<FieldStream> foamStream_;       // the spray for its foam
+    static constexpr const char* kWaterFrictionField = "water/friction_velocity";
+    std::shared_ptr<FieldStream> frictionStream_;  // the air's rub on it, for its ripples
+    std::shared_ptr<const FieldVolumeData> surfaceOf_, foamOf_,
+        frictionOf_;         // what waterSurface was made of
+    float sprayTime_{0.0F};  // s, for the streaks' fall
     struct Particle {
         std::array<double, 3> at{};  // region frame, m
         float age{0.0F};             // s
@@ -2388,6 +3115,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
         ui.setSlice(options.slice);
+        ui.setWaterRelief(options.waterRelief);
+        ui.setWaterCdom(options.waterCdom);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
@@ -2789,6 +3518,10 @@ bool createSwapchain(const gpu::Device& device, SDL_Window* window, Swapchain& s
 }
 
 int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspace workspace) {
+    // The app id names the window to the desktop (Wayland's xdg-shell app_id, X11's WM_CLASS),
+    // so the dock and app grid group it under Lagrange's desktop entry and icon, whose file is
+    // <id>.desktop with StartupWMClass=<id> (viewer/assets/desktop/). Set before SDL_Init.
+    SDL_SetAppMetadata("Lagrange", nullptr, kDesktopAppId);
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "error: cannot initialise the window system: %s\n", SDL_GetError());
         return 3;
@@ -2888,6 +3621,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
         ui.setSlice(options.slice);
+        ui.setWaterRelief(options.waterRelief);
+        ui.setWaterCdom(options.waterCdom);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);

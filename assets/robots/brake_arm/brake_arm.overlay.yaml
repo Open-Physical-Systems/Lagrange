@@ -1,0 +1,20 @@
+# The arm's holding brake (RFC 0020, "Also worth adding"; docs/physics/actuators.md "Holding
+# brakes"): a spring-applied, power-off brake on the shoulder, released by a 24 V coil. Applied to
+# brake_arm.urdf by `lagrange_server --overlay`. Parameters are illustrative, of the size a small
+# servo-motor brake's datasheet gives, not a real product:
+#   5 N·m holding (static), 4 N·m dynamic, against the arm's 2.94 N·m;
+#   coil 48 Ω and 0.5 H (0.5 A, 12 W, τ = 10.4 ms): it lets go at 0.35 A, 12.5 ms after power
+#   on, and is applied again at 0.15 A, 12.5 ms after power off (the diode freewheeling).
+# Release it with /shoulder/release (Bool) or `Server::commandActuator("shoulder", 1)`.
+schema_version: 1
+apply:
+  - prim: shoulder
+    schemas:
+      BrakeAPI_1:
+        act:brake:holdingTorque: 5.0             # N·m
+        act:brake:dynamicTorque: 4.0             # N·m
+        act:brake:coilResistance: 48.0           # ohm
+        act:brake:coilInductance: 0.5            # H
+        act:brake:ratedVoltage: 24.0             # V
+        act:brake:releaseCurrent: 0.35           # A
+        act:brake:dropoutCurrent: 0.15           # A

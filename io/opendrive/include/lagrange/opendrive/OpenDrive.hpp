@@ -3,13 +3,15 @@
 // OpenDRIVE road networks (formats.md: roads → USD; domains/traffic.md): an own reader for the
 // subset that describes geometry and lanes (ASAM OpenDRIVE 1.4–1.8: planView, elevation,
 // superelevation, lane offset, lane sections with width polynomials, lane heights and levels,
-// lane and road links, junction connections), and its conversion to a Model: road surface
-// meshes, road marks, RoadLaneAPI_1 lanes, and colliders for roads that leave the ground plane.
+// lane and road links, junction connections, objects and signals), and its conversion to a
+// Model: road surface meshes, road marks, RoadLaneAPI_1 lanes, colliders for roads that leave
+// the ground plane, and objects and signals as fixed scenery.
 
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/world/Model.hpp"
 
 #include <array>
+#include <cmath>
 #include <map>
 #include <optional>
 #include <string>
@@ -97,6 +99,71 @@ struct Link {
     bool contactEnd{false};  // contactPoint="end" (roads only)
 };
 
+/// An object's <repeat> (ASAM OpenDRIVE 1.8 §13.2): copies every `distance` m from s over
+/// `length` (distance 0: one continuous object, such as a guard rail), the values linear from
+/// their start to their end; NaN where the record leaves a value to the object.
+struct Repeat {
+    double s{0.0}, length{0.0}, distance{0.0};
+    double tStart{0.0}, tEnd{0.0};
+    double heightStart{0.0}, heightEnd{0.0};
+    double zOffsetStart{0.0}, zOffsetEnd{0.0};
+    double widthStart{std::nan("")}, widthEnd{std::nan("")};
+    double lengthStart{std::nan("")}, lengthEnd{std::nan("")};
+    double radiusStart{std::nan("")}, radiusEnd{std::nan("")};
+    bool detach{false};  // detachFromReferenceLine: a straight line from start to end
+};
+
+/// One corner of an object's outline (§13.3): <cornerRoad> (a = s, b = t, z = dz, from the
+/// road's reference line elevation) or <cornerLocal> (a = u, b = v, z, in the object's frame).
+struct Corner {
+    double a{0.0}, b{0.0}, z{0.0}, height{0.0};
+};
+
+struct Outline {
+    bool local{false};   // cornerLocal
+    bool closed{false};  // an area; else a linear feature along the corners
+    std::vector<Corner> corners;
+};
+
+/// An <object> (§13.1): its origin at s and t on the road surface, zOffset above it; heading
+/// relative to the road's direction, pitch and roll; a box (length along u, width along v,
+/// height up from the origin) or a cylinder (radius); repeats and outlines.
+struct Object {
+    std::string id, name, type, subtype;
+    double s{0.0}, t{0.0}, zOffset{0.0};
+    double hdg{0.0}, pitch{0.0}, roll{0.0};
+    double length{0.0}, width{0.0}, height{0.0}, radius{0.0};
+    bool dynamic{false};
+    std::vector<Repeat> repeats;
+    std::vector<Outline> outlines;
+};
+
+/// A <signal> (§14.1): a sign or a traffic light at s and t, its origin (the bottom of the
+/// board) zOffset above the road surface there; it faces the traffic it applies to (orientation
+/// "+": travelling along s, "-": against it) turned by hOffset. Its <validity> elements
+/// (§14.3) name the lanes it applies to, fromLane to toLane; none: every lane of its side.
+struct Signal {
+    std::string id, name, type, subtype, country, orientation, text;
+    double s{0.0}, t{0.0}, zOffset{0.0}, hOffset{0.0}, pitch{0.0}, roll{0.0};
+    double height{0.0}, width{0.0}, length{0.0};
+    double value{std::nan("")};
+    bool dynamic{false};
+    std::vector<std::pair<int, int>> validity;  // fromLane, toLane
+};
+
+/// A <controller> (§14.6): the signals that switch together, each by its <control signalId>.
+struct Controller {
+    std::string id, name;
+    std::optional<int> sequence;
+    std::vector<std::string> signals;  // the signal ids it controls
+};
+
+/// A junction's <controller> entry: a controller of its signals, in `sequence` order.
+struct JunctionController {
+    std::string id, type;
+    std::optional<int> sequence;
+};
+
 struct Road {
     int id{0};
     std::string name;
@@ -111,6 +178,8 @@ struct Road {
     std::vector<Poly3> superelevation;
     std::vector<Poly3> laneOffset;
     std::vector<LaneSection> sections;
+    std::vector<Object> objects;
+    std::vector<Signal> signals;
 };
 
 struct Connection {
@@ -123,11 +192,13 @@ struct Connection {
 struct Junction {
     int id{0};
     std::vector<Connection> connections;
+    std::vector<JunctionController> controllers;
 };
 
 struct Network {
     std::vector<Road> roads;
     std::vector<Junction> junctions;
+    std::vector<Controller> controllers;
     [[nodiscard]] const Road* road(int id) const;
 };
 
@@ -152,6 +223,25 @@ struct Network {
 /// inner to outer border. Lane 0 (the centre) is pointAt.
 [[nodiscard]] std::array<double, 3> lanePoint(const Road& road, const LaneSection& section, int id,
                                               double s, double t);
+/// One placed copy of an object: its origin's pose (x along the object's u axis, z up) and its
+/// size there (length, width, height, radius; 0 where it has none).
+struct Placement {
+    Pose pose;
+    double length{0.0}, width{0.0}, height{0.0}, radius{0.0};
+};
+
+/// The road surface point at s and t, `up` above it (pointAt raised along z).
+[[nodiscard]] std::array<double, 3> surfacePoint(const Road& road, double s, double t, double up);
+/// The pose of a frame on the road at s and t, zOffset up, its heading `hdg` from the road's
+/// direction there, then pitch and roll (z-y'-x'', §8).
+[[nodiscard]] Pose roadPose(const Road& road, double s, double t, double zOffset, double hdg,
+                            double pitch, double roll);
+/// Every copy of an object: the object itself when it has no discrete repeat, else one per
+/// repeat step (repeats with distance 0 are continuous, see continuousPath).
+[[nodiscard]] std::vector<Placement> placements(const Road& road, const Object& object);
+/// The pose of a signal's board: its bottom centre, x the direction its face looks in.
+[[nodiscard]] Pose signalPose(const Road& road, const Signal& signal);
+
 /// Whether a road leaves the ground plane: any elevation, superelevation or lane height.
 [[nodiscard]] bool raised(const Road& road);
 
@@ -164,13 +254,18 @@ struct ConvertOptions {
     double colliderStep{2.0};   // m
     double colliderDepth{0.3};  // m
     double friction{1.0};       // the slabs' Coulomb coefficient (dry asphalt, illustrative)
+    /// Objects and signals: drawn, and those that stand up collide (boxes, cylinders, hulls).
+    double objectFriction{0.8};  // their Coulomb coefficient (concrete, steel; illustrative)
 };
 
 /// A Model of the network: road surface meshes per lane type, kerb faces and road marks
 /// (scene; roads on the ground plane need no colliders, raised ones get slabs), and a
 /// RoadLaneAPI_1 prim per driving,
 /// biking, parking or sidewalk lane and lane section, linked to the lanes it continues into
-/// across sections, roads and junctions.
+/// across sections, roads and junctions; and a RoadSignalAPI_1 prim per dynamic signal (a
+/// traffic light: its validity, controller and that controller's sequence in its junction) at
+/// the middle of its face, under /<root>/signals. Dynamic signals are drawn as a dark housing
+/// on a pole: the traffic module lights their lamps.
 [[nodiscard]] Expected<Model, std::string> toModel(const Network& network,
                                                    const ConvertOptions& options = {});
 

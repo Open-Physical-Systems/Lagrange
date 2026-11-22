@@ -104,6 +104,18 @@ public:
     /// One step of `dt`: the ends move in a straight line from where they were to these.
     void step(double dt, const Vec3& anchor, const Vec3& attach,
               std::span<const Obstacle> obstacles, const Air& air);
+    /// A winch command for the steps from now on, as an operator or a feeder gives it while the
+    /// run goes (tether/<n>/*_command). Each field ≤ 0 is no command. With a length, the winch
+    /// pays out or reels in to it; else with a tension, it keeps that tension (as Winch::Tension);
+    /// else it does what the parameters say. A speed replaces params.winchSpeed as the most it
+    /// reels at.
+    struct WinchCommand {
+        double length{0.0};   // m
+        double tension{0.0};  // N
+        double speed{0.0};    // m/s
+    };
+    void command(const WinchCommand& c) { command_ = c; }
+
     /// The robots the ends are tied to (Obstacle::robot), -1 for none.
     void setEndRobots(int anchorRobot, int attachRobot) {
         anchorRobot_ = anchorRobot;
@@ -168,6 +180,7 @@ private:
     Vec3 anchor_{}, attach_{};
     double tensionAttach_{0.0}, tensionAnchor_{0.0}, winchSpeed_{0.0}, anchorFilter_{0.0};
     double winchIntegral_{0.0};
+    WinchCommand command_;
     Vec3 forceOnAttach_{};
     Vec3 forceOnAnchor_{};
     int contacts_{0};

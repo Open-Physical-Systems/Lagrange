@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <imgui_internal.h>  // ItemSize/ItemAdd for custom-drawn widgets
+#include <map>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,21 @@ const DomainName* findDomain(std::string_view domain) {
         }
     }
     return nullptr;
+}
+
+/// A domain the design does not name, as people read it: "vehicle_dynamics" is "Vehicle
+/// dynamics", "fire" is "Fire". Kept for the run (UI thread only), so the views stay valid.
+std::string_view humanName(std::string_view domain) {
+    static std::map<std::string, std::string, std::less<>> names;
+    if (const auto found = names.find(domain); found != names.end()) {
+        return found->second;
+    }
+    std::string name(domain);
+    std::ranges::replace(name, '_', ' ');
+    if (!name.empty() && name.front() >= 'a' && name.front() <= 'z') {
+        name.front() = static_cast<char>(name.front() - 'a' + 'A');
+    }
+    return names.emplace(std::string(domain), std::move(name)).first->second;
 }
 
 ImU32 u32(const ImVec4& color) {
@@ -162,12 +178,12 @@ ImVec4 domainColor(std::string_view domain) {
 
 std::string_view domainLabel(std::string_view domain) {
     const DomainName* entry = findDomain(domain);
-    return entry != nullptr ? entry->label : domain;
+    return entry != nullptr ? entry->label : humanName(domain);
 }
 
 std::string_view domainShortLabel(std::string_view domain) {
     const DomainName* entry = findDomain(domain);
-    return entry != nullptr ? entry->shortLabel : domain;
+    return entry != nullptr ? entry->shortLabel : humanName(domain);
 }
 
 void Mono(const ImVec4& color, const char* format, ...) {

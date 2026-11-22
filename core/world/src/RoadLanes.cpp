@@ -129,4 +129,46 @@ RoadLanes roadLanesOf(const WorldView& world) {
     return g;
 }
 
+std::vector<RoadSignal> roadSignalsOf(const WorldView& world, const RoadLanes& lanes) {
+    std::vector<RoadSignal> out;
+    for (const SchemaInstance* s : world.instancesOf("RoadSignalAPI_1")) {
+        RoadSignal g;
+        g.id = std::string(s->token("signal:id").value_or(""));
+        g.controller = std::string(s->token("signal:controller").value_or(""));
+        g.road = static_cast<int>(s->integer("signal:road").value_or(0));
+        g.s = s->real("signal:s").value_or(0.0);
+        g.junction = static_cast<int>(s->integer("signal:junction").value_or(-1));
+        g.sequence = static_cast<int>(s->integer("signal:sequence").value_or(-1));
+        g.height = s->real("signal:height").value_or(0.0);
+        g.face = world.primPoseInBody(s->prim);
+        const std::string_view orientation = s->token("signal:orientation").value_or("+");
+        int from = static_cast<int>(s->integer("signal:fromLane").value_or(0));
+        int to = static_cast<int>(s->integer("signal:toLane").value_or(0));
+        if (from == 0 && to == 0) {
+            // No validity: every lane of the side it faces.
+            from = orientation == "+" ? std::numeric_limits<int>::min() : 1;
+            to = orientation == "-" ? std::numeric_limits<int>::max() : -1;
+            if (orientation == "none") {
+                from = std::numeric_limits<int>::min();
+                to = std::numeric_limits<int>::max();
+            }
+        }
+        if (from > to) {
+            std::swap(from, to);
+        }
+        for (std::size_t i = 0; i < lanes.lanes.size(); ++i) {
+            const RoadLane& lane = lanes.lanes[i];
+            if (lane.sidewalk || lane.road != g.road || lane.lane == 0 || lane.lane < from ||
+                lane.lane > to) {
+                continue;
+            }
+            if (const auto at = lanes.find(lane.road, lane.lane, g.s); at && at->first == i) {
+                g.lanes.push_back(*at);
+            }
+        }
+        out.push_back(std::move(g));
+    }
+    return out;
+}
+
 }  // namespace lagrange

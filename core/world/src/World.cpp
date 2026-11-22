@@ -142,7 +142,7 @@ bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
         std::string_view name;
         SurfaceMaterial material;
     };
-    static constexpr std::array<Row, 9> kPresets{{
+    static constexpr std::array<Row, 15> kPresets{{
         {"default", {0.5, 0.5, 0.0, 0.0, false}},
         // A smooth water surface mirrors: about 2 % comes straight back at normal incidence
         // (Fresnel, n = 1.33) and nothing at a slant, and water absorbs what enters.
@@ -154,6 +154,44 @@ bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
         {"white_paint", {0.8, 0.7, 0.05, 0.0, false}},
         {"black_rubber", {0.05, 0.05, 0.0, 0.0, false}},
         {"retroreflector", {0.9, 0.9, 0.0, 0.0, true}},
+        // Grass (docs/physics/ground.md): green leaves reflect strongly in the near infrared
+        // and less at 1550 nm, where their water absorbs; the ground gives under a wheel.
+        // TODO(verify): every number below, against the sources in ground.md.
+        // Wheels (frictionScale, rollingResistance; ground.md "Wheels on grass"): `grass` is DRY
+        // grass; rain makes it wet through env/friction_scale (the weather), which the wheels
+        // multiply in, so `wet_grass` is for ground wet whatever the weather (do not use it with
+        // rain on, or the wetness counts twice). rollingResistance 0.08 lies in the range Wong
+        // (Theory of Ground Vehicles, Table 1.1, after Taborek) gives car tyres between an
+        // unpaved road (0.05) and a field (0.1-0.35); TODO(verify) the table's numbers and a
+        // turf-specific measurement (e.g. Holloway, Wilson and Drach 1989, SAE, ATV tyres on
+        // grass); frictionScale TODO(verify) against a tyre-on-grass friction measurement.
+        // Lidar columns: green vegetation sits on its near-infrared plateau at 905 nm (about
+        // half reflected) and lower at 1550 nm, between the leaf water bands at 1450 and
+        // 1940 nm; TODO(verify) 0.5 / 0.3 against the USGS Spectral Library v7 "Lawn_Grass
+        // GDS91" spectrum (Kokaly et al. 2017, USGS Data Series 1035) at those wavelengths. Wet
+        // grass: a film of water absorbs more at 1550 nm and adds a small mirror part
+        // (TODO(verify)). canopyHeight: a mown lawn's blades (5 cm) and uncut grass (40 cm),
+        // TODO(verify) against a mowing-height source; ShapeCaster.hpp's canopy return uses it.
+        {"grass", {0.5, 0.3, 0.0, 0.0, false, 0.9, 0.08, 0.05}},
+        {"wet_grass", {0.45, 0.2, 0.05, 0.0, false, 0.6, 0.1, 0.05}},
+        {"tall_grass", {0.5, 0.3, 0.0, 0.0, false, 0.9, 0.12, 0.4}},
+        // Emergent vegetation on banks and in channels (ground.md "Reeds and shrubs").
+        // reeds, common reed (Phragmites australis): culms reach up to about 3-4 m in full
+        // stands (TODO(verify) a measured height survey); 1.5 m is a low or young bank stand,
+        // the height this preset is for. LAI 4: TODO(verify) against reedbed measurements
+        // (e.g. LAI-2000 surveys of UK reedbeds, or LAI from specific leaf area in Dutch
+        // lake stands); the order of magnitude of a dense green canopy, not a measurement.
+        // shrub: 0.8 m, LAI 3, TODO(verify) both. Lidar columns as green leaves (grass's, from
+        // its TODO(verify) NIR plateau); frictionScale and rollingResistance TODO(verify).
+        // tall_grass: canopy 0.4 m and the default LAI 3 (TODO(verify)). The stems' drag on a
+        // body pushing through is lagrange_vegetation's, from canopyHeight and leafAreaIndex.
+        {"reeds", {0.5, 0.3, 0.0, 0.0, false, 0.8, 0.15, 1.5, 4.0, CanopyForm::Reeds}},
+        {"shrub", {0.5, 0.3, 0.0, 0.0, false, 0.9, 0.15, 0.8, 3.0, CanopyForm::Shrub}},
+        // Bark (ground.md "Branches"): the wood in a tree's crown, as the lidars see it. Dry bark
+        // is darker than green leaves in the near infrared and has no leaf water to absorb at
+        // 1550 nm. TODO(verify) 0.35 / 0.35 against a measured bark spectrum (e.g. the USGS
+        // Spectral Library v7, Kokaly et al. 2017, its bark samples) at those wavelengths.
+        {"bark", {0.35, 0.35, 0.0, 0.0, false}},
     }};
     for (const Row& row : kPresets) {
         if (row.name == name) {

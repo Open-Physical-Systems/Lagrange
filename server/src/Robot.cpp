@@ -10,9 +10,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -936,6 +938,273 @@ void addThermalElements(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId
     }
 }
 
+/// A link's <fire> (RFC 0022) as FireAPI_1 on its prim: attributes as in USD, in snake case;
+/// alpha also takes a t² growth class (slow, medium, fast, ultrafast); hrr_curve is "t Q t Q
+/// ...". What cannot be read is a note and the element is skipped.
+void addFireElement(Robot& robot, const tinyxml2::XMLElement& fire, PrimId prim) {
+    SchemaInstance s;
+    s.schema = "FireAPI_1";
+    s.prim = prim;
+    constexpr std::array<std::pair<const char*, const char*>, 3> kTokens{{
+        {"preset", "fire:preset"},
+        {"class", "fire:class"},
+        {"growth", "fire:growth"},
+    }};
+    for (const auto& [xml, attribute] : kTokens) {
+        if (const char* text = fire.Attribute(xml); text != nullptr) {
+            s.tokens[attribute] = text;
+        }
+    }
+    constexpr std::array<std::pair<const char*, const char*>, 19> kReals{{
+        {"hrr_per_area", "fire:hrrPerArea"},
+        {"area", "fire:area"},
+        {"fuel_mass", "fire:fuelMass"},
+        {"heat_of_combustion", "fire:heatOfCombustion"},
+        {"radiative_fraction", "fire:radiativeFraction"},
+        {"soot_yield", "fire:sootYield"},
+        {"pool_burning_rate", "fire:poolBurningRate"},
+        {"pool_extinction", "fire:poolExtinction"},
+        {"flame_temperature", "fire:flameTemperature"},
+        {"flame_absorption", "fire:flameAbsorption"},
+        {"ignition_temperature", "fire:ignitionTemperature"},
+        {"ignition_time", "fire:ignitionTime"},
+        {"blow_off_speed", "fire:blowOffSpeed"},
+        {"blow_off_max_hrr", "fire:blowOffMaxHrr"},
+        {"critical_water_rate", "fire:criticalWaterRate"},
+        {"oxygen_limit", "fire:oxygenLimit"},
+        {"decay_fraction", "fire:decayFraction"},
+        {"foam_blanket_thickness", "fire:foamBlanketThickness"},
+        {"alpha", "fire:alpha"},
+    }};
+    for (const auto& [xml, attribute] : kReals) {
+        const char* text = fire.Attribute(xml);
+        if (text == nullptr) {
+            continue;
+        }
+        double value = 0.0;
+        if (fire.QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+            s.reals[attribute] = value;
+        } else if (std::string_view(xml) == "alpha" && stage::fireGrowthAlpha(text)) {
+            s.reals[attribute] = *stage::fireGrowthAlpha(text);
+        } else {
+            robot.notes.push_back(std::string("fire: ") + xml + "=\"" + text +
+                                  "\" is not a number: the fire is skipped");
+            return;
+        }
+    }
+    if (const char* curve = fire.Attribute("hrr_curve"); curve != nullptr) {
+        std::istringstream in(curve);
+        std::vector<double> values;
+        for (double v = 0.0; in >> v;) {
+            values.push_back(v);
+        }
+        s.realArrays["fire:hrrCurve"] = std::move(values);
+    }
+    robot.world.schemaInstances.push_back(std::move(s));
+}
+
+/// A link's <lamp>s (RFC 0021): a prim each on link `body`, placed by xyz and rpy, with
+/// LampAPI_1. Its power and heat are added like any load's and node's (an overlay).
+void addLamps(Robot& robot, const tinyxml2::XMLElement& gazebo, std::size_t body) {
+    World& world = robot.world;
+    for (const tinyxml2::XMLElement* l = gazebo.FirstChildElement("lamp"); l != nullptr;
+         l = l->NextSiblingElement("lamp")) {
+        const char* name = l->Attribute("name");
+        if (name == nullptr || *name == '\0') {
+            robot.notes.push_back("lamp without a name: skipped");
+            continue;
+        }
+        Pose mount;
+        if (const auto xyz = threeNumbers(*l, "xyz")) {
+            mount.position = {(*xyz)[0], (*xyz)[1], (*xyz)[2]};
+        }
+        if (const auto rpy = threeNumbers(*l, "rpy")) {
+            mount.orientation = fromRpy((*rpy)[0], (*rpy)[1], (*rpy)[2]);
+        }
+        ScenePrim prim;
+        prim.name = name;
+        prim.parent = robot.bodyPrim[body];
+        prim.path = robot.scene.prims[prim.parent].path + "/" + name;
+        prim.typeName = "Xform";
+        prim.apiSchemas = {"LampAPI_1"};
+        prim.body = static_cast<std::uint32_t>(body);
+        prim.offset = mount;
+        SchemaInstance s;
+        s.schema = "LampAPI_1";
+        s.prim = world.addPrim(prim.path, name);
+        world.prims.body.back() = BodyId{static_cast<std::uint32_t>(body)};
+        world.prims.poseInBody.back() = mount;
+        robot.scene.prims.push_back(std::move(prim));
+        if (const char* kind = l->Attribute("kind"); kind != nullptr) {
+            s.tokens["lamp:kind"] = kind;
+        }
+        constexpr std::array<std::pair<const char*, const char*>, 12> kReals{{
+            {"intensity", "lamp:luminousIntensity"},
+            {"beam_angle", "lamp:beamAngle"},
+            {"field_angle", "lamp:fieldAngle"},
+            {"color_temperature", "lamp:colorTemperature"},
+            {"efficacy", "lamp:luminousEfficacy"},
+            {"heat_fraction", "lamp:heatFraction"},
+            {"rise_time", "lamp:riseTime"},
+            {"blink_frequency", "lamp:blinkFrequency"},
+            {"blink_duty", "lamp:blinkDuty"},
+            {"rotation_speed", "lamp:rotationSpeed"},
+            {"voltage_exponent", "lamp:voltageExponent"},
+            {"initial", "lamp:initialCommand"},
+        }};
+        for (const auto& [xml, attribute] : kReals) {
+            double value = 0.0;
+            if (l->QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                s.reals[attribute] = value;
+            }
+        }
+        if (const auto color = threeNumbers(*l, "color")) {
+            s.realArrays["lamp:color"] = *color;
+        }
+        world.schemaInstances.push_back(std::move(s));
+    }
+}
+
+/// A link's <suction_cup> and <magnet_gripper> (RFC 0020) as SuctionGripperAPI_1 and
+/// MagnetGripperAPI_1: on the link's prim (named after the link), or with name= or xyz= on a prim
+/// of their own under it.
+void addGrippers(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId linkPrim, BodyId body) {
+    World& world = robot.world;
+    struct Form {
+        const char* element;
+        const char* schema;
+        const char* prefix;
+        std::vector<std::pair<const char*, const char*>> reals;
+        const char* token;
+    };
+    const std::array<Form, 2> forms{{
+        {"suction_cup",
+         "SuctionGripperAPI_1",
+         "act:suction:",
+         {{"diameter", "diameter"},
+          {"volume", "volume"},
+          {"flow", "flow"},
+          {"ultimate_pressure", "ultimatePressure"},
+          {"seal_gap", "sealGap"},
+          {"max_tilt", "maxTilt"},
+          {"leak_conductance", "leakConductance"}},
+         nullptr},
+        {"magnet_gripper",
+         "MagnetGripperAPI_1",
+         "act:magnet:",
+         {{"turns", "turns"},
+          {"pole_area", "poleArea"},
+          {"iron_path_length", "ironPathLength"},
+          {"iron_permeability", "ironPermeability"},
+          {"saturation", "saturation"},
+          {"coil_resistance", "coilResistance"},
+          {"coil_inductance", "coilInductance"},
+          {"rated_voltage", "ratedVoltage"}},
+         "kind"},
+    }};
+    for (const Form& form : forms) {
+        for (const tinyxml2::XMLElement* e = gazebo.FirstChildElement(form.element); e != nullptr;
+             e = e->NextSiblingElement(form.element)) {
+            SchemaInstance s;
+            s.schema = form.schema;
+            s.prim = linkPrim;
+            const auto xyz = threeNumbers(*e, "xyz");
+            const char* name = e->Attribute("name");
+            const bool named = name != nullptr && *name != '\0';
+            if (xyz || named) {
+                const std::string own = named ? name : form.element;
+                s.prim = world.addPrim(world.prims.paths[linkPrim.index] + "/" + own, own);
+                world.prims.body[s.prim.index] = body;
+                if (xyz) {
+                    world.prims.poseInBody[s.prim.index].position = {(*xyz)[0], (*xyz)[1],
+                                                                     (*xyz)[2]};
+                }
+            }
+            const std::string prefix = form.prefix;
+            for (const auto& [xml, attribute] : form.reals) {
+                double value = 0.0;
+                if (e->QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                    s.reals[prefix + attribute] = value;
+                }
+            }
+            if (form.token != nullptr) {
+                if (const char* kind = e->Attribute(form.token); kind != nullptr) {
+                    s.tokens[prefix + form.token] = kind;
+                }
+            }
+            if (const auto axis = threeNumbers(*e, "axis")) {
+                s.realArrays[prefix + "axis"] = *axis;
+            }
+            world.schemaInstances.push_back(std::move(s));
+        }
+    }
+}
+
+/// A link's <nozzle> and <water_tank> (RFC 0022 §8) as NozzleAPI_1 and TankAPI_1: on the link's
+/// prim, or with name= or xyz= on a prim of their own under it. A nozzle's tank= names the tank
+/// (its name=, else its link), resolved once every link is read: into `tanks` go the nozzle's
+/// schema instance and that name.
+void addNozzles(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId linkPrim, BodyId body,
+                std::vector<std::pair<std::size_t, std::string>>& tanks) {
+    World& world = robot.world;
+    const auto prim = [&](const tinyxml2::XMLElement& e, const char* fallback) {
+        const auto xyz = threeNumbers(e, "xyz");
+        const char* name = e.Attribute("name");
+        const bool named = name != nullptr && *name != '\0';
+        if (!xyz && !named) {
+            return linkPrim;
+        }
+        const std::string own = named ? name : fallback;
+        const PrimId p = world.addPrim(world.prims.paths[linkPrim.index] + "/" + own, own);
+        world.prims.body[p.index] = body;
+        if (xyz) {
+            world.prims.poseInBody[p.index].position = {(*xyz)[0], (*xyz)[1], (*xyz)[2]};
+        }
+        return p;
+    };
+    const auto reals = [](const tinyxml2::XMLElement& e, SchemaInstance& s, const char* prefix,
+                          std::initializer_list<std::pair<const char*, const char*>> names) {
+        for (const auto& [xml, attribute] : names) {
+            double value = 0.0;
+            if (e.QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                s.reals[std::string(prefix) + attribute] = value;
+            }
+        }
+    };
+    for (const tinyxml2::XMLElement* e = gazebo.FirstChildElement("water_tank"); e != nullptr;
+         e = e->NextSiblingElement("water_tank")) {
+        SchemaInstance s;
+        s.schema = "TankAPI_1";
+        s.prim = prim(*e, "water_tank");
+        reals(*e, s, "act:tank:",
+              {{"capacity", "capacity"}, {"initial", "initial"}, {"density", "density"}});
+        world.schemaInstances.push_back(std::move(s));
+    }
+    for (const tinyxml2::XMLElement* e = gazebo.FirstChildElement("nozzle"); e != nullptr;
+         e = e->NextSiblingElement("nozzle")) {
+        SchemaInstance s;
+        s.schema = "NozzleAPI_1";
+        s.prim = prim(*e, "nozzle");
+        reals(*e, s, "act:nozzle:",
+              {{"diameter", "diameter"},
+               {"discharge_coefficient", "dischargeCoefficient"},
+               {"pressure", "pressure"},
+               {"foam_expansion", "foamExpansion"},
+               {"spray_half_angle", "sprayHalfAngle"},
+               {"pump_efficiency", "pumpEfficiency"}});
+        if (const char* agent = e->Attribute("agent"); agent != nullptr) {
+            s.tokens["act:nozzle:agent"] = agent;
+        }
+        if (const auto axis = threeNumbers(*e, "axis")) {
+            s.realArrays["act:nozzle:axis"] = *axis;
+        }
+        world.schemaInstances.push_back(std::move(s));
+        if (const char* tank = e->Attribute("tank"); tank != nullptr && *tank != '\0') {
+            tanks.emplace_back(world.schemaInstances.size() - 1, tank);
+        }
+    }
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 /// Why a sensor of the file cannot be read (it refuses the model), or empty.
 std::string addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
@@ -945,10 +1214,27 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
     }
     const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
     World& world = robot.world;
+    std::vector<std::pair<std::size_t, std::string>> nozzleTanks;
     for (const tinyxml2::XMLElement* gazebo = top != nullptr ? top->FirstChildElement("gazebo")
                                                              : nullptr;
          gazebo != nullptr; gazebo = gazebo->NextSiblingElement("gazebo")) {
         const char* reference = gazebo->Attribute("reference");
+        // RFC 0022 §8: <water_tank capacity= initial=/> and <nozzle diameter=
+        // discharge_coefficient= pressure= tank= .../> on the link.
+        if (reference != nullptr && (gazebo->FirstChildElement("nozzle") != nullptr ||
+                                     gazebo->FirstChildElement("water_tank") != nullptr)) {
+            bool found = false;
+            for (std::size_t b = firstBody; b < world.bodies.names.size() && !found; ++b) {
+                if (world.bodies.names[b] == reference) {
+                    addNozzles(robot, *gazebo, world.bodies.prim[b],
+                               BodyId{static_cast<std::uint32_t>(b)}, nozzleTanks);
+                    found = true;
+                }
+            }
+            if (!found) {
+                robot.notes.push_back(std::string("nozzle/water_tank: no link ") + reference);
+            }
+        }
         // <sensor_material preset="asphalt" reflectivity_905="0.1" reflectivity_1550="0.1"
         // specular="0" transmission="0" retroreflective="false"/>: what a lidar sees of the link.
         if (const tinyxml2::XMLElement* surface = gazebo->FirstChildElement("sensor_material");
@@ -968,6 +1254,31 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
             material.specular = std::clamp(material.specular, 0.0, 1.0);
             material.transmission = std::clamp(material.transmission, 0.0, 1.0);
             world.surfaceMaterials.push_back(material);
+            // What the actuators read (RFC 0020): a part's air permeance and iron, as
+            // SensorMaterialAPI_1 on the link's prim.
+            double airPermeability = 0.0;
+            double relativePermeability = 1.0;
+            const bool porous = surface->QueryDoubleAttribute(
+                                    "air_permeability", &airPermeability) == tinyxml2::XML_SUCCESS;
+            const bool iron =
+                surface->QueryDoubleAttribute("relative_permeability", &relativePermeability) ==
+                tinyxml2::XML_SUCCESS;
+            if (porous || iron) {
+                for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                    if (world.bodies.names[b] == reference) {
+                        SchemaInstance s;
+                        s.schema = "SensorMaterialAPI_1";
+                        s.prim = world.bodies.prim[b];
+                        if (porous) {
+                            s.reals["sensmat:airPermeability"] = airPermeability;
+                        }
+                        if (iron) {
+                            s.reals["sensmat:relativePermeability"] = relativePermeability;
+                        }
+                        world.schemaInstances.push_back(std::move(s));
+                    }
+                }
+            }
             const auto index = static_cast<std::uint32_t>(world.surfaceMaterials.size() - 1);
             for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
                 const BodyId owner = world.colliders.body[c];
@@ -994,6 +1305,54 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
                                       reference);
             } else {
                 addThermalElements(robot, *gazebo, *prim);
+            }
+        }
+        // RFC 0022: <fire alpha="fast" hrr_per_area= fuel_mass= .../> on the link: FireAPI_1.
+        if (const tinyxml2::XMLElement* fire = gazebo->FirstChildElement("fire");
+            fire != nullptr && reference != nullptr) {
+            std::optional<PrimId> prim;
+            for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.names[b] == reference) {
+                    prim = world.bodies.prim[b];
+                }
+            }
+            if (!prim) {
+                robot.notes.push_back(std::string("fire: no link ") + reference);
+            } else {
+                addFireElement(robot, *fire, *prim);
+            }
+        }
+        // RFC 0021: <lamp name= kind= intensity= beam_angle= field_angle= color_temperature=
+        // color="r g b" efficacy= heat_fraction= rise_time= blink_frequency= blink_duty=
+        // rotation_speed= voltage_exponent= initial= xyz= rpy=/>, a LampAPI_1 prim on the link.
+        if (reference != nullptr && gazebo->FirstChildElement("lamp") != nullptr) {
+            std::optional<std::size_t> body;
+            for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.names[b] == reference) {
+                    body = b;
+                }
+            }
+            if (!body) {
+                robot.notes.push_back(std::string("lamp: no link ") + reference);
+            } else {
+                addLamps(robot, *gazebo, *body);
+            }
+        }
+        // RFC 0020: <suction_cup diameter= volume= flow= ultimate_pressure= .../> and
+        // <magnet_gripper turns= pole_area= coil_resistance= rated_voltage= .../> on the link.
+        if (reference != nullptr && (gazebo->FirstChildElement("suction_cup") != nullptr ||
+                                     gazebo->FirstChildElement("magnet_gripper") != nullptr)) {
+            bool found = false;
+            for (std::size_t b = firstBody; b < world.bodies.names.size() && !found; ++b) {
+                if (world.bodies.names[b] == reference) {
+                    addGrippers(robot, *gazebo, world.bodies.prim[b],
+                                BodyId{static_cast<std::uint32_t>(b)});
+                    found = true;
+                }
+            }
+            if (!found) {
+                robot.notes.push_back(std::string("suction_cup/magnet_gripper: no link ") +
+                                      reference);
             }
         }
         // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how
@@ -1160,6 +1519,19 @@ std::string addSensors(Robot& robot, const std::string& path, std::size_t firstB
             robot.scene.prims.push_back(std::move(prim));
             robot.sensorPrim.push_back(static_cast<std::uint32_t>(robot.scene.prims.size() - 1));
         }
+    }
+    // Each nozzle's tank=, by the tank's prim name (its name=, else its link's).
+    for (const auto& [instance, name] : nozzleTanks) {
+        std::optional<PrimId> tank;
+        for (const SchemaInstance& s : world.schemaInstances) {
+            if (s.schema == "TankAPI_1" && world.prims.instanceNames[s.prim.index] == name) {
+                tank = s.prim;
+            }
+        }
+        if (!tank) {
+            return "nozzle: tank=\"" + name + "\" names no <water_tank>";
+        }
+        world.schemaInstances[instance].relationships["act:nozzle:tank"] = {*tank};
     }
     return {};
 }

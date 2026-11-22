@@ -14,6 +14,12 @@
 namespace lagrange::gpu {
 
 class Device;
+struct RealisticLamp;
+struct RealisticWaterSurface;
+struct AirRotor;
+struct RealisticTree;
+struct RealisticTreeCut;
+struct RealisticLeaf;
 
 // --- the mesh pipeline shared by the viewer's viewport and the camera sensor ----------------
 // (invariant 13: one shader, gpu/kernels/camera/mesh.slang, draws both)
@@ -230,6 +236,30 @@ public:
     /// `seconds` is the sim time: what moves in the realistic look (water, clouds).
     void render(std::span<const RasterInstance> instances, const PinholeCamera& camera,
                 RasterImages& out, double seconds = 0.0);
+
+    /// The light of the realistic look from now on (RFC 0021 §4, §6): the run's lamps and the
+    /// sky's horizontal illuminance in lx (NaN: the drawn day, as without a call). `linear`: the
+    /// colour is the scene's linear value, for calibration tests (RealisticSettings::linear).
+    /// The simple look draws neither (sensors.md §2, Tier 0).
+    void setLighting(std::span<const RealisticLamp> lamps, double skyIlluminance,
+                     bool linear = false);
+
+    /// The first body of water's moving surface in the realistic look from now on (copied; a
+    /// default value: the still level again). Depth and instance ids keep the still level: the
+    /// sensor moves its depth onto the surface in double (sensors::rayOntoWater).
+    void setWaterSurface(const RealisticWaterSurface& surface);
+
+    /// The rotors whose outwash bends grass and vegetation in the realistic look from now on
+    /// (GroundAir.hpp); the simple look draws no grass.
+    void setAir(std::span<const AirRotor> rotors);
+
+    /// The trees, their cut crown cells and the flying leaves the realistic look draws from now
+    /// on (copied; RealisticSettings::trees); the simple look draws the trees as a trunk and
+    /// clumps (TreeShapes.hpp) and no flying leaves. Depth and instance ids see the trunks
+    /// (RealisticTree::id) in either look, not the crowns: the camera sensor adds those as its
+    /// lidar sees them (sensors.md "Trees in the camera").
+    void setTrees(std::span<const RealisticTree> trees, std::span<const RealisticTreeCut> cuts,
+                  std::span<const RealisticLeaf> leaves);
 
     /// Whether colour is drawn (the default). Without, render() draws only depth and instance
     /// ids, and the colour reads back as zeros: for a camera that needs no colour, as a thermal

@@ -35,6 +35,9 @@ struct ServerOptions {
     /// The site's air density, kg/m³ (--air-density; a profile's rotor_aero.air_density
     /// overrides it). A site parameter with no default: rotors do not run without it.
     std::optional<double> airDensityKgM3;
+    /// --no-downwash-water: wakes go through water to the ground, its surface stays still and
+    /// no spray (as a profile's aerodynamics.downwash_water: false, which it gives way to).
+    bool downwashWater{true};
     /// The weather (--weather KEY=VALUE,...: temperature K, pressure Pa, relative_humidity,
     /// visibility m, rain_rate m/s, dust_concentration kg/m³, dust_median_diameter m,
     /// solar_irradiance W/m², sky_temperature K; a profile's weather keys override them). The
@@ -75,6 +78,9 @@ struct ServerOptions {
     /// --thrust-limit FRACTION: the share of each rotor's full thrust that the built-in controller
     /// and an autopilot's full output may ask for (an ESC limit), 0 < FRACTION <= 1.
     double thrustLimit{1.0};
+    /// --leaf-litter N: leaves lying under each tree's crown (TreeAPI_1) from the start, for the
+    /// wind and the rotors to lift again (ground.md "Leaves lifted again"); 0: none.
+    std::uint32_t leafLitter{0};
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.
@@ -121,6 +127,9 @@ struct ServerOptions {
         double length{0.0};
     };
     std::vector<Tether> tethers;
+    /// --fire-water NAME=RATE[@T] (RFC 0022): water at RATE kg/(m²·s) (mm/s) over the burning area
+    /// of fire NAME from T s on, a sprinkler's rate until nozzles and sprinklers place it.
+    std::vector<std::string> fireWater;
     /// --emi-motor-leads SPACING[,X,Y,Z] (RFC 0013): a wire on the robot's root link from the
     /// battery (at X,Y,Z in that link's frame; else the battery prim, when it is on the robot) to
     /// every motor, carrying its bus current, its return SPACING m above it; every magnetometer a
@@ -279,6 +288,10 @@ public:
     /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
     /// "effort" (N·m, N). False for another mode, a joint the run does not have, or a value
     /// that is not finite.
+    /// Commands gripper `name` (RFC 0020, act/<name>/command): 1 on, 0 off. False when the run
+    /// has no gripper of that name. Taken at the actuators domain's next step; a later change on
+    /// the bus (its ROS topic) wins over it in turn.
+    bool commandActuator(const std::string& name, double value);
     bool commandJoint(const std::string& joint, const std::string& mode, double value);
     /// commandJoint's outcome in full: why it was refused, or the value taken, held within the
     /// joint's velocity limit, effort limit or range from the robot file (not the effort limit

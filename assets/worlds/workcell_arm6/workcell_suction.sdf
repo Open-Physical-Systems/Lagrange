@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<!-- workcell_suction: the sample arm's workcell (workcell_arm6.urdf: a table with a pick station
+     and a place station) with a part to pick, for the suction arm (arm6_suction.urdf, RFC 0020):
+     a 60 mm cardboard-sized box of 0.3 kg on the pick station. The box is a free body. -->
+<sdf version="1.10">
+  <world name="workcell_suction">
+    <model name="workcell">
+      <static>true</static>
+      <link name="table">
+        <pose>0.55 0 0.15 0 0 0</pose>
+        <collision name="top">
+          <geometry><box><size>0.4 0.9 0.3</size></box></geometry>
+          <surface><friction><ode><mu>0.6</mu></ode></friction></surface>
+        </collision>
+        <visual name="top">
+          <geometry><box><size>0.4 0.9 0.3</size></box></geometry>
+          <material><ambient>0.55 0.45 0.35 1</ambient><diffuse>0.55 0.45 0.35 1</diffuse></material>
+        </visual>
+        <visual name="pick_station">
+          <pose>0 0.25 0.155 0 0 0</pose>
+          <geometry><box><size>0.1 0.1 0.01</size></box></geometry>
+          <material><ambient>0.85 0.75 0.2 1</ambient><diffuse>0.85 0.75 0.2 1</diffuse></material>
+        </visual>
+        <visual name="place_station">
+          <pose>0 -0.25 0.155 0 0 0</pose>
+          <geometry><box><size>0.1 0.1 0.01</size></box></geometry>
+          <material><ambient>0.85 0.75 0.2 1</ambient><diffuse>0.85 0.75 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="parcel">
+      <pose>0.55 0.25 0.33 0 0 0</pose>
+      <link name="parcel">
+        <inertial>
+          <mass>0.3</mass>
+          <inertia><ixx>1.8e-4</ixx><iyy>1.8e-4</iyy><izz>1.8e-4</izz></inertia>
+        </inertial>
+        <collision name="box">
+          <geometry><box><size>0.06 0.06 0.06</size></box></geometry>
+          <surface><friction><ode><mu>0.5</mu></ode></friction></surface>
+        </collision>
+        <visual name="box">
+          <geometry><box><size>0.06 0.06 0.06</size></box></geometry>
+          <material><ambient>0.72 0.55 0.33 1</ambient><diffuse>0.72 0.55 0.33 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

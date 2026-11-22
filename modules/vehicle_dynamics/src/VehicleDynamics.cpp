@@ -409,6 +409,12 @@ Status VehicleDynamics::declare(const WorldView& world, const ModuleConfig& conf
             ws.slipRatio = d.output(spec(wheel + "slip_ratio", SignalType::Scalar, units::one));
             ws.slipAngle = d.output(spec(wheel + "slip_angle", SignalType::Scalar, units::rad));
             ws.normalForce = d.output(spec(wheel + "normal_force", SignalType::Scalar, units::N));
+            // Only over a surface with rolling resistance, so that other runs keep their bus.
+            if (std::any_of(groundRolling_.begin(), groundRolling_.end(),
+                            [](double c) { return c > 0.0; })) {
+                ws.rollingResistance =
+                    d.output(spec(wheel + "rolling_resistance", SignalType::Scalar, units::N));
+            }
             ws.steerAngleOut =
                 d.output(spec(wheel + "steer_angle", SignalType::Scalar, units::rad));
             if (w.steerJoint) {
@@ -444,7 +450,8 @@ Status VehicleDynamics::init(const WorldView&, const ModuleConfig&, SignalBus& b
         for (WheelState& w : s.wheels) {
             w.longDeflection = w.latDeflection = w.compression = 0.0;
             for (const SignalId id : {w.loadTorque, w.driveCommand, w.slipRatio, w.slipAngle,
-                                      w.normalForce, w.steerAngleOut, w.steerCommand}) {
+                                      w.normalForce, w.steerAngleOut, w.steerCommand,
+                                      w.rollingResistance}) {
                 if (id.valid()) {
                     bus.write(id, 0.0);
                 }
@@ -486,7 +493,7 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
 
     // Suspension: compression along the chassis's up from each wheel's mount.
     const std::size_t n = v.wheels.size();
-    std::vector<double> fz(n, 0.0), mu(n, 1.0), steer(n, 0.0);
+    std::vector<double> fz(n, 0.0), mu(n, 1.0), steer(n, 0.0), crr(n, 0.0);
     std::vector<Vec3> contact(n);
     std::vector<Vec3> normal(n, kUp);  // the road's outward normal at each contact
     std::vector<bool> grounded(n, false);
@@ -520,6 +527,7 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
         const double surface =
             hit.shape < groundFriction_.size() ? groundFriction_[hit.shape] : 1.0;
         mu[i] = surface * muEnv;
+        crr[i] = hit.shape < groundRolling_.size() ? std::max(0.0, groundRolling_[hit.shape]) : 0.0;
     }
     // Anti-roll bars: across each axle, the more compressed side takes more load.
     for (const bool frontAxle : {true, false}) {
@@ -675,6 +683,16 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
         double brakeTorque = brake * axleBrake;
         if (v.abs && brake > 0.0 && kappa < -kAbsSlip) {
             brakeTorque *= std::clamp(1.0 - (-kappa - kAbsSlip) / kAbsBand, 0.0, 1.0);
+        }
+        // The surface's rolling resistance (grass: the sward and soil the tyre presses down,
+        // docs/physics/ground.md "Wheels on grass"): F = Crr Fz against the rolling, as a moment
+        // Crr Fz r on the wheel taken through the same stick-slip clamp as the brake, so that it
+        // slows the wheel to rest and never turns it backwards or creeps it at standstill; the
+        // tyre then carries it to the road as a longitudinal force.
+        const double rolling = grounded[i] ? crr[i] * fz[i] : 0.0;
+        brakeTorque += rolling * w.radius;
+        if (ws.rollingResistance.valid()) {
+            bus.write(ws.rollingResistance, rolling);
         }
         // The brake as stick-slip friction (Karnopp): the torque that stops the wheel within the
         // step against the tyre's, up to what the brake gives. It holds a car on a slope and never

@@ -3,9 +3,11 @@
 // outwash measured by Tanner et al. (2015) and in flight tests they quote.
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/aerodynamics/Downwash.hpp"
+#include "lagrange/gpu/GroundAir.hpp"
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 #include <vector>
 
@@ -241,6 +243,248 @@ TEST(Downwash, TheFountainIsTheHoverCasesFit) {
     EXPECT_NEAR(fountainLift(kFountainReach - 1e-9), 0.0, 1e-9) << "no step at its reach";
     EXPECT_GT(fountainLift(1.0), fountainLift(1.5)) << "stronger lower";
     EXPECT_EQ(fountainLift(0.2), fountainLift(kFountainLowest)) << "held below the lowest case";
+}
+
+// --- Over water (Downwash::setWater; downwash.md "Over water") ----------------------------
+
+/// A pond 1.2 m deep whose surface is at z = 1.2 over the ground at 0, 6 m a side.
+Downwash pond() {
+    Downwash d;
+    d.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+    d.setWater({Downwash::WaterSurface{"pond", {0.0, 0.0, 1.2}, 3.0, 3.0}});
+    return d;
+}
+
+TEST(Downwash, AWakeStopsOnWaterAsOnTheGround) {
+    // The same drone 1 m over the pond and 1 m over bare ground: the same jet arrives and the
+    // same outwash spreads; nothing moves under the surface, and no dust lifts from water.
+    Downwash water = pond();
+    water.update(offboard(2.2));
+    Downwash ground;
+    ground.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+    ground.update(offboard(1.0));
+    const Downwash::Group& g = water.groups()[0];
+    ASSERT_TRUE(g.hits);
+    EXPECT_EQ(g.hitWater, 0);
+    EXPECT_EQ(g.hitBox, -1);
+    EXPECT_NEAR(g.hitPoint[2], 1.2, 1e-9);
+    EXPECT_NEAR(g.arriveSpeed, ground.groups()[0].arriveSpeed, 1e-12);
+    for (const double r : {0.2, 0.5, 1.0, 2.0}) {
+        EXPECT_NEAR(water.velocityAt({r, 0.0, 1.21})[0], ground.velocityAt({r, 0.0, 0.01})[0],
+                    1e-12)
+            << r;
+    }
+    EXPECT_EQ(water.velocityAt({0.0, 0.0, 1.0})[2], 0.0);  // under the surface
+    EXPECT_EQ(water.peakOutwash(), 0.0);
+    EXPECT_GT(ground.peakOutwash(), 0.0);
+    // Beside the pond the wake goes down to the ground.
+    Downwash beside = pond();
+    beside.update(offboard(2.2, 0, 5.0));
+    EXPECT_EQ(beside.groups()[0].hitWater, -1);
+    EXPECT_NEAR(beside.groups()[0].hitPoint[2], 0.0, 1e-9);
+}
+
+TEST(Downwash, TheSurfaceCarriesTheJetsMomentumAsPressure) {
+    // Not fitted: a jet stopped by a surface pushes it with its whole momentum flux, the thrust
+    // (∫p dA = T), and the stagnation pressure on the axis is ½ρU² of the arriving jet.
+    for (const double height : {0.5, 1.0, 2.0, 4.0}) {
+        Downwash d = pond();
+        d.update(offboard(1.2 + height));
+        const double thrust = 0.572 * kGravity;
+        double force = 0.0;
+        constexpr int kCells = 600;
+        const double span = 3.0;
+        const double cell = 2.0 * span / kCells;
+        for (int i = 0; i < kCells; ++i) {
+            for (int j = 0; j < kCells; ++j) {
+                const Vec3 x{-span + (i + 0.5) * cell, -span + (j + 0.5) * cell, 1.2};
+                force += d.surfacePressure(x, kRho, 0) * cell * cell;
+            }
+        }
+        // Within the near wake's and far jet's own momentum budgets (0.93 at 0.5 m, where the
+        // jets merge; 1.02 from 1 m down).
+        EXPECT_NEAR(force / thrust, 1.0, 0.08) << height;
+        EXPECT_EQ(d.surfacePressure({0.0, 0.0, 1.2}, kRho, -1), 0.0);  // not the ground's
+    }
+    Downwash high = pond();
+    high.update(offboard(1.2 + 10.0 * 0.266));
+    const double u = high.groups()[0].arriveSpeed;
+    EXPECT_NEAR(high.surfacePressure({0.0, 0.0, 1.2}, kRho, 0), 0.5 * kRho * u * u, 1e-9);
+}
+
+TEST(Downwash, TheOutwashsFrictionVelocityOnWater) {
+    Downwash d = pond();
+    d.update(offboard(2.2));
+    for (const double r : {0.3, 0.6, 1.2}) {
+        const Vec3 u = d.surfaceOutwash({r, 0.0, 1.2}, 0);
+        const Vec3 f = d.surfaceFriction({r, 0.0, 1.2}, 0);
+        EXPECT_GT(u[0], 0.0) << r;  // outwards
+        EXPECT_NEAR(f[0], kWallJetFriction * u[0], 1e-12);
+        // The wall jet's peak, the largest across the layer there.
+        const Downwash::Group& g = d.groups()[0];
+        EXPECT_NEAR(u[0],
+                    outwashSpeed(g.arriveSpeed, g.arriveRadius, r,
+                                 kOutwashPeakHeight * g.arriveRadius /
+                                     (1.0 / std::sqrt(1.0 + 1.0 / std::numbers::sqrt2))),
+                    1e-12);
+    }
+}
+
+}  // namespace
+}  // namespace lagrange::aerodynamics
+
+namespace lagrange::aerodynamics {
+
+// The renderer's ground air (lagrange/gpu/GroundAir.hpp, realistic.slang's groundAir) is a port
+// of the outwash here: it must give the same horizontal air over level ground.
+namespace {
+
+std::vector<gpu::AirRotor> asAir(const std::vector<Downwash::Rotor>& rotors) {
+    std::vector<gpu::AirRotor> out;
+    for (const Downwash::Rotor& r : rotors) {
+        out.push_back({r.hub, r.thrustAxis, r.radius, r.induced, r.thrust, r.group});
+    }
+    return out;
+}
+
+void expectSameOutwash(const std::vector<Downwash::Rotor>& rotors, double groundZ) {
+    Downwash d;
+    d.setGround({0.0, 0.0, groundZ}, {0.0, 0.0, 1.0});
+    d.update(rotors);
+    const std::vector<gpu::AirRotor> air = asAir(rotors);
+    const std::vector<gpu::AirJet> jets = gpu::groundJets(air, groundZ);
+    ASSERT_EQ(jets.size(), d.groups().size());
+    for (std::size_t k = 0; k < jets.size(); ++k) {
+        EXPECT_NEAR(jets[k].speed, d.groups()[k].arriveSpeed, 1e-9);
+        EXPECT_NEAR(jets[k].radius, d.groups()[k].arriveRadius, 1e-9);
+    }
+    const double peak = gpu::outwashPeakHeight(jets.front().radius);
+    for (const double rho : {0.1, 0.3, 0.6, 1.0, 2.0, 4.0}) {
+        for (const double z : {peak, 2.0 * peak, 0.15, 0.3}) {
+            const Vec3 at{jets.front().hit[0] + rho, jets.front().hit[1], groundZ + z};
+            const Vec3 v = d.velocityAt(at);
+            const std::array<double, 2> g = gpu::groundOutwash(jets, at);
+            EXPECT_NEAR(g[0], v[0], 1e-9 + 1e-9 * std::abs(v[0])) << rho << " " << z;
+            EXPECT_NEAR(g[1], v[1], 1e-9) << rho << " " << z;
+        }
+    }
+}
+
+}  // namespace
+
+TEST(GroundAir, MatchesTheOutwashOfASingleRotor) {
+    Downwash::Rotor r;
+    r.hub = {0.0, 0.0, 1.0};
+    r.thrustAxis = {0.0, 0.0, 1.0};
+    r.radius = 1.0;
+    r.induced = 5.0;
+    r.thrust = 1.0;
+    expectSameOutwash({r}, 0.0);
+}
+
+TEST(GroundAir, MatchesTheOutwashOfAQuadcopterAtSeveralHeights) {
+    for (const double height : {0.3, 1.0, 2.5}) {
+        expectSameOutwash(offboard(height + 0.4), 0.4);
+    }
+}
+
+TEST(GroundAir, NoRotorsNoOutwash) {
+    const std::vector<gpu::AirJet> jets = gpu::groundJets({}, 0.0);
+    EXPECT_TRUE(jets.empty());
+    const std::array<double, 2> g = gpu::groundOutwash(jets, {1.0, 2.0, 0.0});
+    EXPECT_EQ(g[0], 0.0);
+    EXPECT_EQ(g[1], 0.0);
+    // Idle rotors: no wake.
+    Downwash::Rotor idle;
+    idle.hub = {0.0, 0.0, 1.0};
+    idle.thrustAxis = {0.0, 0.0, 1.0};
+    idle.radius = 0.12;
+    EXPECT_TRUE(gpu::groundJets(asAir({idle}), 0.0).empty());
+}
+
+TEST(GroundAir, BladesBelowThePeakFeelThePeak) {
+    Downwash::Rotor r;
+    r.hub = {0.0, 0.0, 1.0};
+    r.thrustAxis = {0.0, 0.0, 1.0};
+    r.radius = 0.2;
+    r.induced = 6.0;
+    r.thrust = 5.0;
+    const std::vector<gpu::AirJet> jets = gpu::groundJets(asAir({r}), 0.0);
+    ASSERT_EQ(jets.size(), 1U);
+    const double peak = gpu::outwashPeakHeight(jets[0].radius);
+    EXPECT_DOUBLE_EQ(gpu::groundOutwash(jets, {0.5, 0.0, 0.0})[0],
+                     gpu::groundOutwash(jets, {0.5, 0.0, peak})[0]);
+    EXPECT_GT(gpu::groundOutwash(jets, {0.5, 0.0, 0.0})[0], 0.5);
+}
+
+}  // namespace lagrange::aerodynamics
+
+namespace lagrange::aerodynamics {
+namespace {
+
+// The trees' broad phase (AeroDrag, ground.md "The orchard"): a crown farther from every wake
+// column than kCrownWakeFar times the spread of its five samples takes the air at its centre for
+// their mean. A 2 kg quadcopter (the sample X500: 12.7 cm propellers, 25 cm half diagonal)
+// hovering 1 to 15 m over the ground, crowns of 1 to 5 m radius at 1 to 20 m: wherever the rule
+// applies, the centre is within 2 % of the mean plus 2 mm/s.
+TEST(Downwash, FarFromTheWakeTheCrownsCentreStandsForItsMean) {
+    constexpr double kMass = 2.0;
+    constexpr double kRadius = 0.127;
+    constexpr double kHalfDiagonal = 0.25;
+    double worst = 0.0;  // the largest difference over its allowance
+    std::size_t checked = 0;
+    for (const double height : {1.0, 2.0, 5.0, 15.0}) {
+        std::vector<Downwash::Rotor> rotors;
+        for (int i = 0; i < 4; ++i) {
+            const double a = std::numbers::pi / 4.0 + i * std::numbers::pi / 2.0;
+            Downwash::Rotor r;
+            r.hub = {kHalfDiagonal * std::cos(a), kHalfDiagonal * std::sin(a), height};
+            r.thrustAxis = {0.0, 0.0, 1.0};
+            r.radius = kRadius;
+            r.thrust = kMass * kGravity / 4.0;
+            r.induced = inducedOf(r.thrust, kRadius);
+            rotors.push_back(r);
+        }
+        Downwash d;
+        d.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+        d.update(rotors);
+        ASSERT_EQ(d.groups().size(), 1U);
+        for (const double crownRadius : {1.0, 2.0, 5.0}) {
+            const double h = 0.5 * crownRadius;
+            for (const double across : {5.0, 10.0, 20.0, 30.0, 50.0}) {
+                for (const double z : {1.0, 2.0, 4.0, 8.0, 12.0, 20.0}) {
+                    for (int k = 0; k < 8; ++k) {
+                        const double a = k * std::numbers::pi / 8.0;
+                        const Vec3 c{across * std::cos(a), across * std::sin(a), z};
+                        if (Downwash::wakeDistance(d.groups()[0], c) <= kCrownWakeFar * h) {
+                            continue;
+                        }
+                        Vec3 mean{};
+                        for (const Vec3& o : {Vec3{0, 0, 0}, Vec3{h, 0, 0}, Vec3{-h, 0, 0},
+                                              Vec3{0, h, 0}, Vec3{0, -h, 0}}) {
+                            const Vec3 v = d.velocityAt({c[0] + o[0], c[1] + o[1], c[2] + o[2]});
+                            for (std::size_t n = 0; n < 3; ++n) {
+                                mean[n] += v[n] / 5.0;
+                            }
+                        }
+                        const Vec3 centre = d.velocityAt(c);
+                        const double diff = std::hypot(centre[0] - mean[0], centre[1] - mean[1],
+                                                       centre[2] - mean[2]);
+                        const double allowed =
+                            (0.02 * std::hypot(mean[0], mean[1], mean[2])) + 0.002;
+                        worst = std::max(worst, diff / allowed);
+                        ++checked;
+                    }
+                }
+            }
+        }
+    }
+    std::printf(
+        "%zu far crowns: the centre's difference from the mean at most %.2f of its "
+        "allowance\n",
+        checked, worst);
+    EXPECT_GT(checked, 100U);
+    EXPECT_LT(worst, 1.0);
 }
 
 }  // namespace

@@ -71,11 +71,13 @@ sensor_faults:              # what goes wrong with a sensor, and when: cli.md "S
   - front_lidar=dropout,at=10,for=2,probability=0.3
 water:                      # still water: it floats what enters it, and lidars see it as water
   - {at: [0, 0, 0.5], size: [12, 8], depth: 0.5}    # x, y, surface height
+fire_water:                 # water on a fire (FireAPI_1), kg/(m²·s) = mm/s, from `at` s on
+  - {fire: pallet, rate: 0.133, at: 60}             # physics/fire.md
 record: run.mcap
 ```
 
 Keys under `simulate` are `physics`, `sensors`, `electrical`, `thermal`, `weather`, `emi`, `comms`,
-`vehicle_dynamics`, `traffic` and `humans`. `false` puts in the domain's substitute. A mistake in the
+`vehicle_dynamics`, `traffic`, `humans` and `fire`. `false` puts in the domain's substitute. A mistake in the
 file stops the start and says which key.
 
 Electrical needs a power system on the robot: an overlay (`overlay: power.yaml`,

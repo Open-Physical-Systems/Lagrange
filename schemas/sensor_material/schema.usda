@@ -76,4 +76,10 @@ class "SensorMaterialAPI_1" (
         lagrangeUnit = "1"
         doc = "Multiplier on friction when the surface is wet."
     )
+    double sensmat:airPermeability = 0 (
+        lagrangeUnit = "m/(Pa.s)"
+        doc = """Air permeance: the volume of air that goes through the surface per area, time and
+        pressure difference across it. What a suction cup on it leaks (RFC 0020).
+        0: airtight."""
+    )
 }

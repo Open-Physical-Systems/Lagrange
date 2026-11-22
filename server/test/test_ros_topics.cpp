@@ -13,7 +13,9 @@
 #include <gtest/gtest.h>
 
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/range.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 
@@ -86,6 +88,52 @@ subscribe:
     EXPECT_EQ(server.read("acme/valve/command").at(0), 2.5) << "the topic wrote the signal";
 }
 
+// RFC 0020 §5: a gripper's default topics with no --ros-topics map: /suction_cup/command turns
+// the cup on, /suction_cup/pressure and /suction_cup/state come out.
+TEST(RosTopics, AGrippersDefaultTopics) {
+    if (!rclcpp::ok()) {
+        rclcpp::init(0, nullptr);
+    }
+    ServerOptions options;
+    options.endpoint = proto::Endpoint::unixSocket((directory() / "grip.sock").string());
+    options.robotPath = LAGRANGE_TEST_ARM6_SUCTION_URDF;
+    options.worldPath = LAGRANGE_TEST_WORKCELL_SUCTION_SDF;
+    options.ros = true;
+    options.realTimeFactor = 0.0;
+    Server server(options);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+
+    auto node = std::make_shared<rclcpp::Node>("gripper_topics_test");
+    std::optional<sensor_msgs::msg::FluidPressure> pressure;
+    std::optional<bool> state;
+    auto pressures = node->create_subscription<sensor_msgs::msg::FluidPressure>(
+        "/suction_cup/pressure", 10,
+        [&pressure](const sensor_msgs::msg::FluidPressure& m) { pressure = m; });
+    auto states = node->create_subscription<std_msgs::msg::Bool>(
+        "/suction_cup/state", 10, [&state](const std_msgs::msg::Bool& m) { state = m.data; });
+    auto command = node->create_publisher<std_msgs::msg::Bool>("/suction_cup/command", 10);
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    std_msgs::msg::Bool on;
+    on.data = true;
+    const auto deadline = std::chrono::steady_clock::now() + 60s;
+    while ((!pressure || !state || server.read("act/suction_cup/command").at(0) != 1.0) &&
+           std::chrono::steady_clock::now() < deadline) {
+        server.runOnce(5);
+        if (command->get_subscription_count() > 0) {
+            command->publish(on);
+        }
+        executor.spin_some(10ms);
+    }
+    ASSERT_TRUE(pressure) << "no FluidPressure message";
+    EXPECT_EQ(pressure->header.frame_id, "suction_cup");
+    EXPECT_NEAR(pressure->fluid_pressure, 101'325.0, 1.0) << "open, in the air: atmospheric";
+    ASSERT_TRUE(state);
+    EXPECT_FALSE(*state) << "holding nothing";
+    EXPECT_EQ(server.read("act/suction_cup/command").at(0), 1.0) << "the topic turned it on";
+}
+
 // RFC 0009 §6: a person's goal over ROS: x, y, active, through --ros-topics.
 TEST(RosTopics, APersonTakesAGoalFromATopic) {
     if (!rclcpp::ok()) {
@@ -141,6 +189,62 @@ TEST(RosTopics, ASignalThatDoesNotFitItsMessageStopsTheStart) {
     const Status unfit = wrong.start();
     ASSERT_FALSE(unfit.ok());
     EXPECT_NE(unfit.message.find("has 7 values"), std::string::npos) << unfit.message;
+}
+
+// RFC 0021 §9: each lamp's default topics, with no --ros-topics file.
+TEST(RosTopics, ALampIsSwitchedAndItsStateIsLatched) {
+    if (!rclcpp::ok()) {
+        rclcpp::init(0, nullptr);
+    }
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_lights_run";
+    std::filesystem::create_directories(dir);
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_AMR_URDF;
+    o.overlayPath = LAGRANGE_TEST_AMR_LIGHTS_OVERLAY;
+    o.worldPath.clear();
+    o.ambientTemperatureK = 293.15;
+    o.demoDrive = false;
+    o.realTimeFactor = 0.0;
+    o.endpoint = proto::Endpoint::unixSocket((dir / "l.sock").string());
+    o.ros = true;
+    Server server(o);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    auto node = std::make_shared<rclcpp::Node>("lights_run_test");
+    std::optional<double> state;
+    auto subscription = node->create_subscription<std_msgs::msg::Float64>(
+        "/lights/headlamp/state", rclcpp::QoS(1).transient_local(),
+        [&state](const std_msgs::msg::Float64& m) { state = m.data; });
+    auto command = node->create_publisher<std_msgs::msg::Float64>("/lights/headlamp/command", 10);
+    auto blink = node->create_publisher<std_msgs::msg::Bool>("/lights/beacon/blink", 10);
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    // Lit at its initialCommand before any message.
+    auto deadline = std::chrono::steady_clock::now() + 60s;
+    while (!state && std::chrono::steady_clock::now() < deadline) {
+        server.runOnce(5);
+        executor.spin_some(10ms);
+    }
+    ASSERT_TRUE(state) << "no state message";
+    EXPECT_DOUBLE_EQ(*state, 1.0);
+    std_msgs::msg::Float64 dim;
+    dim.data = 0.25;
+    std_msgs::msg::Bool on;
+    on.data = true;
+    deadline = std::chrono::steady_clock::now() + 60s;
+    while ((!state || *state != 0.25) && std::chrono::steady_clock::now() < deadline) {
+        server.runOnce(5);
+        if (command->get_subscription_count() > 0) {
+            command->publish(dim);
+            blink->publish(on);
+        }
+        executor.spin_some(10ms);
+    }
+    ASSERT_TRUE(state);
+    EXPECT_DOUBLE_EQ(*state, 0.25);
+    EXPECT_DOUBLE_EQ(server.read("lamp/headlamp/intensity").at(0), 0.25 * 1500.0);
+    EXPECT_EQ(server.read("lamp/beacon/blink").at(0), 1.0);
 }
 
 }  // namespace

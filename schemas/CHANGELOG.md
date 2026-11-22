@@ -8,6 +8,67 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Road library**: `RoadSignalAPI_1`, a traffic light (an OpenDRIVE dynamic signal): its id,
+  road, s and t, orientation, type and subtype, the lanes it governs (`signal:fromLane`,
+  `toLane`), its controller, that controller's junction and sequence, and its head's height.
+  Addition (approved by the owner on 2026-11-22), nothing to migrate.
+- **World library** (ground.md "Trees", approved by the owner 2026-11-22): `TreeAPI_1`, a tree
+  whose crown is a volume of leaves (height, crown radius and base, trunk diameter, leaf area
+  density, drag coefficient, sway frequency and damping, crown mass, cut energy, leaf area). New
+  class, nothing to migrate.
+- **World library** (ground.md "Branches", TreeAPI_1 additions approved by the owner 2026-11-22):
+  `tree:branchCount`, `tree:woodCutEnergy`, `tree:maxCutDiameter`, the crown's wood. Added
+  attributes with fallbacks, nothing to migrate.
+
+- **Aero library** (hydrodynamics.md, "thrusters as rotors in water"): `aero:rotor:advanceRatios`,
+  `thrustCoeffs` and `torqueCoeffs` on `RotorAPI_1`, an open-water chart K_T(J), K_Q(J) that
+  replaces the static coefficients when given. Additions, nothing to migrate.
+
+- **Fire library** (RFC 0022): `FireAPI_1`, a fuel item that can burn: its class, growth law
+  (t², pool, or a measured `hrrCurve`), fuel mass and heat of combustion, radiative fraction, soot
+  yield, ignition (time, temperature), blow-off speed, critical water rate, oxygen limit, decay
+  fraction and foam blanket thickness. New library, nothing to migrate.
+- **Light library** (RFC 0021): `LampAPI_1`, a lamp on a prim (spot, point or beacon) with its
+  intensity in cd, beam and field angles, colour, efficacy, blinking and dimming. New library,
+  nothing to migrate.
+- **Actuator library** (RFC 0020): `SuctionGripperAPI_1` (a suction cup: diameter, volume, the
+  vacuum generator's flow and ultimate pressure, seal tolerances, an open cup's ISO 6358
+  conductance) and `MagnetGripperAPI_1` (an electromagnet or electropermanent magnet: turns, pole
+  area, iron path, saturation, coil). New library, nothing to migrate.
+- **Actuator library** (RFC 0022 §8): `NozzleAPI_1` (a water, foam or CO2 nozzle: bore,
+  discharge coefficient, pump pressure, agent, foam expansion, spray half angle, pump efficiency,
+  axis, the tank it draws from) and `TankAPI_1` (capacity, how full it starts, the agent's
+  density). Additions, nothing to migrate.
+
+- **Actuator library** (RFC 0020 §4.3): `ServoAPI_1` on a joint, a hobby PWM servo's or a smart
+  servo's board (pulse map, deadband, P/I/D duty gains, profile limits, sensing resolution, stall
+  torque and no-load speed for the motor-less model, overload and overheating shutdown). New
+  class, nothing to migrate.
+
+- **Actuator library** (RFC 0020, "Also worth adding"): `BrakeAPI_1` on a joint, a spring-applied
+  holding brake (holding and dynamic torque or force, the release coil's resistance, inductance
+  and rated voltage, its release and dropout currents). New class, nothing to migrate.
+
+- **Actuator library** (RFC 0020 §4.6): `SolenoidAPI_1` on a prismatic joint, a solenoid's
+  plunger and coil (an inductance table over the stroke, resistance, return spring rate and
+  preload, stroke, rated voltage). New class, nothing to migrate.
+
+- **Electrical library** (RFC 0020 §4.5): `stepper` appended to `elec:motorType`'s tokens, and
+  `elec:stepper:rotorTeeth` (50), `elec:stepper:detentTorque` (0 N·m), `elec:stepper:holdCurrent`
+  (no fallback: `maxCurrent`) and `elec:stepper:microsteps` (1) on `ElectricalMotorAPI_1`, used
+  only by steppers. Additions, nothing to migrate.
+
+- **Electrical library** (RFC 0020 §4.3): `position` appended to `elec:controlMode`'s tokens: the
+  drive runs the joint's `ServoAPI_1` position loop itself on `joint/<j>/position_command`.
+  Addition, nothing to migrate.
+
+- **Electrical library** (RFC 0020 §4.4): `elec:gearBackEfficiency` on `ElectricalMotorAPI_1`
+  (fallback −1: the same as `elec:gearEfficiency`, today's behaviour), a gear's efficiency when
+  the load drives it; 0 is self-locking. Addition, nothing to migrate.
+
+- **Sensor-material library** (RFC 0020): `sensmat:airPermeability` on `SensorMaterialAPI_1` (fallback
+  0, airtight), what a suction cup on the surface leaks. Addition, nothing to migrate.
+
 - **Sensor library** (RFC 0015): `flash` and `rosette` appended to `sensor:lidar:scanPattern`;
   `sensor:lidar:channelElevations` (a channel table) and five `sensor:lidar:rosette:*` (fov,
   pointRate, speed1, speed2, prismRatio; no fallbacks) on `LidarAPI_1`; `sensor:camera:lensType`

@@ -7,6 +7,7 @@ find_package(lagrange_core REQUIRED)
 find_package(lagrange_fields REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 find_package(lagrange_thermal REQUIRED)
+find_package(lagrange_lights REQUIRED)
 # Tier 0 ray casting: Embree's hierarchy culls, the exact tests stay ours (ShapeCaster).
 find_package(embree 4 REQUIRED)
 find_package(TBB REQUIRED)
@@ -18,6 +19,7 @@ add_library(
     src/Faults.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
+    src/MovingWater.cpp
     src/BodyScene.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
@@ -80,7 +82,11 @@ target_link_libraries(
         lagrange_fields::lagrange_fields
         lagrange_gpu::lagrange_gpu_raycast
         lagrange_gpu::lagrange_gpu_raster
-    PRIVATE embree TBB::tbb lagrange_thermal::lagrange_thermal
+    PRIVATE
+        embree
+        TBB::tbb
+        lagrange_thermal::lagrange_thermal
+        lagrange_lights::lagrange_lights
 )
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
@@ -182,6 +188,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_lidar_tiers lagrange_sensors)
     lagrange_target_defaults(test_lidar_tiers)
     ament_add_gtest(
+        test_moving_water
+        test/test_moving_water.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_moving_water lagrange_sensors)
+    lagrange_target_defaults(test_moving_water)
+    ament_add_gtest(
         test_lidar_patterns
         test/test_lidar_patterns.cpp
         TIMEOUT 120
@@ -270,7 +285,11 @@ if(BUILD_TESTING)
     target_link_libraries(test_kinds_humidity_sensor lagrange_sensors)
     lagrange_target_defaults(test_kinds_humidity_sensor)
     ament_add_gtest(test_kinds_light_sensor test/test_kinds_light_sensor.cpp)
-    target_link_libraries(test_kinds_light_sensor lagrange_sensors)
+    target_link_libraries(
+        test_kinds_light_sensor
+        lagrange_sensors
+        lagrange_lights::lagrange_lights
+    )
     lagrange_target_defaults(test_kinds_light_sensor)
     ament_add_gtest(test_kinds_rain_sensor test/test_kinds_rain_sensor.cpp)
     target_link_libraries(test_kinds_rain_sensor lagrange_sensors)
@@ -326,5 +345,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core lagrange_fields lagrange_gpu lagrange_thermal embree TBB)
+ament_export_dependencies(lagrange_core lagrange_fields lagrange_gpu lagrange_thermal lagrange_lights embree TBB)
 ament_package()

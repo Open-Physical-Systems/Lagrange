@@ -4,11 +4,13 @@
 // and the camera sensor (invariant 13): the sun's shadow map, the scene in HDR with sky, materials
 // and water, then the final image.
 
+#include "lagrange/gpu/GroundAir.hpp"
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Resources.hpp"
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -42,6 +44,123 @@ struct RealisticDraw {
     std::array<float, 6> box{};  // water only: the mesh's bounds, min then max
 };
 
+/// A lamp as the renderer draws it (RFC 0021 §4): what LampAPI_1 and lamp/<n>/intensity give.
+struct RealisticLamp {
+    std::array<double, 3> position{};              // world
+    std::array<double, 3> axis{1.0, 0.0, 0.0};     // world, unit: where the beam points
+    double intensity{0.0};                         // cd on the axis, now
+    double beamAngle{0.0};                         // rad, full angle to 50 % (spot)
+    double fieldAngle{0.0};                        // rad, full angle to 10 %, dark beyond (spot)
+    bool point{false};                             // the same all round
+    std::array<float, 3> color{1.0F, 1.0F, 1.0F};  // linear sRGB of luminance 1
+};
+
+/// Lamps drawn per frame at most (RFC 0021 open question 5): the brightest at the eye, by I/d².
+inline constexpr std::size_t kMaxRealisticLamps = 64;
+
+/// The most cells a side of a moving water surface the renderer takes (RealisticWaterSurface).
+inline constexpr std::uint32_t kMaxRealisticSurfaceCells = 256;
+
+/// The most cells of a spray box the renderer takes (RealisticSpray).
+inline constexpr std::size_t kMaxRealisticSprayCells = 65536;
+
+/// The spray off water as the physics has it (downwash.md §5b): its water per cell (kg/m³) in a
+/// box, drawn as mist: its extinction along each view ray, scattered back as the daylight's
+/// white. `extinctionPerKg` (1/m per kg/m³) is the drops' (Q_ext = 2: 3/(ρ_w D) per kg/m³).
+struct RealisticSpray {
+    std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz; fewer than 2 in any: none
+    double cell{0.0};                      ///< m
+    std::array<double, 3> first{};         ///< world: the first cell's centre
+    std::span<const float> water;          ///< kg/m³, x fastest, then y, then z
+    double extinctionPerKg{0.0};           ///< 1/m per kg/m³ of water
+};
+
+/// The water's moving surface as the physics has it (docs/physics/water.md "The surface under a
+/// rotor"): a square grid of heights over the still level on the first body of water, drawn in
+/// place of the flat level where it lies. The water is lifted by η and shaded by its slope (from
+/// the heights by central differences), and foams where `foam` says the spray is torn off.
+struct RealisticWaterSurface {
+    std::uint32_t cells{0};          ///< a side; 0 (or fewer than 2, or over the most): none
+    double cell{0.0};                ///< m
+    std::array<double, 2> first{};   ///< world x and y of the first cell's centre
+    std::span<const float> heights;  ///< m over the still level, cells² in row order (y rows of x)
+    std::span<const float> foam;     ///< 0-1 per cell, or empty
+    /// The air's friction velocity on the water (m/s, u* = τ/√(ρ·|τ|): x for every cell, then
+    /// y), or empty: the ripples below the grid that it raises (water_optics, Cox and Munk)
+    /// roughen the water where it lies. The settings' wind adds its own everywhere.
+    std::span<const float> friction;
+    /// How much the heights and slopes are scaled when drawn: 1 as the physics has them; more
+    /// exaggerates sub-millimetre ripples so that they can be seen (a drawing choice).
+    float relief{1.0F};
+};
+
+/// The most cells a side of the cut plants' grid the renderer takes (RealisticCutPlants).
+inline constexpr std::uint32_t kMaxRealisticCutSide = 512;
+
+/// Plants cut by propellers as the physics has them (docs/physics/ground.md "Cutting the
+/// plants"): a world grid of the plants' cut tops. Grass, reeds and shrubs are drawn no taller
+/// than the top over the cell they stand in; the cut ends show pale.
+struct RealisticCutPlants {
+    std::array<std::uint32_t, 2> cells{};  ///< along x and y; 0 in either (or over the most): none
+    double cell{0.0};                      ///< m
+    std::array<double, 2> first{};         ///< world x and y of the first cell's centre
+    double level{0.0};                     ///< m, world z the tops are given over
+    std::span<const float> tops;           ///< m over `level`, x fastest; NaN where not cut
+};
+
+/// Trees (TreeAPI_1; docs/physics/ground.md "Trees"), drawn as trees made in the vertex shader
+/// (realistic.slang vsTree): a trunk, main branches, twigs and a crown of leaf cards in the
+/// crown's ellipsoid, swaying with the physics. At most kMaxRealisticTrees, the first given first.
+inline constexpr std::size_t kMaxRealisticTrees = 255;
+struct RealisticTree {
+    std::array<double, 3> foot{};                           ///< region frame: the trunk's foot, m
+    std::array<float, 4> rotation{1.0F, 0.0F, 0.0F, 0.0F};  ///< w, x, y, z
+    double height{0.0};                                     ///< m
+    double crownRadius{0.0};                                ///< m
+    double crownBase{0.0};                                  ///< m over the foot
+    double trunkDiameter{0.0};                              ///< m
+    std::array<double, 3> sway{};  ///< world: the crown centre's displacement (tree/<n>/sway), m
+    std::uint32_t seed{0};         ///< its look: the same seed, the same tree
+    /// The instance id its trunk writes in a camera's instance image (RasterInstance::id; the
+    /// tree prim's scene index), kNoInstance: none.
+    std::uint32_t id{0xFFFF'FFFFU};
+};
+
+/// A crown cell a propeller cut (lagrange/world/Trees.hpp kTreeCutSignal): no leaves there.
+struct RealisticTreeCut {
+    std::uint32_t tree{0};               ///< index into RealisticSettings::trees
+    std::array<std::int32_t, 3> cell{};  ///< of 0.1 m (kTreeCutCell), crown frame, unswayed
+};
+
+/// A flying leaf (lagrange/world/Leaves.hpp): its blade's normal is (cos pitch cos yaw,
+/// cos pitch sin yaw, sin pitch). At most kMaxRealisticLeaves.
+inline constexpr std::size_t kMaxRealisticLeaves = 2048;
+struct RealisticLeaf {
+    std::array<double, 3> position{};  ///< region frame, m
+    float yaw{0.0F};                   ///< rad
+    float pitch{0.0F};                 ///< rad
+    float size{0.0F};                  ///< m, the blade's length
+};
+
+/// The renderer's units per lux (RFC 0021 §4): the drawn sun, kSunStrength, is the IES clear-sky
+/// direct normal illuminance of the light_sensor (sensors.md §9) at the drawn sun's elevation on
+/// the March equinox, so a Lambertian surface of albedo ρ under E lx is drawn ρ·E/π times this.
+[[nodiscard]] double realisticUnitsPerLux();
+/// The drawn sun's direct normal illuminance (lx), and the day's horizontal illuminance (lx,
+/// direct on a level surface plus the clear sky's diffuse): what the drawn day stands for.
+[[nodiscard]] double realisticSunIlluminance();
+[[nodiscard]] double realisticDaylight();
+/// The unit vector towards the drawn sun (world, z up).
+[[nodiscard]] std::array<double, 3> realisticSunDirection();
+/// How much the picture is brightened for a sky of `skyIlluminance` lx (horizontal): 1 by day,
+/// up to kMaxAdaptation in the dark, as eyes and cameras adapt (a drawing choice). A camera
+/// sensor divides its own exposure by it (CameraModel), so its electrons stay physical.
+[[nodiscard]] double realisticAdaptation(double skyIlluminance);
+/// Linear sRGB of luminance 1 of a black body at `kelvin`: Planck's law weighted by the CIE 1931
+/// 2° colour-matching functions in the analytic fit of Wyman, Sloan and Shirley (JCGT 2(2), 2013),
+/// then IEC 61966-2-1's XYZ to linear sRGB; negative components clipped.
+[[nodiscard]] std::array<float, 3> colorOfTemperature(double kelvin);
+
 /// Where it is seen from. Screen y runs down; depth is reversed with no far plane.
 struct RealisticView {
     std::array<float, 16> viewProjection{};  // relative to the eye
@@ -56,13 +175,40 @@ struct RealisticView {
 /// What does not come from the scene.
 struct RealisticSettings {
     int season{0};          // 0 summer, 1 fall, 2 winter, 3 rainy
-    float windSpeed{0.0F};  // m/s: how rough water is drawn
+    float windSpeed{0.0F};  // m/s at 10 m: how rough water is drawn (from `wind`'s direction)
     double seconds{0.0};    // sim time
     // What falls, drawn in the world: rain in mm/h, snow in mm/h of water, carried by the wind
     // (m/s, world x and y, where it blows to).
     float rainMmPerH{0.0F};
     float snowMmPerH{0.0F};
     std::array<float, 2> wind{};
+    /// Lamps (RFC 0021 §4), any number: the kMaxRealisticLamps brightest at the eye are drawn.
+    std::span<const RealisticLamp> lamps;
+    /// The sky's horizontal illuminance (lx): the sun and the sky are drawn at its share of
+    /// realisticDaylight(), and the picture adapts (realisticAdaptation). NaN: the drawn day.
+    double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
+    /// The first body of water's moving surface, when the physics moves it.
+    RealisticWaterSurface waterSurface;
+    /// Its coloured dissolved organic matter: the absorption at 440 nm (1/m), spread over the
+    /// spectrum as a·exp(−0.014·(λ − 440 nm)) (Bricaud, Morel and Prieur, Limnol. Oceanogr.
+    /// 26(1), 1981). 0: pure water.
+    float waterCdom{0.0F};
+    /// The spray's mist, when the run has spray.
+    RealisticSpray spray;
+    /// The final image is the scene's linear HDR value, clamped to 1, with no exposure, tone
+    /// mapping, bloom or occlusion: for calibration tests.
+    bool linear{false};
+    /// Rotor discs (GroundAir.hpp): their outwash over the ground at `groundHeight` (m, world z;
+    /// NaN: the top of what is drawn under the robot) bends grass and vegetation
+    /// (realistic.slang's groundAir), up to kMaxAirJets robots.
+    std::span<const AirRotor> rotors;
+    double groundHeight{std::numeric_limits<double>::quiet_NaN()};
+    /// Plants cut by propellers, when the run's plants have been cut.
+    RealisticCutPlants cutPlants;
+    /// Trees, their cut crown cells and the flying leaves.
+    std::span<const RealisticTree> trees;
+    std::span<const RealisticTreeCut> treeCuts;
+    std::span<const RealisticLeaf> leaves;
 };
 
 /// The photographs of surfaces, shared by the renderers on a device.
@@ -117,7 +263,15 @@ private:
     Image hdrCopy_;
     Image mirror_;
     Image mirrorDepth_;
-    Buffer frames_;  // host-visible: the main Frame, then the mirror pass's
+    Buffer frames_;   // host-visible: the main Frame, then the mirror pass's
+    Buffer lamps_;    // host-visible: up to kMaxRealisticLamps lamps (realistic.slang's Lamp)
+    Buffer surface_;  // host-visible: the moving water surface's cells (η, ∂η/∂x, ∂η/∂y, foam)
+    Buffer spray_;    // host-visible: the spray's water per cell (kg/m³)
+    Buffer cut_;      // host-visible: the cut plants' tops per cell (m, RealisticCutPlants)
+    const float* cutUploaded_{nullptr};  // what cut_ holds, to upload only a new grid
+    std::size_t cutUploadedCount_{0};
+    Buffer treeCuts_;  // host-visible: the trees' cut cells, an open-addressed table of keys
+    Buffer leaves_;    // host-visible: the flying leaves (realistic.slang flyingLeaves)
     VkSampler linear_{VK_NULL_HANDLE};
     VkSampler nearest_{VK_NULL_HANDLE};
     VkSampler repeat_{VK_NULL_HANDLE};
@@ -142,8 +296,36 @@ private:
     // Per frame: each item's bounding ball relative to the eye (x, y, z, radius); radius < 0
     // for an item that is never culled.
     std::vector<std::array<float, 4>> balls_;
+    // Per frame: the lamps by brightness at the eye (−I/d², index), kept to reuse its capacity.
+    std::vector<std::pair<double, std::size_t>> lampOrder_;
+    std::vector<double> rippleVariance_, rippleDirection_;  // water_optics::fetchLimitedRipples
     Pipeline sky_;
     Pipeline waterPipe_;
+    // Reeds, shrubs and grass blades, made in the vertex shader (realistic.slang vsVeg).
+    Pipeline vegPipe_;
+    // Per frame: each vegetation patch's push constants, its clump or tile count, the vertices
+    // of one, and whether it is grass (left out of the water's mirror).
+    struct VegPatch {
+        std::array<float, 24> push{};
+        std::uint32_t instances = 0;
+        std::uint32_t vertices = 0;
+        bool grass = false;
+    };
+    std::vector<VegPatch> vegPatches_;
+    // Trees (realistic.slang vsTree), made in the same pipeline, and their shadows in the sun's
+    // cascades. Per frame: each tree's push constants and its leaf cards, and its bounding ball
+    // relative to the eye.
+    Pipeline treeShadowPipe_;
+    struct TreeDraw {
+        std::array<float, 24> push{};
+        std::uint32_t leaves = 0;
+        std::array<float, 4> ball{};
+    };
+    std::vector<TreeDraw> treeDraws_;
+    std::vector<std::pair<double, std::size_t>> treeOrder_;  // per frame: (distance, tree)
+    std::uint64_t treeCutsSum_{0};                           // a hash of the cuts treeCuts_ holds
+    std::uint32_t treeCutsStored_{0};                        // keys in it
+    std::uint32_t leafCount_{0};                             // flying leaves in leaves_ this frame
     Pipeline composite_;
 };
 

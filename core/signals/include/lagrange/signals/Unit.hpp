@@ -65,6 +65,10 @@ enum class QuantityKind : std::uint16_t {
     MomentOfInertia = 34,
     Duration = 35,  // appended in v0.5
     DataRate = 36,
+    LuminousIntensity = 37,  // appended in 1.5 (RFC 0021)
+    LuminousFlux = 38,
+    Illuminance = 39,
+    LuminousEfficacy = 40,
 };
 
 /// A unit: dimension, factor to the coherent SI unit, and quantity kind.
@@ -120,6 +124,14 @@ inline constexpr Unit Gy_per_s{{.length = 2, .time = -3}, 1.0, QuantityKind::Dos
 inline constexpr Unit Bq{{.time = -1}, 1.0, QuantityKind::Activity};
 inline constexpr Unit W_per_m2{{.mass = 1, .time = -3}, 1.0, QuantityKind::Irradiance};
 inline constexpr Unit per_m{{.length = -1}, 1.0, QuantityKind::Extinction};
+/// Photometry (RFC 0021). The steradian is tracked as angle², so a lumen is cd·sr and a lux
+/// cd·sr/m², as SI defines them.
+inline constexpr Unit cd{{.luminous = 1}, 1.0, QuantityKind::LuminousIntensity};
+inline constexpr Unit lm{{.luminous = 1, .angle = 2}, 1.0, QuantityKind::LuminousFlux};
+inline constexpr Unit lx{{.length = -2, .luminous = 1, .angle = 2}, 1.0, QuantityKind::Illuminance};
+inline constexpr Unit lm_per_W{{.length = -2, .mass = -1, .time = 3, .luminous = 1, .angle = 2},
+                               1.0,
+                               QuantityKind::LuminousEfficacy};
 }  // namespace units
 
 /// Name of a quantity kind, e.g. "Torque". "Unspecified" for kind 0, "Unknown" outside the enum.
@@ -145,7 +157,7 @@ struct UnitParse {
 
 /// Parses a unit string as written in schema metadata (the `lagrangeUnit` field).
 ///
-/// Grammar: SI symbols (m kg s A K mol cd rad sr N J W V C ohm F H Hz Pa T Gy Bq S Wb),
+/// Grammar: SI symbols (m kg s A K mol cd rad sr N J W V C ohm F H Hz Pa T Gy Bq S Wb lm lx),
 /// products with '.', a quotient with '/', integer exponents written after the symbol ("m2",
 /// "s-2"), parentheses, and "1" for dimensionless. Prefixes are not accepted: schema values are
 /// SI. "a/b.c" is rejected as ambiguous; write "a/(b.c)" or "a.c/b".

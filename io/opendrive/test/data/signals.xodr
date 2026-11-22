@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A four-way junction with traffic lights (test_opendrive.cpp, test_traffic.cpp): four
+     arms of 50 m (road 1 east, 2 north, 3 west, 4 south), each starting 10 m from the centre
+     and leading away from it, one lane each way (lane 1 comes in against s, lane -1 goes out);
+     junction 100 joins them straight across (roads 10 to 13). A dynamic signal on each arm 3 m
+     out (s = 3), right of the incoming lane: east and west (signals 11, 13) are controller 1,
+     north and south (signals 12, 14) controller 2; the junction lists controller 2 first
+     (sequence 1). Signal 14 has no validity: it governs the left lanes it faces. -->
+<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="signals" version="1"/>
+  <road id="1" length="50" junction="-1">
+    <link><predecessor elementType="junction" elementId="100"/></link>
+    <type s="0" type="town"><speed max="50" unit="km/h"/></type>
+    <planView><geometry s="0" x="10" y="0" hdg="0" length="50"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <left><lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></left>
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+    <signals>
+      <signal id="11" s="3" t="4.5" zOffset="2.5" orientation="-" dynamic="yes" country="DE" type="1000001" subtype="-1" height="0.9" width="0.3"><validity fromLane="1" toLane="1"/></signal>
+    </signals>
+  </road>
+  <road id="2" length="50" junction="-1">
+    <link><predecessor elementType="junction" elementId="100"/></link>
+    <type s="0" type="town"><speed max="50" unit="km/h"/></type>
+    <planView><geometry s="0" x="0" y="10" hdg="1.5707963267948966" length="50"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <left><lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></left>
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+    <signals>
+      <signal id="12" s="3" t="4.5" zOffset="2.5" orientation="-" dynamic="yes" country="DE" type="1000001" subtype="-1" height="0.9" width="0.3"><validity fromLane="1" toLane="1"/></signal>
+    </signals>
+  </road>
+  <road id="3" length="50" junction="-1">
+    <link><predecessor elementType="junction" elementId="100"/></link>
+    <type s="0" type="town"><speed max="50" unit="km/h"/></type>
+    <planView><geometry s="0" x="-10" y="0" hdg="3.141592653589793" length="50"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <left><lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></left>
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+    <signals>
+      <signal id="13" s="3" t="4.5" zOffset="2.5" orientation="-" dynamic="yes" country="DE" type="1000001" subtype="-1" height="0.9" width="0.3"><validity fromLane="1" toLane="1"/></signal>
+    </signals>
+  </road>
+  <road id="4" length="50" junction="-1">
+    <link><predecessor elementType="junction" elementId="100"/></link>
+    <type s="0" type="town"><speed max="50" unit="km/h"/></type>
+    <planView><geometry s="0" x="0" y="-10" hdg="-1.5707963267948966" length="50"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <left><lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></left>
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+    <signals>
+      <signal id="14" s="3" t="4.5" zOffset="2.5" orientation="-" dynamic="yes" country="DE" type="1000001" subtype="-1" height="0.9" width="0.3"></signal>
+    </signals>
+  </road>
+  <road id="10" length="20" junction="100">
+    <link><predecessor elementType="road" elementId="1" contactPoint="start"/><successor elementType="road" elementId="3" contactPoint="start"/></link>
+    <planView><geometry s="0" x="10" y="0" hdg="3.141592653589793" length="20"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><link><predecessor id="1"/><successor id="-1"/></link><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road id="11" length="20" junction="100">
+    <link><predecessor elementType="road" elementId="3" contactPoint="start"/><successor elementType="road" elementId="1" contactPoint="start"/></link>
+    <planView><geometry s="0" x="-10" y="0" hdg="0" length="20"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><link><predecessor id="1"/><successor id="-1"/></link><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road id="12" length="20" junction="100">
+    <link><predecessor elementType="road" elementId="2" contactPoint="start"/><successor elementType="road" elementId="4" contactPoint="start"/></link>
+    <planView><geometry s="0" x="0" y="10" hdg="-1.5707963267948966" length="20"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><link><predecessor id="1"/><successor id="-1"/></link><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road id="13" length="20" junction="100">
+    <link><predecessor elementType="road" elementId="4" contactPoint="start"/><successor elementType="road" elementId="2" contactPoint="start"/></link>
+    <planView><geometry s="0" x="0" y="-10" hdg="1.5707963267948966" length="20"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0">
+        <center><lane id="0" type="none"/></center>
+        <right><lane id="-1" type="driving"><link><predecessor id="1"/><successor id="-1"/></link><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+  <controller id="1" name="east_west">
+    <control signalId="11" type="0"/>
+    <control signalId="13" type="0"/>
+  </controller>
+  <controller id="2" name="north_south">
+    <control signalId="12" type="0"/>
+    <control signalId="14" type="0"/>
+  </controller>
+  <junction id="100" name="cross">
+    <connection id="10" incomingRoad="1" connectingRoad="10" contactPoint="start"><laneLink from="1" to="-1"/></connection>
+    <connection id="11" incomingRoad="3" connectingRoad="11" contactPoint="start"><laneLink from="1" to="-1"/></connection>
+    <connection id="12" incomingRoad="2" connectingRoad="12" contactPoint="start"><laneLink from="1" to="-1"/></connection>
+    <connection id="13" incomingRoad="4" connectingRoad="13" contactPoint="start"><laneLink from="1" to="-1"/></connection>
+    <controller id="2" type="0" sequence="1"/>
+    <controller id="1" type="0" sequence="2"/>
+  </junction>
+</OpenDRIVE>

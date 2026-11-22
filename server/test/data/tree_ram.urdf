@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!-- A ram on a level rail at the open field's tree_1 (test_branches_run): a 20 cm box of 2 kg
+     driven along -y into the crown at 3.35 m, a lidar on it looking ahead. -->
+<robot name="ram">
+  <link name="world"/>
+  <link name="rail">
+    <inertial><mass value="10"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -1.7"/><geometry><cylinder radius="0.05" length="3.4"/></geometry></visual>
+    <visual><origin xyz="0 -0.6 -0.17"/><geometry><box size="0.04 1.6 0.04"/></geometry></visual>
+  </link>
+  <joint name="rail_joint" type="fixed">
+    <parent link="world"/><child link="rail"/><origin xyz="18.12 9.9 3.345" rpy="0 0 0"/>
+  </joint>
+  <link name="ram">
+    <inertial><mass value="2.0"/><inertia ixx="0.02" iyy="0.02" izz="0.02" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+    <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+  </link>
+  <joint name="ram_joint" type="prismatic">
+    <parent link="rail"/><child link="ram"/><axis xyz="0 -1 0"/>
+    <limit lower="0" upper="2.0" effort="40" velocity="1.0"/>
+  </joint>
+  <link name="lidar_link">
+    <inertial><mass value="0.1"/><inertia ixx="0.0001" iyy="0.0001" izz="0.0001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><geometry><cylinder radius="0.04" length="0.05"/></geometry></visual>
+  </link>
+  <joint name="lidar_joint" type="fixed">
+    <parent link="ram"/><child link="lidar_link"/><origin xyz="0 0 0.13" rpy="0 0 -1.5708"/>
+  </joint>
+  <gazebo reference="lidar_link">
+    <sensor name="front_lidar" type="gpu_lidar">
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal><samples>900</samples><min_angle>-1.0</min_angle><max_angle>1.0</max_angle></horizontal>
+          <vertical><samples>64</samples><min_angle>-0.7</min_angle><max_angle>0.7</max_angle></vertical>
+        </scan>
+        <range><min>0.15</min><max>20.0</max></range>
+      </lidar>
+    </sensor>
+  </gazebo>
+</robot>

@@ -5,6 +5,9 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
+#include "smoke_box.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -132,6 +135,134 @@ TEST(Camera, WithoutADeviceItRefusesToStartAndSaysWhatToDo) {
     auto wired = scheduler.wire(WorldView(model.world));
     ASSERT_FALSE(wired);
     EXPECT_NE(to_string(wired.error().front()).find("ground_truth"), std::string::npos);
+}
+
+// Trees (sensors.md "Trees in the camera"): the depth and instance images see a crown as the
+// lidar does, a turbid volume of leaf area density a (ShapeCaster.hpp crownStop): along a ray the
+// stop lies at an exponential distance of mean 1/μ, μ = G·a, past where the ray enters the crown
+// (Beer-Lambert, Ross 1981), truncated at the chord. The simple look draws the crown green.
+TEST(Camera, SeesATreesCrownAsTheLidarDoes) {
+    Model model = scene();
+    World& w = model.world;
+    w.schemaInstances.push_back({});
+    SchemaInstance& oak = w.schemaInstances.back();
+    oak.schema = "TreeAPI_1";
+    oak.prim = w.addPrim("/oak", "oak");
+    // A round crown of radius 1.5 m centred 2 m up, 3 m to the right of the axis, 8 m ahead.
+    w.prims.poseInBody.at(oak.prim.index).position = {8.0, -3.0, 0.0};
+    constexpr double kRadius = 1.5;
+    constexpr double kDensity = 4.0;  // m²/m³: μ = 2 /m, a mean free path of 0.5 m
+    oak.reals = {{"tree:height", 3.5},
+                 {"tree:crownRadius", kRadius},
+                 {"tree:crownBase", 0.5},
+                 {"tree:leafAreaDensity", kDensity}};
+    ScenePrim prim;
+    prim.name = "oak";
+    prim.path = "/oak";
+    model.scene.prims.push_back(prim);  // scene prim 2, no mesh of its own
+    std::string error;
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    const std::shared_ptr<CameraScene> cameras =
+        createCameraScene(model, gpu != nullptr ? gpu : "", error);
+    if (!cameras) {
+        GTEST_SKIP() << "no Vulkan device: " << error;
+    }
+    Rig run;
+    auto modules = createSensorModules(model.world, nullptr, cameras);
+    ASSERT_EQ(modules.size(), 1U);
+    run.scheduler.add(std::move(modules[0]));
+    auto wired = run.scheduler.wire(WorldView(model.world));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    run.step();
+    ASSERT_TRUE(run.image && run.depth && run.instance);
+    // The crown's centre, (8, -3, 1) from the camera, is at u = cx + fx·3/8, v = cy - fy·1/8.
+    const double f = kWidth / 2.0 / std::tan(0.6);
+    const double cx = (kWidth - 1) / 2.0;
+    const double cy = (kHeight - 1) / 2.0;
+    const auto uc = static_cast<int>(std::lround(cx + (f * 3.0 / 8.0)));
+    const auto vc = static_cast<int>(std::lround(cy - (f * 1.0 / 8.0)));
+    const double distance = std::sqrt(64.0 + 9.0 + 1.0);
+    const double mu = kCanopyProjection * kDensity;
+    const double chord = 2.0 * kRadius;
+    // The mean stop past the entry of an exponential truncated at the chord.
+    const double meanPast =
+        (1.0 / mu) - (chord * std::exp(-mu * chord) / (1.0 - std::exp(-mu * chord)));
+    int crown = 0;
+    int pixels = 0;
+    double sum = 0.0;
+    for (int v = vc - 4; v <= vc + 4; ++v) {
+        for (int u = uc - 4; u <= uc + 4; ++u) {
+            ++pixels;
+            const auto pu = static_cast<std::uint32_t>(u);
+            const auto pv = static_cast<std::uint32_t>(v);
+            if (pixel<std::uint32_t>(*run.instance, pu, pv) != 2U) {
+                continue;
+            }
+            ++crown;
+            // Depth is along the optical axis: back to the distance along the pixel's ray.
+            const double x = (u - cx) / f;
+            const double y = (v - cy) / f;
+            sum += pixel<float>(*run.depth, pu, pv) * std::sqrt(1.0 + (x * x) + (y * y));
+        }
+    }
+    EXPECT_GE(crown, pixels * 95 / 100);  // a ray escapes a 3 m chord with e^-6
+    ASSERT_GT(crown, 0);
+    EXPECT_NEAR(sum / crown, distance - kRadius + meanPast, 0.2);
+    // Beside the crown (and above the horizon) there is only sky.
+    const auto beside = static_cast<std::uint32_t>(uc + std::lround(f * 2.0 / 8.0));
+    EXPECT_EQ(pixel<std::uint32_t>(*run.instance, beside, static_cast<std::uint32_t>(vc)),
+              gpu::kNoInstance);
+    // The trunk, solid wood under the crown, is in depth and instance too: 0.2 m up, 8 m ahead,
+    // its radius there some 0.09 m (tree:trunkDiameter's fallback R/8, tapering; TreeShapes.hpp).
+    const auto ut = static_cast<std::uint32_t>(std::lround(cx + (f * 3.0 / 8.0)));
+    const auto vt = static_cast<std::uint32_t>(std::lround(cy + (f * 0.8 / 8.0)));
+    EXPECT_EQ(pixel<std::uint32_t>(*run.instance, ut, vt), 2U);
+    EXPECT_NEAR(pixel<float>(*run.depth, ut, vt), 8.0F - 0.09F, 0.03F);
+    // The simple look draws it as clumps of leaves: green.
+    using Rgba = std::array<std::uint8_t, 4>;
+    const Rgba leaf =
+        pixel<Rgba>(*run.image, static_cast<std::uint32_t>(uc), static_cast<std::uint32_t>(vc));
+    EXPECT_GT(leaf[1], leaf[0]);
+    EXPECT_GT(leaf[1], leaf[2]);
+}
+
+// Smoke (RFC 0022 §6): the veil through a uniform smoke of σ (visible) over the 2.5 m to the
+// cube's face is Koschmieder's, L = L0·e^(−σd) + L_air·(1 − e^(−σd)), ±1 code.
+TEST(Camera, SmokeVeilsTheSceneByItsOpticalDepth) {
+    const Model model = scene();
+    std::string error;
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    const std::shared_ptr<CameraScene> cameras =
+        createCameraScene(model, gpu != nullptr ? gpu : "", error);
+    if (!cameras) {
+        GTEST_SKIP() << "no Vulkan device: " << error;
+    }
+    const double sigma = 0.3;  // 1/m
+    const auto shoot = [&](bool smoke) {
+        Rig run;
+        if (smoke) {
+            run.scheduler.add(std::make_unique<test::SmokeBox>(
+                fields::DenseBox{{-1.0, -3.0, -1.0}, 0.25, {21, 25, 17}}, sigma));
+        }
+        auto modules = createSensorModules(model.world, nullptr, cameras);
+        run.scheduler.add(std::move(modules[0]), test::smokeConfig());
+        auto wired = run.scheduler.wire(WorldView(model.world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        run.step();
+        return run.image;
+    };
+    const std::shared_ptr<const Buffer> clear = shoot(false);
+    const std::shared_ptr<const Buffer> smoky = shoot(true);
+    ASSERT_TRUE(clear && smoky);
+    const double t = std::exp(-sigma * 2.5);
+    using Rgba = std::array<std::uint8_t, 4>;
+    const Rgba before = pixel<Rgba>(*clear, kWidth / 2, kHeight / 2);
+    const Rgba after = pixel<Rgba>(*smoky, kWidth / 2, kHeight / 2);
+    for (std::size_t k = 0; k < 3; ++k) {
+        const double expected = before[k] * t + kAirLight[k] * (1.0 - t);
+        const double seen = after[k];
+        EXPECT_NEAR(seen, expected, 1.0) << k;
+    }
 }
 
 // The camera model on the GPU (gpu/kernels/camera/camera_model.slang) against the CPU

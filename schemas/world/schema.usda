@@ -51,3 +51,73 @@ class "WorldTileAPI_1" (
         doc = "The tile has colliders: robots may only enter it once they are in the physics backend."
     )
 }
+
+class "TreeAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A tree (docs/physics/ground.md "Trees") standing at this prim's origin, z up. Its trunk
+    is whatever collider the stage gives it; its crown is not a collider but a volume of leaves and
+    twigs, an ellipsoid over crownBase with semi-axes (crownRadius, crownRadius,
+    (height - crownBase)/2). Bodies push through it, the wind and rotor downwash sway it (one
+    damped mode), propellers cut it, and lidars see it as a turbid volume."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double tree:height (
+        lagrangeUnit = "m"
+        doc = "From the foot of the trunk to the top of the crown. Required."
+    )
+    double tree:crownRadius (
+        lagrangeUnit = "m"
+        doc = "The crown's horizontal semi-axis. Required."
+    )
+    double tree:crownBase (
+        lagrangeUnit = "m"
+        doc = "Where the crown starts over the foot. No fallback: 0.3 of the height."
+    )
+    double tree:trunkDiameter (
+        lagrangeUnit = "m"
+        doc = "For drawing. No fallback: an eighth of the crown radius."
+    )
+    double tree:leafAreaDensity = 1 (
+        lagrangeUnit = "m2/m3"
+        doc = "Leaf area per crown volume: the drag on what moves through it and the lidars' gap probability."
+    )
+    double tree:dragCoefficient = 0.3 (
+        lagrangeUnit = "1"
+        doc = "Of the crown's side area pi·crownRadius·(height - crownBase)/2, for its sway."
+    )
+    double tree:naturalFrequency = 0.5 (
+        lagrangeUnit = "Hz"
+        doc = "The first sway mode's."
+    )
+    double tree:dampingRatio = 0.1 (
+        lagrangeUnit = "1"
+        doc = "The first sway mode's."
+    )
+    double tree:crownMass (
+        lagrangeUnit = "kg"
+        doc = "The sway mode's mass. No fallback: 2 kg per m3 of crown."
+    )
+    double tree:cutEnergy = 2000 (
+        lagrangeUnit = "J/m3"
+        doc = "The energy a propeller spends cutting through a cubic metre of crown."
+    )
+    double tree:leafArea = 0.003 (
+        lagrangeUnit = "m2"
+        doc = "One leaf's area, to count the leaves a cut sheds."
+    )
+    int tree:branchCount = 12 (
+        lagrangeUnit = "1"
+        doc = "Limbs leaving the trunk in the crown, besides its leader; each forks down to twigs (ground.md \"Branches\")."
+    )
+    double tree:woodCutEnergy = 50000 (
+        lagrangeUnit = "J/m2"
+        doc = "The energy a propeller spends severing a twig, per m2 of the twig's cross-section."
+    )
+    double tree:maxCutDiameter = 0.01 (
+        lagrangeUnit = "m"
+        doc = "The thickest wood a propeller cuts through; a thicker branch stops it (a strike)."
+    )
+}
