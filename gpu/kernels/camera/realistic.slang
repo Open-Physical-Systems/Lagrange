@@ -43,6 +43,8 @@ struct Frame
                               // centre relative to the eye; z its cell, m; w cells along x (0: none)
     float4 cutLevel;          // x: the tops' reference height relative to the eye; y: cells along y;
                               // z: 1 when grass blades are drawn near the eye (vsGrassBlade)
+    float4 trees;             // x: cut cells in treeCuts (0: none cut); y: flying leaves in
+                              // flyingLeaves; zw: unused
 };
 static const int kAirJets = 8; // kMaxAirJets
 
@@ -75,6 +77,12 @@ struct Lamp
 [[vk::binding(10)]] Sampler2D mirrorDepth;
 // The cut plants' tops (m over frame.cutLevel.x), x fastest; 1e30 where nothing is cut.
 [[vk::binding(11)]] StructuredBuffer<float> cutTops;
+// The trees' cut crown cells (vsTree, treeCellCut): an open-addressed table of kTreeCutSlots keys,
+// 0xffffffff where empty.
+[[vk::binding(12)]] StructuredBuffer<uint> treeCuts;
+// Flying leaves (lagrange/world/Leaves.hpp), two each: the centre relative to the eye and the
+// blade's length (m); its yaw and pitch (rad), a tone 0..1, 0.
+[[vk::binding(13)]] StructuredBuffer<float4> flyingLeaves;
 
 struct Push
 {
@@ -2001,9 +2009,437 @@ VegOutput vsGrassBlade(uint vertex, uint instance)
     return o;
 }
 
+// --- trees: TreeAPI_1 prims drawn as trees ------------------------------------------------
+// docs/physics/ground.md "Trees". A tree is made here from its parameters and a seed alone (no
+// buffers: the same tree every frame and on every machine): a tapered trunk with a root flare
+// from its foot to its crown base and on up into the crown, kTreeBranches main branches out to
+// the crown's main clumps of leaves, a twig to each further clump, and a crown of leaf cards in
+// kTreeClumps clumps inside the crown's ellipsoid (Trees.hpp: semi-axes R, R and half the crown's
+// height over the crown base). The crown sways by tree/<n>/sway (the crown centre's displacement):
+// a point at height z over the foot moves by sway·(z / centre height)^1.5, so the trunk bends and
+// the top moves most; each leaf flutters in the air at it (groundAir: wind and rotor outwash).
+// Leaves whose cell (kTreeCutCell, the crown's own unswayed frame) a propeller cut are not drawn.
+// Sizes, counts and colours are drawing choices: TODO(verify) against photographs of broadleaf
+// trees. The renderer draws a tree in two draws (wood, then leaves; Realistic.cpp), both also into
+// the sun's cascades so trees cast their shadows, leaf by leaf.
+// Push (96 bytes): model[0] = the foot relative to the eye (xyz), height (m); model[1] = crown
+// radius, crown base, trunk diameter (m), leaf cards drawn; model[2] = part (100 wood, 101 leaves,
+// 102 flying leaves), the tree's index in the cut table, its seed, mirror plane; baseColor = sway
+// (world m), leaf card length (m); surface = its orientation (x, y, z, w); emissive.w = 0 for the
+// view, 1 and 2 for the sun's near and far cascades.
+
+static const uint kTreeBranches = 7;
+static const uint kTreeClumps = 28;
+static const uint kTrunkSides = 10;
+static const uint kTrunkSegments = 8;
+static const uint kBranchSides = 6;
+static const uint kBranchSegments = 4;
+static const uint kTwigSides = 4;
+static const uint kTwigSegments = 2;
+static const uint kTrunkVerts = kTrunkSides * kTrunkSegments * 6u;     // 480
+static const uint kBranchVerts = kBranchSides * kBranchSegments * 6u;  // 144
+static const uint kTwigVerts = kTwigSides * kTwigSegments * 6u;        // 48
+// kTrunkVerts + kTreeBranches * kBranchVerts + (kTreeClumps - kTreeBranches) * kTwigVerts = 2496
+// vertices of wood: Realistic.cpp kTreeWoodVertices.
+static const uint kTreeCutSlots = 32768;  // Realistic.cpp kTreeCutSlots
+static const float kTreeCell = 0.1;       // m, Trees.hpp kTreeCutCell
+
+struct TreeShape
+{
+    float height;
+    float radius;      // R
+    float base;        // crown base over the foot
+    float half;        // c: half the crown's height
+    float trunk;       // trunk radius at the foot
+    float trunkTop;    // where the trunk ends, over the foot
+    float2 lean;       // the trunk top's offset, m
+    uint seed;
+};
+
+TreeShape treeShape()
+{
+    TreeShape t;
+    t.height = push.model[0].w;
+    t.radius = push.model[1].x;
+    t.base = push.model[1].y;
+    t.half = 0.5 * (t.height - t.base);
+    t.trunk = 0.5 * max(push.model[1].z, 0.02);
+    t.trunkTop = t.base + 1.3 * t.half;
+    t.seed = uint(push.model[2].z);
+    uint s = vegHash(t.seed ^ 0x51ed27u);
+    t.lean = (float2(vegRandom(s), vegRandom(s)) - 0.5) * 0.12 * t.radius;
+    return t;
+}
+
+float3 treeCentre(TreeShape t) { return float3(0.0, 0.0, t.base + t.half); }
+
+// v turned by the tree's orientation (push.surface, a unit quaternion x, y, z, w).
+float3 treeTurn(float3 v)
+{
+    float3 q = push.surface.xyz;
+    float3 u = cross(q, v) + push.surface.w * v;
+    return v + 2.0 * cross(q, u);
+}
+
+// A point of the tree (its own frame over the foot) relative to the eye, swayed.
+float3 treePlace(TreeShape t, float3 local)
+{
+    float bend = pow(max(local.z, 0.0) / (t.base + t.half), 1.5);
+    return push.model[0].xyz + treeTurn(local) + push.baseColor.xyz * bend;
+}
+
+float4 treeClip(float3 relative)
+{
+    float cascade = push.emissive.w;
+    if (cascade < 0.5)
+        return project(relative);
+    // A cascade of the sun (Realistic.cpp cascade()): its atlas rows undone to its clip space.
+    float4 p = float4(relative, 1.0);
+    bool nearOne = cascade < 1.5;
+    float u = dot(nearOne ? frame.shadow0[0] : frame.shadow1[0], p);
+    float v = dot(nearOne ? frame.shadow0[1] : frame.shadow1[1], p);
+    float d = dot(nearOne ? frame.shadow0[2] : frame.shadow1[2], p);
+    return float4((u - (nearOne ? 0.25 : 0.75)) / 0.25, (v - 0.5) / 0.5, d, 1.0);
+}
+
+// The trunk's axis at height z over the foot.
+float3 trunkAxis(TreeShape t, float z)
+{
+    float f = saturate(z / t.trunkTop);
+    return float3(t.lean * f * f, z);
+}
+
+float trunkRadius(TreeShape t, float z)
+{
+    float f = saturate(z / t.trunkTop);
+    float flare = 1.0 + 0.45 * exp(-z / max(0.35 * t.trunk * 4.0, 0.05));
+    return t.trunk * (1.0 - 0.72 * f) * flare;
+}
+
+// Clump k's centre (the crown's frame, from its centre) and radius.
+float4 treeClump(TreeShape t, uint k)
+{
+    uint s = vegHash(t.seed * 2654435761u + k * 0x9e3779b9u + 17u);
+    float az;
+    float up;
+    float reach;
+    if (k < kTreeBranches)
+    {
+        az = (float(k) + 0.35 * vegRandom(s)) * 2.39996;  // the golden angle round the trunk
+        up = -0.35 + 1.05 * (float(k) + vegRandom(s)) / float(kTreeBranches);
+        reach = 0.6 + 0.15 * vegRandom(s);
+    }
+    else
+    {
+        float i = float(k - kTreeBranches);
+        float n = float(kTreeClumps - kTreeBranches);
+        az = i * 2.39996 + vegRandom(s) * 0.8;
+        up = lerp(-0.55, 0.92, (i + vegRandom(s)) / n);
+        reach = 0.55 + 0.3 * vegRandom(s);
+    }
+    float horizontal = sqrt(max(1.0 - up * up, 0.0));
+    float3 dir = float3(horizontal * cos(az), horizontal * sin(az), up);
+    float3 centre = dir * reach * float3(t.radius, t.radius, t.half);
+    float r = (0.27 + 0.2 * vegRandom(s)) * min(t.radius, t.half * 1.3);
+    return float4(centre, r);
+}
+
+// A point of a quadratic Bézier and its tangent.
+float3 bezier(float3 a, float3 b, float3 c, float f) { return lerp(lerp(a, b, f), lerp(b, c, f), f); }
+float3 bezierTangent(float3 a, float3 b, float3 c, float f) { return 2.0 * lerp(b - a, c - b, f); }
+
+// Main branch b: its start on the trunk, control point and end (the tree's frame).
+void treeBranch(TreeShape t, uint b, out float3 a, out float3 m, out float3 e, out float r)
+{
+    float4 clump = treeClump(t, b);
+    e = treeCentre(t) + clump.xyz;
+    uint s = vegHash(t.seed * 747796405u + b * 2891336453u);
+    float z = t.base * (0.82 + 0.1 * vegRandom(s)) + t.half * (0.15 + 0.85 * float(b) / float(kTreeBranches));
+    z = min(z, t.trunkTop * 0.92);
+    a = trunkAxis(t, z);
+    m = float3(lerp(a.xy, e.xy, 0.6), lerp(a.z, e.z, 0.25));
+    r = trunkRadius(t, z) * (0.5 + 0.12 * vegRandom(s));
+}
+
+// A tapered tube along a Bézier: vertex v of `sides` x `segments` quads.
+void treeTube(uint v, uint sides, uint segments, float3 a, float3 m, float3 e, float r0, float r1,
+              out float3 p, out float3 n, out float along)
+{
+    static const uint level[6] = {0u, 0u, 1u, 1u, 0u, 1u};
+    static const uint turn[6] = {0u, 1u, 0u, 0u, 1u, 1u};
+    uint q = v / 6u;
+    uint c = v % 6u;
+    float f = float(q / sides + level[c]) / float(segments);
+    float angle = float(q % sides + turn[c]) / float(sides) * 6.2831853;
+    float3 centre = bezier(a, m, e, f);
+    float3 T = normalize(bezierTangent(a, m, e, f) + float3(0.0, 0.0, 1e-4));
+    float3 side = normalize(cross(T, abs(T.z) < 0.95 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
+    float3 other = cross(T, side);
+    n = side * cos(angle) + other * sin(angle);
+    p = centre + n * lerp(r0, r1, f);
+    along = f;
+}
+
+// Whether tree `tree`'s crown cell `cell` (kTreeCell, the crown's unswayed frame) was cut.
+bool treeCellCut(uint tree, int3 cell)
+{
+    if (frame.trees.x < 0.5 || tree > 254u || any(cell < int3(-128)) || any(cell > int3(127)))
+        return false;
+    uint key = (tree << 24) | (uint(cell.x + 128) << 16) | (uint(cell.y + 128) << 8) | uint(cell.z + 128);
+    uint slot = vegHash(key) & (kTreeCutSlots - 1u);
+    for (uint probe = 0u; probe < 32u; ++probe)
+    {
+        uint k = treeCuts[slot];
+        if (k == key)
+            return true;
+        if (k == 0xffffffffu)
+            return false;
+        slot = (slot + 1u) & (kTreeCutSlots - 1u);
+    }
+    return false;
+}
+
+VegOutput treeFinish(VegOutput o)
+{
+    float mirror = push.model[2].w;
+    if (mirror < 1e8)
+    {
+        o.relative.z = 2.0 * mirror - o.relative.z;  // the water's mirror pass
+        o.normal.z = -o.normal.z;
+    }
+    o.position = treeClip(o.relative);
+    return o;
+}
+
+// The bark: grey-brown, darker in its furrows, lighter on the branches.
+float3 barkColor(float3 local, float3 n, float along, bool branch)
+{
+    float3 world = local * float3(1.0, 1.0, 0.25);
+    float furrow = noise3(float3(atan2(n.y, n.x) * 6.0, local.z * 9.0, 2.0));
+    float3 bark = float3(0.095, 0.075, 0.058) * (0.6 + 0.7 * furrow);
+    bark *= 0.85 + 0.3 * noise3(world * 3.0);
+    if (branch)
+        bark = lerp(bark, float3(0.12, 0.1, 0.075), 0.4 + 0.3 * along);
+    // Green algae on the side away from the sun, near the foot.
+    float moss = saturate(1.0 - local.z / 1.5) * saturate(-n.x * 0.7 + 0.3) * noise3(local * 4.0);
+    return lerp(bark, float3(0.05, 0.075, 0.03), 0.6 * moss);
+}
+
+VegOutput vsTreeWood(uint vertex)
+{
+    TreeShape t = treeShape();
+    float3 p;
+    float3 n;
+    float along;
+    bool branch = true;
+    if (vertex < kTrunkVerts)
+    {
+        // The trunk: a Bézier from the foot to its top, so its axis matches trunkAxis.
+        float3 a = float3(0.0, 0.0, -0.05);
+        float3 e = trunkAxis(t, t.trunkTop);
+        float3 m = float3(0.0, 0.0, 0.5 * (a.z + e.z));
+        uint q = vertex / 6u;
+        uint c = vertex % 6u;
+        static const uint level[6] = {0u, 0u, 1u, 1u, 0u, 1u};
+        static const uint turn[6] = {0u, 1u, 0u, 0u, 1u, 1u};
+        float f = float(q / kTrunkSides + level[c]) / float(kTrunkSegments);
+        // Segments closer together at the foot, where the flare is.
+        f = f * f * (1.6 - 0.6 * f) / 1.0;
+        float z = lerp(a.z, e.z, f);
+        float angle = float(q % kTrunkSides + turn[c]) / float(kTrunkSides) * 6.2831853;
+        float3 centre = trunkAxis(t, z);
+        n = float3(cos(angle), sin(angle), 0.0);
+        // Its bark ridged: the radius a little uneven round it.
+        float ridge = 1.0 + 0.06 * sin(angle * 5.0 + float(t.seed & 7u)) * saturate(1.0 - z / t.trunkTop);
+        p = centre + n * trunkRadius(t, z) * ridge;
+        along = z / t.trunkTop;
+        branch = false;
+    }
+    else if (vertex < kTrunkVerts + kTreeBranches * kBranchVerts)
+    {
+        uint v = vertex - kTrunkVerts;
+        uint b = v / kBranchVerts;
+        float3 a;
+        float3 m;
+        float3 e;
+        float r;
+        treeBranch(t, b, a, m, e, r);
+        treeTube(v % kBranchVerts, kBranchSides, kBranchSegments, a, m, e, r, r * 0.25, p, n, along);
+    }
+    else
+    {
+        uint v = vertex - kTrunkVerts - kTreeBranches * kBranchVerts;
+        uint k = kTreeBranches + v / kTwigVerts;
+        if (k >= kTreeClumps)
+            return vegNothing();
+        uint parent = k % kTreeBranches;
+        float3 a;
+        float3 m;
+        float3 e;
+        float r;
+        treeBranch(t, parent, a, m, e, r);
+        uint s = vegHash(t.seed * 1664525u + k * 1013904223u);
+        float f = 0.35 + 0.35 * vegRandom(s);
+        float3 start = bezier(a, m, e, f);
+        float rs = lerp(r, r * 0.25, f) * 0.6;
+        float4 clump = treeClump(t, k);
+        float3 end = lerp(start, treeCentre(t) + clump.xyz, 0.8);
+        float3 mid = lerp(start, end, 0.5) + float3(0.0, 0.0, 0.1 * distance(start, end));
+        treeTube(v % kTwigVerts, kTwigSides, kTwigSegments, start, mid, end, rs, rs * 0.3, p, n, along);
+    }
+    VegOutput o;
+    o.relative = treePlace(t, p);
+    o.normal = treeTurn(n);
+    o.color = barkColor(p, n, along, branch);
+    o.rough = 0.9;
+    return treeFinish(o);
+}
+
+// A leaf's green: the clump's own tone, each leaf a little its own, dark deep in the crown and
+// under it; the season's colours (0 summer, 1 fall, 2 winter, 3 rainy).
+float3 leafColor(float clumpTone, float tone, float depth, float below)
+{
+    float3 green = float3(0.055, 0.12, 0.028);
+    green *= lerp(float3(0.8, 0.95, 0.85), float3(1.2, 1.12, 0.7), clumpTone);
+    green *= 0.75 + 0.5 * tone;
+    int season = seasonNow();
+    if (season == 1)
+    {
+        float3 autumn = tone < 0.33 ? float3(0.36, 0.16, 0.02) : tone < 0.66 ? float3(0.3, 0.06, 0.015)
+                                                                         : float3(0.32, 0.26, 0.03);
+        green = lerp(green, autumn, 0.35 + 0.6 * clumpTone);
+    }
+    else if (season == 2)
+        green = float3(0.14, 0.09, 0.05) * (0.7 + 0.5 * tone);
+    // Deep in the crown and on its underside, the leaves are in the others' shade.
+    return green * lerp(0.3, 1.0, depth) * lerp(0.6, 1.0, below);
+}
+
+// A leaf card is a spray of kSprayLeaves leaves round a twig's tip (kSprayVerts vertices).
+static const uint kSprayLeaves = 3;
+static const uint kSprayVerts = kSprayLeaves * 6u;  // Realistic.cpp kTreeCardVertices
+
+VegOutput vsTreeLeaves(uint vertex)
+{
+    TreeShape t = treeShape();
+    uint i = vertex / kSprayVerts;
+    uint leaf = (vertex % kSprayVerts) / 6u;
+    uint c6 = vertex % 6u;
+    uint k = i % kTreeClumps;
+    uint s = vegHash(t.seed * 2246822519u + i * 2654435761u + 7u);
+    int season = seasonNow();
+    if (season == 2 && vegRandom(s) < 0.88)
+        return vegNothing();  // winter: a few dead leaves left
+    float4 clump = treeClump(t, k);
+    // A point in the clump, more of them near its outside.
+    float zz = vegRandom(s) * 2.0 - 1.0;
+    float az = vegRandom(s) * 6.2831853;
+    float rr = pow(vegRandom(s), 0.55);
+    float3 dir = float3(sqrt(max(1.0 - zz * zz, 0.0)) * float2(cos(az), sin(az)), zz);
+    float3 q = clump.xyz + dir * clump.w * rr * float3(1.0, 1.0, 0.8);
+    float3 axes = float3(t.radius, t.radius, t.half);
+    float e = length(q / axes);
+    if (e > 1.0)
+        q *= 1.0 / e;  // kept in the crown's ellipsoid, where the physics has its leaves
+    // Its blade faces out of its clump and the crown, and a little up, each its own way.
+    float3 outward = normalize(q / (axes * axes) + 1e-5);
+    float3 nrm = normalize(dir * 0.8 + outward * 0.6 +
+                           (float3(vegRandom(s), vegRandom(s), vegRandom(s)) - 0.5) * 1.6 + float3(0.0, 0.0, 0.35));
+    float3 tu = normalize(cross(nrm, abs(nrm.z) < 0.9 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
+    float3 tv = cross(nrm, tu);
+    float spin = vegRandom(s) * 6.2831853 + float(leaf) * 2.1 + 0.6 * sin(float(i) + float(leaf) * 1.3);
+    float3 along = tu * cos(spin) + tv * sin(spin);
+    float3 across = cross(nrm, along);
+    float size = push.baseColor.w * (0.7 + 0.6 * vegRandom(s));
+    // This leaf of the spray: out from the twig's tip along its own way, tipped a little.
+    uint ls = vegHash(s + leaf * 0x632be5abu);
+    float3 tilt = (float3(vegRandom(ls), vegRandom(ls), vegRandom(ls)) - 0.5) * 0.7;
+    q += along * size * 0.32;
+    nrm = normalize(nrm + tilt);
+    along = normalize(along - nrm * dot(along, nrm));
+    across = cross(nrm, along);
+    size *= 0.62;
+    // Cut away by a propeller: no leaf whose middle is in a cut cell.
+    float3 middle = q + along * size * 0.25;
+    uint tree = uint(push.model[2].y);
+    int3 at = int3(floor(middle / kTreeCell));
+    if (treeCellCut(tree, at))
+        return vegNothing();
+    // Beside a cut: torn leaves, pale, so the hole shows.
+    bool torn = frame.trees.x > 0.5 &&
+                (treeCellCut(tree, at + int3(1, 0, 0)) || treeCellCut(tree, at - int3(1, 0, 0)) ||
+                 treeCellCut(tree, at + int3(0, 1, 0)) || treeCellCut(tree, at - int3(0, 1, 0)) ||
+                 treeCellCut(tree, at + int3(0, 0, 1)) || treeCellCut(tree, at - int3(0, 0, 1)));
+    static const float2 kite[6] = {float2(-1, 0), float2(-0.2, -0.42), float2(-0.2, 0.42),
+                                   float2(-0.2, 0.42), float2(-0.2, -0.42), float2(1, 0)};
+    float2 corner = kite[c6];
+    float3 local = treeCentre(t) + q;
+    float3 relative = treePlace(t, local);
+    // Flutter: each leaf turns about its stalk in the air at it, more in more air.
+    float3 world = relative + frame.worldWrap.xyz;
+    float air = length(groundAir(world)) + 4.0 * length(push.baseColor.xyz);
+    float push_ = airPush(air, 0.45);
+    float phase = vegRandom(s) * 6.2831853;
+    float flutter = sin(frame.worldWrap.w * (7.0 + 9.0 * push_) + phase) * (0.06 + 0.5 * push_);
+    float3 p = q + (along * corner.x + across * corner.y) * (0.5 * size);
+    p += nrm * flutter * size * 0.5 * (corner.x + 1.0) * 0.5;
+    VegOutput o;
+    o.relative = treePlace(t, treeCentre(t) + p);
+    o.normal = treeTurn(normalize(nrm - along * flutter * 0.8));
+    uint ks = t.seed + k * 977u;
+    float clumpTone = vegRandom(ks);
+    float depth = smoothstep(0.35, 0.95, e) * smoothstep(-0.2, 0.9, dot(dir, normalize(clump.xyz + 1e-4)) * 0.5 + 0.5 + rr * 0.3);
+    float below = saturate(q.z / t.half * 0.6 + 0.7);
+    o.color = leafColor(clumpTone, vegRandom(s), depth, below);
+    o.rough = season == 3 ? 0.35 : 0.55;
+    if (torn)
+        o.color = lerp(o.color, float3(0.2, 0.17, 0.07), 0.55);  // bruised and torn at the cut
+    return treeFinish(o);
+}
+
+// Flying leaves (Leaves.hpp): cut from crowns or stripped by the air, drawn as single leaves at
+// the orientation the physics gives them.
+VegOutput vsFlyingLeaf(uint vertex)
+{
+    uint i = vertex / 6u;
+    uint c6 = vertex % 6u;
+    if (float(i) >= frame.trees.y)
+        return vegNothing();
+    float4 a = flyingLeaves[2u * i];
+    float4 b = flyingLeaves[2u * i + 1u];
+    float yaw = b.x;
+    float pitch = b.y;
+    float3 nrm = float3(cos(pitch) * cos(yaw), cos(pitch) * sin(yaw), sin(pitch));
+    float3 along = normalize(cross(nrm, abs(nrm.z) < 0.9 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
+    float3 across = cross(nrm, along);
+    static const float2 kite[6] = {float2(-1, 0), float2(-0.2, -0.42), float2(-0.2, 0.42),
+                                   float2(-0.2, 0.42), float2(-0.2, -0.42), float2(1, 0)};
+    float2 corner = kite[c6];
+    // Drawn twice their blade's length (a leaf of 5 cm is less than a pixel a few metres off).
+    float size = max(a.w, 0.02) * 1.6;
+    VegOutput o;
+    o.relative = a.xyz + (along * corner.x + across * corner.y) * (0.5 * size);
+    o.normal = nrm;
+    o.color = leafColor(b.z, frac(b.z * 7.13), 1.0, 1.0) * lerp(float3(1.0), float3(1.6, 1.3, 0.8), b.z * 0.6);
+    o.rough = 0.55;
+    return treeFinish(o);
+}
+
+VegOutput vsTree(uint vertex)
+{
+    float part = push.model[2].x;
+    if (part < 100.5)
+        return vsTreeWood(vertex);
+    if (part < 101.5)
+        return vsTreeLeaves(vertex);
+    return vsFlyingLeaf(vertex);
+}
+
 [shader("vertex")]
 VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
 {
+    if (push.model[2].x > 99.5)
+        return vsTree(vertex);  // trees (TreeAPI_1) and flying leaves
     if (grassOf(int(push.model[2].x + 0.5)) > 0)
         return vsGrassBlade(vertex, instance);
     uint nx = uint(push.model[1].z);

@@ -100,8 +100,8 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     settings.lamps = lamps_;
     rotors_.clear();
     for (const RenderOptions::Rotor& from : options.rotors) {
-        rotors_.push_back({from.hub, from.thrustAxis, from.radius, from.induced, from.thrust,
-                           from.group});
+        rotors_.push_back(
+            {from.hub, from.thrustAxis, from.radius, from.induced, from.thrust, from.group});
     }
     settings.rotors = rotors_;
     settings.skyIlluminance = options.skyIlluminance;
@@ -122,6 +122,37 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         settings.cutPlants.level = cut->level;
         settings.cutPlants.tops = cut->tops;
     }
+    trees_.clear();
+    for (const RenderOptions::Tree& from : options.trees) {
+        gpu::RealisticTree& tree = trees_.emplace_back();
+        tree.foot = from.foot;
+        tree.rotation = from.rotation;
+        tree.height = from.height;
+        tree.crownRadius = from.crownRadius;
+        tree.crownBase = from.crownBase;
+        tree.trunkDiameter = from.trunkDiameter;
+        tree.sway = from.sway;
+        tree.seed = from.seed;
+    }
+    settings.trees = trees_;
+    if (options.treeCuts != treeCutsOf_) {
+        treeCutsOf_ = options.treeCuts;
+        treeCuts_.clear();
+        if (const auto& cuts = options.treeCuts) {
+            treeCuts_.reserve(cuts->size());
+            for (const RenderOptions::TreeCut& from : *cuts) {
+                treeCuts_.push_back({from.tree, from.cell});
+            }
+        }
+    }
+    settings.treeCuts = treeCuts_;
+    leaves_.clear();
+    if (const auto& leaves = options.leaves) {
+        for (const RenderOptions::Leaf& from : *leaves) {
+            leaves_.push_back({from.position, from.yaw, from.pitch, from.size});
+        }
+    }
+    settings.leaves = leaves_;
     if (const auto& spray = options.spray3d) {
         // The drops' extinction per kg/m³ of water: Q_ext = 2 for drops much larger than the
         // wavelength (van de Hulst 1957, §8.42), 3/(ρ_w·D) per kg/m³, over the aerodynamics

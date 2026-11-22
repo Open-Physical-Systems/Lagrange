@@ -377,6 +377,10 @@ the grass. The volume cut so far is `tree/<n>/cut_volume`, and the leaves it cut
 `cut volume × LAD / tree:leafArea`, are `tree/<n>/leaves_shed`. Cut cells hold no leaves: nothing
 drags there, and the lidars see through them.
 
+**Drawing.** The realistic view and camera sensors draw each tree as a trunk, branches and a
+crown of leaf cards in its ellipsoid, swaying by `tree/<n>/sway`, with holes where cells were cut,
+and the flying leaves of `vegetation/leaves` (docs/design/viewer.md §4).
+
 **Lidars.** A beam crossing a crown stops in it with the gap probability: its free path through
 the leaves has `P(s > x) = exp(−G·LAD·x)`, counted only through cells not cut away, the crown at
 its sway (`sensors::crownStop`). The return is a leaf's (the `shrub` preset's reflectivity) facing
@@ -481,9 +485,10 @@ density of 1 m²/m³ (broadleaf crowns run from about 0.5 to 2), a crown drag co
 a crown mass of 2 kg per m³ of crown, 2000 J to cut a m³ of crown, a leaf of 30 cm². The sway is
 one mode of the whole crown: branches do not sway on their own, and the crown does not bend
 (its top moves as its centre). The crown's air is sampled at its centre's height; rotors inside
-the crown under it give it their inflow, not their wake. Not yet: the realistic view's trees, the
-crown's shelter of the air behind it, trees broken by a vehicle (branches that stop a propeller:
-"Branches" above; flying leaves: below).
+the crown under it give it their inflow, not their wake. Not yet: the crown's shelter of the air
+behind it, trees broken by a vehicle (branches that stop a propeller: "Branches" above; flying
+leaves: below; the realistic view and camera sensors draw the trees, their cuts and the flying
+leaves, docs/design/viewer.md).
 
 ### Flying leaves
 
@@ -565,5 +570,4 @@ defoliation in wind. The jet's 4 R and its spread are a simplification of the ae
 merged-jet model (Bauersfeld et al. 2024), which the leaves do not see. Left out: twigs as anything
 but small leaves, the leaves' own lift and the true dynamics of a tumbling plate, the ground's
 outwash and the wake's skew in wind (the aerodynamics domain has both), leaves lifted again from
-the ground, leaves stopped by colliders other than the surfaces above (walls, robots), and the
-camera sensors drawing them (the viewer draws them).
+the ground, and leaves stopped by colliders other than the surfaces above (walls, robots).

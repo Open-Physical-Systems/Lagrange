@@ -397,6 +397,9 @@ struct RasterCamera::Impl {
     RealisticWaterSurface water;       // setWaterSurface, its spans into these:
     std::vector<float> waterHeights, waterFoam, waterFriction;
     std::vector<AirRotor> rotors;      // setAir
+    std::vector<RealisticTree> trees;  // setTrees
+    std::vector<RealisticTreeCut> treeCuts;
+    std::vector<RealisticLeaf> leaves;
     double skyIlluminance{std::numeric_limits<double>::quiet_NaN()};
     bool linear{false};
     bool colour{true};  // false: only depth and ids are drawn (setColour)
@@ -547,6 +550,14 @@ void RasterCamera::setWaterSurface(const RealisticWaterSurface& surface) {
 
 void RasterCamera::setAir(std::span<const AirRotor> rotors) {
     impl_->rotors.assign(rotors.begin(), rotors.end());
+}
+
+void RasterCamera::setTrees(std::span<const RealisticTree> trees,
+                            std::span<const RealisticTreeCut> cuts,
+                            std::span<const RealisticLeaf> leaves) {
+    impl_->trees.assign(trees.begin(), trees.end());
+    impl_->treeCuts.assign(cuts.begin(), cuts.end());
+    impl_->leaves.assign(leaves.begin(), leaves.end());
 }
 
 void RasterCamera::setColour(bool drawn) {
@@ -878,6 +889,9 @@ void RasterCamera::draw(std::span<const RasterInstance> instances, const Pinhole
             settings.seconds = seconds;
             settings.lamps = impl_->lamps;
             settings.rotors = impl_->rotors;
+            settings.trees = impl_->trees;
+            settings.treeCuts = impl_->treeCuts;
+            settings.leaves = impl_->leaves;
             settings.skyIlluminance = impl_->skyIlluminance;
             settings.linear = impl_->linear;
             settings.waterSurface = impl_->water;

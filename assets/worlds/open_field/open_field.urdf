@@ -2,7 +2,8 @@
 <!--
   An open field for the drone samples (robot-classes.md §5): the loaders' 50 m ground slab with a
   painted landing pad at the origin (visual only, flush with the ground), a windsock on a pole
-  4 m from the pad, four trees (their crowns soft: TreeAPI_1 in open_field.usda, ground.md "Trees") and a shed, all more than 15 m from the pad so that the 10 m
+  4 m from the pad, four trees (their crowns soft: TreeAPI_1 in open_field.usda, ground.md "Trees"; that file keeps only
+  the trunks' colliders, the realistic view drawing the trees) and a shed, all more than 15 m from the pad so that the 10 m
   mission square at 5 m (tools/ci/px4_mission.sh) flies clear of them, all fixed to the ground
   (root link "world"). Primitives only, so it needs no mesh files.
 -->

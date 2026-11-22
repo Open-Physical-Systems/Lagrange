@@ -927,6 +927,7 @@ public:
         buildSpray();  // after the airflow: its drops go in the same overlay slot
         followWaterSurface();
         followCutPlants();
+        followTrees();
         buildCables();
         followWeather();
         followLamps();
@@ -1029,9 +1030,10 @@ public:
                    a.airflow == b.airflow && a.airflowMax == b.airflowMax && a.spray == b.spray &&
                    a.waterSurface == b.waterSurface && a.waterRelief == b.waterRelief &&
                    a.waterCdom == b.waterCdom && a.spray3d == b.spray3d &&
-                   a.cutPlants == b.cutPlants &&
-                   sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
-                   a.heatCovered == b.heatCovered && a.lamps == b.lamps &&
+                   a.cutPlants == b.cutPlants && a.trees == b.trees && a.treeCuts == b.treeCuts &&
+                   a.leaves == b.leaves && sameValues(a.temperature, b.temperature) &&
+                   sameValues(a.current, b.current) && a.heatCovered == b.heatCovered &&
+                   a.lamps == b.lamps &&
                    (a.skyIlluminance == b.skyIlluminance ||
                     (std::isnan(a.skyIlluminance) && std::isnan(b.skyIlluminance)));
         }
@@ -1169,6 +1171,14 @@ public:
                 lamp.intensity = client_.subscribe("lamp/" + prim.name + "/intensity");
                 prims.push_back(lamp.prim);
             }
+            // The trees' tree:* attributes in the same request (followTrees): a second one would
+            // be taken for the inspector's.
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const std::vector<std::string>& schemas = statics.prims[i].apiSchemas;
+                if (std::find(schemas.begin(), schemas.end(), "TreeAPI_1") != schemas.end()) {
+                    prims.push_back(static_cast<std::uint32_t>(i));
+                }
+            }
             if (!prims.empty()) {
                 client_.requestAttributesOf(prims);
             }
@@ -1254,8 +1264,8 @@ public:
         if (catalog != rotorCatalog_) {
             rotorCatalog_ = catalog;
             for (SceneRotor& rotor : rotors_) {
-                for (const auto& b : {rotor.thrust, rotor.induced, rotor.axis[0], rotor.axis[1],
-                                      rotor.axis[2]}) {
+                for (const auto& b :
+                     {rotor.thrust, rotor.induced, rotor.axis[0], rotor.axis[1], rotor.axis[2]}) {
                     if (b) {
                         client_.unsubscribe(b);
                     }
@@ -1305,8 +1315,8 @@ public:
         }
         // ISA sea-level density, kg/m³ (ICAO Doc 7488/3), when the run gives none.
         constexpr double kSeaLevelDensity = 1.225;
-        const double rho = airDensity_ && airDensity_->latest() > 0.0 ? airDensity_->latest()
-                                                                       : kSeaLevelDensity;
+        const double rho =
+            airDensity_ && airDensity_->latest() > 0.0 ? airDensity_->latest() : kSeaLevelDensity;
         for (const SceneRotor& rotor : rotors_) {
             if (!rotor.thrust || !rotor.induced || !rotor.axis[0] || !rotor.axis[1] ||
                 !rotor.axis[2] || rotor.link >= frame->transforms.size() ||
@@ -1322,8 +1332,8 @@ public:
             if (!(drawn.thrust > 0.0) || !(drawn.induced > 0.0) || !std::isfinite(drawn.thrust)) {
                 continue;
             }
-            drawn.radius = std::sqrt(drawn.thrust / (2.0 * rho * std::numbers::pi *
-                                                     drawn.induced * drawn.induced));
+            drawn.radius = std::sqrt(
+                drawn.thrust / (2.0 * rho * std::numbers::pi * drawn.induced * drawn.induced));
             // Its robot: the top prim above its link.
             std::uint32_t root = rotor.link;
             for (std::size_t guard = 0; guard < statics.prims.size(); ++guard) {
@@ -1668,8 +1678,8 @@ public:
             return;
         }
         cutOf_ = volume;
-        if (volume->components != 1U || volume->nz != 1U || volume->nx == 0U ||
-            volume->ny == 0U || volume->cellM <= 0.0 ||
+        if (volume->components != 1U || volume->nz != 1U || volume->nx == 0U || volume->ny == 0U ||
+            volume->cellM <= 0.0 ||
             volume->values.size() != static_cast<std::size_t>(volume->nx) * volume->ny) {
             renderOptions_.cutPlants.reset();  // nothing cut (yet, or after a reset)
             return;
@@ -1681,6 +1691,199 @@ public:
         cut->level = volume->origin[2];
         cut->tops = volume->values;
         renderOptions_.cutPlants = std::move(cut);
+    }
+
+    /// Trees for the realistic view (ground.md "Trees"), only through the protocol (invariant
+    /// 14): the TreeAPI_1 prims of the scene, their tree:* attributes (asked for with the lamps',
+    /// with Trees.hpp's fallbacks), their poses, tree/<n>/sway (watched while the realistic view
+    /// draws), and the server's vegetation/tree_cut and vegetation/leaves volumes.
+    void followTrees() {
+        renderOptions_.trees.clear();
+        const auto frame = scene_;
+        if (!frame || !frame->statics) {
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        const bool realistic = renderOptions_.shading == Shading::Realistic;
+        const auto stopSway = [&] {
+            for (SceneTree& tree : trees_) {
+                for (std::shared_ptr<ScopeBuffer>& b : tree.sway) {
+                    if (b) {
+                        client_.unsubscribe(b);
+                        b.reset();
+                    }
+                }
+            }
+            treeCatalog_.reset();
+        };
+        if (statics.generation != treeGeneration_) {
+            treeGeneration_ = statics.generation;
+            stopSway();
+            trees_.clear();
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const PrimData& prim = statics.prims[i];
+                if (std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(), "TreeAPI_1") ==
+                    prim.apiSchemas.end()) {
+                    continue;
+                }
+                SceneTree& tree = trees_.emplace_back();
+                tree.prim = static_cast<std::uint32_t>(i);
+                tree.name = prim.name;
+                // Its look's seed: from its name, so it is the same tree in every run.
+                std::uint32_t seed = 2166136261U;
+                for (const char c : prim.name) {
+                    seed = (seed ^ static_cast<unsigned char>(c)) * 16777619U;
+                }
+                tree.seed = seed & 0xffffffU;
+            }
+            treeAttributes_.reset();
+        }
+        const auto watch = [&](std::shared_ptr<FieldStream>& stream, const char* name,
+                               bool wanted) {
+            const std::shared_ptr<const EnvironmentInfo> info = client_.environment();
+            const bool available =
+                wanted && info && std::ranges::any_of(info->fields, [&](const auto& f) {
+                    return f.name == name && f.available;
+                });
+            if (available && !stream) {
+                stream = client_.watchField(name, 0.0, SliceOrientation::Horizontal, true);
+            } else if (!available && stream) {
+                (void)client_.watchField(name, 0.0, SliceOrientation::Horizontal, false);
+                stream.reset();
+            }
+            return available;
+        };
+        const bool drawn = realistic && !trees_.empty();
+        if (!drawn) {
+            stopSway();
+        }
+        if (!watch(treeCutStream_, kTreeCutField, drawn)) {
+            treeCutsOf_.reset();
+            renderOptions_.treeCuts.reset();
+        }
+        if (!watch(leavesStream_, kLeavesField, realistic)) {
+            leavesOf_.reset();
+            renderOptions_.leaves.reset();
+        }
+        if (trees_.empty()) {
+            return;
+        }
+        // Their numbers, with the fallbacks of TreeAPI_1 (lagrange/world/Trees.hpp treesOf).
+        const auto attributes = client_.attributesOf();
+        if (attributes != treeAttributes_) {
+            treeAttributes_ = attributes;
+            for (SceneTree& tree : trees_) {
+                const auto it = attributes->find(tree.prim);
+                if (it == attributes->end()) {
+                    continue;
+                }
+                const auto number = [&](const char* name, double fallback) {
+                    for (const AttributeInfo& a : it->second.attributes) {
+                        if (a.name == name && !a.numbers.empty()) {
+                            return a.numbers.front();
+                        }
+                    }
+                    return fallback;
+                };
+                constexpr double kCrownBaseShare = 0.3;  // Trees.hpp kTreeCrownBaseShare
+                constexpr double kTrunkShare = 0.125;    // Trees.hpp kTreeTrunkShare
+                tree.height = number("tree:height", 0.0);
+                tree.crownRadius = number("tree:crownRadius", 0.0);
+                tree.crownBase = number("tree:crownBase", kCrownBaseShare * tree.height);
+                tree.trunkDiameter = number("tree:trunkDiameter", kTrunkShare * tree.crownRadius);
+                tree.known = tree.height > 0.0 && tree.crownRadius > 0.0 && tree.crownBase >= 0.0 &&
+                             tree.crownBase < tree.height;
+            }
+        }
+        if (drawn) {
+            const auto catalog = client_.catalog();
+            if (catalog && catalog != treeCatalog_) {
+                stopSway();
+                treeCatalog_ = catalog;
+                for (SceneTree& tree : trees_) {
+                    const std::string name = "tree/" + tree.name + "/sway";
+                    if (catalog->find(name) != nullptr) {
+                        for (std::uint32_t k = 0; k < 3; ++k) {
+                            tree.sway.at(k) = client_.watchSignal(name, k);
+                        }
+                    }
+                }
+            }
+        }
+        for (const SceneTree& tree : trees_) {
+            if (!tree.known || tree.prim >= frame->transforms.size()) {
+                continue;
+            }
+            const Transform& at = frame->transforms[tree.prim];
+            RenderOptions::Tree& out = renderOptions_.trees.emplace_back();
+            out.foot = at.position;
+            out.rotation = at.rotation;
+            out.height = tree.height;
+            out.crownRadius = tree.crownRadius;
+            out.crownBase = tree.crownBase;
+            out.trunkDiameter = tree.trunkDiameter;
+            out.seed = tree.seed;
+            for (std::size_t k = 0; k < 3; ++k) {
+                const auto& b = tree.sway.at(k);
+                const double v = b ? b->latest() : 0.0;
+                out.sway.at(k) = std::isfinite(v) ? v : 0.0;
+            }
+        }
+        // The cut cells, by their tree's scene prim.
+        if (treeCutStream_) {
+            const std::shared_ptr<const FieldVolumeData> volume = treeCutStream_->latestVolume();
+            if (volume && volume != treeCutsOf_) {
+                treeCutsOf_ = volume;
+                auto cuts = std::make_shared<std::vector<RenderOptions::TreeCut>>();
+                if (volume->components == 1U && volume->ny == 1U && volume->nz == 1U) {
+                    const std::vector<float>& v = volume->values;
+                    for (std::size_t at = 0; at + 3 < v.size(); at += 4) {
+                        if (!std::isfinite(v[at])) {
+                            continue;
+                        }
+                        const auto prim = static_cast<std::uint32_t>(v[at]);
+                        const auto it = std::ranges::find(trees_, prim, &SceneTree::prim);
+                        if (it == trees_.end()) {
+                            continue;
+                        }
+                        // Its index among the trees drawn (those whose numbers are known).
+                        std::uint32_t index = 0;
+                        for (auto t = trees_.begin(); t != it; ++t) {
+                            index += t->known ? 1U : 0U;
+                        }
+                        cuts->push_back({index,
+                                         {static_cast<std::int32_t>(v[at + 1]),
+                                          static_cast<std::int32_t>(v[at + 2]),
+                                          static_cast<std::int32_t>(v[at + 3])}});
+                    }
+                }
+                renderOptions_.treeCuts = std::move(cuts);
+            }
+        }
+        // The flying leaves.
+        if (leavesStream_) {
+            const std::shared_ptr<const FieldVolumeData> volume = leavesStream_->latestVolume();
+            if (volume && volume != leavesOf_) {
+                leavesOf_ = volume;
+                auto leaves = std::make_shared<std::vector<RenderOptions::Leaf>>();
+                constexpr std::size_t kFields = 6;  // Leaves.hpp kLeavesFields
+                if (volume->components == 1U && volume->ny == 1U && volume->nz == 1U) {
+                    const std::vector<float>& v = volume->values;
+                    for (std::size_t at = 0; at + kFields <= v.size(); at += kFields) {
+                        if (!std::isfinite(v[at]) || !std::isfinite(v[at + 5])) {
+                            continue;
+                        }
+                        leaves->push_back(
+                            {{volume->origin[0] + v[at], volume->origin[1] + v[at + 1],
+                              volume->origin[2] + v[at + 2]},
+                             v[at + 3],
+                             v[at + 4],
+                             v[at + 5]});
+                    }
+                }
+                renderOptions_.leaves = std::move(leaves);
+            }
+        }
     }
 
     /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
@@ -2609,10 +2812,29 @@ private:
     std::shared_ptr<FieldStream> sprayStream_;
     static constexpr const char* kWaterSurfaceField = "water/surface";
     static constexpr const char* kCutField = "vegetation/cut";
-    std::shared_ptr<FieldStream> cutStream_;           // the realistic view's cut plants
-    std::shared_ptr<const FieldVolumeData> cutOf_;     // what cutPlants was made of
-    std::shared_ptr<FieldStream> surfaceStream_;  // the realistic view's moving water
-    std::shared_ptr<FieldStream> foamStream_;     // the spray for its foam
+    std::shared_ptr<FieldStream> cutStream_;  // the realistic view's cut plants
+    /// A tree of the scene (TreeAPI_1), for the realistic view (followTrees).
+    struct SceneTree {
+        std::uint32_t prim{kNone};
+        std::string name;
+        double height{0.0}, crownRadius{0.0}, crownBase{0.0}, trunkDiameter{0.0};
+        bool known{false};  // its tree:* attributes arrived and make a tree
+        std::uint32_t seed{0};
+        std::array<std::shared_ptr<ScopeBuffer>, 3> sway;  // tree/<n>/sway x, y, z
+    };
+    std::vector<SceneTree> trees_;
+    std::uint64_t treeGeneration_{0};
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> treeAttributes_;
+    std::shared_ptr<const SignalCatalog> treeCatalog_;
+    static constexpr const char* kTreeCutField = "vegetation/tree_cut";
+    static constexpr const char* kLeavesField = "vegetation/leaves";
+    std::shared_ptr<FieldStream> treeCutStream_;
+    std::shared_ptr<const FieldVolumeData> treeCutsOf_;
+    std::shared_ptr<FieldStream> leavesStream_;
+    std::shared_ptr<const FieldVolumeData> leavesOf_;
+    std::shared_ptr<const FieldVolumeData> cutOf_;  // what cutPlants was made of
+    std::shared_ptr<FieldStream> surfaceStream_;    // the realistic view's moving water
+    std::shared_ptr<FieldStream> foamStream_;       // the spray for its foam
     static constexpr const char* kWaterFrictionField = "water/friction_velocity";
     std::shared_ptr<FieldStream> frictionStream_;  // the air's rub on it, for its ripples
     std::shared_ptr<const FieldVolumeData> surfaceOf_, foamOf_,
