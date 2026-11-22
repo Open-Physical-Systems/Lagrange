@@ -4,6 +4,7 @@
 
 #include "lagrange/services/SceneQuery.hpp"
 #include "lagrange/world/CanopyCut.hpp"
+#include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"
 
 #include <array>
@@ -200,6 +201,17 @@ struct CanopyFormShape {
 [[nodiscard]] double canopyShapedShortening(
     const SurfaceMaterial& material, double x, double y, double cosIncidence, double range,
     double u, double cutTop = std::numeric_limits<double>::infinity());
+
+/// Trees (docs/physics/ground.md "Trees"): where a beam stops in a crown, a turbid ellipsoid of
+/// leaves (lagrange/world/Trees.hpp), for a uniform draw u: its free path through the leaves
+/// has P(s > x) = exp(-mu x), mu = G LAD (the gap probability), counted only through cells the
+/// propellers have not cut away. The crown stands at its sway (world, m); the beam is marched in
+/// steps of half a cut cell between where it enters and leaves the ellipsoid, within [0, range].
+/// +inf when it goes through.
+[[nodiscard]] double crownStop(const TreeSpec& tree, std::uint32_t index,
+                               const std::array<double, 3>& origin,
+                               const std::array<double, 3>& direction, double range,
+                               const std::array<double, 3>& sway, const TreeCuts* cuts, double u);
 
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);

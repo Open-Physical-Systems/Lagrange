@@ -2030,7 +2030,12 @@ struct Server::Impl {
 
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
-    bool hasVegetation() const { return !vegetation::canopiesOf(robot.world).empty(); }
+    bool hasVegetation() const {
+        // A wrong tree is named by the vegetation domain at its start.
+        return !vegetation::canopiesOf(robot.world).empty() ||
+               std::ranges::any_of(robot.world.schemaInstances,
+                                   [](const SchemaInstance& s) { return s.schema == "TreeAPI_1"; });
+    }
     bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
     bool hasFires() const { return !WorldView(robot.world).instancesOf("FireAPI_1").empty(); }
     bool hasLamps() const { return !WorldView(robot.world).instancesOf("LampAPI_1").empty(); }
@@ -3891,8 +3896,8 @@ struct Server::Impl {
             : domain == "hydrodynamics" ? "no water in the world (WaterAPI_1, --water)"
             : domain == "tether"        ? "no tethers in the stage (TetherAPI_1, --tether)"
             : domain == "vegetation"
-                ? "no reeds, shrubs or tall grass in the world (a canopy preset on a fixed box or "
-                  "plane)"
+                ? "no reeds, shrubs, tall grass or trees in the world (a canopy preset on a fixed "
+                  "box or plane, TreeAPI_1)"
             : domain == "fire" ? "no fires in the stage (FireAPI_1)"
             : domain == "actuators"
                 ? "no grippers, nozzles, servos, solenoids or brakes in the stage "

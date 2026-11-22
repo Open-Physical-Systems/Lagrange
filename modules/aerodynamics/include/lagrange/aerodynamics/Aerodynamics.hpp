@@ -230,6 +230,10 @@ private:
     struct FireBase {  // a fire's base and flame height in, the rotors' air at it out
         SignalId base, height, downwash;
     };
+    struct TreeCrown {  // a tree's crown (TreeAPI_1): the rotors' air over it out
+        std::array<std::array<double, 3>, 5> points{};  // world: the centre and 4 half way out
+        SignalId downwash;
+    };
     struct RotorLink {
         double radius{0.0};
         std::size_t group{0};
@@ -251,6 +255,7 @@ private:
     std::vector<RotorLink> rotors_;
     std::vector<TetherNodes> cables_;
     std::vector<FireBase> fires_;
+    std::vector<TreeCrown> crowns_;
     std::size_t groupCount_{0};
     Downwash downwash_;
     std::array<double, 3> groundNormal_{0.0, 0.0, 1.0};

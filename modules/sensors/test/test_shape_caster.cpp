@@ -691,5 +691,75 @@ TEST(CanopyShape, CutPlantsStopBeamsNoHigherThanTheCut) {
     EXPECT_EQ(canopyShapedShortening(grass, 0.0, 0.0, 1.0, 10.0, 0.999, 0.0), 0.0);
 }
 
+// Trees (ground.md "Trees"): a beam through a crown is stopped with the gap probability
+// exp(-G·LAD·s); cut cells let it through; the crown is where its sway puts it.
+TreeSpec crown() {
+    TreeSpec t;
+    t.name = "oak";
+    t.height = 10.0;
+    t.crownRadius = 3.0;
+    t.crownBase = 3.0;  // centre at 6.5 m, half height 3.5 m
+    t.leafAreaDensity = 0.5;
+    return t;
+}
+
+TEST(Crown, ABeamThroughTheCrownPassesWithTheGapProbability) {
+    const TreeSpec t = crown();
+    const double mu = kCanopyProjection * t.leafAreaDensity;  // 0.25 /m
+    // Level along x through the centre: 6 m of leaves, from x = -3 to 3.
+    const std::array<double, 3> from{-10.0, 0.0, 6.5};
+    const std::array<double, 3> dir{1.0, 0.0, 0.0};
+    int through = 0;
+    double meanStop = 0.0;
+    int stopped = 0;
+    constexpr int kDraws = 20000;
+    for (int k = 0; k < kDraws; ++k) {
+        const double u = (k + 0.5) / kDraws;
+        const double at = crownStop(t, 0, from, dir, 100.0, {}, nullptr, u);
+        if (std::isinf(at)) {
+            ++through;
+        } else {
+            EXPECT_GE(at, 7.0 - 1e-9);
+            EXPECT_LE(at, 13.0 + 1e-9);
+            meanStop += at - 7.0;
+            ++stopped;
+        }
+    }
+    const double pass = std::exp(-mu * 6.0);  // 0.223
+    EXPECT_NEAR(static_cast<double>(through) / kDraws, pass, 0.002);
+    // The mean depth of the stops: the truncated exponential's, 1/mu - 6 e^(-6mu)/(1 - e^(-6mu)).
+    const double expected = 1.0 / mu - 6.0 * pass / (1.0 - pass);
+    EXPECT_NEAR(meanStop / stopped, expected, 0.01 * expected);
+    // Over the crown, or short of it, nothing.
+    EXPECT_TRUE(std::isinf(crownStop(t, 0, {-10.0, 0.0, 11.0}, dir, 100.0, {}, nullptr, 0.5)));
+    EXPECT_TRUE(std::isinf(crownStop(t, 0, from, dir, 6.5, {}, nullptr, 0.5)));
+}
+
+TEST(Crown, CutCellsLetTheBeamThroughAndTheSwayMovesTheCrown) {
+    const TreeSpec t = crown();
+    // Every cell along the beam's line cut away (z cell 0 holds the beam at the centre height).
+    std::vector<double> values(kTreeCutLength, 0.0);
+    values[0] = 1.0;
+    std::size_t n = 0;
+    for (int x = -31; x <= 31; ++x) {
+        const std::size_t at = kTreeCutHeader + 4 * n++;
+        values[at] = 0.0;
+        values[at + 1] = x;
+        values[at + 2] = 0.0;
+        values[at + 3] = 0.0;
+    }
+    values[1] = static_cast<double>(n);
+    TreeCuts cuts;
+    cuts.load(values);
+    const std::array<double, 3> dir{1.0, 0.0, 0.0};
+    EXPECT_TRUE(std::isinf(crownStop(t, 0, {-10.0, 0.05, 6.55}, dir, 100.0, {}, &cuts, 0.99)));
+    EXPECT_FALSE(std::isinf(crownStop(t, 0, {-10.0, 0.05, 6.85}, dir, 100.0, {}, &cuts, 0.5)));
+    // Swayed 2 m along +y, a beam at y = 0 near the old edge misses; one 2 m over meets it.
+    EXPECT_TRUE(
+        std::isinf(crownStop(t, 0, {-10.0, -2.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.5)));
+    EXPECT_FALSE(
+        std::isinf(crownStop(t, 0, {-10.0, -0.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.1)));
+}
+
 }  // namespace
 }  // namespace lagrange::sensors

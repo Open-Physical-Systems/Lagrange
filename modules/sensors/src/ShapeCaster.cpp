@@ -521,6 +521,57 @@ bool canopyVolumeSpan(ShapeType type, const std::array<double, 3>& size, const P
     return true;
 }
 
+double crownStop(const TreeSpec& tree, std::uint32_t index, const std::array<double, 3>& origin,
+                 const std::array<double, 3>& direction, double range,
+                 const std::array<double, 3>& sway, const TreeCuts* cuts, double u) {
+    constexpr double kNever = std::numeric_limits<double>::infinity();
+    const double mu = kCanopyProjection * tree.leafAreaDensity;
+    if (!(mu > 0.0)) {
+        return kNever;
+    }
+    // In the crown's frame, scaled to a unit sphere: |o + t d| = 1.
+    const std::array<double, 3> o = inCrown(tree, origin, sway);
+    const std::array<double, 3> d = rotate(conjugate(tree.pose.orientation), direction);
+    const std::array<double, 3> scale{1.0 / tree.crownRadius, 1.0 / tree.crownRadius,
+                                      1.0 / tree.halfHeight()};
+    const std::array<double, 3> os{o[0] * scale[0], o[1] * scale[1], o[2] * scale[2]};
+    const std::array<double, 3> ds{d[0] * scale[0], d[1] * scale[1], d[2] * scale[2]};
+    const double a = ds[0] * ds[0] + ds[1] * ds[1] + ds[2] * ds[2];
+    const double b = os[0] * ds[0] + os[1] * ds[1] + os[2] * ds[2];
+    const double c = os[0] * os[0] + os[1] * os[1] + os[2] * os[2] - 1.0;
+    const double disc = b * b - a * c;
+    if (!(disc > 0.0) || !(a > 0.0)) {
+        return kNever;
+    }
+    const double root = std::sqrt(disc);
+    const double enter = std::max(0.0, (-b - root) / a);
+    const double leave = std::min(range, (-b + root) / a);
+    if (!(leave > enter)) {
+        return kNever;
+    }
+    // The optical depth to reach: -ln(1 - u).
+    const double need = -std::log1p(-std::clamp(u, 0.0, 1.0 - 1e-16));
+    if (cuts == nullptr || cuts->empty()) {
+        const double s = need / mu;
+        return enter + s < leave ? enter + s : kNever;
+    }
+    const double step = 0.5 * kTreeCutCell;
+    double depth = 0.0;
+    for (double t = enter; t < leave; t += step) {
+        const double ds2 = std::min(step, leave - t);
+        const double mid = t + 0.5 * ds2;
+        const std::array<double, 3> q{o[0] + mid * d[0], o[1] + mid * d[1], o[2] + mid * d[2]};
+        if (cuts->cut(index, q)) {
+            continue;
+        }
+        if (depth + mu * ds2 >= need) {
+            return t + (need - depth) / mu;
+        }
+        depth += mu * ds2;
+    }
+    return kNever;
+}
+
 double canopyVolumeStop(double enter, double leave, double canopyHeight, double leafAreaIndex,
                         double u) {
     if (!(canopyHeight > 0.0) || !(leafAreaIndex > 0.0) || !(leave > enter)) {

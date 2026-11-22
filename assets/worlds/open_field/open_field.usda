@@ -1,7 +1,7 @@
 #usda 1.0
 (
     defaultPrim = "open_field"
-    doc = "Converted from assets/worlds/open_field/open_field.urdf by lagrange_import."
+    doc = "Converted from assets/worlds/open_field/open_field.urdf by lagrange_import; the four TreeAPI_1 trees (ground.md \"Trees\") added by hand, their crowns without colliders."
     kilogramsPerUnit = 1
     metersPerUnit = 1
     upAxis = "Z"
@@ -112,16 +112,6 @@ def Xform "open_field"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
 
-        def Sphere "collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            uniform token purpose = "guide"
-            double radius = 1.8
-            quatd xformOp:orient = (1, 0, 0, 0)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-        }
     }
 
     def Xform "tree_1_trunk"
@@ -180,16 +170,6 @@ def Xform "open_field"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
 
-        def Sphere "collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            uniform token purpose = "guide"
-            double radius = 1.8
-            quatd xformOp:orient = (1, 0, 0, 0)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-        }
     }
 
     def Xform "tree_2_trunk"
@@ -248,16 +228,6 @@ def Xform "open_field"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
 
-        def Sphere "collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            uniform token purpose = "guide"
-            double radius = 1.8
-            quatd xformOp:orient = (1, 0, 0, 0)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-        }
     }
 
     def Xform "tree_3_trunk"
@@ -316,16 +286,6 @@ def Xform "open_field"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
 
-        def Sphere "collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            uniform token purpose = "guide"
-            double radius = 1.8
-            quatd xformOp:orient = (1, 0, 0, 0)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-        }
     }
 
     def Xform "tree_4_trunk"
@@ -418,5 +378,56 @@ def Xform "open_field"
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
+    }
+    def Xform "tree_1" (
+        prepend apiSchemas = ["TreeAPI_1"]
+    )
+    {
+        double tree:crownBase = 2.5
+        double tree:crownRadius = 1.8
+        double tree:height = 6.1
+        double tree:trunkDiameter = 0.5
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (18, 8, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "tree_2" (
+        prepend apiSchemas = ["TreeAPI_1"]
+    )
+    {
+        double tree:crownBase = 2.5
+        double tree:crownRadius = 1.8
+        double tree:height = 6.1
+        double tree:trunkDiameter = 0.5
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-16, -14, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "tree_3" (
+        prepend apiSchemas = ["TreeAPI_1"]
+    )
+    {
+        double tree:crownBase = 2.5
+        double tree:crownRadius = 1.8
+        double tree:height = 6.1
+        double tree:trunkDiameter = 0.5
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (14, -19, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+    }
+
+    def Xform "tree_4" (
+        prepend apiSchemas = ["TreeAPI_1"]
+    )
+    {
+        double tree:crownBase = 2.5
+        double tree:crownRadius = 1.8
+        double tree:height = 6.1
+        double tree:trunkDiameter = 0.5
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-20, 10, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
     }
 }
