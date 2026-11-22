@@ -63,11 +63,35 @@ struct ControlJoint {
 [[nodiscard]] Expected<std::vector<ControlJoint>, std::string> controlJoints(
     const std::string& urdf);
 
+/// A <gpio> of the URDF's <ros2_control> blocks that use LagrangeSystem (RFC 0020 §5): each of
+/// its interfaces is bound to a signal, `act/<gpio>/<interface>` unless the interface's
+/// <param name="signal"> names another; its unit and type come from the actuator signal of that
+/// name (Bool for held, sealed, overload) or from <param name="unit"> ("Pa", "1"...) and
+/// <param name="type"> (bool or scalar). Aliases of RFC 0020 §4.1: `vacuum` is `command`,
+/// `holding` is `held`, `tank` is `tank_mass`.
+struct ControlGpio {
+    struct Interface {
+        std::string name;    // as the controllers see it: "<gpio>/<name>"
+        std::string signal;  // the bus signal it reads or writes
+        std::string unit;    // empty: by the signal's name
+        std::string type;    // empty: by the signal's name
+    };
+    std::string name;
+    std::vector<Interface> commands;
+    std::vector<Interface> states;
+};
+
+/// The GPIOs of the URDF's <ros2_control> blocks that use LagrangeSystem.
+[[nodiscard]] Expected<std::vector<ControlGpio>, std::string> controlGpios(const std::string& urdf);
+
 /// The scheduler module that steps `host` (domain "control", name "ros2_control", 1 ms): it
 /// reads joint/j/position and velocity, runs the controller manager every 1/update_rate, and
 /// writes joint/j/torque from the claimed command: effort directly, velocity and position
-/// through the servo, clamped to the joint's effort limit.
+/// through the servo, clamped to the joint's effort limit. Each GPIO's command interfaces are
+/// written to their signals (NaN until a controller sets one) and its state interfaces read from
+/// theirs, every controller cycle.
 [[nodiscard]] std::unique_ptr<IModule> createControlModule(ControllerHost& host,
-                                                           std::vector<ControlJoint> joints);
+                                                           std::vector<ControlJoint> joints,
+                                                           std::vector<ControlGpio> gpios = {});
 
 }  // namespace lagrange::ros2_control

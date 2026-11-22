@@ -668,6 +668,35 @@ past the end stop under the 2.5 N pull (the model holds `x` to the stroke for it
 co-energy force is the textbook result for a linear magnetic circuit (TODO(verify): cite an
 edition; no openly readable text was found in this pass, as RFC 0020 §4.6 notes).
 
+## ros2_control GPIO
+
+Every actuator's signals can also be reached from ros2_control (RFC 0020 §5). In the URDF's
+`<ros2_control>` block for `lagrange_ros2_control/LagrangeSystem`, a `<gpio>` names an actuator.
+Each of its command interfaces writes `act/<gpio>/<interface>` and each state interface reads it,
+once every controller cycle:
+
+```xml
+<ros2_control name="bench" type="system">
+  <hardware><plugin>lagrange_ros2_control/LagrangeSystem</plugin></hardware>
+  <gpio name="plunger">
+    <command_interface name="command"/>
+    <state_interface name="current"/>
+    <state_interface name="position"/>
+  </gpio>
+</ros2_control>
+```
+
+`gpio_controllers/GpioCommandController` then commands it: its `~/commands`
+(`control_msgs/DynamicInterfaceGroupValues`) set the command interfaces, and its `~/gpio_states`
+publish the state interfaces. A suction gripper's RFC names are aliases: `vacuum` is `command`,
+`holding` is `held`, `tank` is `tank_mass`. An interface can name any signal with
+`<param name="signal">`. The signal's unit and type come from the actuator signal of that name
+(`held`, `sealed` and `overload` are flags), or from `<param name="unit">` and
+`<param name="type">bool</param>` for any other; a name Lagrange does not know without a unit
+stops the start. A command interface reads NaN until a controller sets it, and the actuators take
+NaN as "no command yet". With a GPIO's command interface in the block, the actuator's own
+`/<name>/command` topic is not subscribed, so the signal has one writer (`test_gpio`).
+
 ## References
 
 - J. Schmalz GmbH, "Theoretical holding force of a suction cup" (vacuum knowledge, system design

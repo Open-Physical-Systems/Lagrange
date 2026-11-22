@@ -21,6 +21,8 @@
   <test_depend>lagrange_electrical</test_depend>
   <test_depend>forward_command_controller</test_depend>
   <test_depend>std_msgs</test_depend>
+  <test_depend>control_msgs</test_depend>
+  <test_depend>gpio_controllers</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

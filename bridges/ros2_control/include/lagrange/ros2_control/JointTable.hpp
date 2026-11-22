@@ -22,6 +22,13 @@ struct JointSlot {
     double glitchProbability{0.0};
 };
 
+/// One <gpio> of the <ros2_control> block (RFC 0020 §5): its command interfaces' values as the
+/// controllers set them (NaN until one does) and its state interfaces' as the simulation has them.
+struct GpioSlot {
+    std::map<std::string, double> commands;
+    std::map<std::string, double> states;
+};
+
 /// The joints shared between the simulation (ControlModule, on the scheduler) and the
 /// LagrangeSystem plugin (loaded by the controller manager through pluginlib, in the same
 /// process). Both run on the scheduler's thread during read/update/write, so the lock only
@@ -34,11 +41,18 @@ public:
     /// Joints by name; created on first use.
     JointSlot& operator[](const std::string& joint) { return joints_[joint]; }
     [[nodiscard]] bool contains(const std::string& joint) const { return joints_.contains(joint); }
-    void clear() { joints_.clear(); }
+    /// GPIOs by name; created on first use.
+    GpioSlot& gpio(const std::string& name) { return gpios_[name]; }
+    [[nodiscard]] bool containsGpio(const std::string& name) const { return gpios_.contains(name); }
+    void clear() {
+        joints_.clear();
+        gpios_.clear();
+    }
 
 private:
     std::mutex mutex_;
     std::map<std::string, JointSlot> joints_;
+    std::map<std::string, GpioSlot> gpios_;
 };
 
 }  // namespace lagrange::ros2_control
