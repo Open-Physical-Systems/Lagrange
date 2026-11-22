@@ -44,9 +44,12 @@ struct TreeSpec {
     double dragCoefficient{0.0};   // of the crown's frontal area
     double naturalFrequency{0.0};  // Hz, the first sway mode
     double dampingRatio{0.0};
-    double crownMass{0.0};  // kg, the sway mode's mass
-    double cutEnergy{0.0};  // J per m³ of crown cut through
-    double leafArea{0.0};   // m², one leaf
+    double crownMass{0.0};       // kg, the sway mode's mass
+    double cutEnergy{0.0};       // J per m³ of crown cut through
+    double leafArea{0.0};        // m², one leaf
+    int branchCount{0};          // limbs leaving the trunk in the crown, besides the leader
+    double woodCutEnergy{0.0};   // J per m² of twig cross-section severed
+    double maxCutDiameter{0.0};  // m, the thickest wood a propeller cuts through
 
     [[nodiscard]] double halfHeight() const { return 0.5 * (height - crownBase); }
     /// The crown's centre over the foot, in the tree's frame.
@@ -71,6 +74,12 @@ inline constexpr double kTreeDampingRatio = 0.1;
 inline constexpr double kTreeCrownDensity = 2.0;  // kg/m³: crownMass = 2 × crown volume
 inline constexpr double kTreeCutEnergy = 2000.0;  // J/m³ of crown (leaves and twigs)
 inline constexpr double kTreeLeafArea = 0.003;    // m², a leaf of 5 cm by 6 cm
+inline constexpr int kTreeBranchCount = 12;       // limbs in the crown besides the leader
+/// J/m² of twig cross-section: the top of the 10-60 mJ/mm² measured for grass stems (Persson 1987,
+/// vegetation's kCutEnergyPerArea); green wood's is TODO(verify) (e.g. against the Salix viminalis
+/// stem measurements in Applied Sciences 15(2), 696, 2025, whose numbers we have not read).
+inline constexpr double kTreeWoodCutEnergy = 5.0e4;
+inline constexpr double kTreeMaxCutDiameter = 0.01;  // m, TODO(verify) for a 10-inch propeller
 
 inline constexpr std::string_view kTreeCutSignal = "vegetation/tree_cut";
 /// m, the side of a cut cell of a crown.
@@ -103,6 +112,13 @@ inline constexpr std::uint32_t kTreeCutLength = kTreeCutHeader + (4 * kTreeCutCa
         t.dampingRatio = s.real("tree:dampingRatio").value_or(kTreeDampingRatio);
         t.cutEnergy = s.real("tree:cutEnergy").value_or(kTreeCutEnergy);
         t.leafArea = s.real("tree:leafArea").value_or(kTreeLeafArea);
+        t.branchCount = static_cast<int>(s.integer("tree:branchCount").value_or(kTreeBranchCount));
+        t.woodCutEnergy = s.real("tree:woodCutEnergy").value_or(kTreeWoodCutEnergy);
+        t.maxCutDiameter = s.real("tree:maxCutDiameter").value_or(kTreeMaxCutDiameter);
+        if (t.branchCount < 0 || t.branchCount > 64) {
+            error = "tree " + t.name + ": tree:branchCount must be from 0 to 64";
+            return {};
+        }
         if (!(t.height > 0.0) || !(t.crownRadius > 0.0) || !(t.crownBase >= 0.0) ||
             !(t.crownBase < t.height)) {
             error = "tree " + t.name +
@@ -111,9 +127,9 @@ inline constexpr std::uint32_t kTreeCutLength = kTreeCutHeader + (4 * kTreeCutCa
             return {};
         }
         t.crownMass = s.real("tree:crownMass").value_or(kTreeCrownDensity * t.crownVolume());
-        for (const double v :
-             {t.trunkDiameter, t.leafAreaDensity, t.dragCoefficient, t.naturalFrequency,
-              t.dampingRatio, t.crownMass, t.cutEnergy, t.leafArea}) {
+        for (const double v : {t.trunkDiameter, t.leafAreaDensity, t.dragCoefficient,
+                               t.naturalFrequency, t.dampingRatio, t.crownMass, t.cutEnergy,
+                               t.leafArea, t.woodCutEnergy, t.maxCutDiameter}) {
             if (!(v >= 0.0)) {
                 error = "tree " + t.name + ": its numbers must not be negative";
                 return {};

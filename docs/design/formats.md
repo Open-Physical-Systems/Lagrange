@@ -1217,6 +1217,9 @@ no collider but an ellipsoid of leaves over `crownBase` with semi-axes (`crownRa
 | `tree:crownMass` | double | kg | 2 kg/m³ × crown volume | The sway mode's mass |
 | `tree:cutEnergy` | double | J/m³ | `2000` | Spent by a propeller cutting through the crown |
 | `tree:leafArea` | double | m² | `0.003` | One leaf, to count the leaves a cut sheds |
+| `tree:branchCount` | int | 1 | `12` | Limbs leaving the trunk in the crown besides the leader; each forks down to 4 mm twigs (ground.md "Branches") |
+| `tree:woodCutEnergy` | double | J/m² | `50000` | Spent by a propeller severing a twig, per m² of its cross-section |
+| `tree:maxCutDiameter` | double | m | `0.01` | The thickest wood a propeller cuts; thicker stops it (a strike) |
 
 Every fallback is TODO(verify) against measurements of the species.
 

@@ -16,6 +16,9 @@ and `test_schemas.py` checks it.
   whose crown is a volume of leaves (height, crown radius and base, trunk diameter, leaf area
   density, drag coefficient, sway frequency and damping, crown mass, cut energy, leaf area). New
   class, nothing to migrate.
+- **World library** (ground.md "Branches", TreeAPI_1 additions approved by the owner 2026-11-22):
+  `tree:branchCount`, `tree:woodCutEnergy`, `tree:maxCutDiameter`, the crown's wood. Added
+  attributes with fallbacks, nothing to migrate.
 
 - **Aero library** (hydrodynamics.md, "thrusters as rotors in water"): `aero:rotor:advanceRatios`,
   `thrustCoeffs` and `torqueCoeffs` on `RotorAPI_1`, an open-water chart K_T(J), K_Q(J) that
