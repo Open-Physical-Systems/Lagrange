@@ -291,7 +291,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (25)</summary>
+<details><summary>Plan and evaluation (26)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Robot builder: phase 1 and 1b work plan (RFC 0016)](docs/plan/builder-phase1-plan.md)
@@ -317,6 +317,7 @@ recorded to MCAP and replayed.
 - [Spike: legged contact, measured first (RFC 0019 step 1)](docs/plan/spikes/legged-contact.md)
 - [Spike: MuJoCo 3.12 → 4.x](docs/plan/spikes/mujoco-4.md)
 - [Usability and sensor physics queue](docs/plan/usability-physics-queue.md)
+- [v1.6.0 development plan (draft, 2026-11-22)](docs/plan/v1.6.0-plan.md)
 - [Verification record](docs/plan/verification.md)
 
 </details>
