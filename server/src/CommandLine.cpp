@@ -164,7 +164,7 @@ void printServerOptions(std::FILE* out) {
         "  --thrust-limit FRACTION  cap each rotor at this share of its full thrust (0.8: 80 %%),\n"
         "            for the built-in controller and an autopilot's full output\n"
         "  --leaf-litter N  N leaves lying under each tree's crown from the start (TreeAPI_1);\n"
-        "            the wind and the rotors' outwash lift them again\n"
+        "            the wind and the rotors' outwash lift them again (at most 2048 in all)\n"
         "  --emi-motor-leads SPACING[,X,Y,Z]  a wire from the battery (at X,Y,Z on the root\n"
         "            link) to each motor carrying its bus current, its return SPACING m above\n"
         "            it; magnetometers feel it (RFC 0013)\n"

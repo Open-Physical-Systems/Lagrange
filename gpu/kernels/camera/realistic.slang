@@ -2419,6 +2419,10 @@ VegOutput vsFlyingLeaf(uint vertex)
     float size = max(a.w, 0.02) * 1.6;
     VegOutput o;
     o.relative = a.xyz + (along * corner.x + across * corner.y) * (0.5 * size);
+    // Lying ones (Leaves.hpp: flat once settled) a few millimetres over what they lie on, or the
+    // ground's depth hides them.
+    if (abs(nrm.z) > 0.999)
+        o.relative.z += 0.004;
     o.normal = nrm;
     o.color = leafColor(b.z, frac(b.z * 7.13), 1.0, 1.0) * lerp(float3(1.0), float3(1.6, 1.3, 0.8), b.z * 0.6);
     o.rough = 0.55;

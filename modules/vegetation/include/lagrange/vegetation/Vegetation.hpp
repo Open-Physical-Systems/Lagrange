@@ -251,6 +251,7 @@ private:
     LeafWalls walls_;
     SignalId leavesOut_, leavesAir_;
     std::uint32_t litter_{0};  // leaves lying under each crown at the start
+    bool litterFresh_{false};  // laid and not yet published under a step's version
     double leafVersion_{0.0};
     std::vector<double> leafValues_;
     std::vector<std::vector<CutCell>> treeCells_;

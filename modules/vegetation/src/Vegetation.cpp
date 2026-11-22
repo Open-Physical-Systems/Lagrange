@@ -686,6 +686,7 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     treeCells_.assign(trees_.size(), {});
     if (leavesOut_.valid()) {
         layLitter();
+        litterFresh_ = !leaves_.leaves().empty();
     }
     if (leavesOut_.valid()) {
         leaves_.write(leafValues_, leafVersion_);
@@ -895,10 +896,13 @@ void Vegetation::layLitter() {
     // foot, never inside the trunk.
     constexpr std::uint64_t kLitterSeed = 0x4C454146ULL;  // any fixed key: "LEAF"
     constexpr double kProbe = 0.5;                        // m over the foot it looks down from
-    for (std::size_t k = 0; k < treeSpecs_.size() && litter_ > 0; ++k) {
+    // At most an equal share of the particles each, so no tree's litter pushes out another's.
+    const auto each = static_cast<std::uint32_t>(std::min<std::size_t>(
+        litter_, kLeavesCapacity / std::max<std::size_t>(treeSpecs_.size(), 1)));
+    for (std::size_t k = 0; k < treeSpecs_.size() && each > 0; ++k) {
         const TreeSpec& t = treeSpecs_[k];
         random::Stream rng(kLitterSeed, 0, static_cast<std::uint32_t>(k));
-        for (std::uint32_t n = 0; n < litter_; ++n) {
+        for (std::uint32_t n = 0; n < each; ++n) {
             const double r = t.crownRadius * std::sqrt(rng.uniform());
             const double a = 2.0 * std::numbers::pi * rng.uniform();
             if (r < 0.5 * t.trunkDiameter) {
@@ -955,7 +959,10 @@ void Vegetation::stepLeaves(const StepContext& context, SignalBus& bus,
     const std::span<const double> leafAir =
         leavesAir_.valid() ? bus.readN(leavesAir_) : std::span<const double>{};
     const bool moved = leaves_.step(dt, w, wakes_, landing_, &walls_, leafAir);
-    if (started > 0 || moved) {
+    // The litter is published again on the first step under a new version, for a client that
+    // came after the run's start (it sends a version once).
+    if (started > 0 || moved || litterFresh_) {
+        litterFresh_ = false;
         leafVersion_ += 1.0;
         leaves_.write(leafValues_, leafVersion_);
         bus.writeN(leavesOut_, leafValues_);
@@ -1023,6 +1030,7 @@ Status Vegetation::restoreState(StateReader& reader) {
         return Status::error(StatusCode::Internal, "vegetation: the saved leaves are short");
     }
     treeCells_.assign(trees_.size(), {});
+    litterFresh_ = false;  // the saved leaves were published as they were
     return {};
 }
 

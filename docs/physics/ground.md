@@ -643,7 +643,8 @@ domain (no air density) nothing lifts. Directly under a hovering drone the outwa
 around it hop outwards until they are past the ring where the outwash falls under `u_t`.
 
 `--leaf-litter N` (config `leaf_litter`) lays `N` leaves under each crown from the start, uniform
-over its footprint (none inside the trunk), on the highest surface there.
+over its footprint (none inside the trunk), on the highest surface there; at most an equal share
+of the 2048 particles per tree.
 
 **Lidars** (`sensors::FlyingLeaves`): each listed particle is a disc of its size seen from any
 side; a beam passing within half its size of its centre, before its own hit and any crown stop,
