@@ -142,7 +142,7 @@ bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
         std::string_view name;
         SurfaceMaterial material;
     };
-    static constexpr std::array<Row, 14> kPresets{{
+    static constexpr std::array<Row, 15> kPresets{{
         {"default", {0.5, 0.5, 0.0, 0.0, false}},
         // A smooth water surface mirrors: about 2 % comes straight back at normal incidence
         // (Fresnel, n = 1.33) and nothing at a slant, and water absorbs what enters.
@@ -187,6 +187,11 @@ bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
         // body pushing through is lagrange_vegetation's, from canopyHeight and leafAreaIndex.
         {"reeds", {0.5, 0.3, 0.0, 0.0, false, 0.8, 0.15, 1.5, 4.0, CanopyForm::Reeds}},
         {"shrub", {0.5, 0.3, 0.0, 0.0, false, 0.9, 0.15, 0.8, 3.0, CanopyForm::Shrub}},
+        // Bark (ground.md "Branches"): the wood in a tree's crown, as the lidars see it. Dry bark
+        // is darker than green leaves in the near infrared and has no leaf water to absorb at
+        // 1550 nm. TODO(verify) 0.35 / 0.35 against a measured bark spectrum (e.g. the USGS
+        // Spectral Library v7, Kokaly et al. 2017, its bark samples) at those wavelengths.
+        {"bark", {0.35, 0.35, 0.0, 0.0, false}},
     }};
     for (const Row& row : kPresets) {
         if (row.name == name) {

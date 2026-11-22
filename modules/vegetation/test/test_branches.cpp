@@ -7,7 +7,9 @@
 #include "lagrange/vegetation/Vegetation.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <numbers>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -273,6 +275,171 @@ TEST(Branches, ABranchStopsThePropeller) {
     ASSERT_TRUE(back.strike);
     const double t2 = back.wrench[3] * u[0] + back.wrench[4] * u[1] + back.wrench[5] * u[2];
     EXPECT_NEAR(-inertia * omega + t2 * dt, 0.0, 1e-12);
+}
+
+// Bodies against the wood (Branches.hpp "What a body does"): a 6 cm ball pushed by a steady
+// 5 N into a branch, square to it, comes to rest against it: the wood's push balances the 5 N,
+// the overlap is the spring's F/k with k = m/τ² (critically damped, c = 2m/τ), the ball's centre
+// stands r + R - δ from the branch's axis, and the crown is pushed back by the same force.
+TEST(Branches, ABodyPushedIntoABranchStops) {
+    const TreeSpec t = tree();
+    Branches branches;
+    branches.build({t});
+    const std::vector<BranchSegment>& segs = branches.skeleton(0).segments;
+    const std::size_t i = find(branches.skeleton(0), false);  // a 71 mm branch
+    ASSERT_LT(i, segs.size());
+    const BranchSegment s = segs[i];
+    ASSERT_GT(s.diameter, t.maxCutDiameter);
+    const V3 u = unit({s.to[0] - s.from[0], s.to[1] - s.from[1], s.to[2] - s.from[2]});
+    // Square to the fork's plane, so that the branch's sibling is not in the way.
+    std::size_t sibling = 0;
+    for (std::size_t j = 0; j < i; ++j) {
+        if (segs[j].generation == s.generation - 1 && segs[j].end > i) {
+            sibling = j + 1;
+        }
+    }
+    while (sibling == i) {
+        sibling = segs[sibling].end;
+    }
+    const V3 w = unit({segs[sibling].to[0] - segs[sibling].from[0],
+                       segs[sibling].to[1] - segs[sibling].from[1],
+                       segs[sibling].to[2] - segs[sibling].from[2]});
+    const V3 side =
+        unit({u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]});
+    const V3 mid = world(
+        t, {(s.from[0] + s.to[0]) / 2.0, (s.from[1] + s.to[1]) / 2.0, (s.from[2] + s.to[2]) / 2.0});
+    const double radius = 0.03;
+    const double mass = 1.0;
+    const double push = 5.0;
+    WoodShape ball;
+    ball.type = ShapeType::Sphere;
+    ball.size = {radius, 0.0, 0.0};
+    ball.bound = radius;
+    const double gap = 0.5 * s.diameter + radius + 0.02;
+    V3 x{mid[0] + gap * side[0], mid[1] + gap * side[1], mid[2] + gap * side[2]};
+    V3 v{};
+    const double dt = 1e-3;
+    BodyContact last;
+    std::vector<V3> crownPush(1);
+    const std::vector<V3> still(1);
+    for (int k = 0; k < 3000; ++k) {  // 3 s, 150 τ
+        crownPush.assign(1, V3{});
+        last = branches.touch({t}, std::span<const WoodShape>(&ball, 1), radius,
+                              Pose{x, {1.0, 0.0, 0.0, 0.0}}, {v[0], v[1], v[2], 0.0, 0.0, 0.0},
+                              {0.0, 0.0, 0.0}, mass, still, still, crownPush);
+        for (std::size_t c = 0; c < 3; ++c) {
+            v.at(c) += dt * (last.wrench.at(c) - push * side.at(c)) / mass;
+            x.at(c) += dt * v.at(c);
+        }
+    }
+    ASSERT_EQ(last.contacts, 1);
+    EXPECT_EQ(last.broken, 0);
+    EXPECT_LT(std::hypot(v[0], v[1], v[2]), 1e-6) << "it stopped";
+    // The force balance: the wood's push is the 5 N, back along the side.
+    for (std::size_t c = 0; c < 3; ++c) {
+        EXPECT_NEAR(last.wrench.at(c), push * side.at(c), 1e-6 * push);
+        EXPECT_NEAR(last.wrench.at(c + 3), 0.0, 1e-6);  // through the ball's centre
+    }
+    EXPECT_NEAR(last.force, push, 1e-6);
+    const double k = mass / (kWoodContactTime * kWoodContactTime);
+    EXPECT_NEAR(last.depth, push / k, 1e-6);
+    const V3 off{x[0] - mid[0], x[1] - mid[1], x[2] - mid[2]};
+    EXPECT_NEAR(off[0] * side[0] + off[1] * side[1] + off[2] * side[2],
+                0.5 * s.diameter + radius - push / k, 1e-6);
+    // And the crown is pushed the other way, level.
+    EXPECT_NEAR(crownPush[0][0], -push * side[0], 1e-6);
+    EXPECT_NEAR(crownPush[0][1], -push * side[1], 1e-6);
+    std::printf("a 6 cm ball pushed by %.0f N rests on a %.0f mm branch, %.2f mm into it (F/k)\n",
+                push, s.diameter * 1e3, last.depth * 1e3);
+}
+
+// A ball moving through a twig no thicker than tree:maxCutDiameter breaks it: no push, the twig
+// and what grows beyond it gone, counted with the propellers' twigs.
+TEST(Branches, ABodyBreaksATwig) {
+    const TreeSpec t = tree();
+    Branches branches;
+    branches.build({t});
+    const std::size_t i = find(branches.skeleton(0), true);
+    ASSERT_LT(i, branches.skeleton(0).segments.size());
+    const BranchSegment s = branches.skeleton(0).segments[i];
+    const V3 u = unit({s.to[0] - s.from[0], s.to[1] - s.from[1], s.to[2] - s.from[2]});
+    const V3 side = unit({u[1], -u[0], 0.0});
+    const V3 mid = world(
+        t, {(s.from[0] + s.to[0]) / 2.0, (s.from[1] + s.to[1]) / 2.0, (s.from[2] + s.to[2]) / 2.0});
+    WoodShape ball;
+    ball.type = ShapeType::Sphere;
+    ball.size = {0.02, 0.0, 0.0};
+    ball.bound = 0.02;
+    std::vector<V3> push(1);
+    const std::vector<V3> still(1);
+    int broken = 0;
+    for (int k = -10; k <= 10; ++k) {  // across it, 1 cm a step
+        const double at = 0.01 * k;
+        const V3 x{mid[0] + at * side[0], mid[1] + at * side[1], mid[2] + at * side[2]};
+        const BodyContact c =
+            branches.touch({t}, std::span<const WoodShape>(&ball, 1), 0.02,
+                           Pose{x, {1.0, 0.0, 0.0, 0.0}}, {}, {}, 1.0, still, still, push);
+        broken += c.broken;
+        EXPECT_EQ(c.contacts, 0) << "a twig does not push";
+    }
+    EXPECT_GE(broken, 1);
+    EXPECT_LT(branches.standing(0, i), 1.0);
+    for (std::size_t j = i + 1; j < s.end; ++j) {
+        EXPECT_EQ(branches.standing(0, j), 0.0);
+    }
+    // The broken wood is in the signal the lidars read.
+    TreeWood seen;
+    seen.build({t});
+    seen.load(branches.cutValues());
+    EXPECT_EQ(seen.standing(0, i), branches.standing(0, i));
+}
+
+// Wood inside a fixed collider of the world (the trunk the stage gives the tree) is its: a ball
+// overlapping the trunk's crown segment there is not pushed by the wood a second time.
+TEST(Branches, TheTrunkColliderKeepsItsWood) {
+    const TreeSpec t = tree();
+    Branches branches;
+    branches.build({t});
+    WoodShape ball;
+    ball.type = ShapeType::Sphere;
+    ball.size = {0.1, 0.0, 0.0};
+    ball.bound = 0.1;
+    const Pose at{{0.25 + 0.1 - 0.01, 0.0, t.crownBase + 0.1}, {1.0, 0.0, 0.0, 0.0}};
+    std::vector<V3> push(1);
+    const std::vector<V3> still(1);
+    const BodyContact bare = branches.touch({t}, std::span<const WoodShape>(&ball, 1), 0.1, at, {},
+                                            {}, 1.0, still, still, push);
+    EXPECT_EQ(bare.contacts, 1) << "the wood alone pushes";
+    WoodShape trunk;
+    trunk.type = ShapeType::Cylinder;
+    trunk.size = {0.25, 1.0, 0.0};
+    trunk.pose = {{0.0, 0.0, t.crownBase}, {1.0, 0.0, 0.0, 0.0}};
+    trunk.bound = std::hypot(0.25, 1.0);
+    branches.setFixed({trunk});
+    const BodyContact kept = branches.touch({t}, std::span<const WoodShape>(&ball, 1), 0.1, at, {},
+                                            {}, 1.0, still, still, push);
+    EXPECT_EQ(kept.contacts, 0);
+}
+
+// The signed distances the contacts use, against their closed forms.
+TEST(Branches, ShapeDistances) {
+    WoodShape box;
+    box.type = ShapeType::Box;
+    box.size = {1.0, 2.0, 3.0};
+    EXPECT_DOUBLE_EQ(shapeDistance(box, {2.0, 0.0, 0.0}), 1.0);
+    EXPECT_DOUBLE_EQ(shapeDistance(box, {0.5, 0.0, 0.0}), -0.5);
+    EXPECT_DOUBLE_EQ(shapeDistance(box, {4.0, 6.0, 0.0}), 5.0);  // past a corner: 3-4-5
+    WoodShape cylinder;
+    cylinder.type = ShapeType::Cylinder;
+    cylinder.size = {1.0, 2.0, 0.0};
+    EXPECT_DOUBLE_EQ(shapeDistance(cylinder, {3.0, 0.0, 0.0}), 2.0);
+    EXPECT_DOUBLE_EQ(shapeDistance(cylinder, {0.0, 0.0, 2.5}), 0.5);
+    EXPECT_DOUBLE_EQ(shapeDistance(cylinder, {0.0, 0.0, 1.5}), -0.5);
+    WoodShape capsule;
+    capsule.type = ShapeType::Capsule;
+    capsule.size = {0.5, 1.0, 0.0};
+    EXPECT_DOUBLE_EQ(shapeDistance(capsule, {0.0, 0.0, 2.0}), 0.5);
+    EXPECT_DOUBLE_EQ(shapeDistance(capsule, {1.0, 0.0, 0.5}), 0.5);
 }
 
 TEST(Branches, TreeApiReadsTheBranchFallbacks) {

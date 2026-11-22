@@ -165,6 +165,13 @@ void stepSway(const TreeSpec& tree, Sway& sway, const std::array<double, 2>& for
 /// (rotor/<j>/damage, branch_strikes; tree/<n>/twigs_cut). Config "blade_break_energy" (J,
 /// default kBladeBreakEnergy).
 ///
+/// Bodies against the wood (Branches.hpp "What a body does"): with trees and config
+/// "branch_contact" (default true), body/<b>/wrench/branches (world_local, about the centre of
+/// mass) and body/<b>/branch_force (N, its size) for every body above; twigs it reaches into
+/// break (vegetation/branch_cut, which the lidars read), thicker wood pushes it out and the crown
+/// back. Config "contact_time" (s, default kWoodContactTime), "bark_friction" (default
+/// kBarkFriction).
+///
 /// Flying leaves (Leaves.hpp, ground.md "Flying leaves"): with trees and config "leaves" (default
 /// true), the leaves a rotor cuts off and those the air strips from a crown fly as particles in
 /// the wind and the rotors' wake (rotor/<j>/induced_velocity and thrust_axis, optional) and settle
@@ -191,9 +198,13 @@ private:
     };
     struct Body {
         SignalId pose, twist, wrench, inside;
+        SignalId woodWrench, woodForce;  // branch contacts; invalid without trees
         std::array<double, 3> com{};
         std::vector<Cell> cells;
         double volume{0.0};
+        std::vector<WoodShape> shapes;  // its colliders, for the wood
+        double bound{0.0};              // m, round them about the link's origin
+        double mass{0.0};               // kg
     };
     struct Rotor {
         SignalId pose, velocity, wrench, power;
@@ -206,7 +217,8 @@ private:
     struct Tree {
         SignalId downwash, sway, force, cutVolume, leaves, flying;
         Sway state;
-        double cut{0.0};  // m³
+        std::array<double, 2> push{};  // N, the bodies' push on its wood in the last step
+        double cut{0.0};               // m³
     };
     std::vector<TreeSpec> treeSpecs_;
     std::vector<Tree> trees_;

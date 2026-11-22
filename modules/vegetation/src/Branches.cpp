@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 namespace lagrange::vegetation {
@@ -30,162 +31,10 @@ double norm(const V3& a) {
     return std::sqrt(dot(a, a));
 }
 
-/// v turned by `angle` about the unit axis k (Rodrigues).
-V3 turn(const V3& v, const V3& k, double angle) {
-    const double c = std::cos(angle);
-    const double s = std::sin(angle);
-    return add(add(scale(v, c), scale(cross(k, v), s)), scale(k, dot(k, v) * (1.0 - c)));
-}
-
-/// Distance from p (inside) along unit d to the ellipsoid x²/R² + y²/R² + z²/c² = 1.
-double toSurface(const V3& p, const V3& d, double r, double c) {
-    const double a = (d[0] * d[0] + d[1] * d[1]) / (r * r) + d[2] * d[2] / (c * c);
-    const double b = 2.0 * ((p[0] * d[0] + p[1] * d[1]) / (r * r) + p[2] * d[2] / (c * c));
-    const double k = (p[0] * p[0] + p[1] * p[1]) / (r * r) + p[2] * p[2] / (c * c) - 1.0;
-    const double disc = b * b - 4.0 * a * k;
-    if (!(a > 0.0) || disc < 0.0) {
-        return 0.0;
-    }
-    return std::max(0.0, (-b + std::sqrt(disc)) / (2.0 * a));
-}
-
 /// A stub shorter than this is not cut again (m), as for the grass (kMinCutPiece).
 constexpr double kMinPiece = 0.01;
 
-class Grower {
-public:
-    Grower(Skeleton& out, double radius, double half) : out_(out), r_(radius), c_(half) {}
-
-    std::uint32_t push(const V3& from, const V3& to, double d, std::int32_t generation) {
-        BranchSegment s;
-        s.from = from;
-        s.to = to;
-        s.diameter = d;
-        s.generation = generation;
-        out_.segments.push_back(s);
-        return static_cast<std::uint32_t>(out_.segments.size() - 1);
-    }
-    void close(std::uint32_t i) {
-        out_.segments[i].end = static_cast<std::uint32_t>(out_.segments.size());
-    }
-
-    /// A limb from `start` along frame (dir, p, q), base diameter d, reaching `length`.
-    void limb(const V3& start, const V3& dir, const V3& p, double d, double length) {
-        if (!(d >= kTwigDiameter) || !(length > 0.0)) {
-            return;
-        }
-        int generations = 0;
-        while (forkDiameter(d, generations) >= kTwigDiameter) {
-            ++generations;
-        }
-        const double first =
-            length * (1.0 - kForkLengthRatio) / (1.0 - std::pow(kForkLengthRatio, generations));
-        grow(start, dir, p, cross(dir, p), first, d, 0, generations);
-    }
-
-private:
-    void grow(const V3& start, const V3& dir, const V3& p, const V3& q, double length, double d,
-              int g, int generations) {
-        // A branch that would leave the crown ends at its edge, a tip.
-        const double room = toSurface(start, dir, r_, c_);
-        const bool edge = room < length;
-        const V3 end = add(start, scale(dir, edge ? room : length));
-        const std::uint32_t i = push(start, end, d, g);
-        if (g + 1 < generations && !edge) {
-            for (const double side : {1.0, -1.0}) {
-                const double angle = side * kForkHalfAngle;
-                const V3 cd = turn(dir, q, angle);
-                const V3 cp = turn(p, q, angle);
-                // The next fork's plane rolled 90° about the child: (p, q) -> (q, -p).
-                grow(end, cd, q, scale(cp, -1.0), length * kForkLengthRatio,
-                     d / std::numbers::sqrt2, g + 1, generations);
-            }
-        }
-        close(i);
-    }
-
-    Skeleton& out_;
-    double r_, c_;  // the crown's semi-axes
-};
-
 }  // namespace
-
-double limbDiameter(double trunkDiameter, double length, double totalLength) {
-    if (!(totalLength > 0.0) || !(length > 0.0)) {
-        return 0.0;
-    }
-    return trunkDiameter * std::sqrt(length / totalLength);
-}
-
-double forkDiameter(double diameter, int generation) {
-    return diameter * std::pow(2.0, -0.5 * generation);
-}
-
-Skeleton skeletonOf(const TreeSpec& tree, std::uint32_t index) {
-    Skeleton out;
-    const double span = tree.height - tree.crownBase;
-    const double c = tree.halfHeight();
-    const double centre = tree.centreHeight();
-    if (!(tree.trunkDiameter > 0.0) || !(span > 0.0) || !(tree.crownRadius > 0.0)) {
-        return out;
-    }
-    const int n = std::max(0, tree.branchCount);
-    const double top = tree.crownBase + kLimbSpan * span;
-    std::vector<double> heights(static_cast<std::size_t>(n));
-    std::vector<V3> dirs(static_cast<std::size_t>(n));
-    double total = 0.0;
-    for (int k = 0; k < n; ++k) {
-        const auto ku = static_cast<std::size_t>(k);
-        heights[ku] = tree.crownBase + kLimbSpan * span * (k + 0.5) / n;
-        const double phi = kGoldenAngle * (k + 0.5 * index);
-        dirs[ku] = {std::cos(kLimbElevation) * std::cos(phi),
-                    std::cos(kLimbElevation) * std::sin(phi), std::sin(kLimbElevation)};
-        out.limbs.push_back(
-            toSurface({0.0, 0.0, heights[ku] - centre}, dirs[ku], tree.crownRadius, c));
-        total += out.limbs.back();
-    }
-    out.limbs.push_back(tree.height - top);  // the leader
-    total += out.limbs.back();
-    out.trunkArea = std::numbers::pi * tree.trunkDiameter * tree.trunkDiameter / 4.0;
-
-    Grower grow(out, tree.crownRadius, c);
-    // The trunk through the crown, a segment from junction to junction; each holds what the
-    // limbs below it did not take, and its subtree is everything above it.
-    std::vector<std::uint32_t> open;
-    double area = out.trunkArea;
-    double from = tree.crownBase;
-    for (int k = 0; k <= n; ++k) {
-        const double to = k < n ? heights[static_cast<std::size_t>(k)] : top;
-        open.push_back(grow.push({0.0, 0.0, from - centre}, {0.0, 0.0, to - centre},
-                                 std::sqrt(4.0 * std::max(area, 0.0) / std::numbers::pi), -1));
-        const double length = out.limbs[static_cast<std::size_t>(k)];
-        const double d = limbDiameter(tree.trunkDiameter, length, total);
-        if (k < n) {
-            const V3& dir = dirs[static_cast<std::size_t>(k)];
-            const V3 side = {-dir[1], dir[0], 0.0};
-            const double l = norm(side);
-            grow.limb({0.0, 0.0, to - centre}, dir, scale(side, 1.0 / l), d, length);
-        } else {
-            grow.limb({0.0, 0.0, to - centre}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}, d, length);
-        }
-        area -= std::numbers::pi * d * d / 4.0;
-        from = to;
-    }
-    for (auto it = open.rbegin(); it != open.rend(); ++it) {
-        grow.close(*it);
-    }
-    // Spheres around each segment and its subtree, children first.
-    std::vector<BranchSegment>& s = out.segments;
-    for (std::size_t i = s.size(); i-- > 0;) {
-        BranchSegment& b = s[i];
-        b.centre = scale(add(b.from, b.to), 0.5);
-        b.radius = 0.5 * norm(sub(b.to, b.from)) + 0.5 * b.diameter;
-        for (std::size_t j = i + 1; j < b.end; j = s[j].end) {
-            b.radius = std::max(b.radius, norm(sub(s[j].centre, b.centre)) + s[j].radius);
-        }
-    }
-    return out;
-}
 
 double discMeets(const V3& a, const V3& b, double d, const V3& centre, const V3& normal,
                  double radius) {
@@ -235,15 +84,11 @@ double discMeets(const V3& a, const V3& b, double d, const V3& centre, const V3&
 }
 
 void Branches::build(const std::vector<TreeSpec>& trees) {
-    skeletons_.clear();
-    for (std::size_t k = 0; k < trees.size(); ++k) {
-        skeletons_.push_back(skeletonOf(trees[k], static_cast<std::uint32_t>(k)));
-    }
-    standing_.clear();
-    for (const Skeleton& s : skeletons_) {
-        standing_.emplace_back(s.segments.size(), 1.0);
-    }
+    wood_.build(trees);
     cuts_.clear();
+    std::fill(cutValues_.begin(), cutValues_.end(), 0.0);
+    cutVersion_ = 0.0;
+    cutOut_ = SignalId{};
     rotors_.clear();
     twigsOut_.clear();
     twigs_.assign(trees.size(), 0.0);
@@ -253,7 +98,7 @@ void Branches::addRotor(SignalDeclarer& d, const std::string& joint,
                         const std::array<double, 3>& linkCom) {
     RotorState r;
     r.com = linkCom;
-    if (!skeletons_.empty()) {
+    if (!wood_.empty()) {
         SignalSpec damage;
         damage.name = "rotor/" + joint + "/damage";
         damage.type = SignalType::Scalar;
@@ -281,13 +126,21 @@ void Branches::declareTrees(const std::vector<TreeSpec>& trees, SignalDeclarer& 
         s.unit = units::one;
         twigsOut_.push_back(d.output(s));
     }
+    if (!trees.empty()) {
+        SignalSpec cut;
+        cut.name = std::string(kBranchCutSignal);
+        cut.type = SignalType::ScalarArray;
+        cut.unit = units::one;
+        cut.arrayLength = kBranchCutLength;
+        cutOut_ = d.output(cut);
+    }
 }
 
 void Branches::init(SignalBus& bus) {
-    for (std::size_t k = 0; k < skeletons_.size(); ++k) {
-        std::fill(standing_[k].begin(), standing_[k].end(), 1.0);
-    }
+    wood_.reset();
     cuts_.clear();
+    std::fill(cutValues_.begin(), cutValues_.end(), 0.0);
+    cutVersion_ = -1.0;  // written by the first publish
     std::fill(twigs_.begin(), twigs_.end(), 0.0);
     for (RotorState& r : rotors_) {
         r.damage = 0.0;
@@ -297,14 +150,11 @@ void Branches::init(SignalBus& bus) {
 }
 
 double Branches::standing(std::size_t tree, std::size_t s) const {
-    return standing_.at(tree).at(s);
+    return wood_.standing(tree, s);
 }
 
 void Branches::apply(const Cut& cut) {
-    std::vector<double>& standing = standing_.at(cut.tree);
-    const BranchSegment& s = skeletons_.at(cut.tree).segments.at(cut.segment);
-    standing[cut.segment] = std::min(standing[cut.segment], cut.share);
-    std::fill(standing.begin() + cut.segment + 1, standing.begin() + s.end, 0.0);
+    wood_.cut(cut.tree, cut.segment, cut.share);
 }
 
 BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees, const Pose& hub,
@@ -312,15 +162,15 @@ BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees,
                           const std::vector<std::array<double, 3>>& sways, double omega,
                           double inertia, double dt) {
     BranchHit hit;
-    if (rotor >= rotors_.size() || skeletons_.empty()) {
+    if (rotor >= rotors_.size() || wood_.empty()) {
         return hit;
     }
     std::uint32_t strikeTree = 0;
     std::uint32_t strikeSegment = 0;
     V3 strikeAt{};
-    for (std::size_t k = 0; k < trees.size() && k < skeletons_.size(); ++k) {
+    for (std::size_t k = 0; k < trees.size() && k < wood_.trees(); ++k) {
         const TreeSpec& tree = trees[k];
-        const std::vector<BranchSegment>& segs = skeletons_[k].segments;
+        const std::vector<BranchSegment>& segs = wood_.skeleton(k).segments;
         if (segs.empty()) {
             continue;
         }
@@ -329,11 +179,11 @@ BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees,
         if (norm(sub(o, segs[0].centre)) > segs[0].radius + radius + kBladeHalfThickness) {
             continue;  // far from this tree's wood
         }
-        std::vector<double>& standing = standing_[k];
+        const auto standing = [&](std::size_t s) { return wood_.standing(k, s); };
         std::size_t i = 0;
         while (i < segs.size()) {
             const BranchSegment& s = segs[i];
-            if (standing[i] <= 0.0) {
+            if (standing(i) <= 0.0) {
                 i = s.end;
                 continue;
             }
@@ -346,15 +196,14 @@ BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees,
             }
             const V3 full = sub(s.to, s.from);
             const double length = norm(full);
-            const double reach = standing[i] * length;
+            const double reach = standing(i) * length;
             const double at =
-                discMeets(s.from, add(s.from, scale(full, standing[i])), s.diameter, o, n, radius);
+                discMeets(s.from, add(s.from, scale(full, standing(i))), s.diameter, o, n, radius);
             if (at >= 0.0 && at < reach - kMinPiece) {
                 if (s.diameter <= tree.maxCutDiameter) {
                     const Cut cut{static_cast<std::uint32_t>(k), static_cast<std::uint32_t>(i),
                                   at / length};
-                    cuts_.push_back(cut);
-                    apply(cut);
+                    record(cut);
                     hit.cutEnergy +=
                         tree.woodCutEnergy * std::numbers::pi * s.diameter * s.diameter / 4.0;
                     ++hit.twigsCut;
@@ -369,7 +218,7 @@ BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees,
                     strikeAt = add(s.from, scale(full, at / length));
                 }
             }
-            i = standing[i] < 1.0 ? s.end : i + 1;
+            i = standing(i) < 1.0 ? s.end : i + 1;
         }
     }
     if (!(hit.diameter > 0.0) || !(inertia > 0.0) || !(dt > 0.0) || omega == 0.0) {
@@ -377,7 +226,7 @@ BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees,
     }
     // The strike: back to the world.
     const TreeSpec& tree = trees[strikeTree];
-    const BranchSegment& s = skeletons_[strikeTree].segments[strikeSegment];
+    const BranchSegment& s = wood_.skeleton(strikeTree).segments[strikeSegment];
     const V3 up = rotate(tree.pose.orientation, {0.0, 0.0, tree.centreHeight()});
     const V3& sway = sways[strikeTree];
     const V3 point =
@@ -428,6 +277,28 @@ void Branches::publish(SignalBus& bus) {
     for (std::size_t k = 0; k < twigsOut_.size() && k < twigs_.size(); ++k) {
         bus.write(twigsOut_[k], twigs_[k]);
     }
+    if (cutOut_.valid()) {
+        if (cutValues_[0] != cutVersion_) {
+            bus.writeN(cutOut_, cutValues_);
+            cutVersion_ = cutValues_[0];
+        } else {
+            bus.hold(cutOut_);
+        }
+    }
+}
+
+void Branches::record(const Cut& cut) {
+    cuts_.push_back(cut);
+    apply(cut);
+    const std::size_t n = cuts_.size();
+    cutValues_[0] = static_cast<double>(n);  // the version: the list only grows
+    if (n <= kBranchCutCapacity) {
+        const std::size_t at = kBranchCutHeader + (kBranchCutFields * (n - 1));
+        cutValues_[1] = static_cast<double>(n);
+        cutValues_[at] = cut.tree;
+        cutValues_[at + 1] = cut.segment;
+        cutValues_[at + 2] = cut.share;
+    }
 }
 
 void Branches::save(StateWriter& writer) const {
@@ -457,20 +328,282 @@ bool Branches::restore(StateReader& reader) {
     if (!reader.get(count)) {
         return false;
     }
-    for (std::size_t k = 0; k < skeletons_.size(); ++k) {
-        std::fill(standing_[k].begin(), standing_[k].end(), 1.0);
-    }
+    wood_.reset();
     cuts_.clear();
+    std::fill(cutValues_.begin(), cutValues_.end(), 0.0);
+    cutVersion_ = -1.0;
     for (std::uint64_t k = 0; k < count; ++k) {
         Cut c{};
         if (!reader.get(c.tree) || !reader.get(c.segment) || !reader.get(c.share) ||
-            c.tree >= skeletons_.size() || c.segment >= skeletons_[c.tree].segments.size()) {
+            c.tree >= wood_.trees() || c.segment >= wood_.skeleton(c.tree).segments.size()) {
             return false;
         }
-        cuts_.push_back(c);
-        apply(c);
+        record(c);
     }
     return true;
+}
+
+namespace {
+
+/// x (world) in the frame of `pose`.
+V3 inFrame(const Pose& pose, const V3& x) {
+    return rotate(conjugate(pose.orientation), sub(x, pose.position));
+}
+
+/// The distance from p to the segment a-b.
+double toSegment(const V3& p, const V3& a, const V3& b) {
+    const V3 ab = sub(b, a);
+    const double abab = dot(ab, ab);
+    const double t = abab > 0.0 ? std::clamp(dot(sub(p, a), ab) / abab, 0.0, 1.0) : 0.0;
+    return norm(sub(p, add(a, scale(ab, t))));
+}
+
+/// Golden-section search for the t in [0, length] where f is least; f is convex along it (a
+/// convex shape's signed distance along a line).
+template <class F>
+double leastAlong(double length, const F& f) {
+    constexpr int kIterations = 40;  // 0.618^40: 4e-9 of the length
+    const double g = (std::sqrt(5.0) - 1.0) / 2.0;
+    double lo = 0.0;
+    double hi = length;
+    double x1 = hi - g * (hi - lo);
+    double x2 = lo + g * (hi - lo);
+    double f1 = f(x1);
+    double f2 = f(x2);
+    for (int k = 0; k < kIterations; ++k) {
+        if (f1 <= f2) {
+            hi = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = hi - g * (hi - lo);
+            f1 = f(x1);
+        } else {
+            lo = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = lo + g * (hi - lo);
+            f2 = f(x2);
+        }
+    }
+    return 0.5 * (lo + hi);
+}
+
+}  // namespace
+
+bool woodShapeOf(const World& world, std::size_t c, WoodShape& out) {
+    const World::Colliders& colliders = world.colliders;
+    out = WoodShape{};
+    out.type = colliders.shape.at(c);
+    out.size = colliders.size.at(c);
+    out.pose = colliders.poseInBody.at(c);
+    const V3& s = out.size;
+    switch (out.type) {
+        case ShapeType::Sphere:
+            out.bound = s[0];
+            return s[0] > 0.0;
+        case ShapeType::Capsule:
+            out.bound = s[0] + s[1];
+            return s[0] > 0.0;
+        case ShapeType::Cylinder:
+            out.bound = std::hypot(s[0], s[1]);
+            return s[0] > 0.0;
+        case ShapeType::Box:
+            out.bound = norm(s);
+            return out.bound > 0.0;
+        case ShapeType::ConvexHull: {
+            const std::uint32_t h = colliders.hull.at(c);
+            if (h >= world.hulls.size() || world.hulls[h].faces.empty()) {
+                return false;
+            }
+            out.faces = &world.hulls[h].faces;
+            for (const V3& p : world.hulls[h].points) {
+                out.bound = std::max(out.bound, norm(p));
+            }
+            return true;
+        }
+        case ShapeType::Plane:
+        case ShapeType::HeightField:
+            break;
+    }
+    return false;
+}
+
+double shapeDistance(const WoodShape& shape, const V3& q) {
+    const V3& s = shape.size;
+    switch (shape.type) {
+        case ShapeType::Sphere:
+            return norm(q) - s[0];
+        case ShapeType::Capsule:
+            return std::hypot(q[0], q[1], q[2] - std::clamp(q[2], -s[1], s[1])) - s[0];
+        case ShapeType::Cylinder: {
+            const double dr = std::hypot(q[0], q[1]) - s[0];
+            const double dz = std::abs(q[2]) - s[1];
+            return std::min(std::max(dr, dz), 0.0) +
+                   std::hypot(std::max(dr, 0.0), std::max(dz, 0.0));
+        }
+        case ShapeType::Box: {
+            const V3 d{std::abs(q[0]) - s[0], std::abs(q[1]) - s[1], std::abs(q[2]) - s[2]};
+            const V3 out{std::max(d[0], 0.0), std::max(d[1], 0.0), std::max(d[2], 0.0)};
+            return norm(out) + std::min(std::max({d[0], d[1], d[2]}), 0.0);
+        }
+        case ShapeType::ConvexHull: {
+            if (shape.faces == nullptr || shape.faces->empty()) {
+                return std::numeric_limits<double>::infinity();
+            }
+            double most = -std::numeric_limits<double>::infinity();
+            for (const std::array<double, 4>& f : *shape.faces) {
+                most = std::max(most, f[0] * q[0] + f[1] * q[1] + f[2] * q[2] - f[3]);
+            }
+            return most;
+        }
+        case ShapeType::Plane:
+        case ShapeType::HeightField:
+            break;
+    }
+    return std::numeric_limits<double>::infinity();
+}
+
+bool Branches::inFixed(const V3& point) const {
+    for (const WoodShape& f : fixed_) {
+        if (norm(sub(point, f.pose.position)) <= f.bound &&
+            shapeDistance(f, inFrame(f.pose, point)) < 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+BodyContact Branches::touch(const std::vector<TreeSpec>& trees, std::span<const WoodShape> shapes,
+                            double bound, const Pose& pose, const std::array<double, 6>& twist,
+                            const V3& comLocal, double mass, const std::vector<V3>& sways,
+                            const std::vector<V3>& crownVelocity, std::vector<V3>& crownPush) {
+    BodyContact out;
+    if (wood_.empty() || shapes.empty() || !(mass > 0.0) || !(contactTime > 0.0)) {
+        return out;
+    }
+    // The penalty contact: critically damped at τ for the link's mass.
+    const double stiffness = mass / (contactTime * contactTime);
+    const double damping = 2.0 * mass / contactTime;
+    const V3 v{twist[0], twist[1], twist[2]};
+    const V3 w{twist[3], twist[4], twist[5]};
+    const V3 com = compose(pose, Pose{comLocal, {1.0, 0.0, 0.0, 0.0}}).position;
+    std::vector<Pose> placed(shapes.size());
+    for (std::size_t j = 0; j < shapes.size(); ++j) {
+        placed[j] = compose(pose, shapes[j].pose);
+    }
+    std::vector<V3> centres(shapes.size());
+    V3 total{};
+    for (std::size_t k = 0; k < trees.size() && k < wood_.trees(); ++k) {
+        const std::vector<BranchSegment>& segs = wood_.skeleton(k).segments;
+        if (segs.empty()) {
+            continue;
+        }
+        const TreeSpec& tree = trees[k];
+        const V3 o = inCrown(tree, pose.position, sways[k]);
+        if (norm(sub(o, segs[0].centre)) > segs[0].radius + bound) {
+            continue;  // far from this tree's wood
+        }
+        for (std::size_t j = 0; j < shapes.size(); ++j) {
+            centres[j] = inCrown(tree, placed[j].position, sways[k]);
+        }
+        const V3 crown = add(
+            add(tree.pose.position, rotate(tree.pose.orientation, {0.0, 0.0, tree.centreHeight()})),
+            sways[k]);
+        std::size_t i = 0;
+        while (i < segs.size()) {
+            const BranchSegment& s = segs[i];
+            const double standing = wood_.standing(k, i);
+            if (standing <= 0.0 || norm(sub(o, s.centre)) > s.radius + bound) {
+                i = s.end;
+                continue;
+            }
+            const double r = 0.5 * s.diameter;
+            const V3 full = sub(s.to, s.from);
+            const double length = norm(full);
+            const double reach = standing * length;
+            const V3 tip = add(s.from, scale(full, standing));
+            bool broke = false;
+            for (std::size_t j = 0; j < shapes.size() && length > 0.0; ++j) {
+                const WoodShape& shape = shapes[j];
+                if (toSegment(centres[j], s.from, tip) > shape.bound + r) {
+                    continue;
+                }
+                const V3 aw = add(crown, rotate(tree.pose.orientation, s.from));
+                const V3 uw = rotate(tree.pose.orientation, scale(full, 1.0 / length));
+                const V3 as = inFrame(placed[j], aw);
+                const V3 us = rotate(conjugate(placed[j].orientation), uw);
+                const auto along = [&](double t) {
+                    return shapeDistance(shape, add(as, scale(us, t)));
+                };
+                const double t = leastAlong(reach, along);
+                const double distance = along(t);
+                const double depth = r - distance;
+                if (!(depth > 0.0)) {
+                    continue;
+                }
+                const V3 x = add(aw, scale(uw, t));
+                if (inFixed(x)) {
+                    continue;  // the trunk the stage gives the tree: its collider's
+                }
+                if (s.diameter <= tree.maxCutDiameter) {
+                    if (t < reach - kMinPiece) {  // a twig: it breaks
+                        record(Cut{static_cast<std::uint32_t>(k), static_cast<std::uint32_t>(i),
+                                   t / length});
+                        twigs_[k] += 1.0;
+                        ++out.broken;
+                        broke = true;
+                        break;
+                    }
+                    continue;
+                }
+                // The collider's outward normal at the wood's axis (central differences).
+                const V3 xs = add(as, scale(us, t));
+                constexpr double kH = 1e-6;  // m
+                V3 grad{};
+                for (std::size_t c = 0; c < 3; ++c) {
+                    V3 hi = xs;
+                    V3 lo = xs;
+                    hi.at(c) += kH;
+                    lo.at(c) -= kH;
+                    grad.at(c) = shapeDistance(shape, hi) - shapeDistance(shape, lo);
+                }
+                const double gn = norm(grad);
+                if (!(gn > 0.0)) {
+                    continue;
+                }
+                const V3 n = rotate(placed[j].orientation, scale(grad, 1.0 / gn));
+                const V3 p = sub(x, scale(n, distance));  // on the collider's surface
+                const V3 vb = add(v, cross(w, sub(p, pose.position)));
+                const V3& vc = crownVelocity[k];
+                const V3 rel = sub(vb, vc);
+                const double vn = dot(rel, n);  // > 0: into the wood
+                const double fn = stiffness * depth + damping * vn;
+                if (!(fn > 0.0)) {
+                    continue;
+                }
+                V3 f = scale(n, -fn);
+                const V3 vt = sub(rel, scale(n, vn));
+                const double slide = norm(vt);
+                if (slide > 0.0) {
+                    const double ft = std::min(friction * fn, damping * slide);
+                    f = sub(f, scale(vt, ft / slide));
+                }
+                const V3 m = cross(sub(p, com), f);
+                for (std::size_t c = 0; c < 3; ++c) {
+                    out.wrench.at(c) += f.at(c);
+                    out.wrench.at(c + 3) += m.at(c);
+                }
+                total = add(total, f);
+                crownPush[k][0] -= f[0];
+                crownPush[k][1] -= f[1];
+                out.depth = std::max(out.depth, depth);
+                ++out.contacts;
+            }
+            i = broke || standing < 1.0 ? s.end : i + 1;
+        }
+    }
+    out.force = norm(total);
+    return out;
 }
 
 }  // namespace lagrange::vegetation

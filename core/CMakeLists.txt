@@ -28,6 +28,7 @@ add_library(
     world/src/World.cpp
     world/src/Meshes.cpp
     world/src/RoadLanes.cpp
+    world/src/TreeWood.cpp
     world/coords/src/Frames.cpp
     world/streaming/src/TileSelector.cpp
     world/regions/src/RegionPlanner.cpp

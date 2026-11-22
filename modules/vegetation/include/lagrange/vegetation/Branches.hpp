@@ -3,27 +3,9 @@
 // Branches (docs/physics/ground.md "Branches"): the wood in a tree's crown, which a propeller cuts
 // when it is a twig and is stopped by when it is a branch.
 //
-// Geometry, a pure function of the tree's parameters and index (no state, invariant 7):
-//
-//  - The trunk goes on through the crown from tree:crownBase to kLimbSpan of the crown's height.
-//    tree:branchCount limbs leave it at even steps of height, each turned by the golden angle
-//    from the last (plus a turn by the tree's index, so neighbouring trees differ), rising at
-//    kLimbElevation, and long enough to reach the crown's ellipsoid; the leader goes on from the
-//    trunk's top to the crown's top.
-//  - Pipe model (Shinozaki, Yoda, Hozumi and Kira 1964, "A quantitative analysis of plant form -
-//    the pipe model theory. I. Basic analyses", Japanese Journal of Ecology 14, 97-105): the wood's
-//    cross-section carries the leaves beyond it. With the leaves spread along the limbs' length,
-//    limb k of length L_k takes the share L_k / Λ of the trunk's cross-section, Λ the limbs' and
-//    the leader's lengths together, so its base diameter is d_k = D √(L_k / Λ); the trunk above a
-//    limb keeps what the limbs below it did not take, so the cross-sections add up at every
-//    junction.
-//  - Every limb forks in two, again and again, down to kTwigDiameter. Leonardo's rule (as stated
-//    and argued in Eloy 2011, "Leonardo's rule, self-similarity, and wind-induced stresses in
-//    trees", Phys. Rev. Lett. 107, 258101, doi:10.1103/PhysRevLett.107.258101): the two children's
-//    cross-sections add up to their parent's, so each is d/√2 and generation g of a limb is
-//    d_k 2^(-g/2). Each generation is kForkLengthRatio as long as its parent, the first sized so
-//    that the straight line of forks reaches the limb's length; children turn ±kForkHalfAngle off
-//    their parent, the fork's plane rolled 90° each generation.
+// The wood's geometry, a pure function of the tree's parameters and index, is shared with the
+// lidars (lagrange/world/TreeWood.hpp: the trunk through the crown, the limbs by the pipe model,
+// their forks by Leonardo's rule).
 //
 // What a propeller does (a disc of the blades' radius, kBladeHalfThickness thick):
 //  - wood it meets no thicker than tree:maxCutDiameter is cut where it meets it, everything beyond
@@ -33,62 +15,58 @@
 //    angular momentum I ω in the step (the push stands over the step); its push on the drone is
 //    the same force through the hub. The strike takes the propeller's kinetic energy ½ I ω², and
 //    a share of it, over kBladeBreakEnergy, breaks the blades: rotor/<j>/damage.
+//
+// What a body does (its colliders against the wood, each segment a capsule of its diameter, at
+// the crown's sway):
+//  - wood no thicker than tree:maxCutDiameter that a collider reaches into breaks there: it is
+//    cut as a propeller cuts a twig (the cut list, tree/<n>/twigs_cut), and pushes back nothing;
+//  - thicker wood pushes the body out along the collider's surface normal by a penalty contact,
+//    a spring and a damper on the overlap with Coulomb friction: F_n = max(0, k δ + c v_n),
+//    |F_t| = min(μ F_n, c |v_t|) against the sliding, k = m/τ² and c = 2m/τ for the link's mass
+//    m (the critically damped soft contact of MuJoCo's solref (τ, 1), whose default τ = 0.02 s
+//    is kWoodContactTime; MuJoCo documentation, "Solver parameters"). The wood is rigid: no
+//    branch bends. What pushes the body pushes the crown back, horizontally, into its sway.
+//  - wood inside a fixed collider of the world (the trunk the stage gives the tree) is that
+//    collider's: it does not push twice.
 
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/module/StateIO.hpp"
+#include "lagrange/world/TreeWood.hpp"
 #include "lagrange/world/Trees.hpp"
+#include "lagrange/world/World.hpp"
 
 #include <array>
 #include <cstdint>
 #include <numbers>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace lagrange::vegetation {
 
-/// The limbs leave the trunk over the lower 70 % of the crown's height. TODO(verify).
-inline constexpr double kLimbSpan = 0.7;
-/// The limbs rise 30° over the horizontal. TODO(verify) against a species.
-inline constexpr double kLimbElevation = 30.0 * std::numbers::pi / 180.0;
-/// A fork's children turn 25° off their parent. TODO(verify).
-inline constexpr double kForkHalfAngle = 25.0 * std::numbers::pi / 180.0;
-/// Each generation of a limb is 0.8 as long as its parent. TODO(verify).
-inline constexpr double kForkLengthRatio = 0.8;
-/// Wood thinner than this is not drawn as branches: it is in the crown's leaves and twigs (m).
-inline constexpr double kTwigDiameter = 0.004;
 /// Half the thickness of the sheet a propeller's blades sweep (m). TODO(verify).
 inline constexpr double kBladeHalfThickness = 0.005;
 /// The strike energy that breaks a propeller's blades (J), rotor/<j>/damage = energy / this,
 /// summed and held at 1. TODO(verify): no measurement behind it.
 inline constexpr double kBladeBreakEnergy = 30.0;
-/// The golden angle (rad), between successive limbs.
-inline constexpr double kGoldenAngle = std::numbers::pi * (3.0 - 2.23606797749978969640);
+/// The penalty contact's time constant τ (s): MuJoCo's default solref timeconst, 0.02 s, critically
+/// damped. A numerical choice, not a property of wood.
+inline constexpr double kWoodContactTime = 0.02;
+/// Coulomb friction of bark on a robot's shell. TODO(verify): no measurement of bark on plastic or
+/// aluminium behind it.
+inline constexpr double kBarkFriction = 0.5;
 
-/// A piece of wood, a straight cylinder, in the crown's frame (relative to the crown's centre,
-/// unswayed, the tree's orientation undone), in depth-first order.
-struct BranchSegment {
-    std::array<double, 3> from{};
-    std::array<double, 3> to{};
-    double diameter{0.0};            // m
-    std::uint32_t end{0};            // one past the last segment of its subtree
-    std::array<double, 3> centre{};  // a sphere around it and its subtree
-    double radius{0.0};
-    std::int32_t generation{0};  // -1 for the trunk and leader's base, else the fork generation
-};
-
-/// The wood of one tree.
-struct Skeleton {
-    std::vector<BranchSegment> segments;
-    double trunkArea{0.0};      // m², π D² / 4
-    std::vector<double> limbs;  // L_k, the limbs' lengths, then the leader's
-};
-
-/// The pipe model's limb diameter: D √(L / Λ).
-[[nodiscard]] double limbDiameter(double trunkDiameter, double length, double totalLength);
-/// Leonardo's rule over g forks: d 2^(-g/2).
-[[nodiscard]] double forkDiameter(double diameter, int generation);
-/// Tree `index`'s wood.
-[[nodiscard]] Skeleton skeletonOf(const TreeSpec& tree, std::uint32_t index);
+using lagrange::BranchSegment;
+using lagrange::forkDiameter;
+using lagrange::kForkHalfAngle;
+using lagrange::kForkLengthRatio;
+using lagrange::kGoldenAngle;
+using lagrange::kLimbElevation;
+using lagrange::kLimbSpan;
+using lagrange::kTwigDiameter;
+using lagrange::limbDiameter;
+using lagrange::Skeleton;
+using lagrange::skeletonOf;
 
 /// Where a segment from `a` to `b` of diameter `d` meets a disc (centre, unit normal, radius,
 /// kBladeHalfThickness thick): the distance along it from `a` to the first point of the
@@ -108,8 +86,33 @@ struct BranchHit {
     std::array<double, 6> wrench{};  // on the propeller's link, world, about its centre of mass
 };
 
-/// The trees' wood and what the rotors did to it. Signals per rotor rotor/<j>/damage (0..1) and
-/// rotor/<j>/branch_strikes (count), per tree tree/<n>/twigs_cut (count).
+/// A collider as the wood touches it.
+struct WoodShape {
+    ShapeType type{ShapeType::Sphere};
+    std::array<double, 3> size{};
+    Pose pose{};  // in its body's frame (a fixed collider's: region-local)
+    const std::vector<std::array<double, 4>>* faces{nullptr};  // a hull's planes
+    double bound{0.0};  // m, a sphere round it about pose.position
+};
+/// The collider `c` of `world` as the wood touches it; false for a plane or a height field.
+bool woodShapeOf(const World& world, std::size_t c, WoodShape& out);
+/// The signed distance from q (the shape's frame) to its surface (m): negative inside. Exact for
+/// spheres, capsules, cylinders and boxes; for a hull the farthest of its face planes (exact
+/// inside and over a face, short of the truth past an edge).
+[[nodiscard]] double shapeDistance(const WoodShape& shape, const std::array<double, 3>& q);
+
+/// What the wood did to one body in one step.
+struct BodyContact {
+    std::array<double, 6> wrench{};  // N, N·m: world, about the centre of mass
+    double force{0.0};               // N, the size of the total push
+    double depth{0.0};               // m, the deepest overlap
+    int contacts{0};
+    int broken{0};  // twigs it broke
+};
+
+/// The trees' wood and what the rotors and bodies did to it. Signals per rotor rotor/<j>/damage
+/// (0..1) and rotor/<j>/branch_strikes (count), per tree tree/<n>/twigs_cut (count, by rotors
+/// and bodies), and kBranchCutSignal, the wood broken off.
 class Branches {
 public:
     void build(const std::vector<TreeSpec>& trees);
@@ -126,15 +129,33 @@ public:
                     const std::array<double, 3>& axis, double radius,
                     const std::vector<std::array<double, 3>>& sways, double omega, double inertia,
                     double dt);
+    /// The wood's push on a body (pose of its link, world; twist: velocity of the link's origin
+    /// and angular velocity, world) whose colliders are `shapes` within `bound` of its origin,
+    /// centre of mass `comLocal` (link frame), mass `mass`. Breaks the twigs it reaches into.
+    /// `crownVelocity` the crowns' sway velocities (world); the crowns' push back is added to
+    /// `crownPush` (world, N, per tree).
+    BodyContact touch(const std::vector<TreeSpec>& trees, std::span<const WoodShape> shapes,
+                      double bound, const Pose& pose, const std::array<double, 6>& twist,
+                      const std::array<double, 3>& comLocal, double mass,
+                      const std::vector<std::array<double, 3>>& sways,
+                      const std::vector<std::array<double, 3>>& crownVelocity,
+                      std::vector<std::array<double, 3>>& crownPush);
+    /// The world's fixed colliders: wood inside one is its, not pushed twice (the trunk).
+    void setFixed(std::vector<WoodShape> fixed) { fixed_ = std::move(fixed); }
     void publish(SignalBus& bus);
     void save(StateWriter& writer) const;
     bool restore(StateReader& reader);
 
-    [[nodiscard]] const Skeleton& skeleton(std::size_t tree) const { return skeletons_.at(tree); }
+    [[nodiscard]] const Skeleton& skeleton(std::size_t tree) const { return wood_.skeleton(tree); }
     /// The share of segment `s` of tree `tree` still standing (1 whole, 0 gone).
     [[nodiscard]] double standing(std::size_t tree, std::size_t s) const;
+    [[nodiscard]] const TreeWood& wood() const { return wood_; }
     [[nodiscard]] double damage(std::size_t rotor) const { return rotors_.at(rotor).damage; }
+    /// kBranchCutSignal's value.
+    [[nodiscard]] const std::vector<double>& cutValues() const { return cutValues_; }
     double breakEnergy{kBladeBreakEnergy};
+    double contactTime{kWoodContactTime};  // s
+    double friction{kBarkFriction};
 
 private:
     struct Cut {
@@ -148,9 +169,15 @@ private:
         double strikes{0.0};
     };
     void apply(const Cut& cut);
-    std::vector<Skeleton> skeletons_;
-    std::vector<std::vector<double>> standing_;
+    /// Appends a cut to the list and the signal's value.
+    void record(const Cut& cut);
+    [[nodiscard]] bool inFixed(const std::array<double, 3>& point) const;
+    TreeWood wood_;
     std::vector<Cut> cuts_;  // in order, the saved state
+    std::vector<double> cutValues_ = std::vector<double>(kBranchCutLength, 0.0);
+    SignalId cutOut_;
+    double cutVersion_{0.0};  // what publish last wrote
+    std::vector<WoodShape> fixed_;
     std::vector<RotorState> rotors_;
     std::vector<SignalId> twigsOut_;
     std::vector<double> twigs_;
