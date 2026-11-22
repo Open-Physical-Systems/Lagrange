@@ -4,6 +4,7 @@
 
 #include "lagrange/services/SceneQuery.hpp"
 #include "lagrange/world/CanopyCut.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"
 
@@ -212,6 +213,27 @@ struct CanopyFormShape {
                                const std::array<double, 3>& origin,
                                const std::array<double, 3>& direction, double range,
                                const std::array<double, 3>& sway, const TreeCuts* cuts, double u);
+
+/// Flying leaves (lagrange/world/Leaves.hpp, ground.md "Flying leaves"): the particles of the
+/// vegetation domain's kLeavesSignal as the beams see them, each a disc of its size seen from any
+/// side (a beam passing within size/2 of its centre meets it), with a bounding sphere round them
+/// all so the beams that miss it skip the list.
+class FlyingLeaves {
+public:
+    /// Takes the signal's value; rebuilds only when its version changed.
+    void load(std::span<const double> values);
+    [[nodiscard]] bool empty() const { return leaves_.empty(); }
+    /// The range (m) along a beam (origin, unit direction) to the first leaf within [0, range];
+    /// +inf when it meets none.
+    [[nodiscard]] double stop(const std::array<double, 3>& origin,
+                              const std::array<double, 3>& direction, double range) const;
+
+private:
+    double version_{-1.0};
+    std::vector<std::array<double, 4>> leaves_;  // centre (world_local), radius
+    std::array<double, 3> centre_{};
+    double radius_{0.0};
+};
 
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);

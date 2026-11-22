@@ -573,6 +573,7 @@ public:
         trees_.clear();
         treeSway_.clear();
         treeCut_ = SignalId{};
+        flyingIn_ = SignalId{};
         if (!groundTruth_) {
             std::string treeError;
             trees_ = treesOf(raw, treeError);
@@ -592,6 +593,12 @@ public:
                 cut.feedback = true;
                 treeCut_ = d.input(cut);
                 surfaceMaterialPreset("shrub", leaves_);
+                SignalSpec flying = spec(std::string(kLeavesSignal), SignalType::ScalarArray,
+                                         units::one, "world_local");
+                flying.arrayLength = kLeavesLength;
+                flying.optional = true;
+                flying.feedback = true;
+                flyingIn_ = d.input(flying);
             }
             sways_.assign(trees_.size(), {});
         }
@@ -706,6 +713,9 @@ public:
         if (treeCut_.valid()) {
             treeCuts_.load(bus.readN(treeCut_));
         }
+        if (flyingIn_.valid()) {
+            flying_.load(bus.readN(flyingIn_));
+        }
         for (std::size_t k = 0; k < treeSway_.size(); ++k) {
             const std::span<const double> w = bus.readN(treeSway_[k]);
             sways_[k] =
@@ -786,6 +796,14 @@ public:
                         crownStop(trees_[k], static_cast<std::uint32_t>(k), from.position, dir,
                                   std::min(reach, stop), sways_[k],
                                   treeCuts_.empty() ? nullptr : &treeCuts_, rng.uniform());
+                    if (at < stop) {
+                        stop = at;
+                        leaves = true;
+                    }
+                }
+                // Flying leaves (ShapeCaster.hpp FlyingLeaves): the first the beam meets.
+                if (!flying_.empty()) {
+                    const double at = flying_.stop(from.position, dir, std::min(reach, stop));
                     if (at < stop) {
                         stop = at;
                         leaves = true;
@@ -1205,6 +1223,8 @@ private:
     std::vector<std::array<double, 3>> sways_;  // this scan's
     SignalId treeCut_;                          // vegetation/tree_cut
     TreeCuts treeCuts_;
+    SignalId flyingIn_;       // vegetation/leaves
+    FlyingLeaves flying_;     // this scan's
     SurfaceMaterial leaves_;  // a leaf's return: the shrub preset's
     std::vector<double> intensity_;
     bool wavelength1550_{false};
