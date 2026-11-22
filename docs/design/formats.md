@@ -1054,6 +1054,19 @@ servo's or smart servo's board; its motor is the joint's `ElectricalMotorAPI_1` 
 `elec:controlMode`'s token `position` (appended) makes the motor's drive run this loop itself on
 `joint/<j>/position_command`.
 
+**`SolenoidAPI_1`** (single-apply, on a prismatic joint; RFC 0020 §4.6). A plunger in a coil: the
+joint's position is the plunger's stroke into it, 0 at rest; its limits are the stops.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `act:solenoid:inductanceStrokes` | double[] | m | — | The table's strokes, rising, covering 0 to `stroke`. Required (RFC 0020's `inductanceTable`, split so that each column has a unit) |
+| `act:solenoid:inductances` | double[] | H | — | The coil's inductance at each, over 0. Required |
+| `act:solenoid:resistance` | double | ohm | — | Required |
+| `act:solenoid:springRate` | double | N/m | `0` | The return spring |
+| `act:solenoid:springPreload` | double | N | `0` | Its push at rest |
+| `act:solenoid:stroke` | double | m | — | Required |
+| `act:solenoid:ratedVoltage` | double | V | — | Across the coil at a command of 1. Required |
+
 **`MagnetGripperAPI_1`** (single-apply). The prim's origin is the centre of the pole faces.
 
 | Attribute | Type | Unit | Fallback | Meaning |

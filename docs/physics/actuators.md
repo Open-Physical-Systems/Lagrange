@@ -1,4 +1,4 @@
-# Actuators: grippers, lead screws, nozzles, tanks, servos and steppers
+# Actuators: grippers, lead screws, nozzles, tanks, servos, steppers and solenoids
 
 Grippers that hold a part without fingers (RFC 0020, phase 1): a suction cup
 (`SuctionGripperAPI_1`) and an electromagnet or electropermanent magnet (`MagnetGripperAPI_1`).
@@ -575,8 +575,8 @@ In an overlay (formats.md §9):
 | 1.3× the holding torque for 10 ms at standstill | a slip lands on another equilibrium | 52 full steps lost (a multiple of four), then 200 full steps forward land on the count less those 52, to 0.01 full step |
 | Microstep position, 1/16 | without detent: `θe = φ`; with `T_d` = 0.03 N·m: the root of `K_m·I·sin(φ − θe) = T_d·sin 4θe` | 0.000 microsteps off; with detent within 1 % of a microstep of the root, the worst microstep 0.73 microsteps from its table angle |
 | The network's stepper on a 1 kg carriage stepped at 1 ms, 1000 full steps/s on the belt with 0.25 s ramps | the step count | at 0.099988 m for 7999 microsteps, to the microstep; 0 lost; asked 3000 full steps/s at once, it loses 892 full steps |
-| The gantry, joint control to x = 0.1 m, y = −0.03 m | the count, the profile's time | GANTRY_RESULT |
-| A 150 kg beam asked for 0.8 m/s² | 120 N needed, 65 N available | LOST_RESULT, `fault` 0 |
+| The gantry, joint control to x = 0.1 m, y = −0.03 m | the count, the profile's time | x at 0.100000 m (8000 microsteps), y at −0.030000 m (−12000 microsteps): to the microstep |
+| A 150 kg beam asked for 0.8 m/s² | 120 N needed, 65 N available | 432 full steps lost, the carriage at 0.0136 m of 0.1 m, `fault` 0 |
 | The same run twice | | state hashes equal; the network alone bit-identical |
 
 What it leaves out: the chopper's own ripple and decay modes (it is averaged over its PWM
@@ -589,6 +589,84 @@ the joint exactly by the steps: with the electrical domain off, joint control dr
 joint as an ideal position servo. The pull-out curve is checked against the circuit, not against
 a measured motor (TODO(verify): no published measured curve with full motor parameters was found
 for this pass).
+
+## Solenoids
+
+A solenoid (`SolenoidAPI_1`, RFC 0020 §4.6) is a plunger in a coil, on a prismatic joint. The
+joint's position `x` is how far the plunger has gone in, 0 at rest and `act:solenoid:stroke`
+fully in. The joint's limits are the stops. `actuators/solenoids` (`modules/actuators`, 100 µs)
+keeps the coil's flux linkage `λ = L(x)·i` as its state:
+
+```
+dλ/dt = v − R·i,       i = λ / L(x)
+F     = ½·i²·dL/dx − (F0 + k·x)
+```
+
+`L(x)` is the table `act:solenoid:inductanceStrokes`/`inductances`, linear between its points,
+so `dL/dx` is the slope of the segment that holds `x`. The pull `½·i²·dL/dx` is the co-energy
+force of a coil whose inductance does not depend on its current (no saturation). Each step solves
+the R–L circuit exactly at the plunger's position, from the current `λ/L(x)`. A plunger that
+moved since the last step keeps its flux, so its current falls by the ratio of the inductances.
+That is the current's dip as the plunger pulls in, which a valve driver watches to tell that the
+valve has moved. The pull and the spring push the joint through `joint/<j>/torque_command` (N on a
+slide), which the electrical domain (or its ideal substitute) passes on, as for any joint without
+a motor. The joint is made actuated whatever its file says.
+
+The command `act/<s>/command` (0 to 1) puts that share of `act:solenoid:ratedVoltage` across the
+coil: 1 on, 0 off, between them a PWM duty as the coil sees it on average (its current ripple is
+left out). The supply is not a bus of the electrical network yet, as for `MagnetGripperAPI_1`
+(TODO(RFC 0020): a solenoid as a load on its bus).
+
+### Using it
+
+```bash
+lagrange assets/robots/solenoid_bench/solenoid_bench.urdf --world none \
+  --overlay assets/robots/solenoid_bench/solenoid_bench.overlay.yaml
+ros2 topic pub --once /plunger/command std_msgs/msg/Float64 "{data: 1.0}"
+ros2 topic echo /plunger/current
+```
+
+| Signal | Unit | Meaning |
+|---|---|---|
+| `act/<s>/command` | 1 | In: 0 to 1, the share of the rated voltage (optional, 0) |
+| `act/<s>/current` | A | The coil's current |
+| `act/<s>/voltage` | V | Across the coil |
+| `act/<s>/force` | N | The magnetic pull alone, `½·i²·dL/dx` |
+| `act/<s>/position` | m | The plunger's stroke, held to 0 … `stroke` |
+| `act/<s>/power` | W | Drawn from the supply, `v·i` |
+
+ROS: `/<s>/command` (`std_msgs/Float64`) in, `/<s>/current` and `/<s>/position` out;
+`Server::commandActuator(name, value)`. Substitutes: `ideal` puts the steady current `V/R` through
+the coil at once (no delay, no dip); `zero` and `constant` leave it unpowered. The spring acts in
+every one, since it is the device's and not its electronics'.
+
+The sample is a 12 V push-pull solenoid of 24 Ω on a bench, with a 20 g plunger and 10 mm of
+stroke, `L` from 30 mH at rest to 90 mH fully in. Its numbers are illustrative, of the size a
+small open-frame solenoid's datasheet gives, not a real product's.
+
+### Checked
+
+`test_solenoid` (the coil and the pull) and `test_solenoids_run` (the bench on MuJoCo):
+
+| Check | Reference | Result |
+|---|---|---|
+| Pull at 1, 5 and 9.5 mm, the current settled | `½·(V/R)²·ΔL/Δx` of the table's segment | within 1e-6 |
+| Current with the plunger held, at ½τ, τ, 3τ, steps of 0.1 and 1 ms | `V/R·(1 − e^(−t/τ))`, `τ = L/R` | within 1 % |
+| The plunger jumped from rest to the stop in 1 µs | the flux kept: `i·L(0)/L(stroke)` | within 1 %, then back to `V/R` without overshoot |
+| Pull-in of the bench, from rest | the same coil, spring and 20 g plunger integrated at 1 µs with hard stops | 63.0 ms against 61.9 ms; current peak 0.500 A (0.499), dip 0.389 A (0.370) |
+| At the stop | `V/R`, the last segment's pull, `V²/R` | 0.5 A, 2.5 N, 6 W, each within 1 % |
+| Off | the spring | back at rest, no current |
+| The actuators domain off | | unpowered, at rest |
+| The same run twice | | bit for bit |
+
+What it leaves out: saturation of the iron (the inductance does not depend on the current), eddy
+currents and the plunger's magnetic hysteresis, the coil's heating (its resistance is constant),
+the latching kind with a permanent magnet, the PWM ripple, and a closed form for `L(x)` from a
+magnetic circuit (the table is given). MuJoCo's joint limits are soft at its default solver
+reference: the 20 g plunger sits about 0.2 mm past rest under the spring's 0.1 N and about 2.6 mm
+past the end stop under the 2.5 N pull (the model holds `x` to the stroke for its own sums). The
+co-energy force is the textbook result for a linear magnetic circuit (TODO(verify): cite an
+edition; no openly readable text was found in this pass, as RFC 0020 §4.6 notes).
 
 ## References
 
