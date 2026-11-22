@@ -261,9 +261,17 @@ private:
     std::vector<double> rippleVariance_, rippleDirection_;  // water_optics::fetchLimitedRipples
     Pipeline sky_;
     Pipeline waterPipe_;
-    Pipeline vegPipe_;  // reeds and shrubs, made in the vertex shader (realistic.slang vsVeg)
-    // Per frame: each vegetation patch's push constants and its clump count.
-    std::vector<std::pair<std::array<float, 24>, std::uint32_t>> vegPatches_;
+    // Reeds, shrubs and grass blades, made in the vertex shader (realistic.slang vsVeg).
+    Pipeline vegPipe_;
+    // Per frame: each vegetation patch's push constants, its clump or tile count, the vertices
+    // of one, and whether it is grass (left out of the water's mirror).
+    struct VegPatch {
+        std::array<float, 24> push{};
+        std::uint32_t instances = 0;
+        std::uint32_t vertices = 0;
+        bool grass = false;
+    };
+    std::vector<VegPatch> vegPatches_;
     Pipeline composite_;
 };
 

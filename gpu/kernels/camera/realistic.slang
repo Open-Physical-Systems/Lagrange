@@ -41,7 +41,8 @@ struct Frame
                               // w arriving speed m/s; then x its arriving radius m
     float4 cutGrid;           // plants cut by propellers (RealisticCutPlants): xy the first cell's
                               // centre relative to the eye; z its cell, m; w cells along x (0: none)
-    float4 cutLevel;          // x: the tops' reference height relative to the eye; y: cells along y
+    float4 cutLevel;          // x: the tops' reference height relative to the eye; y: cells along y;
+                              // z: 1 when grass blades are drawn near the eye (vsGrassBlade)
 };
 static const int kAirJets = 8; // kMaxAirJets
 
@@ -680,6 +681,14 @@ float2 grassBend(float3 world, float stiff, float wetness)
     return bend + droop * 0.5 * wetness;
 }
 
+// How far from the eye grass blades of `kind` are drawn, m (Realistic.cpp grassTiles).
+float grassReach(int kind)
+{
+    if (kind == 12) return 24.0;
+    if (kind == 14) return 10.0;
+    return 8.0;
+}
+
 void grassSurface(int kind, float3 world, float distance, float mid, float near, inout float3 N,
                   inout float3 albedo, inout float roughness)
 {
@@ -732,8 +741,23 @@ void grassSurface(int kind, float3 world, float distance, float mid, float near,
     float3 outAlbedo = flat;
     float3 outN = Nflat;
     float up = smoothstep(0.6, 0.85, N.z);
+    // Under real blades (vsGrassBlade) the ground is what shows between them: the canopy's
+    // lower, shaded leaves and thatch, darker where it stands taller; cut, the stubble and soil
+    // as they are.
+    float reach = grassReach(kind);
+    float cover = frame.cutLevel.z * (1.0 - smoothstep(reach * 0.6, reach, distance)) * up;
+    if (cover > 0.0)
+    {
+        float thatch = noise3(float3(world.xy * 9.0, 2.0));
+        // (Darker made a lawn's blade zone a dark disc round the eye, seen from a few metres up.)
+        float shade = lerp(0.8 - 0.45 * saturate(full / 0.5), 1.0, saturate(cut * 1.4));
+        outAlbedo = lerp(flat, flat * shade * (0.8 + 0.4 * thatch), cover);
+    }
     // Fade the blades out before one is narrower than a pixel, where they would only shimmer.
-    float close = (1.0 - smoothstep(3.0, 6.0 + 30.0 * height, distance)) * up;
+    // Under a lawn's blades its fine parallax canopy stays (the many short blades the geometry
+    // leaves out); under tall grass the blades are enough, and its coarse canopy only shows dots.
+    float close = (1.0 - smoothstep(3.0, 6.0 + 30.0 * height, distance)) * up *
+                  (1.0 - cover * saturate(full / 0.2));
     if (close > 0.01)
     {
         // March down from the canopy's top (the drawn ground) to the soil.
@@ -784,7 +808,7 @@ void grassSurface(int kind, float3 world, float distance, float mid, float near,
         // colour desaturated the tall and wet strips.)
         hitColor = lerp(flat * 0.85, hitColor, resolved);
         hitN = normalize(lerp(Nflat, hitN, resolved));
-        outAlbedo = lerp(flat, hitColor, close);
+        outAlbedo = lerp(outAlbedo, hitColor, close);
         outN = normalize(lerp(Nflat, hitN, close));
     }
     albedo = outAlbedo;
@@ -1849,9 +1873,139 @@ VegOutput vegNothing()
     return o;
 }
 
+// --- grass blades: the lawn near the eye as real geometry ----------------------------------
+// On grass (kinds 6, 12, 13, 14) the renderer draws a tile of kGrassBlades blades in every cell of
+// a world grid near the eye, over the ground's own parallax canopy (grassSurface), so the field has
+// silhouettes, gaps and blades lit one by one. Each blade is a tapered strip of kBladeSegments
+// segments and a pointed tip, standing at its own place, facing and height, curved outward, bent
+// by the air at its root like the reeds (groundAir: wind and rotor outwash, the tip most), bowed
+// by rain, and ending at the cut where a propeller cut it (cutTopAt). Far off the blades thin out
+// and sink into the ground, where the parallax canopy carries on. Sizes, counts and colours are
+// drawing choices: TODO(verify) against photographs of turf and meadow.
+// Push as vsVeg's; model[0].w the tile size, model[2].y unused (the height is grassLook's).
+
+static const uint kGrassBlades = 48;     // per tile
+static const uint kBladeSegments = 3;
+static const uint kBladeVerts = kBladeSegments * 6u + 3u;  // a quad per segment and the tip
+// kGrassBlades * kBladeVerts = 1008 vertices per tile: Realistic.cpp kGrassTileVertices.
+
+VegOutput vsGrassBlade(uint vertex, uint instance)
+{
+    uint nx = uint(push.model[1].z);
+    int2 cell = int2(int(push.model[1].x) + int(instance % nx), int(push.model[1].y) + int(instance / nx));
+    float tile = push.model[0].w;
+    int kind = int(push.model[2].x + 0.5);
+    float reach = push.model[2].z;
+    GrassLook g = grassLook(grassOf(kind));
+    float2 lo = float2(instance % nx, instance / nx);
+    float3 corner = float3(push.model[0].xy + lo * tile, push.model[0].z);
+    // The whole tile off screen, or too far: nothing (every vertex of it decides the same).
+    float3 centre = corner + float3(0.5 * tile, 0.5 * tile, 0.5 * g.height);
+    float distance = length(centre);
+    if (distance > reach)
+        return vegNothing();
+    float4 c = project(centre);
+    float r = 0.75 * tile + g.height;
+    if (c.w < -r || abs(c.x) - 3.0 * r > c.w || abs(c.y) - 3.0 * r > c.w)
+        return vegNothing();
+    uint b = vertex / kBladeVerts;
+    uint v = vertex % kBladeVerts;
+    // Fewer blades further off: all of them within a third of the reach, a quarter at its end.
+    float keep = lerp(1.0, 0.25, smoothstep(reach * 0.33, reach, distance));
+    if (float(b) >= float(kGrassBlades) * keep)
+        return vegNothing();
+    uint seed = vegHash(uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ uint(kind) * 83492791u);
+    uint s = vegHash(seed + b * 2654435761u);
+    float3 root = corner + float3(float2(vegRandom(s), vegRandom(s)) * tile, 0.0);
+    if (root.x < push.surface.x || root.y < push.surface.y || root.x > push.surface.z || root.y > push.surface.w)
+        return vegNothing();
+    float3 world = root + frame.worldWrap.xyz;
+    float rain = saturate(log2(1.0 + frame.weather.x) / 3.5);
+    float wetness = max(g.wet, rain);
+    // Sinking into the ground towards the reach, where the parallax canopy takes over.
+    float fade = 1.0 - smoothstep(reach * 0.6, reach, length(root));
+    float h = g.height * (0.45 + 0.65 * vegRandom(s)) * (1.0 - 0.15 * wetness) * fade;
+    float cap = cutTopAt(root.xy, 0.0) - root.z;
+    float kept = saturate(cap / max(h, 1e-4));
+    if (h * kept < 0.004)
+        return vegNothing();
+    float azimuth = vegRandom(s) * 6.283;
+    float2 out2 = float2(cos(azimuth), sin(azimuth));
+    float2 widthDir = float2(-out2.y, out2.x);
+    // Blades are wider than real ones (2-4 mm): fewer of them have to fill the view.
+    float width = g.spacing * g.width * (0.35 + 0.25 * vegRandom(s)) * 1.4;
+    float curl = 0.1 + 0.5 * vegRandom(s);  // how far it arcs out, m per m of height
+    // The air at the root bends it (grassBend: lean, gusts, sway, the rain's droop); a cut stub
+    // stands stiff.
+    float2 bend = grassBend(world, g.stiff, wetness) * (1.0 - 0.8 * (1.0 - kept));
+    float2 tipOff = out2 * curl + bend;  // tip displacement per m of height
+    // Strip: segment k, corner; then the tip triangle.
+    static const uint level[6] = {0u, 0u, 1u, 1u, 0u, 1u};
+    static const float side[6] = {-1.0, 1.0, -1.0, -1.0, 1.0, 1.0};
+    float f;
+    float across;
+    if (v < kBladeSegments * 6u)
+    {
+        f = float(v / 6u + level[v % 6u]) / float(kBladeSegments + 1u);
+        across = side[v % 6u];
+    }
+    else
+    {
+        uint t = v - kBladeSegments * 6u;
+        f = t == 2u ? 1.0 : float(kBladeSegments) / float(kBladeSegments + 1u);
+        across = t == 0u ? -1.0 : (t == 1u ? 1.0 : 0.0);
+    }
+    bool cutBlade = kept < 1.0;
+    f *= kept;
+    // A cantilever's curve (the tip most), the height it loses by leaning kept so the blade keeps
+    // about its length.
+    float2 offset = tipOff * h * f * f;
+    float leanAmount = min(length(tipOff), 1.4);
+    float lift = h * f * (1.0 - 0.38 * leanAmount * leanAmount * f);
+    float w = width * (cutBlade ? 1.0 - 0.6 * f : 1.0 - f * f);
+    float3 p = root + float3(offset + widthDir * w * across * 0.5, max(lift, 0.0));
+    float3 tangent = normalize(float3(tipOff * 2.0 * f, 1.0));
+    float3 n = normalize(cross(tangent, float3(widthDir, 0.0)));
+    VegOutput o;
+    // Rounded toward the sky, as a blade's fold and the canopy's light make it look.
+    o.normal = normalize(n + float3(0.0, 0.0, 0.7));
+    o.relative = p;
+    // Colour: the ground's (grassSurface's flat lawn), each blade a little its own, dark at the
+    // root where the canopy shades it, drier at the tip.
+    float3 base = push.baseColor.rgb * g.tint;
+    float dry = smoothstep(0.45, 0.7, fbm(world * 0.17, 4)) * (grassOf(kind) == 4 ? 0.3 : 1.0);
+    base = lerp(base, base * float3(1.75, 1.35, 0.8), dry);
+    float mid = fbm(world * 1.9, 3);
+    float tone = vegRandom(s);
+    float3 col = base * (0.7 + 0.6 * mid) * lerp(float3(0.8, 0.9, 0.7), float3(1.25, 1.2, 0.9), tone);
+    float rootShade = f / max(kept, 1e-3);
+    col *= lerp(0.45, 1.05, saturate(rootShade * 1.3));
+    float near = 1.0 - saturate(length(root) / reach);
+    col = lerp(col, base * float3(1.6, 1.4, 0.8), smoothstep(0.7, 1.0, rootShade) * 0.35 * tone * near * saturate(g.height / 0.3));
+    // Far, the blades take the flat lawn's colour they sink into (grassSurface's far look).
+    col = lerp(col, base * (0.55 + 0.75 * mid), (1.0 - fade) * 0.8);
+    // Laid flat by the air, their pale backs show (as grassSurface's band).
+    float laid = saturate(length(bend) / 1.2);
+    col = lerp(col, col * 1.45 + float3(0.03, 0.04, 0.02), 0.4 * laid * laid);
+    if (cutBlade && f > kept - 0.08)
+        col = base * float3(1.45, 1.4, 0.8) + float3(0.03, 0.03, 0.015);  // the pale cut end
+    col *= lerp(1.0, 0.62, wetness);
+    o.color = col;
+    o.rough = lerp(0.8, 0.6, wetness);
+    if (push.model[2].w < 1e8)
+    {
+        o.relative.z = 2.0 * push.model[2].w - o.relative.z;
+        o.normal.z = -o.normal.z;
+    }
+    o.position = project(o.relative);
+    return o;
+}
+
 [shader("vertex")]
 VegOutput vsVeg(uint vertex : SV_VertexID, uint instance : SV_InstanceID)
 {
+    if (grassOf(int(push.model[2].x + 0.5)) > 0)
+        return vsGrassBlade(vertex, instance);
     uint nx = uint(push.model[1].z);
     int2 cell = int2(int(push.model[1].x) + int(instance % nx), int(push.model[1].y) + int(instance / nx));
     float spacing = push.model[0].w;
@@ -1998,8 +2152,13 @@ float4 fsVeg(VegOutput input) : SV_Target
 {
     float3 N = normalize(input.normal);
     float3 V = normalize(-input.relative);
+    // Leaves and blades have two sides: seen from behind, the far side's normal, turned round
+    // its upright axis so that a blade lit from the sky stays lit from the sky (turning the whole
+    // normal pointed it at the ground, and blades seen from behind went black).
     if (dot(N, V) < 0.0)
-        N = -N;  // leaves and blades have two sides
+        N = normalize(float3(-N.xy, N.z));
+    if (dot(N, V) < 0.0)
+        N = -N;
     if (frame.mode.x > 0.5 && input.relative.z > frame.mode.y)
         discard;
     float3 albedo = input.color;
