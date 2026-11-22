@@ -6,6 +6,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <memory>
 #include <numbers>
@@ -620,6 +621,167 @@ TEST(RotorAeroBem, RefusesARotorWithoutItsPropellerFile) {
     auto wired = rig.scheduler->wire(WorldView(world));
     ASSERT_FALSE(wired);
     EXPECT_NE(to_string(wired.error().front()).find("propeller file"), std::string::npos);
+}
+
+// Blade damage (rotor_aero.md §10): the shares of thrust and torque a rotor keeps, and the mass
+// imbalance's force, against their closed forms. The imbalance is checked against the lost
+// piece summed as point masses (de Alvear Cárdenas and de Visser 2024, eq. 7: F = m·r_cg·ω²).
+TEST(BladeDamage, SharesAndImbalanceFollowTheirClosedForms) {
+    // A tip of 20 % off one of two blades: that blade keeps 0.8³ of its thrust, 0.8⁴ of its torque.
+    EXPECT_NEAR(damagedThrustShare(0.2, 2), 1.0 - (1.0 - 0.512) / 2.0, 1e-15);
+    EXPECT_NEAR(damagedTorqueShare(0.2, 2), 1.0 - (1.0 - 0.4096) / 2.0, 1e-15);
+    EXPECT_EQ(damagedThrustShare(0.0, 3), 1.0);
+    EXPECT_NEAR(damagedThrustShare(1.0, 2), 0.5, 1e-15) << "a blade gone: half the thrust";
+    EXPECT_NEAR(damagedThrustShare(1.0, 3), 2.0 / 3.0, 1e-15);
+    // The thrust share by blade elements (∝ r²) against thrust ∝ area (the cruder bound): the
+    // tip carries more than its area's share.
+    EXPECT_LT(damagedThrustShare(0.2, 2), 1.0 - 0.2 / 2.0);
+
+    const double bladeMass = 0.0026;  // kg
+    const double omega = 600.0;       // rad/s
+    for (const double d : {0.05, 0.2, 0.5, 1.0}) {
+        // The lost piece, from (1−d)R to R, as 10⁵ point masses: Σ m_i·r_i·ω².
+        constexpr int kPieces = 100'000;
+        double sum = 0.0;
+        for (int i = 0; i < kPieces; ++i) {
+            const double r = kRadius * (1.0 - d + d * (i + 0.5) / kPieces);
+            sum += bladeMass * d / kPieces * r * omega * omega;
+        }
+        EXPECT_NEAR(imbalanceForce(bladeMass, kRadius, d, omega), sum, 1e-9 * sum) << d;
+    }
+    // 20 % of a 2.6 g blade at 600 rad/s: 0.52 g at 0.9 R, about 21 N.
+    EXPECT_NEAR(imbalanceForce(bladeMass, kRadius, 0.2, omega),
+                0.2 * bladeMass * 0.9 * kRadius * omega * omega, 1e-12);
+    // The lost thrust's moment about the hub: ∫ (T/B)·3r²/R³ · r dr over the lost tip.
+    const double thrust = 5.0;  // N
+    double moment = 0.0;
+    constexpr int kSteps = 100'000;
+    for (int i = 0; i < kSteps; ++i) {
+        const double r = kRadius * (0.8 + 0.2 * (i + 0.5) / kSteps);
+        moment +=
+            thrust / 2.0 * 3.0 * r * r / (kRadius * kRadius * kRadius) * r * kRadius * 0.2 / kSteps;
+    }
+    EXPECT_NEAR(thrustAsymmetryMoment(thrust, kRadius, 0.2, 2), moment, 1e-9 * moment);
+    // A propeller of the reference's size: its blade is its blades' share of its 11.9 g.
+    EXPECT_NEAR(estimatedBladeMass(kReferencePropellerRadius, 2),
+                kReferencePropellerMass * kBladeMassShare / 2.0, 1e-15);
+    EXPECT_NEAR(estimatedBladeMass(kReferencePropellerRadius / 2.0, 2),
+                estimatedBladeMass(kReferencePropellerRadius, 2) / 8.0, 1e-15);
+}
+
+/// Writes rotor/<j>/damage, as a branch strike would.
+class Cutter final : public IModule {
+public:
+    explicit Cutter(std::string joint) : joint_(std::move(joint)) {}
+    double damage{0.0};
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"test", "cutter", 1, 0, false, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec s;
+        s.name = "rotor/" + joint_ + "/damage";
+        s.unit = units::one;
+        out_ = d.output(s);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(out_, damage);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        bus.write(out_, damage);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    std::string joint_;
+    SignalId out_;
+};
+
+// A damaged rotor in the module: its thrust and torque keep their shares, and its link takes the
+// imbalance, drag and thrust asymmetry, turning with it (the lost piece fixed in the link's frame).
+TEST(BladeDamage, TheLinkTakesTheTurningImbalance) {
+    const World world = propellerRig();
+    ModuleConfigData config = withDensity();
+    config.values["ground_effect"] = false;
+    Rig rig = makeRig(world, std::move(config));
+    auto cutter = std::make_unique<Cutter>("prop_joint");
+    Cutter* cut = cutter.get();
+    rig.scheduler->add(std::move(cutter));
+    auto wired = rig.scheduler->wire(WorldView(world));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    constexpr double kOmega = 600.0;
+    constexpr double kDamage = 0.2;
+    rig.plant->omega = kOmega;
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{3'000'000}).ok());
+    const Load whole = staticLoad({kRadius, kCt, kCp, 1.0}, kOmega, kRho);
+    EXPECT_NEAR(rig.read("rotor/prop_joint/thrust"), whole.thrust, 1e-12) << "whole: unchanged";
+    const std::vector<double> before = rig.wrench();
+    EXPECT_EQ(before[0], 0.0);
+    EXPECT_EQ(before[1], 0.0);
+
+    cut->damage = kDamage;
+    const double bladeMass = estimatedBladeMass(kRadius, 2);
+    const double mass = imbalanceForce(bladeMass, kRadius, kDamage, kOmega);
+    const double drag = dragAsymmetryForce(std::abs(whole.torque), kRadius, kDamage, 2);
+    const double lift = thrustAsymmetryMoment(whole.thrust, kRadius, kDamage, 2);
+    for (const double angle : {0.0, 0.7, 2.0}) {  // the link turned about its axis (z)
+        rig.plant->pose = {{0.0, 0.0, 10.0}, {std::cos(angle / 2), 0.0, 0.0, std::sin(angle / 2)}};
+        ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{rig.scheduler->now().ns + 3'000'000}).ok());
+        EXPECT_NEAR(rig.read("rotor/prop_joint/thrust"),
+                    whole.thrust * damagedThrustShare(kDamage, 2), 1e-12);
+        EXPECT_NEAR(rig.read("rotor/prop_joint/aero_torque"),
+                    whole.torque * damagedTorqueShare(kDamage, 2), 1e-12);
+        // The damaged blade lies along the link's x; it moves along its y (ccw, ω > 0).
+        const std::array<double, 3> blade{std::cos(angle), std::sin(angle), 0.0};
+        const std::array<double, 3> motion{-std::sin(angle), std::cos(angle), 0.0};
+        const std::vector<double> w = rig.wrench();
+        for (std::size_t k = 0; k < 2; ++k) {
+            EXPECT_NEAR(w[k], -mass * blade[k] + drag * motion[k], 1e-9) << angle << " " << k;
+        }
+        EXPECT_NEAR(w[2], whole.thrust * damagedThrustShare(kDamage, 2), 1e-12);
+        // The moment: the force's at the link's origin about its centre of mass (2 cm along the
+        // link's x), the lost thrust's (blade × axis = (sin, −cos, 0) times −lift), the shaft's.
+        const std::array<double, 3> com{0.02 * std::cos(angle), 0.02 * std::sin(angle), 0.0};
+        const std::array<double, 3> lever{std::sin(angle), -std::cos(angle), 0.0};
+        const double shaft = rig.read("rotor/prop_joint/aero_torque");
+        EXPECT_NEAR(w[3], -(com[1] * w[2] - com[2] * w[1]) - lift * lever[0], 1e-9);
+        EXPECT_NEAR(w[4], -(com[2] * w[0] - com[0] * w[2]) - lift * lever[1], 1e-9);
+        EXPECT_NEAR(w[5], -(com[0] * w[1] - com[1] * w[0]) + shaft, 1e-9);
+    }
+    std::printf(
+        "20 %% of a %.2f g blade off at %.0f rad/s: imbalance %.2f N, drag %.3f N, "
+        "thrust moment %.4f N·m; thrust %.3f -> %.3f N\n",
+        bladeMass * 1e3, kOmega, mass, drag, lift, whole.thrust,
+        rig.read("rotor/prop_joint/thrust"));
+}
+
+// At the bem fidelity a damaged blade costs the same shares of the blades' thrust and torque,
+// and shakes the link the same way.
+TEST(BladeDamage, TheBemFidelityKeepsTheSameShares) {
+    const std::string file = propellerFile("ccw");
+    const World world = propellerRig("ccw", file);
+    Rig rig = makeRig(world, bem());
+    auto cutter = std::make_unique<Cutter>("prop_joint");
+    cutter->damage = 0.3;
+    rig.scheduler->add(std::move(cutter));
+    ASSERT_TRUE(rig.scheduler->wire(WorldView(world)));
+    rig.plant->omega = 600.0;
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{3'000'000}).ok());
+    std::string error;
+    const BemLoad whole =
+        PropellerTable::build(loadPropeller(file, error), false).at(600.0, 0.0, {kRho, 0.0});
+    EXPECT_NEAR(rig.read("rotor/prop_joint/thrust"), whole.thrust * damagedThrustShare(0.3, 2),
+                1e-9);
+    EXPECT_NEAR(rig.read("rotor/prop_joint/aero_torque"),
+                -whole.torque * damagedTorqueShare(0.3, 2), 1e-12);
+    const std::vector<double> w = rig.wrench();
+    const double mass = imbalanceForce(estimatedBladeMass(kRadius, 2), kRadius, 0.3, 600.0);
+    const double drag = dragAsymmetryForce(whole.torque, kRadius, 0.3, 2);
+    EXPECT_NEAR(std::hypot(w[0], w[1]), std::hypot(mass, drag), 1e-9);
 }
 
 }  // namespace

@@ -130,6 +130,36 @@ double ceilingEffect(double radius, double distance) {
     return std::cbrt(gamma * gamma);
 }
 
+double damagedThrustShare(double damage, int blades) {
+    const double kept = 1.0 - std::clamp(damage, 0.0, 1.0);
+    return 1.0 - (1.0 - kept * kept * kept) / std::max(blades, 1);
+}
+
+double damagedTorqueShare(double damage, int blades) {
+    const double kept = 1.0 - std::clamp(damage, 0.0, 1.0);
+    return 1.0 - (1.0 - kept * kept * kept * kept) / std::max(blades, 1);
+}
+
+double imbalanceForce(double bladeMass, double radius, double damage, double omega) {
+    const double d = std::clamp(damage, 0.0, 1.0);
+    return d * bladeMass * radius * (1.0 - d / 2.0) * omega * omega;
+}
+
+double thrustAsymmetryMoment(double thrust, double radius, double damage, int blades) {
+    const double kept = 1.0 - std::clamp(damage, 0.0, 1.0);
+    return thrust / std::max(blades, 1) * 0.75 * radius * (1.0 - kept * kept * kept * kept);
+}
+
+double dragAsymmetryForce(double torque, double radius, double damage, int blades) {
+    const double kept = 1.0 - std::clamp(damage, 0.0, 1.0);
+    return 4.0 * torque / (3.0 * radius * std::max(blades, 1)) * (1.0 - kept * kept * kept);
+}
+
+double estimatedBladeMass(double radius, int blades) {
+    const double scale = radius / kReferencePropellerRadius;
+    return kReferencePropellerMass * kBladeMassShare * scale * scale * scale / std::max(blades, 1);
+}
+
 ModuleInfo RotorAero::info() const {
     if (ideal_) {
         return {"rotor_aero", "ideal", 0, 1, true, true, CapabilityTier::Tier0};
@@ -271,6 +301,8 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         r.joint = std::string(world.signalInstanceName(s->prim));
         r.params = {*radius, *ct, *cp, *direction == "ccw" ? 1.0 : -1.0};
         r.mountSign = s->token("aero:rotor:mount").value_or("puller") == "pusher" ? -1.0 : 1.0;
+        r.blades = static_cast<int>(*blades);
+        r.bladeMass = estimatedBladeMass(*radius, r.blades);
         // An open-water chart (a marine thruster's, or any propeller's K_T(J), K_Q(J)).
         {
             const auto j0 = s->realArray("aero:rotor:advanceRatios");
@@ -327,6 +359,7 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
             r.propeller = table;
             if (p.folding) {
                 r.folding = FoldingBlade(p);
+                r.bladeMass = p.folding->bladeMass;
             }
         } else if (const auto file = s->assetPath("aero:rotor:propeller"); file && !ideal_) {
             // Folding blades are mechanics, whatever the aerodynamics: the file gives them.
@@ -334,11 +367,29 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
             const Propeller p = loadPropeller(std::string(*file), error);
             if (error.empty() && p.folding) {
                 r.folding = FoldingBlade(p);
+                r.bladeMass = p.folding->bladeMass;
             }
         }
         const std::array<double, 3>& a = joints.axis[j];
         const double norm = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
         r.axis = {a[0] / norm, a[1] / norm, a[2] / norm};
+        {
+            // The damaged blade: along the child frame's axis least along the joint's, made
+            // square to it (any direction in the disc will do; it turns with the link).
+            std::size_t k = 0;
+            for (std::size_t i = 1; i < 3; ++i) {
+                if (std::abs(r.axis[i]) < std::abs(r.axis[k])) {
+                    k = i;
+                }
+            }
+            std::array<double, 3> e{};
+            e[k] = 1.0;
+            for (std::size_t i = 0; i < 3; ++i) {
+                e[i] -= r.axis[k] * r.axis[i];
+            }
+            const double en = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+            r.bladeDir = {e[0] / en, e[1] / en, e[2] / en};
+        }
         const std::size_t child = joints.child[j].index;
         r.com = bodies.comLocal[child];
         const std::string link(world.signalInstanceName(bodies.prim[child]));
@@ -359,6 +410,12 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
             r.twist = d.input(twist);
         }
         const std::string rotor = "rotor/" + r.joint + "/";
+        if (!ideal_) {
+            // A blade's lost share (rotor_aero.md §10): branch strikes write it; none, it is whole.
+            SignalSpec damage = scalar(rotor + "damage", units::one);
+            damage.optional = damage.feedback = true;
+            r.damageIn = d.input(damage);
+        }
         r.thrustOut = d.output(scalar(rotor + "thrust", units::N));
         r.torqueOut = d.output(scalar(rotor + "aero_torque", units::N_m));
         r.inducedOut = d.output(scalar(rotor + "induced_velocity", units::m_per_s));
@@ -601,9 +658,31 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             target *= ceilingEffect(r.params.radius, nearest);
         }
         r.thrust = keep * r.thrust + (1.0 - keep) * target;
-        const std::array<double, 3> force{r.thrust * axis[0] + inPlane[0],
-                                          r.thrust * axis[1] + inPlane[1],
-                                          r.thrust * axis[2] + inPlane[2]};
+        // A damaged blade (rotor_aero.md §10): less thrust and torque, and forces that turn with
+        // the rotor. Nothing changes, bit for bit, while it is whole.
+        double thrust = r.thrust;
+        const double damage = r.damageIn.valid() ? std::clamp(bus.read(r.damageIn), 0.0, 1.0) : 0.0;
+        if (damage > 0.0) {
+            const double radius = r.params.radius;
+            const std::array<double, 3> blade = rotate(hub.orientation, r.bladeDir);
+            // Where the damaged blade moves: about the joint axis, the way it turns.
+            const std::array<double, 3> turn = cross(jointAxis, blade);
+            const double way = omega < 0.0 ? -1.0 : 1.0;
+            const double mass = imbalanceForce(r.bladeMass, radius, damage, omega);
+            const double drag = dragAsymmetryForce(std::abs(load.torque), radius, damage, r.blades);
+            // The lost thrust's moment about the hub, out of the balance of the whole blades'.
+            const double lift = thrustAsymmetryMoment(r.thrust, radius, damage, r.blades);
+            const std::array<double, 3> lever = cross(blade, axis);
+            for (std::size_t k = 0; k < 3; ++k) {
+                inPlane[k] += -mass * blade[k] + way * drag * turn[k];
+                hubMoment[k] -= lift * lever[k];
+            }
+            thrust *= damagedThrustShare(damage, r.blades);
+            load.torque *= damagedTorqueShare(damage, r.blades);
+        }
+        const std::array<double, 3> force{thrust * axis[0] + inPlane[0],
+                                          thrust * axis[1] + inPlane[1],
+                                          thrust * axis[2] + inPlane[2]};
         // Applied at the link's origin; the backend takes torques about the centre of mass.
         const std::array<double, 3> com = rotate(hub.orientation, r.com);
         const std::array<double, 3> moment = cross({-com[0], -com[1], -com[2]}, force);
@@ -619,12 +698,12 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
                                                       moment[1] + hubMoment[1] + air[1],
                                                       moment[2] + hubMoment[2] + air[2]});
         const double area = std::numbers::pi * r.params.radius * r.params.radius;
-        bus.write(r.thrustOut, r.thrust);
+        bus.write(r.thrustOut, thrust);
         bus.writeN(r.axisOut, axis);
         bus.write(r.torqueOut, load.torque);
         bus.write(r.loadOut, 0.0);  // in the wrench above instead
         bus.write(r.inducedOut,
-                  r.propeller ? induced : std::sqrt(std::abs(r.thrust) / (2.0 * rho * area)));
+                  r.propeller ? induced : std::sqrt(std::abs(thrust) / (2.0 * rho * area)));
         if (r.immersionOut.valid()) {
             bus.write(r.immersionOut, wet);
         }

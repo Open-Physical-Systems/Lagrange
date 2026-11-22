@@ -150,6 +150,18 @@ stopped. A thruster's motor has to turn it against water: the electrical domain'
 torque, as in air. The charts in the tests are illustrative, of a Wageningen B-series' shape;
 TODO(verify): a published open-water chart of a real thruster for a sample.
 
+## A damaged blade
+
+When a blade strikes a branch (ground.md, "Branches"), or a plugin writes it, `rotor/<j>/damage`
+is the share of one blade's length lost from its tip. The rotor then keeps
+$1 - (1-(1-d)^3)/B$ of its thrust and $1 - (1-(1-d)^4)/B$ of its torque (blade elements: the
+tip carries the most), and its link takes the lost piece's imbalance, $F = m_{lost}\, r_{cg}\,
+\omega^2$, turning with the rotor, with the smaller thrust and drag asymmetries. The frame and its
+IMU shake at the rotor's speed of rotation, and the controller spins that rotor faster to make up
+the thrust. The blade's mass is a folding propeller's `blade_mass`, or scaled from a 10-inch APC
+propeller's 11.9 g. Details, sources and checks:
+[rotor_aero.md §10](../design/domains/rotor_aero.md).
+
 ## How far to trust it
 
 | Check | Result | Test |

@@ -258,6 +258,7 @@ if(BUILD_TESTING)
         test/test_optics_import.cpp
         test/test_humans_run.cpp
         test/test_plugins.cpp
+        test/test_blade_damage_run.cpp
         test/test_sensor_faults.cpp
         test/test_multicopter.cpp
         test/test_tether_run.cpp
@@ -333,7 +334,11 @@ if(BUILD_TESTING)
         lagrange_core::lagrange_core
         INTERFACE_INCLUDE_DIRECTORIES
     )
-    foreach(plugin IN ITEMS acme_probe scene_probe ideal_torque_source)
+    foreach(
+        plugin
+        IN
+        ITEMS acme_probe scene_probe blade_cutter ideal_torque_source
+    )
         if(plugin STREQUAL "ideal_torque_source")
             set(_source
                 ${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/ideal_torque_source.c
