@@ -27,8 +27,8 @@
 // cell is cut lower, paid by the rotor as a torque against its spin.
 
 #include "lagrange/module/IModule.hpp"
-#include "lagrange/vegetation/Leaves.hpp"
 #include "lagrange/vegetation/Branches.hpp"
+#include "lagrange/vegetation/Leaves.hpp"
 #include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"

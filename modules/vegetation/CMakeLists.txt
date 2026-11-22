@@ -5,7 +5,12 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 
-add_library(lagrange_vegetation src/Vegetation.cpp src/Leaves.cpp src/Branches.cpp)
+add_library(
+    lagrange_vegetation
+    src/Vegetation.cpp
+    src/Leaves.cpp
+    src/Branches.cpp
+)
 lagrange_target_defaults(lagrange_vegetation)
 target_include_directories(
     lagrange_vegetation
