@@ -62,6 +62,35 @@ private:
     SignalId out_;
 };
 
+/// The weather's rain: env/rain_rate, m/s.
+class Rain final : public IModule {
+public:
+    explicit Rain(double mmPerHour) : rate_(mmPerHour / 3.6e6) {}
+    ModuleInfo info() const override { return {"weather", "rain", 0, 1, false, true}; }
+    Duration preferredStep() const override { return Duration{1'000'000}; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec s;
+        s.name = "env/rain_rate";
+        s.unit = units::m_per_s;
+        out_ = d.output(s);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(out_, rate_);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        bus.write(out_, rate_);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    double rate_;
+    SignalId out_;
+};
+
 struct Run {
     World world;
     std::unique_ptr<Scheduler> scheduler;
@@ -70,7 +99,7 @@ struct Run {
 /// A radar 1 m up looking along +x at a 2 m × 1 m plate, fine rays (0.01 rad resolution).
 std::unique_ptr<Run> run(double start, double speed, double noiseFloor,
                          const std::shared_ptr<gpu::RayContext>& rayContext = nullptr,
-                         bool clutter = false) {
+                         bool clutter = false, double rainMmPerHour = 0.0) {
     auto r = std::make_unique<Run>();
     World& w = r->world;
     Pose mountPose;
@@ -108,6 +137,9 @@ std::unique_ptr<Run> run(double start, double speed, double noiseFloor,
         std::make_unique<Scheduler>(SchedulerOptions{.deterministic = rayContext == nullptr});
     r->scheduler->add(std::make_unique<rigid_body::MujocoBackend>());
     r->scheduler->add(std::make_unique<Plate>(start, speed));
+    if (rainMmPerHour > 0.0) {
+        r->scheduler->add(std::make_unique<Rain>(rainMmPerHour));
+    }
     ModuleConfigData config;
     config.tier = rayContext ? CapabilityTier::Tier1 : CapabilityTier::Tier0;
     r->scheduler->add(createRadar(w, 0, false, rayContext), ModuleConfig(config));
@@ -149,6 +181,56 @@ TEST(Radar, DetectsUpToTheRangeTheEquationGives) {
         const SignalBus& bus = r->scheduler->bus();
         EXPECT_EQ(bus.read(bus.find("sensor/front_radar/count")), detected ? 1.0 : 0.0) << range;
     }
+}
+
+// ITU-R P.838-3: its equations (2) and (3) with Tables 1–4 give the coefficients its Table 5 lists
+// (rounded there to four or five figures).
+TEST(Radar, RainCoefficientsAreItuRP838s) {
+    struct Row {
+        double ghz, kH, aH, kV, aV;
+    };
+    for (const Row& row :
+         {Row{10.0, 0.01217, 1.2571, 0.01129, 1.2156}, Row{30.0, 0.2403, 0.9485, 0.2291, 0.9129},
+          Row{60.0, 0.8606, 0.7656, 0.8515, 0.7486}, Row{77.0, 1.1320, 0.7177, 1.1276, 0.7073},
+          Row{79.0, 1.1579, 0.7135, 1.1541, 0.7038}, Row{100.0, 1.3671, 0.6815, 1.3680, 0.6765}}) {
+        // Horizontal: τ = 0 on a level path; vertical: τ = 90°.
+        const RainCoefficients h = rainCoefficients(row.ghz * 1e9, 0.0, 0.0);
+        const RainCoefficients v = rainCoefficients(row.ghz * 1e9, 0.0, std::numbers::pi / 2.0);
+        EXPECT_NEAR(h.k, row.kH, 0.002 * row.kH) << row.ghz << " GHz";
+        EXPECT_NEAR(h.alpha, row.aH, 0.002 * row.aH) << row.ghz << " GHz";
+        EXPECT_NEAR(v.k, row.kV, 0.002 * row.kV) << row.ghz << " GHz";
+        EXPECT_NEAR(v.alpha, row.aV, 0.002 * row.aV) << row.ghz << " GHz";
+    }
+    // 77 GHz in 25 mm/h, at 45°: γ = k·R^α with equations (4) and (5) from the table's values.
+    const double k = (1.1320 + 1.1276) / 2.0;
+    const double alpha = (1.1320 * 0.7177 + 1.1276 * 0.7073) / (2.0 * k);
+    const double gamma = k * std::pow(25.0, alpha);
+    EXPECT_NEAR(rainAttenuation(77e9, 25.0, 0.0, std::numbers::pi / 4.0), gamma, 0.003 * gamma);
+    std::printf("77 GHz, 25 mm/h: %.2f dB/km\n", gamma);
+    EXPECT_EQ(rainAttenuation(77e9, 0.0, 0.0, 0.0), 0.0);
+}
+
+// In rain, an echo comes back weaker by the two-way path loss 10^(−2·γ·R/10⁴).
+TEST(Radar, RainTakesTheTwoWayPathLossOffAnEcho) {
+    auto dry = run(40.0, 0.0, 1e-15);
+    auto wet = run(40.0, 0.0, 1e-15, nullptr, false, 50.0);
+    ASSERT_TRUE(dry && wet);
+    ASSERT_TRUE(dry->scheduler->stepUntil(SimTime{120'000'000}).ok());
+    ASSERT_TRUE(wet->scheduler->stepUntil(SimTime{120'000'000}).ok());
+    const SignalBus& a = dry->scheduler->bus();
+    const SignalBus& b = wet->scheduler->bus();
+    ASSERT_EQ(a.read(a.find("sensor/front_radar/count")), 1.0);
+    ASSERT_EQ(b.read(b.find("sensor/front_radar/count")), 1.0);
+    const std::span<const double> d0 = a.readN(a.find("sensor/front_radar/detections"));
+    const std::span<const double> d1 = b.readN(b.find("sensor/front_radar/detections"));
+    const double gamma = rainAttenuation(77e9, 50.0, 0.0, std::numbers::pi / 4.0);
+    const double expected = std::pow(10.0, -2.0 * gamma * d0[0] / 1e4);
+    std::printf("50 mm/h at 77 GHz: %.2f dB/km; at %.2f m the echo keeps %.4f (expected %.4f)\n",
+                gamma, d0[0], d1[5] / d0[5], expected);
+    // (The reported ranges carry measurement noise, larger on the weaker echo, as on a real
+    // radar; the loss is taken at the cell's own range.)
+    EXPECT_NEAR(d1[5] / d0[5], expected, 1e-3 * expected);
+    EXPECT_NEAR(d1[0], d0[0], 0.05);  // the same target, weaker
 }
 
 /// FNV-1a over the bits of every detection and the count.
