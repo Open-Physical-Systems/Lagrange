@@ -130,5 +130,38 @@ TEST(TreesRun, SameRunTwiceIsBitForBit) {
     EXPECT_EQ(traces[0], traces[1]);
 }
 
+// A steady 12 m/s wind bends tree_1's crown by F/(m ω²): its sway mode (0.5 Hz, ζ 0.1, 2 kg per
+// m³ of crown) under ½ ρ Cd A U², A = π R c with R = c = 1.8 m, Cd 0.3. The quadcopter sits on
+// the ground far from the tree (its rotors stopped), so the aerodynamics domain runs and blows.
+TEST(TreesRun, TheWindBendsTheCrown) {
+    ServerOptions o = underTheTree();
+    o.spawn.position = {0.0, 0.0, 0.0};
+    o.site["wind_speed"] = 12.0;
+    o.site["wind_from"] = 270.0;  // from the west: blowing towards +x
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{20'000'000'000}).ok());
+    // Gusts ride on the mean wind: average the pressure and the crown's lean over 10 s.
+    double speedSquared = 0.0;
+    double lean = 0.0;
+    constexpr int kSamples = 100;
+    for (int k = 0; k < kSamples; ++k) {
+        ASSERT_TRUE(server.stepUntil(SimTime{server.simTime().ns + 100'000'000}).ok());
+        const std::vector<double> wind = server.read("env/wind/velocity");
+        speedSquared += (wind[0] * wind[0] + wind[1] * wind[1]) / kSamples;
+        lean += server.read("tree/tree_1/sway").at(0) / kSamples;
+    }
+    constexpr double kPi = 3.14159265358979323846;
+    const double area = kPi * 1.8 * 1.8;
+    const double mass = 2.0 * 4.0 / 3.0 * kPi * 1.8 * 1.8 * 1.8;
+    const double omega = 2.0 * kPi * 0.5;
+    const double expected = 0.5 * 1.225 * 0.3 * area * speedSquared / (mass * omega * omega);
+    std::printf("mean wind² %.1f m²/s²: the crown leans %.3f m downwind on average, F/k %.3f m\n",
+                speedSquared, lean, expected);
+    EXPECT_GT(speedSquared, 25.0);
+    EXPECT_NEAR(lean, expected, 0.1 * expected);
+}
+
 }  // namespace
 }  // namespace lagrange::server
