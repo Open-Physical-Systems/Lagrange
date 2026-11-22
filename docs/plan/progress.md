@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-15: v1.4.0 released (the robot builder, the viewer's workspace tabs, the legged contact spike, faster parallel environments, downwash on tethers, OpenDRIVE banked roads, four QA rounds; #332–#423, docs/release/v1.4.0.md); what waits on the owner is in [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-22: on `dev` since v1.4.0, actuators (RFC 0020 steps 2–6, brakes, marine thrusters), lights, fire, vegetation and water downwash, MuJoCo's joint limits as stops; RFC 0023 and 0024 are Drafts (#424–#463, below). 2026-11-15: v1.4.0 released (the robot builder, the viewer's workspace tabs, the legged contact spike, faster parallel environments, downwash on tethers, OpenDRIVE banked roads, four QA rounds; #332–#423, docs/release/v1.4.0.md); what waits on the owner is in [owner-decisions-2026-11-15.md](owner-decisions-2026-11-15.md). 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -63,6 +63,36 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   proposed answers; 0014's connection limits are in, its frame cap and 0015 follow. Until 0015, writing
   those sensors to USD is refused instead of written wrong.
 
+## 2026-11-22, on `dev` after v1.4.0 (#424–#463, unreleased)
+
+What merged (CHANGELOG "Unreleased" has every PR):
+
+- **Actuators (RFC 0020, accepted #435)**: suction and magnetic grippers (#438), lead screws and
+  `joint/<j>/friction_limit` in both engines (#440), hobby and smart servos with a pan-tilt sample
+  (#442), steppers on a chopper driver with a gantry sample (#457), solenoids with a bench sample
+  (#458), ros2_control GPIO interfaces bound to actuator signals (#459). From its "also worth
+  adding": holding brakes with an arm sample (#460) and marine thrusters, rotors in water with an
+  open-water chart (#462). Step 7, fluid power, is RFC 0024 (Draft, #461).
+- **Lights (RFC 0021, accepted #435)**: `LampAPI_1` and the lights domain (#437); lamps in the
+  realistic look for cameras and the viewer, and the light sensor (#443).
+- **Fire (RFC 0022, accepted #435)**: `FireAPI_1` and the fire domain (#436), smoke that lidars,
+  cameras and the visibility sensor see (#439), fire nozzles and tanks with a firefighting AMR
+  (#441).
+- **Vegetation**: grass, reeds and shrubs (ground, contacts, lidar canopy, stem drag, their look
+  in wind and downwash; #450); the lidar sees plants by their shape (#452); propellers cut the
+  plants they spin into (#453), shown in the realistic view (#454); grass as real blades near the
+  eye (#455).
+- **Water**: downwash on water, a moving surface, spray and its optics (#449).
+- **Physics fixes**: Jolt keeps a swinging joint's energy (#432); MuJoCo's joint limits are stops,
+  checked by the new conformance case `AJointLimitIsAStop` (#463); the multicopter keeps its lift
+  past its yaw reach (#444).
+- **Worlds and import**: OpenDRIVE objects and signals as fixed scenery (#431); the fetched Lexus
+  mesh split so its wheels spin and steer (#428).
+- **Viewer and CLI**: bare `lagrange` opens the launcher and `lagrange build` the builder (#427),
+  an app button with a desktop entry (#430), every domain listed with older profile schemas named
+  (#447), two viewer tests moved with the layout (#451, #456).
+- **RFCs**: 0023 joint springs (Draft, #448) and 0024 fluid power (Draft, #461).
+
 ## 2026-11-15, on `dev` (#340–#400, unreleased)
 
 What merged (CHANGELOG "Unreleased" has every PR):
@@ -122,7 +152,8 @@ Every open decision, each with a proposed answer: [owner-decisions-2026-11-15.md
 
 - **RFC 0017** (MuJoCo 4.x for the MuJoCo backend): Draft, the owner's decision.
 - **RFC 0018** (radiation) and **RFC 0019** (legged robots): Draft, the owner's decision.
-- **RFC 0020** (actuators), **RFC 0021** (lights) and **RFC 0022** (fire): Draft, the owner's decision; each open question with its proposed answer is in section G of the decisions file ("accept all" or override by number). v1.4.0 is released (2026-11-15), so its release items there are done.
+- **RFC 0020** (actuators), **RFC 0021** (lights) and **RFC 0022** (fire): accepted with every proposed answer (#435) and built (above); RFC 0020's step 7 is RFC 0024.
+- **RFC 0023** (joint springs) and **RFC 0024** (fluid power, RFC 0020 step 7): Draft, the owner's decision. 0024 lists 15 `TODO(verify)` items and 8 steps; its schema classes need 2 approvals.
 - **Builder phase 4** (USD and SDFormat robots): the open questions of
   `docs/plan/builder-phase4-plan.md` §11, and the draft RFC 0016 Addendum B.
 - **Protocol additions** (1.x additive, owner approval): ROS 2 services and parameters in the
