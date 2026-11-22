@@ -1,0 +1,91 @@
+{
+ "device": "NVIDIA GeForce RTX 4060 Laptop GPU",
+ "mujoco": "4.0.1",
+ "mujoco_warp": "4.0.1",
+ "warp": "1.19.0",
+ "steps_timed": 500,
+ "models": {
+  "arm6": {
+   "nq": 8,
+   "nv": 8,
+   "nu": 8,
+   "ngeom": 11,
+   "cpu_mujoco_steps_per_s": 224707.66407685407,
+   "gpu": [
+    {
+     "n": 1,
+     "batched_steps_per_s": 5480.7438289023985,
+     "env_steps_per_s": 5480.7438289023985,
+     "rtf_per_env": 5.480743828902399,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    },
+    {
+     "n": 64,
+     "batched_steps_per_s": 3968.9537323950035,
+     "env_steps_per_s": 254013.03887328022,
+     "rtf_per_env": 3.9689537323950037,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    },
+    {
+     "n": 1024,
+     "batched_steps_per_s": 2816.622427894527,
+     "env_steps_per_s": 2884221.3661639956,
+     "rtf_per_env": 2.816622427894527,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    },
+    {
+     "n": 4096,
+     "batched_steps_per_s": 1353.7011496911334,
+     "env_steps_per_s": 5544759.9091348825,
+     "rtf_per_env": 1.3537011496911335,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    }
+   ]
+  },
+  "quad_x500": {
+   "nq": 11,
+   "nv": 10,
+   "nu": 4,
+   "ngeom": 3,
+   "cpu_mujoco_steps_per_s": 120640.94846388788,
+   "gpu": [
+    {
+     "n": 1,
+     "batched_steps_per_s": 5714.895280891883,
+     "env_steps_per_s": 5714.895280891883,
+     "rtf_per_env": 5.714895280891883,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    },
+    {
+     "n": 64,
+     "batched_steps_per_s": 6015.321842370262,
+     "env_steps_per_s": 384980.59791169676,
+     "rtf_per_env": 6.015321842370262,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    },
+    {
+     "n": 1024,
+     "batched_steps_per_s": 4122.167592810885,
+     "env_steps_per_s": 4221099.6150383465,
+     "rtf_per_env": 4.122167592810885,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    },
+    {
+     "n": 4096,
+     "batched_steps_per_s": 1684.580773751696,
+     "env_steps_per_s": 6900042.8492869465,
+     "rtf_per_env": 1.6845807737516958,
+     "worlds_overflowed": 0,
+     "worlds_nan": 0
+    }
+   ]
+  }
+ }
+}
