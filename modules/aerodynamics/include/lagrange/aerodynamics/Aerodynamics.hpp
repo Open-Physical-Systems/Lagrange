@@ -256,6 +256,10 @@ private:
     std::vector<TetherNodes> cables_;
     std::vector<FireBase> fires_;
     std::vector<TreeCrown> crowns_;
+    // The flying and fallen leaves (lagrange/world/Leaves.hpp): their positions in, the air at
+    // them and along the ground under them out (ground.md "Leaves lifted again").
+    SignalId leavesIn_, leavesAir_;
+    std::vector<double> leafAir_;
     std::size_t groupCount_{0};
     Downwash downwash_;
     std::array<double, 3> groundNormal_{0.0, 0.0, 1.0};

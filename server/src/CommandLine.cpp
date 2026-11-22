@@ -163,6 +163,8 @@ void printServerOptions(std::FILE* out) {
         "            (default: each rotor's loaded top speed from its motor and battery)\n"
         "  --thrust-limit FRACTION  cap each rotor at this share of its full thrust (0.8: 80 %%),\n"
         "            for the built-in controller and an autopilot's full output\n"
+        "  --leaf-litter N  N leaves lying under each tree's crown from the start (TreeAPI_1);\n"
+        "            the wind and the rotors' outwash lift them again (at most 2048 in all)\n"
         "  --emi-motor-leads SPACING[,X,Y,Z]  a wire from the battery (at X,Y,Z on the root\n"
         "            link) to each motor carrying its bus current, its return SPACING m above\n"
         "            it; magnetometers feel it (RFC 0013)\n"
@@ -437,6 +439,14 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--thrust-limit needs a share of full thrust, over 0 and at most 1 (0.8)";
             }
             options.thrustLimit = share;
+        } else if (arg == "--leaf-litter") {
+            const char* text = value();
+            char* end = nullptr;
+            const long count = text != nullptr ? std::strtol(text, &end, 10) : -1;
+            if (text == nullptr || end == text || *end != '\0' || count < 0 || count > 2048) {
+                return "--leaf-litter needs a count of leaves per tree, 0 to 2048";
+            }
+            options.leafLitter = static_cast<std::uint32_t>(count);
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;

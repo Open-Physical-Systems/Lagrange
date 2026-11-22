@@ -1112,6 +1112,9 @@ struct Server::Impl {
             if (settings.airDensityKgM3) {
                 stems.values["density"] = *settings.airDensityKgM3;
             }
+            if (options.leafLitter > 0) {
+                stems.values["leaf_litter"] = static_cast<double>(options.leafLitter);
+            }
             next->add(std::make_unique<vegetation::Vegetation>(), ModuleConfig(stems));
         }
         // Tethers (RFC 0011): cables from their anchors to bodies, against every collider. Drag

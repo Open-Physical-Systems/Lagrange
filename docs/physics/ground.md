@@ -586,9 +586,65 @@ a top hat of radius `R √(v_i/w)` below the disc (continuity) and `R` above it 
 up); past four radii a round jet that keeps its momentum flux, `w ∝ 1/s`, radius `∝ s`. The
 rotors' wake needs cutting on (it rides on the rotors the cutting reads).
 
+When the aerodynamics domain runs it also writes the air at every listed particle,
+`vegetation/leaves_air` (`lagrange/world/Leaves.hpp`: per particle its position as it read it, the
+air at it, and the air along the ground under it), reading `vegetation/leaves` a step late; the
+vegetation domain matches each entry to its particle by position (within 0.1 m in flight, exactly
+lying) and then flies it in that air instead: the logarithmic wind at its height, the gust, every
+robot's merged jet, the ground outwash and the buildings, as the aerodynamics domain computes them
+for everything else.
+
+**Walls.** A flying particle that would pass into a fixed box (any orientation) or behind a fixed
+wall plane (one whose normal is less than about 6° from level) is put back on the face it came
+through (the last slab it entered on its way, or the nearest face if it started inside), and loses
+its speed into that face; along the face it keeps going. Pressed against a wall by the wind it
+falls at its own pace down the face and settles at its foot. Robots and other moving colliders do
+not stop leaves.
+
 **Settling.** A particle that comes down to the highest surface under it that it was above (a fixed
 plane, an upright height field, the top of an upright fixed box or cylinder) stops there and lies
-flat (pitch π/2). It stays until it is dropped for a newer one.
+flat (pitch π/2). It stays until the air lifts it again, or it is dropped for a newer one.
+
+### Leaves lifted again
+
+A leaf lying on the ground lifts again when the air along the ground under it carries its weight.
+Lying flat, the pressure of that air on its blade, `½ ρ C u²`, works against its weight per area
+`m'' g`; it lifts past
+
+```
+u_t = √(2 m'' g / (ρ C))
+```
+
+with `m''` = 0.1 kg/m² and `C` = 1.17, a square flat plate broadside to the flow (Hoerner,
+*Fluid-Dynamic Drag*, 1965, ch. 3): 1.17 m/s in sea-level air. This is the threshold of Bagnold's
+sand grain (`u*_t = A √(g d (ρ_s − ρ)/ρ)`) with the grain's weight per area `(ρ_s − ρ) d` replaced
+by the leaf's `m''`, and with `C` the same as the plate's falling drag it is also the speed the leaf
+falls at flat: a leaf lifts in air along the ground as fast as it falls. Each particle's threshold
+is scaled by its own drawn terminal speed over the mean (a heavier one falls faster and needs more
+air). Written as a friction velocity under the logarithmic wind, `u*_t = κ u_t / ln(z/z0)` with
+`κ` = 0.41 at the blade's height `z` (`liftOffFriction`).
+
+The air along the ground under a lying leaf (`vegetation/leaves_air`, from the aerodynamics domain)
+is the mean wind at the blade's length above the ground (the logarithmic profile, zero under the
+roughness length) plus the rotors' outwash at the wall jet's peak (Tanner et al. 2015 scaled by the
+arriving jet, `aerodynamics::Downwash::surfaceOutwash`, the most it has across its layer) where the
+leaf lies within 5 cm of the surface a wake stops on. A leaf over its threshold leaves with that
+air's velocity along the ground and the vertical speed its excess lift gives it over its own length
+`L`:
+
+```
+w = √(2 g L ((u/u_t)² − 1))
+```
+
+then flies as above, in the outwash that carries it outwards, and settles again where the air
+under it no longer lifts it. `tree/<n>/leaves_lifted` counts the lifts. Without the aerodynamics
+domain (no air density) nothing lifts. Directly under a hovering drone the outwash is near zero
+(it rises from the stagnation point to its peak at about 1.7 R), so the leaves there stay; those
+around it hop outwards until they are past the ring where the outwash falls under `u_t`.
+
+`--leaf-litter N` (config `leaf_litter`) lays `N` leaves under each crown from the start, uniform
+over its footprint (none inside the trunk), on the highest surface there; at most an equal share
+of the 2048 particles per tree.
 
 **Lidars** (`sensors::FlyingLeaves`): each listed particle is a disc of its size seen from any
 side; a beam passing within half its size of its centre, before its own hit and any crown stop,
@@ -606,7 +662,13 @@ Checked (`test_leaves`, `test_shape_caster` `FlyingLeaves.*`, `test_trees_run`):
 | 15 m/s on a 10 m crown for 1 s | `k (15²/10² − 1) N` | 54 for 55.0, within 1 |
 | A roof at 2 m over the ground | lands on the roof, beside it on the ground | exact |
 | Cuts, wake, breeze and stripping for 1.5 s, twice; saved and restored half way | bit for bit | equal |
-| The quadcopter taking off under the open field's tree_1 | the cut leaves fly and settle | 39 leaves cut off, 39 particles from 3.2 m, all 39 on the ground and flat within 12 s; bit for bit twice |
+| The quadcopter taking off under the open field's tree_1 | the cut leaves fly and settle | 37 leaves cut off, 37 particles from 6.2 m, 33 on the ground and flat within 12 s; bit for bit twice |
+| Lift-off threshold | `½ ρ C u_t² = m'' g`; `u_t ∝ √m''`, `∝ 1/√ρ`; `u*_t = κ u_t / ln(z/z0)` | 1.1700 m/s for 0.1 kg/m², to 1e-12 |
+| A lying leaf under 0.99 `u_t` and 1.5 `u_t` of ground air | stays flat; lifts with the air's velocity and `w = √(2 g L ((u/u_t)² − 1))` | exact; a mismatched key lifts nothing |
+| A leaf blown at 8 m/s at a wall 4 m tall, square on and turned 30°, and at a wall plane | never past the face; slides down and lies at its foot | at most 1e-6 m short of the face; lies at x = 2.000, z = 0 |
+| The quadcopter hovering 2 m up beside tree_1, 400 leaves lying under the crown (`--leaf-litter`) | its outwash lifts them and carries them away; none cut | 393 leaves, 31 355 lifts (they hop), up to 389 in the air; mean distance from under it 2.20 m → 4.05 m in 10 s |
+| The litter in a 3 m/s and a 20 m/s wind, no rotors near | a light wind lifts none, a gale lifts them | 0 and 3845 lifts in 5 s |
+| The same run twice with litter | bit for bit | equal |
 
 Numbers and sources: every number of the flight and the shedding is TODO(verify). Broad leaves are
 said to fall at about 1–2 m/s (TODO(verify) against measured falling-leaf speeds of the species);
@@ -614,7 +676,13 @@ the glide ratio, flutter frequency, tilt and spin are drawing choices that only 
 like a leaf's, not measurements; the share of the blade's speed a cut leaf keeps (0.3), the
 stripping threshold (10 m/s) and rate (10⁻³ /s) are guesses to be checked against observations of
 defoliation in wind. The jet's 4 R and its spread are a simplification of the aerodynamics domain's
-merged-jet model (Bauersfeld et al. 2024), which the leaves do not see. Left out: twigs as anything
-but small leaves, the leaves' own lift and the true dynamics of a tumbling plate, the ground's
-outwash and the wake's skew in wind (the aerodynamics domain has both), leaves lifted again from
-the ground, and leaves stopped by colliders other than the surfaces above (walls, robots).
+merged-jet model (Bauersfeld et al. 2024), used only when the aerodynamics domain does not run.
+The lift-off threshold's leaf mass per area (0.1 kg/m², fresh broad leaves some 0.05–0.15 kg/m²:
+dry leaf mass per area mostly 0.03–0.15 kg/m², Poorter et al. 2009, *New Phytologist* 182:565,
+over a dry matter content of some 0.2–0.4) is TODO(verify), and so is taking a square plate's
+broadside drag coefficient for the lift on a leaf lying on the ground (it comes from the flow over
+its curled edges); the launch speed `w` is a model choice, not a measurement. Left out: twigs as
+anything but small leaves, the leaves' own lift in flight and the true dynamics of a tumbling plate,
+a leaf sliding along the ground under its lift-off speed, the outwash's turbulence (the mean flow
+only), leaves stopped by convex hulls, cylinders or moving colliders (robots), and leaves sticking
+to wet walls.

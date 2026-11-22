@@ -315,6 +315,130 @@ TEST(Leaves, TheSameCutsTwiceAreBitForBitAndASavedStateCarriesOn) {
     EXPECT_FALSE(c.assign(std::vector<double>{0.0, 1.0, 0.0}));  // one tree, its carries short
 }
 
+// The lift-off threshold's closed form: the pressure ½ ρ C u² on the blade carries its weight per
+// area m'' g at u_t = √(2 m'' g / (ρ C)); as a friction velocity under the logarithmic wind,
+// u*_t = κ u_t / ln(z/z0).
+TEST(Leaves, TheLiftOffSpeedCarriesItsWeight) {
+    const double g = 9.80665;
+    const double ut = liftOffSpeed(0.1, 1.17, 1.225, g);
+    EXPECT_NEAR(0.5 * 1.225 * 1.17 * ut * ut, 0.1 * g, 1e-12);
+    EXPECT_NEAR(ut, 1.1700, 5e-4);  // √(2·0.1·9.80665/(1.225·1.17))
+    // Twice the mass per area, √2 times the speed; twice the air's density, 1/√2.
+    EXPECT_NEAR(liftOffSpeed(0.2, 1.17, 1.225, g), std::sqrt(2.0) * ut, 1e-12);
+    EXPECT_NEAR(liftOffSpeed(0.1, 1.17, 2.45, g), ut / std::sqrt(2.0), 1e-12);
+    const double star = liftOffFriction(ut, 0.06, 0.03);
+    EXPECT_NEAR(star, 0.41 * ut / std::log(2.0), 1e-12);
+    EXPECT_TRUE(std::isinf(liftOffFriction(ut, 0.02, 0.03))) << "no wind under z0";
+    EXPECT_TRUE(std::isinf(liftOffSpeed(0.1, 1.17, 0.0, g)));
+}
+
+// The kLeavesAirSignal value for the field's leaves as they are now, with this ground air under
+// every one and no air at them.
+std::vector<double> groundAir(const LeafField& field, const Vec3& ground) {
+    std::vector<double> air(kLeavesAirLength, 0.0);
+    air[1] = static_cast<double>(field.leaves().size());
+    for (std::size_t n = 0; n < field.leaves().size(); ++n) {
+        double* e = air.data() + kLeavesHeader + (kLeavesAirFields * n);
+        std::copy(field.leaves()[n].position.begin(), field.leaves()[n].position.end(), e);
+        std::copy(ground.begin(), ground.end(), e + 6);
+    }
+    return air;
+}
+
+TEST(Leaves, ALyingLeafLiftsOnlyWhenTheAirAlongTheGroundCarriesIt) {
+    LeafField field;
+    field.reset(1);
+    field.lay(0, {1.0, 2.0, 0.0}, 0.003, kSeed, 0);
+    const LandingSurfaces ground = groundAtZero();
+    const Leaf& leaf = field.leaves().front();
+    ASSERT_EQ(leaf.settled, 1.0);
+    const double ut = field.liftOff(leaf);
+    // Its own threshold: the closed form scaled by its drawn terminal speed over the mean.
+    EXPECT_NEAR(ut, liftOffSpeed(0.1, 1.17, 1.225, 9.80665) * leaf.terminalSpeed(9.80665) / 1.5,
+                1e-12);
+    // Just under it, it stays put, flat.
+    std::vector<double> air = groundAir(field, {0.99 * ut, 0.0, 0.0});
+    EXPECT_FALSE(field.step(1e-3, {}, {}, ground, nullptr, air));
+    EXPECT_EQ(field.leaves().front().settled, 1.0);
+    EXPECT_EQ(field.lifted(0), 0.0);
+    // A key that does not match (another leaf's place) lifts nothing.
+    air = groundAir(field, {3.0 * ut, 0.0, 0.0});
+    air[kLeavesHeader] += 0.5;
+    EXPECT_FALSE(field.step(1e-3, {}, {}, ground, nullptr, air));
+    // Over it, it lifts with the ground air's velocity and w = √(2 g L ((u/u_t)² − 1)).
+    air = groundAir(field, {0.0, 1.5 * ut, 0.0});
+    LeafField copy = field;
+    EXPECT_TRUE(field.step(1e-3, {}, {}, ground, nullptr, air));
+    const Leaf& up = field.leaves().front();
+    EXPECT_EQ(up.settled, 0.0);
+    EXPECT_GT(up.position[2], 0.0);
+    EXPECT_GT(up.position[1], 2.0) << "carried along the ground air";
+    EXPECT_EQ(field.lifted(0), 1.0);
+    EXPECT_EQ(field.flying(0), 1U);
+    // The launch itself, before the step's drag and gravity: the copy with dt → 0.
+    EXPECT_TRUE(copy.step(1e-12, {}, {}, ground, nullptr, air));
+    const Leaf& launched = copy.leaves().front();
+    const double w = std::sqrt(2.0 * 9.80665 * launched.size * (1.5 * 1.5 - 1.0));
+    EXPECT_NEAR(launched.velocity[2], w, 1e-6 * w);
+    EXPECT_NEAR(launched.velocity[1], 1.5 * ut, 1e-6 * ut);
+}
+
+TEST(Leaves, ALeafBlownAtAWallStopsThereAndSlidesDown) {
+    World world;
+    world.addCollider(kWorldBody, ShapeType::Plane, {}, kLevel, 0.8);
+    // A wall 0.2 m thick, its near face at x = 2, 4 m tall, turned 30° about z.
+    const double half = std::numbers::pi / 12.0;
+    world.addCollider(kWorldBody, ShapeType::Box, {0.1, 3.0, 2.0},
+                      Pose{{2.1, 0.0, 2.0}, {1.0, 0.0, 0.0, 0.0}}, 0.8);
+    world.addCollider(kWorldBody, ShapeType::Box, {0.1, 10.0, 2.0},
+                      Pose{{2.1, 20.0, 2.0}, {std::cos(half), 0.0, 0.0, std::sin(half)}}, 0.8);
+    // And a wall plane facing −x at x = 6, beyond y = 40 (an infinite plane: alone there).
+    const double r = std::sqrt(0.5);
+    world.addCollider(kWorldBody, ShapeType::Plane, {}, Pose{{6.0, 40.0, 0.0}, {r, 0.0, -r, 0.0}},
+                      0.8);
+    LandingSurfaces ground;
+    ground.build(world);
+    LeafWalls walls;
+    walls.build(world);
+    ASSERT_FALSE(walls.empty());
+    LeafParams params;
+    params.glide = 0.0;
+    LeafField field(params);
+    field.reset(1);
+    field.add(0, {0.0, 0.0, 3.0}, {}, 0.003, 0.0, kSeed, 0);
+    field.add(0, {0.0, 20.0, 3.0}, {}, 0.003, 0.0, kSeed, 0);
+    const Vec3 wind{8.0, 0.0, 0.0};  // straight at the walls, faster than the leaves fall
+    double most = -1.0;
+    // Pressed to the wall, the wind across it holds it back: it slides down at about g / (k |u|)
+    // (0.3 m/s), so 20 s.
+    for (int k = 0; k < 20000; ++k) {
+        field.step(1e-3, wind, {}, ground, &walls);
+        most = std::max(most, field.leaves()[0].position[0]);
+        // The turned wall: in its own frame, never past its near face.
+        const Vec3& p = field.leaves()[1].position;
+        const double along =
+            (std::cos(2.0 * half) * (p[0] - 2.1)) + (std::sin(2.0 * half) * (p[1] - 20.0));
+        EXPECT_LE(along, -0.1 + 1e-5) << "through the turned wall at step " << k;
+    }
+    std::printf(
+        "the leaf reached x = %.6f m at most (the wall's face at 2.0), and lies at "
+        "(%.3f, %.3f, %.3f)\n",
+        most, field.leaves()[0].position[0], field.leaves()[0].position[1],
+        field.leaves()[0].position[2]);
+    EXPECT_LE(most, 2.0 + 1e-5) << "it never passes into the wall";
+    EXPECT_GT(most, 1.99) << "it reaches it";
+    EXPECT_EQ(field.leaves()[0].settled, 1.0) << "it slid down to the ground at its foot";
+    EXPECT_EQ(field.leaves()[0].position[2], 0.0);
+    // The plane wall.
+    field.add(0, {5.0, 40.0, 3.0}, {}, 0.003, 0.0, kSeed, 30000);
+    for (int k = 0; k < 20000; ++k) {
+        field.step(1e-3, wind, {}, ground, &walls);
+        EXPECT_LE(field.leaves()[2].position[0], 6.0 + 1e-5);
+    }
+    EXPECT_EQ(field.leaves()[2].settled, 1.0);
+    EXPECT_NEAR(field.leaves()[2].position[0], 6.0, 1e-3);
+}
+
 TEST(Leaves, PastTheCapacityTheOldestGo) {
     LeafField field;
     field.reset(1);

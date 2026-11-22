@@ -1,3 +1,4 @@
+#include "lagrange/random/Philox.hpp"
 #include "lagrange/vegetation/Vegetation.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -433,6 +434,7 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         tree.leaves = d.output(spec(base + "leaves_shed", SignalType::Scalar, units::one));
         if (config.get<bool>("leaves").value_or(true)) {
             tree.flying = d.output(spec(base + "leaves_flying", SignalType::Scalar, units::one));
+            tree.lifted = d.output(spec(base + "leaves_lifted", SignalType::Scalar, units::one));
         }
         trees_.push_back(tree);
     }
@@ -452,9 +454,24 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         out.arrayLength = kLeavesLength;
         leavesOut_ = d.output(out);
         landing_.build(raw);
+        walls_.build(raw);
+        SignalSpec air =
+            spec(std::string(kLeavesAirSignal), SignalType::ScalarArray, units::one, "world_local");
+        air.arrayLength = kLeavesAirLength;
+        air.optional = true;
+        air.feedback = true;
+        air.defaultValue = 0.0;
+        leavesAir_ = d.input(air);
     }
+    litter_ = static_cast<std::uint32_t>(
+        std::clamp(config.get<double>("leaf_litter").value_or(0.0), 0.0, double{kLeavesCapacity}));
     bodies_.clear();
     density_ = std::max(0.0, config.get<double>("density").value_or(0.0));
+    LeafParams leafParams = leaves_.params();
+    if (density_ > 0.0) {
+        leafParams.airDensity = density_;
+    }
+    leaves_.setParams(leafParams);
     dragCoefficient_ =
         std::max(0.0, config.get<double>("drag_coefficient").value_or(kStemDragCoefficient));
     const std::vector<bool> moving = movingBodies(raw);
@@ -661,11 +678,16 @@ Status Vegetation::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         bus.write(tree.leaves, 0.0);
         if (tree.flying.valid()) {
             bus.write(tree.flying, 0.0);
+            bus.write(tree.lifted, 0.0);
         }
     }
     leaves_.reset(trees_.size());
     leafVersion_ = 0.0;
     treeCells_.assign(trees_.size(), {});
+    if (leavesOut_.valid()) {
+        layLitter();
+        litterFresh_ = !leaves_.leaves().empty();
+    }
     if (leavesOut_.valid()) {
         leaves_.write(leafValues_, leafVersion_);
         bus.writeN(leavesOut_, leafValues_);
@@ -869,6 +891,35 @@ void Vegetation::collectCut(std::size_t tree, const std::array<double, 3>& hub,
     }
 }
 
+void Vegetation::layLitter() {
+    // Uniform over the crown's footprint (r = R √u), on the highest surface under it at the tree's
+    // foot, never inside the trunk.
+    constexpr std::uint64_t kLitterSeed = 0x4C454146ULL;  // any fixed key: "LEAF"
+    constexpr double kProbe = 0.5;                        // m over the foot it looks down from
+    // At most an equal share of the particles each, so no tree's litter pushes out another's.
+    const auto each = static_cast<std::uint32_t>(std::min<std::size_t>(
+        litter_, kLeavesCapacity / std::max<std::size_t>(treeSpecs_.size(), 1)));
+    for (std::size_t k = 0; k < treeSpecs_.size() && each > 0; ++k) {
+        const TreeSpec& t = treeSpecs_[k];
+        random::Stream rng(kLitterSeed, 0, static_cast<std::uint32_t>(k));
+        for (std::uint32_t n = 0; n < each; ++n) {
+            const double r = t.crownRadius * std::sqrt(rng.uniform());
+            const double a = 2.0 * std::numbers::pi * rng.uniform();
+            if (r < 0.5 * t.trunkDiameter) {
+                continue;
+            }
+            const std::array<double, 3> local{r * std::cos(a), r * std::sin(a), 0.0};
+            const std::array<double, 3> w = rotate(t.pose.orientation, local);
+            const double x = t.pose.position[0] + w[0];
+            const double y = t.pose.position[1] + w[1];
+            const double z = landing_.below(x, y, t.pose.position[2] + w[2] + kProbe);
+            if (std::isfinite(z)) {
+                leaves_.lay(static_cast<std::uint32_t>(k), {x, y, z}, t.leafArea, kLitterSeed, n);
+            }
+        }
+    }
+}
+
 void Vegetation::stepLeaves(const StepContext& context, SignalBus& bus,
                             std::span<const std::array<double, 3>> sways,
                             std::span<const double> wind) {
@@ -905,8 +956,13 @@ void Vegetation::stepLeaves(const StepContext& context, SignalBus& bus,
         started += leaves_.strip(tree, treeSpecs_[k], trees_[k].cut, air, sways[k], wakes_, w, dt,
                                  context.seed, context.stepIndex);
     }
-    const bool moved = leaves_.step(dt, w, wakes_, landing_);
-    if (started > 0 || moved) {
+    const std::span<const double> leafAir =
+        leavesAir_.valid() ? bus.readN(leavesAir_) : std::span<const double>{};
+    const bool moved = leaves_.step(dt, w, wakes_, landing_, &walls_, leafAir);
+    // The litter is published again on the first step under a new version, for a client that
+    // came after the run's start (it sends a version once).
+    if (started > 0 || moved || litterFresh_) {
+        litterFresh_ = false;
         leafVersion_ += 1.0;
         leaves_.write(leafValues_, leafVersion_);
         bus.writeN(leavesOut_, leafValues_);
@@ -917,6 +973,7 @@ void Vegetation::stepLeaves(const StepContext& context, SignalBus& bus,
         if (trees_[k].flying.valid()) {
             bus.write(trees_[k].flying,
                       static_cast<double>(leaves_.flying(static_cast<std::uint32_t>(k))));
+            bus.write(trees_[k].lifted, leaves_.lifted(static_cast<std::uint32_t>(k)));
         }
     }
 }
@@ -973,6 +1030,7 @@ Status Vegetation::restoreState(StateReader& reader) {
         return Status::error(StatusCode::Internal, "vegetation: the saved leaves are short");
     }
     treeCells_.assign(trees_.size(), {});
+    litterFresh_ = false;  // the saved leaves were published as they were
     return {};
 }
 
