@@ -104,7 +104,16 @@ Status JointControl::declare(const WorldView& world, const ModuleConfig&, Signal
         out.inertia = d.input(inertia);
         const auto drive = driveModes_.find(out.name);
         out.mode = drive == driveModes_.end() ? "torque" : drive->second;
-        if (out.mode == "velocity") {
+        if (out.mode == "stepper") {
+            // An open-loop profile to the driver's position input (RFC 0020 §4.5).
+            out.torque = d.output(spec(base + "/position_command", slide ? units::m : units::rad));
+            const double limit = joints.velocityLimit[j];
+            out.maxSpeed = std::isfinite(limit) && limit > 0.0
+                               ? limit
+                               : (slide ? kStepperSlideSpeed : kStepperSpeed);
+            out.maxAcceleration = out.maxSpeed / kStepperRampTime;
+            out.start = joints.initialPosition[j];
+        } else if (out.mode == "velocity") {
             out.torque = d.output(
                 spec(base + "/velocity_command", slide ? units::m_per_s : units::rad_per_s));
         } else if (out.mode == "voltage") {
@@ -118,8 +127,10 @@ Status JointControl::declare(const WorldView& world, const ModuleConfig&, Signal
 }
 
 Status JointControl::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
-    for (const Joint& j : joints_) {
-        bus.write(j.torque, 0.0);
+    for (Joint& j : joints_) {
+        j.profilePosition = j.start;
+        j.profileVelocity = 0.0;
+        bus.write(j.torque, j.mode == "stepper" ? j.start : 0.0);
     }
     return {};
 }
@@ -132,6 +143,11 @@ Status JointControl::step(const StepContext& context, SignalBus& bus) {
     for (Joint& j : joints_) {
         const auto it = targets.find(j.name);
         double torque = 0.0;
+        if (j.mode == "stepper") {
+            stepProfile(j, it == targets.end() ? nullptr : &it->second, context.dt.seconds());
+            bus.write(j.torque, j.profilePosition);
+            continue;
+        }
         if (j.mode != "torque") {
             // The motor closes the loop: it is told a speed, or volts.
             double out = 0.0;
@@ -208,13 +224,49 @@ Status JointControl::step(const StepContext& context, SignalBus& bus) {
     return {};
 }
 
-// A checkpoint holds what the joints were told, so that going back to it replays the same run.
+void JointControl::stepProfile(Joint& j, const JointTarget* target, double dt) {
+    // Trapezoidal: the speed it wants (toward a position, braking in time, or a velocity, or a
+    // stop), approached at most at the acceleration limit.
+    double wanted = 0.0;
+    if (target != nullptr && target->mode == JointTarget::Mode::Position) {
+        const double distance = target->value - j.profilePosition;
+        wanted = std::copysign(
+            std::min(j.maxSpeed, std::sqrt(2.0 * j.maxAcceleration * std::abs(distance))),
+            distance);
+        if (std::abs(distance) <= j.maxAcceleration * dt * dt &&
+            std::abs(j.profileVelocity) <= j.maxAcceleration * dt) {
+            j.profilePosition = target->value;  // arrived
+            j.profileVelocity = 0.0;
+            return;
+        }
+    } else if (target != nullptr && target->mode == JointTarget::Mode::Velocity) {
+        wanted = std::clamp(target->value, -j.maxSpeed, j.maxSpeed);
+    } else if (target != nullptr && target->mode != JointTarget::Mode::None &&
+               !warned_.contains(j.name)) {
+        warned_.insert(j.name);
+        services::log(services::LogLevel::Warning, "joint_control",
+                      j.name + ": a stepper takes position or velocity targets");
+    }
+    const double change =
+        std::clamp(wanted - j.profileVelocity, -j.maxAcceleration * dt, j.maxAcceleration * dt);
+    j.profileVelocity += change;
+    j.profilePosition += j.profileVelocity * dt;
+}
+
+// A checkpoint holds what the joints were told, so that going back to it replays the same run,
+// and each stepper's profile.
 Status JointControl::saveState(StateWriter& writer) const {
     const std::map<std::string, JointTarget> targets = targets_->all();
     writer.put<std::uint64_t>(targets.size());
     for (const auto& [name, target] : targets) {
         writer.putString(name);
         writer.put(target);
+    }
+    for (const Joint& j : joints_) {
+        if (j.mode == "stepper") {
+            writer.put(j.profilePosition);
+            writer.put(j.profileVelocity);
+        }
     }
     return {};
 }
@@ -228,6 +280,11 @@ Status JointControl::restoreState(StateReader& reader) {
         JointTarget target;
         ok = reader.getString(name) && reader.get(target);
         targets[name] = target;
+    }
+    for (Joint& j : joints_) {
+        if (ok && j.mode == "stepper") {
+            ok = reader.get(j.profilePosition) && reader.get(j.profileVelocity);
+        }
     }
     if (!ok) {
         return Status::error(StatusCode::InvalidConfig, "joint control: bad state");

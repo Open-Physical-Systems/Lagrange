@@ -116,7 +116,7 @@ points at the driven joint).
 
 | Attribute | Type | Unit | Fallback | Meaning |
 |---|---|---|---|---|
-| `elec:motorType` | token | — | `pmsm` | `pmsm`, `bldc`, `dc_brushed`, `induction` (later) |
+| `elec:motorType` | token | — | `pmsm` | `pmsm`, `bldc`, `dc_brushed`, `stepper` (RFC 0020 §4.5, appended after 1.0: a two-phase hybrid stepper on a chopper driver; `torqueConstant` is then the torque per phase ampere), `induction` (later) |
 | `elec:windingResistance` | double | ohm | — | Phase (or armature) resistance at `referenceTemperature` |
 | `elec:inductance` | double | H | — | d-axis (or armature) inductance |
 | `elec:inductanceQ` | double | H | = `inductance` | q-axis inductance (salient machines) |
@@ -137,6 +137,10 @@ points at the driven joint).
 | `elec:behaviorModel` | asset | — | none | Optional FMU that replaces the built-in model |
 | `elec:joint` | rel | — | — | Driven joint prim |
 | `elec:powerPort` | rel | — | — | Port or bus the drive draws from |
+| `elec:stepper:rotorTeeth` | int | 1 | `50` | A stepper's rotor teeth: a full step is 90°/N_r (added after 1.0) |
+| `elec:stepper:detentTorque` | double | N·m | `0.0` | Detent torque amplitude, `−T_d·sin(4·N_r·θ)` |
+| `elec:stepper:holdCurrent` | double | A | = `maxCurrent` | The driver's current at standstill (peak per phase) |
+| `elec:stepper:microsteps` | int | 1 | `1` | Microsteps per full step |
 
 ```usda
 class "PortAPI_1" (

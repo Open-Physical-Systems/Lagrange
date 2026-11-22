@@ -229,6 +229,14 @@ back-driven losses become the joint friction `joint/<j>/friction_limit` = (1 −
 load drives or stands against the screw, so a self-locking screw (0) holds with the motor off;
 the overlay's `lead_screw:` sets the gear from the thread (docs/physics/actuators.md "Lead
 screws", `test_models` `LeadScrew.*`).
+A stepper (`elec:motorType = stepper`, RFC 0020 §4.5): two phases on a chopper driver
+(`stepStepper`): the microstep table's currents, reached each step by the voltage the exact R–L
+solution needs, held to ±V_bus; back-EMF and detent torque; the rotor integrated between physics
+updates on the joint's effective inertia (the speed prediction extended to the angle), so a load
+past the torque–angle curve's peak slips whole electrical periods. Commands
+`joint/<j>/position_command`, `step_target`, `step_rate`, `stepper_enable`; out
+`motor/<m>/current_a|current_b|steps|lost_steps`; docs/physics/actuators.md "Steppers",
+`test_stepper`.
 Checked against the closed forms: stall and no-load in voltage mode, steady speed under load in
 velocity mode, on a hinge and a slide (`server/test/test_motor_modes.cpp`).
 

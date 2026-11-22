@@ -88,9 +88,22 @@ public:
                                    : d.output(spec(act + "goal_position", units::rad));
                 joint.load = d.input(feedback(act + "present_load", units::N_m));
             }
+            // A joint on a stepper (RFC 0020 §4.5): the position command goes to its driver,
+            // converted to microsteps there; the effort state is the torque it makes.
+            for (const SchemaInstance* motor : world.instancesOf("ElectricalMotorAPI_1")) {
+                const auto driven = motor->rel("elec:joint");
+                if (joint.servo || driven.size() != 1 || driven[0] != table.prim[j] ||
+                    motor->token("elec:motorType").value_or("pmsm") != "stepper") {
+                    continue;
+                }
+                joint.stepper = true;
+                joint.torque =
+                    d.output(spec(base + "/position_command", prismatic ? units::m : units::rad));
+                joint.load = d.input(feedback(base + "/torque", prismatic ? units::N : units::N_m));
+            }
             // The command: the electrical domain (or its ideal substitute) turns it into the
             // torque.
-            if (!joint.servo) {
+            if (!joint.servo && !joint.stepper) {
                 joint.torque =
                     d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
             }
@@ -105,7 +118,9 @@ public:
         lastCycleNs_ = -periodNs_;
         for (const Joint& joint : signals_) {
             // A servo keeps its goal until a controller gives one (NaN: no command).
-            bus.write(joint.torque, joint.servo ? std::numeric_limits<double>::quiet_NaN() : 0.0);
+            bus.write(joint.torque, joint.servo || joint.stepper
+                                        ? std::numeric_limits<double>::quiet_NaN()
+                                        : 0.0);
         }
         return {};
     }
@@ -121,7 +136,7 @@ public:
                 JointSlot& slot = table[joint.slot];
                 slot.position = bus.read(joint.position);
                 slot.velocity = bus.read(joint.velocity);
-                slot.effort = joint.servo ? bus.read(joint.load) : joint.applied;
+                slot.effort = joint.servo || joint.stepper ? bus.read(joint.load) : joint.applied;
                 slot.glitchProbability = bus.read(joint.glitch);
             }
         }
@@ -139,6 +154,13 @@ public:
         const std::lock_guard<std::mutex> lock(table.mutex());
         for (Joint& joint : signals_) {
             const JointSlot& slot = table[joint.slot];
+            if (joint.stepper) {
+                // A position command is the driver's; without one it keeps its step count.
+                bus.write(joint.torque, slot.mode == CommandMode::Position
+                                            ? slot.commandPosition
+                                            : std::numeric_limits<double>::quiet_NaN());
+                continue;
+            }
             if (joint.servo) {
                 // Position (or, for a servo in velocity mode, velocity) commands are its goal;
                 // others it cannot follow, and it keeps its last goal.
@@ -210,6 +232,7 @@ private:
         // A servo's joint: `torque` is then its act/<s>/goal_position (or goal_velocity), and
         // `load` its present load.
         bool servo{false}, servoVelocity{false};
+        bool stepper{false};  // `torque` is joint/<j>/position_command, `load` joint/<j>/torque
         SignalId load;
         CommandMode mode{CommandMode::None};
         double integral{0.0};
