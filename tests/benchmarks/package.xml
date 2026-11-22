@@ -3,7 +3,7 @@
 <package format="3">
   <name>lagrange_benchmarks</name>
   <version>1.5.0</version>
-  <description>Performance benchmarks: scheduler overhead, signal bus access and lidar rays per second per capability tier, with the regression check the nightly job runs.</description>
+  <description>Performance benchmarks: scheduler overhead, signal bus access and lidar rays per second per capability tier, reinforcement-learning environment steps per second, with the regression check the nightly job runs.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
 
@@ -16,7 +16,9 @@
   <depend>lagrange_sensors</depend>
   <depend>tbb</depend>
 
+  <exec_depend>lagrange_python</exec_depend>  <!-- rl_throughput.py: environments per second -->
   <exec_depend>mesa-vulkan-drivers</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

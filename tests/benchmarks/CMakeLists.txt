@@ -28,7 +28,10 @@ target_link_libraries(
 lagrange_target_defaults(bench_lidar)
 
 install(TARGETS bench_core bench_lidar DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS scripts/check_benchmarks.py DESTINATION lib/${PROJECT_NAME})
+install(
+    PROGRAMS scripts/check_benchmarks.py scripts/rl_throughput.py
+    DESTINATION lib/${PROJECT_NAME}
+)
 install(FILES baseline.json DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

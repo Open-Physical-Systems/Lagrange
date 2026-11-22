@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Performance benchmarks (roadmap H6): runs bench_core and bench_lidar three times each and
-# compares the medians with tests/benchmarks/baseline.json (docs/design/benchmarks.md).
+# compares the medians with tests/benchmarks/baseline.json (docs/design/benchmarks.md), then
+# records reinforcement-learning throughput (rl_throughput.py, benchmarks.md §6; not compared:
+# OUT_DIR/rl_throughput.json and .md). RL_BENCH=0 skips it; RL_BENCH_ARGS replaces its options.
 # Usage (from the colcon workspace root, after a RelWithDebInfo build):
 #   tools/ci/benchmarks.sh MACHINE [OUT_DIR]
 # MACHINE is a key of baseline.json. When it has no baseline yet, the results are printed and
@@ -22,6 +24,12 @@ for bench in bench_core bench_lidar; do
     "$bin/$bench" --benchmark_repetitions=3 --benchmark_report_aggregates_only=true \
         --benchmark_out="$out/$bench.json" --benchmark_out_format=json
 done
+
+if [[ "${RL_BENCH:-1}" != 0 ]]; then
+    # shellcheck disable=SC2086 # RL_BENCH_ARGS is a list of options
+    python3 "$bin/rl_throughput.py" ${RL_BENCH_ARGS:---repeats 3 --seconds 3} \
+        --json "$out/rl_throughput.json" --markdown "$out/rl_throughput.md"
+fi
 
 status=0
 "$bin/check_benchmarks.py" --baseline "$baseline" --machine "$machine" \

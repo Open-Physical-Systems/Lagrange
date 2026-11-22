@@ -55,6 +55,37 @@ each process stepping its own environment with no coordination, the machine's li
 `step()` waits for the slowest environment each step, which on a loaded machine is a process the
 scheduler set aside; `send`/`recv` reaches about 90 % of the independent rate on 12 workers. There are no batches on the GPU: on this machine the sensorless arm gave 14,000 steps of 20 ms per second on one process and 45,000 on four; a robot with a camera is limited by rendering, about 2,400 on any number.
 
+## Many environments in one process
+
+A worker process costs 35 to 40 MB and hundreds of milliseconds to start (the interpreter,
+numpy, the Lagrange libraries); a simulation in it costs 1 to 3 MB and 5 to 15 ms. So for many
+environments, put several in each worker and step them on threads:
+
+```python
+envs = ParallelEnvs(make_env, 64, envs_per_worker=16, worker_threads=16)  # 4 processes
+envs = VectorEnv(robot, 64, envs_per_worker=16, worker_threads=16, env_options={...})
+```
+
+Each simulation lets go of Python's lock while it steps, so a worker's threads keep several cores
+busy; each thread steps the same environments every time. The defaults (`envs_per_worker=1`,
+`worker_threads=1`) are the earlier behaviour: one process each, or several stepped in turn.
+
+- Every environment stays its own run, bit for bit: environment k of a threaded worker gives
+  exactly what the same seed gives alone in one process (`test_envs.py` compares observations
+  and the whole-state hash at every step, for the AMR with lidars and the quadcopter).
+- Pass `cameras=False` to `LagrangeEnv` (or `Simulation`) when the policy does not observe images:
+  cameras then publish their ground truth and no GPU device is made, one per simulation. Cameras
+  rendering from threads have not been checked.
+- Environments built by your own `make` must be safe to step beside each other on threads; a
+  plugin's module must keep no global state between instances.
+- What one process gives is bounded by its Python share (observations, rewards, actions hold the
+  lock): with cheap steps, use more workers with fewer threads each.
+
+On the 20-thread laptop, shared and heavily loaded, at 64 environments four threaded workers used
+4 to 7 MB per environment instead of 35 to 39 MB, started in 0.5 to 1 s instead of 2 to 4 s, and
+stepped faster than the same workers stepping in turn for each sample robot
+(`docs/design/benchmarks.md` §6; `tests/benchmarks/scripts/rl_throughput.py` measures it on yours).
+
 ## Profile, overlay and world
 
 `LagrangeEnv(robot, world, profile=, overlay=)` hands all three to `lagrange.Simulation`: the

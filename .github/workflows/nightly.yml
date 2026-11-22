@@ -81,7 +81,7 @@ jobs:
         run: src/lagrange/tools/ci/nav2_demo.sh 10
 
   benchmarks:
-    name: benchmarks (scheduler, bus, lidar per tier)
+    name: benchmarks (scheduler, bus, lidar per tier, RL steps per second)
     runs-on: ubuntu-latest
     container: ros:lyrical-ros-base-resolute
     permissions:

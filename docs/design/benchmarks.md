@@ -555,3 +555,120 @@ The Python layer adds about 1 % to an RL step. The rest is the simulation itself
 two lidars, MuJoCo and the electrical network. Under the shared load, `ParallelEnvs` with four
 workers gave 1.5 to 1.8× one worker at 20 ms steps. Each worker's CPU lidar already uses every
 core, and pinning workers to separate cores was slower here.
+
+## 6. Reinforcement-learning throughput and many environments in one process (2026-11-22)
+
+v1.6.0 plan items A5 (the benchmark) and A3 (many environments in one process).
+
+**The benchmark.** `tests/benchmarks/scripts/rl_throughput.py` (installed with
+`lagrange_benchmarks`; the nightly `benchmarks` job runs it through `tools/ci/benchmarks.sh`,
+which records `rl_throughput.json` and `.md` beside the other results without comparing them to a
+baseline) counts environment steps per second, summed over the environments, for 1, 4, 16 and 64
+environments on the CPU. A step is `LagrangeEnv`'s default 20 ms (twenty 1 ms physics steps) with
+uniform random actions. Four ways to run them:
+
+| Mode | What it is |
+|---|---|
+| `processes` | N independent Python processes, each stepping its own `LagrangeEnv` with no coordination: the machine's ceiling |
+| `parallel` | `ParallelEnvs(N)`: one worker process per environment, every `step()` waits for all |
+| `batched` | `ParallelEnvs(N, envs_per_worker=N/4)`: four processes, each stepping its environments one after another |
+| `threaded` | `ParallelEnvs(N, envs_per_worker=N/4, worker_threads=N/4)`: four processes, each stepping its environments on threads at once (A3) |
+
+Robots: `arm`, the sample arm (`arm6.urdf` with its power-system overlay) with the sensors domain
+off and `cameras=False`; `amr`, the sample AMR with its overlay and its two CPU lidars; `amr_nolidar`,
+the same with the sensors domain off; `quad`, the sample quadcopter on `quad_x500_hover` (electrical
+network at 50 µs, rotors, IMU, GNSS, magnetometer, barometer). Each cell is the median of three
+runs of 3 s, with the start-up (from the constructor to the first step) and the memory per
+environment (the summed PSS of every process, the benchmark's own included, divided by N).
+
+```bash
+python3 install/lagrange_benchmarks/lib/lagrange_benchmarks/rl_throughput.py \
+    [--robots arm,amr,amr_nolidar,quad] [--counts 1,4,16,64] [--repeats 3] [--seconds 3] \
+    [--batch-workers 4] [--json OUT.json] [--markdown OUT.md] [--plot OUT.png]
+```
+
+**Results.** The machine was shared with four other agents' builds and a container building debs:
+the load average went from 14 to 102 during the run, so rates move by a factor of two between
+neighbouring cells (the four 1-environment cells are the same simulation in one process and range
+from 322 to 532 for the quadcopter). Read the rows for their shape, not their digits; the memory
+and start-up columns are not affected by the load.
+
+Machine: 13th Gen Intel(R) Core(TM) i9-13900H, 20 logical CPUs, 30.3 GB, Linux 7.0.0-43-generic,
+Python 3.14.4, commit 1121e (v1.5.0 + plan docs), 2026-11-22 19:48 +0900; load average 13.8 at the
+start, 102.1 at the end. Medians of 3 runs of 3.0 s; batched and threaded use 4 worker processes.
+
+| Robot | Envs | processes | parallel | batched | threaded |
+|---|---|---|---|---|---|
+| arm | 1 | 1 185 (119 MB, 0.3 s) | 859 (111 MB, 0.4 s) | 1 617 (124 MB, 0.3 s) | 1 014 (99 MB, 0.3 s) |
+| arm | 4 | 2 368 (57 MB, 0.7 s) | 1 985 (58 MB, 0.5 s) | 1 768 (56 MB, 0.6 s) | 1 185 (60 MB, 0.6 s) |
+| arm | 16 | 7 537 (43 MB, 1.2 s) | 3 066 (41 MB, 0.9 s) | 1 885 (16 MB, 0.8 s) | 4 137 (16 MB, 0.6 s) |
+| arm | 64 | 9 440 (35 MB, 3.4 s) | 3 007 (35 MB, 3.2 s) | 2 984 (4 MB, 0.8 s) | 3 794 (4 MB, 0.8 s) |
+| amr | 1 | 1 147 (157 MB, 0.4 s) | 1 174 (133 MB, 0.3 s) | 628 (133 MB, 0.5 s) | 780 (133 MB, 0.3 s) |
+| amr | 4 | 2 315 (73 MB, 0.5 s) | 1 012 (63 MB, 0.7 s) | 1 265 (63 MB, 0.5 s) | 1 218 (63 MB, 0.8 s) |
+| amr | 16 | 4 959 (47 MB, 0.8 s) | 1 130 (44 MB, 1.4 s) | 2 398 (18 MB, 0.4 s) | 2 002 (19 MB, 0.5 s) |
+| amr | 64 | 8 092 (39 MB, 2.5 s) | 2 755 (38 MB, 2.3 s) | 3 231 (7 MB, 0.5 s) | 4 889 (7 MB, 0.5 s) |
+| amr_nolidar | 1 | 1 599 (157 MB, 0.4 s) | 1 697 (133 MB, 0.3 s) | 1 919 (133 MB, 0.3 s) | 1 868 (129 MB, 0.3 s) |
+| amr_nolidar | 4 | 7 246 (68 MB, 0.4 s) | 634 (59 MB, 0.8 s) | 1 039 (59 MB, 0.6 s) | 3 134 (65 MB, 0.4 s) |
+| amr_nolidar | 16 | 12 354 (46 MB, 0.8 s) | 4 707 (44 MB, 0.6 s) | 3 294 (17 MB, 0.6 s) | 3 116 (16 MB, 0.4 s) |
+| amr_nolidar | 64 | 8 613 (39 MB, 3.9 s) | 3 086 (38 MB, 2.4 s) | 1 170 (6 MB, 1.4 s) | 3 804 (6 MB, 0.9 s) |
+| quad | 1 | 532 (96 MB, 0.5 s) | 322 (90 MB, 0.6 s) | 473 (89 MB, 0.4 s) | 334 (89 MB, 0.4 s) |
+| quad | 4 | 2 970 (53 MB, 0.5 s) | 595 (52 MB, 0.7 s) | 849 (51 MB, 0.8 s) | 1 012 (50 MB, 0.5 s) |
+| quad | 16 | 7 688 (40 MB, 1.3 s) | 1 701 (39 MB, 0.9 s) | 1 405 (14 MB, 0.7 s) | 1 178 (13 MB, 0.7 s) |
+| quad | 64 | 10 209 (35 MB, 2.2 s) | 4 196 (35 MB, 2.1 s) | 2 020 (4 MB, 0.9 s) | 2 693 (4 MB, 1.0 s) |
+
+Each cell: environment steps per second (memory per environment as PSS, start-up).
+
+**What it shows.**
+
+- **Memory per environment.** A process costs 35 to 40 MB of its own (PSS) at 64 processes and
+  about 90 to 130 MB alone: the interpreter, numpy, the Lagrange libraries and their data. One
+  simulation costs 1 to 3 MB on top (AMR 3 MB, quadcopter 1 MB, measured by RSS in one process
+  with 1 to 16 simulations). At 64 environments, four workers holding 16 each use 4 to 7 MB per
+  environment instead of 35 to 39 MB: 0.26 to 0.47 GB in all instead of 2.2 to 2.5 GB.
+- **Start-up.** 64 processes take 2.1 to 3.9 s to start; four workers of 16 take 0.5 to 1.4 s
+  (each simulation loads in 5 to 15 ms, the interpreter and imports in hundreds).
+- **Steps per second.** At 64 environments the threaded workers step faster than the batched
+  ones (the same processes, stepped one after another) for every robot: 3 794 against 2 984 (arm),
+  4 889 against 3 231 (AMR), 3 804 against 1 170 (AMR without sensors), 2 693 against 2 020
+  (quadcopter); and faster than one process per environment for three robots of four. At 16 and
+  below, with four workers holding four or fewer, the modes are within the noise of each other.
+- **Lockstep costs most.** At 64, independent processes reach 1.7 to 3 times the best mode of
+  `ParallelEnvs.step()` on this loaded machine: `step()` waits for the slowest environment, and
+  with 64 processes on 20 CPUs one is always waiting for the scheduler. `send`/`recv` (§5 and the
+  RL example's README) avoid most of that wait; the threaded workers do too within a process.
+- **Where threads stop helping.** A threaded worker lets go of Python's lock only inside
+  `step_until`, `save_state` and `restore_state`; observations, actions, rewards and the worker's
+  own loop hold it. For the 20 ms steps here that is a small share of a step, but cheaper steps
+  (shorter `step_seconds`, no sensors) are bounded by one core's Python per process: use more
+  workers with fewer threads each then. The AMR's lidars cast on TBB's shared pool, so in one
+  process the threads' casts share the same cores instead of oversubscribing them.
+
+**Thread safety (A3).** Threads in one worker step separate `Server`s at once. What was checked:
+
+- Module registry: the substitute registry (`SubstituteRegistry::instance`) is written only while
+  plugins load and modules register, which happens in `Server::load`. A worker builds its
+  environments one after another on its own thread before any thread steps, so stepping only
+  reads it. Plugin loading (`server/src/Plugins.cpp`), USD's schema registration (`std::call_once`)
+  and Jolt's factory (`initJolt`, `std::call_once`) are the same: once, at load.
+- Mutable globals: the libraries' writable data (`nm` over `liblagrange_server.so` and the
+  plugins) holds caches that are `thread_local` (the plugin ABI's rest poses, the sensors' hull
+  and neighbour scratch, the water surface's FFT plans), one-time flags and constant tables behind
+  C++ magic statics, the log sink behind a mutex, the GPU device list behind a mutex, and MAVLink's
+  channel buffers, which the Python simulation never uses.
+- MuJoCo: each `Server` has its own `mjModel` and `mjData`; Lagrange sets no global MuJoCo
+  callbacks. Embree: each lidar's `ShapeCaster` has its own device and scenes. TBB: one shared
+  pool, which takes `parallel_for` from any number of threads; each beam writes only its own slot,
+  so the order the pool runs them in does not change a result.
+- Cameras on a GPU were not checked from threads: `cameras=False` (new on `Simulation` and
+  `LagrangeEnv`) makes no Vulkan device and is what the benchmark and the tests use.
+- Tested, not only read: `test_envs.py` steps six AMRs with lidars and six hovering quadcopters,
+  three per worker on three threads, and compares every observation and the whole-state hash
+  (`state_hash()`, as the reward) at every step, across an autoreset, with each seed run alone in
+  one process; the arm's trajectories are compared the same way with 2 and 3 threads. Bit for
+  bit equal. A longer check, 16 simulations on 16 threads in one worker for 60 steps (AMR with
+  lidars, quadcopter), had no difference in 960 steps each. A ThreadSanitizer build was not run.
+
+**Shared world tables: not done.** The parsed world tables cost 1 to 3 MB per simulation, against
+35 to 40 MB per process, so sharing them would save little, and each `Server` rebuilds and shifts
+its own tables (spawning, the floating origin, restoring a state), which sharing would have to
+copy on write. The process's cost is what A3 removes; the tables stay per simulation.
