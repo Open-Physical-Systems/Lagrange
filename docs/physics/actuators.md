@@ -662,9 +662,7 @@ small open-frame solenoid's datasheet gives, not a real product's.
 What it leaves out: saturation of the iron (the inductance does not depend on the current), eddy
 currents and the plunger's magnetic hysteresis, the coil's heating (its resistance is constant),
 the latching kind with a permanent magnet, the PWM ripple, and a closed form for `L(x)` from a
-magnetic circuit (the table is given). MuJoCo's joint limits are soft at its default solver
-reference: the 20 g plunger sits about 0.2 mm past rest under the spring's 0.1 N and about 2.6 mm
-past the end stop under the 2.5 N pull (the model holds `x` to the stroke for its own sums). The
+magnetic circuit (the table is given). The stops are the joint's limits; both engines hold the plunger on them to micrometres (`AJointLimitIsAStop`). The
 co-energy force is the textbook result for a linear magnetic circuit (TODO(verify): cite an
 edition; no openly readable text was found in this pass, as RFC 0020 §4.6 notes).
 

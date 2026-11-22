@@ -1,6 +1,5 @@
-// RFC 0020 §4.6 in whole runs, on MuJoCo (whose joint limits are soft at its default solref: the
-// stops let the plunger 0.2 mm past rest under the spring's preload and about 2.6 mm past the
-// end under the 2.5 N pull, so positions are checked to those), with the sample bench solenoid (a
+// RFC 0020 §4.6 in whole runs, on MuJoCo (its joint limits are stops: the plunger sits on them
+// to micrometres, AJointLimitIsAStop), with the sample bench solenoid (a
 // 20 g plunger, 10 mm of stroke, 12 V on 24 Ω):
 //   - energised, the plunger pulls in, and its pull-in time and the current's dip agree with an
 //     independent integration of the same coil, spring and mass at 1 µs (m x'' = ½ i² dL/dx −
@@ -25,9 +24,9 @@ const std::vector<double> kX{0.0, 0.002, 0.004, 0.006, 0.008, 0.009, 0.010};
 const std::vector<double> kL{0.030, 0.033, 0.037, 0.044, 0.057, 0.070, 0.090};
 constexpr double kR = 24.0, kV = 12.0, kRate = 5.0, kPreload = 0.1, kStroke = 0.010;
 constexpr double kMass = 0.02;
-// MuJoCo's soft stops: how far past them the plunger may sit, m.
-constexpr double kSoftStop = 3e-4;
-constexpr double kSoftStopPulled = 3e-3;
+// How far past its stops the plunger may sit, m: MuJoCo's stiff limits hold it to micrometres.
+constexpr double kSoftStop = 1e-5;
+constexpr double kSoftStopPulled = 1e-5;
 
 ServerOptions bench() {
     ServerOptions o;
@@ -117,7 +116,7 @@ TEST(SolenoidsRun, PullInFollowsTheCoilAndPlungersOwnEquations) {
     const Status loaded = server.load();
     ASSERT_TRUE(loaded.ok()) << loaded.message;
     ASSERT_TRUE(server.stepUntil(SimTime{100'000'000}).ok());
-    // The spring holds it out, against the soft stop.
+    // The spring holds it out, against the stop.
     EXPECT_LT(std::abs(at(server, "joint/plunger/position")), kSoftStop);
     EXPECT_EQ(at(server, "act/plunger/current"), 0.0);
     ASSERT_TRUE(server.commandActuator("plunger", 1.0));
@@ -161,7 +160,7 @@ TEST(SolenoidsRun, PullInFollowsTheCoilAndPlungersOwnEquations) {
     EXPECT_NEAR(at(server, "act/plunger/current"), kV / kR, 0.01 * kV / kR);
     const double pull = 0.5 * (kV / kR) * (kV / kR) * (0.090 - 0.070) / 0.001;
     EXPECT_NEAR(at(server, "act/plunger/force"), pull, 0.01 * pull);
-    EXPECT_GE(at(server, "joint/plunger/position"), kStroke);  // fully in, on the soft stop
+    EXPECT_GE(at(server, "joint/plunger/position"), kStroke - kSoftStop);  // fully in, on the stop
     EXPECT_LT(at(server, "joint/plunger/position"), kStroke + kSoftStopPulled);
     EXPECT_NEAR(at(server, "act/plunger/power"), kV * kV / kR, 0.01 * kV * kV / kR);
     // Off: the spring returns it.

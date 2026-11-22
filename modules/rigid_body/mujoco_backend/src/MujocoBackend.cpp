@@ -370,6 +370,14 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
             joint->limited = mjLIMITED_TRUE;
             joint->range[0] = joints.lowerLimit[j];
             joint->range[1] = joints.upperLimit[j];
+            // A stop, not a spring: at MuJoCo's default solver reference (a 20 ms time constant)
+            // a 20 g slider pushed with 2.5 N sat 2.5 mm past its limit, where Jolt's stays on it.
+            // The shortest time constant the step allows (2 dt, as the friction rows above) and
+            // the stiffest impedance hold it to a few µm (AJointLimitIsAStop).
+            joint->solref_limit[0] = 2.0 * dt.seconds();  // s, time constant
+            joint->solref_limit[1] = 1.0;                 // critically damped
+            joint->solimp_limit[0] = mjMAXIMP;
+            joint->solimp_limit[1] = mjMAXIMP;
         }
     }
 
@@ -526,9 +534,9 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     rollingAny_ = false;
     for (std::size_t c = 0; c < colliders.body.size(); ++c) {
         const double crr = colliderSurface(world.raw(), c).rollingResistance;
-        const int g = crr > 0.0 ? mj_name2id(model_, mjOBJ_GEOM,
-                                             ("collider_" + std::to_string(c)).c_str())
-                                : -1;
+        const int g =
+            crr > 0.0 ? mj_name2id(model_, mjOBJ_GEOM, ("collider_" + std::to_string(c)).c_str())
+                      : -1;
         if (g >= 0) {
             geomRolling_[static_cast<std::size_t>(g)] = crr;
             rollingAny_ = true;
@@ -1077,8 +1085,10 @@ Status MujocoBackend::restoreState(StateReader& reader) {
         }
         model_->dof_frictionloss[joints_[i].dofAddress] = total;
     }
-    if (rollingAny_ && (!reader.getDoubles(appliedRolling_) || !reader.getDoubles(rollingTorque_))) {
-        return Status::error(StatusCode::InvalidConfig, "MuJoCo state without its rolling resistance");
+    if (rollingAny_ &&
+        (!reader.getDoubles(appliedRolling_) || !reader.getDoubles(rollingTorque_))) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "MuJoCo state without its rolling resistance");
     }
     mj_setState(model_, data_, state.data(), mjSTATE_INTEGRATION);
     for (std::size_t g = 0; g < baseFriction_.size(); ++g) {

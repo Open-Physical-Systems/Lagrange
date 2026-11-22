@@ -333,6 +333,54 @@ TEST_P(Conformance, APivotHoldsUpAStillPendulum) {
     }
 }
 
+// A joint's limit is a stop: an arm lying on it under gravity (a hinge) and a slider pressed onto
+// it (a slide) stay within a hair of it, as against a hard stop; what the engine lets past is the
+// stop's give, not a modelled compliance (rigid_body.md §8).
+TEST_P(Conformance, AJointLimitIsAStop) {
+    // A 1 kg arm 0.3 m out on a hinge whose upper limit is the horizontal: 2.94 N·m on the stop.
+    std::ostringstream arm;
+    arm << R"(<?xml version="1.0"?><robot name="stop_arm"><link name="world"/>)"
+        << R"(<link name="arm"><inertial><origin xyz="0.3 0 0"/><mass value="1"/>)"
+        << R"(<inertia ixx="0.0005" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/>)"
+        << R"(</inertial></link><joint name="hinge" type="revolute"><parent link="world"/>)"
+        << R"(<child link="arm"/><origin xyz="0 0 1"/><axis xyz="0 1 0"/>)"
+        << R"(<limit lower="-1" upper="0" effort="10" velocity="5"/></joint></robot>)";
+    // A 20 g slider on a horizontal slide, pushed onto its upper limit by 2.5 N (a solenoid's
+    // plunger at its stop, RFC 0020 §4.6): gravity across the slide, so the push is a joint force.
+    std::ostringstream slide;
+    slide << R"(<?xml version="1.0"?><robot name="stop_slide"><link name="world"/>)"
+          << R"(<link name="slider"><inertial><mass value="0.02"/>)"
+          << R"(<inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>)"
+          << R"(</inertial></link><joint name="rail" type="prismatic"><parent link="world"/>)"
+          << R"(<child link="slider"/><origin xyz="0 0 1"/><axis xyz="1 0 0"/>)"
+          << R"(<limit lower="0" upper="0.01" effort="50" velocity="5"/></joint></robot>)";
+    {
+        Server server(options(write("stop_arm.urdf", arm.str()), ""));
+        const Status loaded = server.load();
+        ASSERT_TRUE(loaded.ok()) << loaded.message;
+        ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+        const double past = server.read("joint/hinge/position").at(0);
+        std::printf("%s: the arm %.2e rad past its stop under 2.94 N·m\n", GetParam().name.c_str(),
+                    past);
+        EXPECT_LT(past, 2e-3) << "within 0.11° of the stop";
+        EXPECT_GT(past, -1e-4) << "on it, not held off it";
+    }
+    {
+        ServerOptions o = options(write("stop_slide.urdf", slide.str()), "");
+        o.jointControl = true;
+        Server server(o);
+        const Status loaded = server.load();
+        ASSERT_TRUE(loaded.ok()) << loaded.message;
+        ASSERT_TRUE(server.commandJoint("rail", "effort", 2.5));
+        ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+        const double past = server.read("joint/rail/position").at(0) - 0.01;
+        std::printf("%s: the slider %.2e m past its stop under 2.5 N\n", GetParam().name.c_str(),
+                    past);
+        EXPECT_LT(past, 2e-4) << "within 0.2 mm of the stop";
+        EXPECT_GT(past, -1e-4);
+    }
+}
+
 // Swinging, the pivot carries the weight and the pull that turns the bob: at the bottom
 // F = m·g + m·d·ω², with ω² = 2·m·g·d·(1 − cos θ₀) / I from the energy (d pivot to centre of
 // mass, I about the pivot).

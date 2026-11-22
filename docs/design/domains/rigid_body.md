@@ -203,6 +203,7 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 | The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
 | Determinism and state | two runs bit-identical; a saved state restored runs on bit-identically |
 | A self-locking screw | the sample screw lift's Tr12x2 (`friction_limit` from the electrical domain) holds 100 kg for 60 s with its motor shorted: settles within 0.1 mm, then moves < 0.5 mm |
+| A joint limit is a stop | a 1 kg arm lying on its hinge's limit under 2.94 N·m within 2e-3 rad of it, a 20 g slider pushed onto its limit with 2.5 N within 0.2 mm: MuJoCo 1.3e-8 rad and 5.0e-8 m (its limits at a 2-step time constant and the stiffest impedance; at its default 20 ms reference they gave 7.4e-4 rad and 2.5 mm), Jolt 3.6e-5 rad and 1.6e-9 m |
 | A back-drivable screw | its 16x5 ball screw under 20 kg, motor shorted, sinks at `η_back·m·g·R/((2π/lead)²·Kt²)` within 2 %, and on bit for bit from a restored checkpoint |
 
 MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
