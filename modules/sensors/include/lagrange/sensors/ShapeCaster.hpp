@@ -5,6 +5,7 @@
 #include "lagrange/services/SceneQuery.hpp"
 #include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/world/Leaves.hpp"
+#include "lagrange/world/TreeWood.hpp"
 #include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"
 
@@ -213,6 +214,40 @@ struct CanopyFormShape {
                                const std::array<double, 3>& origin,
                                const std::array<double, 3>& direction, double range,
                                const std::array<double, 3>& sway, const TreeCuts* cuts, double u);
+/// Whether a beam passes through a crown's ellipsoid within [0, range] (crownStop's span, no
+/// draw): a beam takes a draw only for the crowns it crosses.
+[[nodiscard]] bool crownCrossed(const TreeSpec& tree, const std::array<double, 3>& origin,
+                                const std::array<double, 3>& direction, double range,
+                                const std::array<double, 3>& sway);
+
+/// A sphere (world centre, radius, m) round a tree's wood (lagrange/world/TreeWood.hpp) at its
+/// sway: its top-level subtrees' spheres together. TreeWood::ray meets nothing outside it.
+[[nodiscard]] std::array<double, 4> woodBound(const TreeSpec& tree, const Skeleton& wood,
+                                              const std::array<double, 3>& sway);
+
+/// A broad phase for beams through many crowns: a uniform grid in x and y of each crown's
+/// bounding sphere (its centre at its sway, radius max(R, c)), rebuilt per scan. candidates()
+/// lists, in index order and once each, every tree whose sphere's cells the beam's segment within
+/// [0, range] passes over (a 2D DDA after clipping the beam to the box of all spheres): a superset
+/// of the crowns it crosses, so the result does not depend on the grid.
+class CrownIndex {
+public:
+    void build(std::span<const TreeSpec> trees, std::span<const std::array<double, 3>> sways);
+    /// The same over any spheres (world centre x, y, z and radius, m), one per tree: the wood's.
+    void buildSpheres(std::span<const std::array<double, 4>> spheres);
+    void candidates(const std::array<double, 3>& origin, const std::array<double, 3>& direction,
+                    double range, std::vector<std::uint32_t>& out) const;
+    [[nodiscard]] bool empty() const { return items_.empty(); }
+
+private:
+    double cell_{1.0};  // m
+    std::array<double, 3> lo_{};
+    std::array<double, 3> hi_{};
+    std::int64_t nx_{0};
+    std::int64_t ny_{0};
+    std::vector<std::uint32_t> start_;  // per cell (row-major in y), into items_; nx*ny + 1
+    std::vector<std::uint32_t> items_;  // tree indices, ascending within a cell
+};
 
 /// Flying leaves (lagrange/world/Leaves.hpp, ground.md "Flying leaves"): the particles of the
 /// vegetation domain's kLeavesSignal as the beams see them, each a disc of its size seen from any

@@ -1246,11 +1246,27 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                at[2] >= -along && at[2] <= 1.0F + along;
     };
 
+    const auto ballInView = [&](const std::array<float, 4>& ball) {
+        const double r = ball[3];
+        const double ahead =
+            ball[0] * view.forward[0] + ball[1] * view.forward[1] + ball[2] * view.forward[2];
+        if (ahead < view.near - r) {
+            return false;
+        }
+        for (std::size_t s = 0; s < 4; ++s) {
+            const std::array<double, 3>& n = sides.at(s);
+            if (ball[0] * n[0] + ball[1] * n[1] + ball[2] * n[2] < -r * sideNorms.at(s)) {
+                return false;
+            }
+        }
+        return true;
+    };
     // --- trees: a trunk with its branches and a crown of leaf cards each (realistic.slang
     // vsTree), the cards fewer and larger further off, every tree's together capped; a software
     // device draws a few hundred a tree.
     treeDraws_.clear();
     treeOrder_.clear();
+    constexpr double kOutOfView = 1e9;  // m, sorts after every tree in view
     for (std::size_t k = 0; k < treeCount; ++k) {
         const RealisticTree& t = settings.trees[k];
         if (!(t.height > 0.0) || !(t.crownRadius > 0.0) || !(t.crownBase >= 0.0) ||
@@ -1260,7 +1276,16 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         const double dx = t.foot[0] + t.sway[0] - eye[0];
         const double dy = t.foot[1] + t.sway[1] - eye[1];
         const double dz = t.foot[2] + t.crownBase + 0.5 * (t.height - t.crownBase) - eye[2];
-        treeOrder_.emplace_back(std::sqrt(dx * dx + dy * dy + dz * dz), k);
+        // Trees in the view take their cards first, nearest first; those out of it (still drawn
+        // into the sun's cascades) get what is left, so a row behind the eye does not leave the
+        // trees in front bare.
+        const double up = 0.5 * t.height;
+        const double sway = std::hypot(t.sway[0], t.sway[1], t.sway[2]);
+        const std::array<float, 4> ball{f(t.foot[0] - eye[0]), f(t.foot[1] - eye[1]),
+                                        f(t.foot[2] - eye[2] + up),
+                                        f(std::hypot(up, t.crownRadius) * 1.1 + 2.0 * sway + 0.1)};
+        treeOrder_.emplace_back(
+            std::sqrt(dx * dx + dy * dy + dz * dz) + (ballInView(ball) ? 0.0 : kOutOfView), k);
     }
     std::ranges::sort(treeOrder_);
     {
@@ -1275,8 +1300,9 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                 std::clamp(volume * kTreeLeavesPerM3, static_cast<double>(kTreeLeavesLeast),
                            static_cast<double>(kTreeLeavesMost));
             double cards = full;
-            if (distance > kTreeFullDetail) {
-                cards = std::max(full * (kTreeFullDetail / distance) * (kTreeFullDetail / distance),
+            const double away = distance >= kOutOfView ? distance - kOutOfView : distance;
+            if (away > kTreeFullDetail) {
+                cards = std::max(full * (kTreeFullDetail / away) * (kTreeFullDetail / away),
                                  static_cast<double>(kTreeLeavesLeast));
             }
             if (software) {
@@ -1314,21 +1340,6 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                          f(std::hypot(up, t.crownRadius) * 1.1 + 2.0 * sway + 0.1)};
         }
     }
-    const auto ballInView = [&](const std::array<float, 4>& ball) {
-        const double r = ball[3];
-        const double ahead =
-            ball[0] * view.forward[0] + ball[1] * view.forward[1] + ball[2] * view.forward[2];
-        if (ahead < view.near - r) {
-            return false;
-        }
-        for (std::size_t s = 0; s < 4; ++s) {
-            const std::array<double, 3>& n = sides.at(s);
-            if (ball[0] * n[0] + ball[1] * n[1] + ball[2] * n[2] < -r * sideNorms.at(s)) {
-                return false;
-            }
-        }
-        return true;
-    };
     const auto ballInCascade = [&](const std::array<float, 4>& ball,
                                    const std::array<float, 12>& clip) {
         const std::array<float, 3> at{

@@ -52,6 +52,14 @@ struct Wind;
 /// Not modelled: inflow above the disc, the wake's swirl, rotor-rotor interference within one
 /// drone, unsteadiness (the mean flow only), obstacles other than the ground plane, the boxes
 /// and still water.
+/// The trees' broad phase (ground.md "The orchard"): a crown farther from every wake column
+/// (Downwash::wakeDistance) than this many times the spread of its five air samples (half its
+/// radius) takes the air at its centre alone, not the mean of the five: the field is smooth on
+/// the scale of that distance, so the mean differs from the centre by about (spread/distance)²
+/// of it (the symmetric samples cancel to first order). test_downwash
+/// `FarFromTheWakeTheCrownsCentreStandsForItsMean` bounds the difference.
+inline constexpr double kCrownWakeFar = 10.0;
+
 class Downwash {
 public:
     using Vec3 = std::array<double, 3>;
@@ -147,6 +155,10 @@ public:
         std::vector<std::pair<Vec3, Vec3>> walls;
     };
     [[nodiscard]] const std::vector<Group>& groups() const { return groups_; }
+    /// How far `x` is from a group's wake column (m): from the segment from its mean hub to where
+    /// the wake meets a surface (or the ray down its axis when it meets none), less half its
+    /// motor-to-motor diagonal.
+    [[nodiscard]] static double wakeDistance(const Group& g, const Vec3& x);
 
 private:
     /// The free jet's speed along its axis at `x` (m/s; `s` the distance along it), its lateral

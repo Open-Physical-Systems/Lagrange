@@ -232,6 +232,7 @@ private:
     };
     struct TreeCrown {  // a tree's crown (TreeAPI_1): the rotors' air over it out
         std::array<std::array<double, 3>, 5> points{};  // world: the centre and 4 half way out
+        double spread{0.0};                             // m, the farthest point from the centre
         SignalId downwash;
     };
     struct RotorLink {

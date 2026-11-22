@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 #include <vector>
 
@@ -416,4 +417,75 @@ TEST(GroundAir, BladesBelowThePeakFeelThePeak) {
     EXPECT_GT(gpu::groundOutwash(jets, {0.5, 0.0, 0.0})[0], 0.5);
 }
 
+}  // namespace lagrange::aerodynamics
+
+namespace lagrange::aerodynamics {
+namespace {
+
+// The trees' broad phase (AeroDrag, ground.md "The orchard"): a crown farther from every wake
+// column than kCrownWakeFar times the spread of its five samples takes the air at its centre for
+// their mean. A 2 kg quadcopter (the sample X500: 12.7 cm propellers, 25 cm half diagonal)
+// hovering 1 to 15 m over the ground, crowns of 1 to 5 m radius at 1 to 20 m: wherever the rule
+// applies, the centre is within 2 % of the mean plus 2 mm/s.
+TEST(Downwash, FarFromTheWakeTheCrownsCentreStandsForItsMean) {
+    constexpr double kMass = 2.0;
+    constexpr double kRadius = 0.127;
+    constexpr double kHalfDiagonal = 0.25;
+    double worst = 0.0;  // the largest difference over its allowance
+    std::size_t checked = 0;
+    for (const double height : {1.0, 2.0, 5.0, 15.0}) {
+        std::vector<Downwash::Rotor> rotors;
+        for (int i = 0; i < 4; ++i) {
+            const double a = std::numbers::pi / 4.0 + i * std::numbers::pi / 2.0;
+            Downwash::Rotor r;
+            r.hub = {kHalfDiagonal * std::cos(a), kHalfDiagonal * std::sin(a), height};
+            r.thrustAxis = {0.0, 0.0, 1.0};
+            r.radius = kRadius;
+            r.thrust = kMass * kGravity / 4.0;
+            r.induced = inducedOf(r.thrust, kRadius);
+            rotors.push_back(r);
+        }
+        Downwash d;
+        d.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+        d.update(rotors);
+        ASSERT_EQ(d.groups().size(), 1U);
+        for (const double crownRadius : {1.0, 2.0, 5.0}) {
+            const double h = 0.5 * crownRadius;
+            for (const double across : {5.0, 10.0, 20.0, 30.0, 50.0}) {
+                for (const double z : {1.0, 2.0, 4.0, 8.0, 12.0, 20.0}) {
+                    for (int k = 0; k < 8; ++k) {
+                        const double a = k * std::numbers::pi / 8.0;
+                        const Vec3 c{across * std::cos(a), across * std::sin(a), z};
+                        if (Downwash::wakeDistance(d.groups()[0], c) <= kCrownWakeFar * h) {
+                            continue;
+                        }
+                        Vec3 mean{};
+                        for (const Vec3& o : {Vec3{0, 0, 0}, Vec3{h, 0, 0}, Vec3{-h, 0, 0},
+                                              Vec3{0, h, 0}, Vec3{0, -h, 0}}) {
+                            const Vec3 v = d.velocityAt({c[0] + o[0], c[1] + o[1], c[2] + o[2]});
+                            for (std::size_t n = 0; n < 3; ++n) {
+                                mean[n] += v[n] / 5.0;
+                            }
+                        }
+                        const Vec3 centre = d.velocityAt(c);
+                        const double diff = std::hypot(centre[0] - mean[0], centre[1] - mean[1],
+                                                       centre[2] - mean[2]);
+                        const double allowed =
+                            (0.02 * std::hypot(mean[0], mean[1], mean[2])) + 0.002;
+                        worst = std::max(worst, diff / allowed);
+                        ++checked;
+                    }
+                }
+            }
+        }
+    }
+    std::printf(
+        "%zu far crowns: the centre's difference from the mean at most %.2f of its "
+        "allowance\n",
+        checked, worst);
+    EXPECT_GT(checked, 100U);
+    EXPECT_LT(worst, 1.0);
+}
+
+}  // namespace
 }  // namespace lagrange::aerodynamics

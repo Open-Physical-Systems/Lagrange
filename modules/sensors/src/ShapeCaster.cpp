@@ -572,6 +572,198 @@ double crownStop(const TreeSpec& tree, std::uint32_t index, const std::array<dou
     return kNever;
 }
 
+bool crownCrossed(const TreeSpec& tree, const std::array<double, 3>& origin,
+                  const std::array<double, 3>& direction, double range,
+                  const std::array<double, 3>& sway) {
+    // crownStop's span, the same arithmetic.
+    const std::array<double, 3> o = inCrown(tree, origin, sway);
+    const std::array<double, 3> d = rotate(conjugate(tree.pose.orientation), direction);
+    const std::array<double, 3> scale{1.0 / tree.crownRadius, 1.0 / tree.crownRadius,
+                                      1.0 / tree.halfHeight()};
+    const std::array<double, 3> os{o[0] * scale[0], o[1] * scale[1], o[2] * scale[2]};
+    const std::array<double, 3> ds{d[0] * scale[0], d[1] * scale[1], d[2] * scale[2]};
+    const double a = ds[0] * ds[0] + ds[1] * ds[1] + ds[2] * ds[2];
+    const double b = os[0] * ds[0] + os[1] * ds[1] + os[2] * ds[2];
+    const double c = os[0] * os[0] + os[1] * os[1] + os[2] * os[2] - 1.0;
+    const double disc = b * b - a * c;
+    if (!(disc > 0.0) || !(a > 0.0)) {
+        return false;
+    }
+    const double root = std::sqrt(disc);
+    const double enter = std::max(0.0, (-b - root) / a);
+    const double leave = std::min(range, (-b + root) / a);
+    return leave > enter;
+}
+
+std::array<double, 4> woodBound(const TreeSpec& tree, const Skeleton& wood,
+                                const std::array<double, 3>& sway) {
+    const std::vector<BranchSegment>& segs = wood.segments;
+    const std::array<double, 3> c0 = segs.empty() ? std::array<double, 3>{} : segs[0].centre;
+    double radius = 0.0;
+    for (std::size_t i = 0; i < segs.size(); i = std::max<std::size_t>(segs[i].end, i + 1)) {
+        radius = std::max(radius, std::hypot(segs[i].centre[0] - c0[0], segs[i].centre[1] - c0[1],
+                                             segs[i].centre[2] - c0[2]) +
+                                      segs[i].radius);
+    }
+    const std::array<double, 3> up =
+        rotate(tree.pose.orientation, {c0[0], c0[1], c0[2] + tree.centreHeight()});
+    return {tree.pose.position[0] + up[0] + sway[0], tree.pose.position[1] + up[1] + sway[1],
+            tree.pose.position[2] + up[2] + sway[2], radius};
+}
+
+void CrownIndex::build(std::span<const TreeSpec> trees,
+                       std::span<const std::array<double, 3>> sways) {
+    // Each crown's bounding sphere, at its sway.
+    std::vector<std::array<double, 4>> spheres(trees.size());
+    for (std::size_t k = 0; k < trees.size(); ++k) {
+        const TreeSpec& t = trees[k];
+        const std::array<double, 3> up = rotate(t.pose.orientation, {0.0, 0.0, t.centreHeight()});
+        const std::array<double, 3> s = k < sways.size() ? sways[k] : std::array<double, 3>{};
+        spheres[k] = {t.pose.position[0] + up[0] + s[0], t.pose.position[1] + up[1] + s[1],
+                      t.pose.position[2] + up[2] + s[2], std::max(t.crownRadius, t.halfHeight())};
+    }
+    buildSpheres(spheres);
+}
+
+void CrownIndex::buildSpheres(std::span<const std::array<double, 4>> given) {
+    items_.clear();
+    start_.clear();
+    nx_ = 0;
+    ny_ = 0;
+    if (given.empty()) {
+        return;
+    }
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    std::vector<std::array<double, 4>> spheres(given.begin(), given.end());
+    lo_ = {kInf, kInf, kInf};
+    hi_ = {-kInf, -kInf, -kInf};
+    double diameters = 0.0;
+    for (std::array<double, 4>& sphere : spheres) {
+        // A little over, so rounding never leaves a crossing tree out.
+        const double r = (sphere[3] * (1.0 + 1e-9)) + 1e-6;
+        sphere[3] = r;
+        for (std::size_t c = 0; c < 3; ++c) {
+            lo_.at(c) = std::min(lo_.at(c), sphere.at(c) - r);
+            hi_.at(c) = std::max(hi_.at(c), sphere.at(c) + r);
+        }
+        diameters += 2.0 * r;
+    }
+    // Cells about a crown across: a crown in at most four, a few crowns a cell in an orchard.
+    cell_ = std::max(diameters / static_cast<double>(spheres.size()), 0.5);
+    constexpr std::int64_t kMostCellsASide = 1024;
+    cell_ =
+        std::max({cell_, (hi_[0] - lo_[0]) / kMostCellsASide, (hi_[1] - lo_[1]) / kMostCellsASide});
+    nx_ =
+        std::max<std::int64_t>(1, static_cast<std::int64_t>(std::ceil((hi_[0] - lo_[0]) / cell_)));
+    ny_ =
+        std::max<std::int64_t>(1, static_cast<std::int64_t>(std::ceil((hi_[1] - lo_[1]) / cell_)));
+    const auto cellOf = [&](double v, double lo, std::int64_t n) {
+        return std::clamp(static_cast<std::int64_t>(std::floor((v - lo) / cell_)), std::int64_t{0},
+                          n - 1);
+    };
+    std::vector<std::uint32_t> counts(static_cast<std::size_t>(nx_ * ny_) + 1, 0);
+    const auto each = [&](auto&& visit) {
+        for (std::size_t k = 0; k < spheres.size(); ++k) {
+            const std::array<double, 4>& s = spheres[k];
+            for (std::int64_t y = cellOf(s[1] - s[3], lo_[1], ny_);
+                 y <= cellOf(s[1] + s[3], lo_[1], ny_); ++y) {
+                for (std::int64_t x = cellOf(s[0] - s[3], lo_[0], nx_);
+                     x <= cellOf(s[0] + s[3], lo_[0], nx_); ++x) {
+                    visit(static_cast<std::size_t>(y * nx_ + x), static_cast<std::uint32_t>(k));
+                }
+            }
+        }
+    };
+    each([&](std::size_t cell, std::uint32_t) { ++counts[cell + 1]; });
+    for (std::size_t c = 1; c < counts.size(); ++c) {
+        counts[c] += counts[c - 1];
+    }
+    start_ = counts;
+    items_.resize(start_.back());
+    each([&](std::size_t cell, std::uint32_t k) { items_[counts[cell]++] = k; });
+}
+
+void CrownIndex::candidates(const std::array<double, 3>& origin,
+                            const std::array<double, 3>& direction, double range,
+                            std::vector<std::uint32_t>& out) const {
+    out.clear();
+    if (items_.empty()) {
+        return;
+    }
+    // The beam's segment clipped to the box of every crown (slabs).
+    double t0 = 0.0;
+    double t1 = range;
+    for (std::size_t c = 0; c < 3; ++c) {
+        if (std::abs(direction.at(c)) < 1e-15) {
+            if (origin.at(c) < lo_.at(c) || origin.at(c) > hi_.at(c)) {
+                return;
+            }
+            continue;
+        }
+        double a = (lo_.at(c) - origin.at(c)) / direction.at(c);
+        double b = (hi_.at(c) - origin.at(c)) / direction.at(c);
+        if (a > b) {
+            std::swap(a, b);
+        }
+        t0 = std::max(t0, a);
+        t1 = std::min(t1, b);
+        if (!(t0 <= t1)) {
+            return;
+        }
+    }
+    // A 2D DDA over the cells from t0 to t1 (Amanatides and Woo 1987).
+    const double px = origin[0] + (direction[0] * t0);
+    const double py = origin[1] + (direction[1] * t0);
+    std::int64_t x = std::clamp(static_cast<std::int64_t>(std::floor((px - lo_[0]) / cell_)),
+                                std::int64_t{0}, nx_ - 1);
+    std::int64_t y = std::clamp(static_cast<std::int64_t>(std::floor((py - lo_[1]) / cell_)),
+                                std::int64_t{0}, ny_ - 1);
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    const auto axis = [&](double d, double o, double lo, std::int64_t at, std::int64_t& step,
+                          double& next, double& delta) {
+        if (std::abs(d) < 1e-15) {
+            step = 0;
+            next = kInf;
+            delta = kInf;
+            return;
+        }
+        step = d > 0.0 ? 1 : -1;
+        const double edge = lo + (static_cast<double>(at + (d > 0.0 ? 1 : 0)) * cell_);
+        next = (edge - o) / d;
+        delta = cell_ / std::abs(d);
+    };
+    std::int64_t sx = 0;
+    std::int64_t sy = 0;
+    double nextX = 0.0;
+    double nextY = 0.0;
+    double dX = 0.0;
+    double dY = 0.0;
+    axis(direction[0], origin[0], lo_[0], x, sx, nextX, dX);
+    axis(direction[1], origin[1], lo_[1], y, sy, nextY, dY);
+    for (;;) {
+        const auto cell = static_cast<std::size_t>(y * nx_ + x);
+        out.insert(out.end(), items_.begin() + start_[cell], items_.begin() + start_[cell + 1]);
+        if (nextX <= nextY) {
+            if (nextX > t1) {
+                break;
+            }
+            x += sx;
+            nextX += dX;
+        } else {
+            if (nextY > t1) {
+                break;
+            }
+            y += sy;
+            nextY += dY;
+        }
+        if (x < 0 || x >= nx_ || y < 0 || y >= ny_) {
+            break;
+        }
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+}
+
 void FlyingLeaves::load(std::span<const double> values) {
     if (values.size() < kLeavesHeader || values[0] == version_) {
         return;

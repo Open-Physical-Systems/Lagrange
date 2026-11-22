@@ -5,9 +5,11 @@
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/world/TreeWood.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <numbers>
@@ -822,6 +824,117 @@ TEST(Crown, ABeamStopsOnABranch) {
     EXPECT_NEAR(
         rayCapsule({0.0, 0.0, 5.0}, {0.0, 0.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, 0.1, 10.0),
         3.9, 1e-12);
+}
+
+// The crowns' broad phase (CrownIndex): for many beams through an orchard of 140 swaying crowns
+// of mixed sizes and leans, its candidates are in index order, each once, and hold every crown
+// the beam crosses (brute force over all of them).
+TEST(Crown, TheIndexListsEveryCrownABeamCrosses) {
+    std::mt19937 gen(7);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::vector<TreeSpec> trees;
+    std::vector<std::array<double, 3>> sways;
+    for (int k = 0; k < 140; ++k) {
+        TreeSpec t = crown();
+        t.pose.position = {-30.0 + (60.0 * unit(gen)), -20.0 + (40.0 * unit(gen)), 0.0};
+        const double yaw = 6.28 * unit(gen);
+        const double lean = 0.2 * unit(gen);  // rad about x
+        t.pose.orientation = {
+            std::cos(yaw / 2) * std::cos(lean / 2), std::cos(yaw / 2) * std::sin(lean / 2),
+            -std::sin(yaw / 2) * std::sin(lean / 2), std::sin(yaw / 2) * std::cos(lean / 2)};
+        t.height = 3.0 + (15.0 * unit(gen));
+        t.crownBase = 0.25 * t.height;
+        t.crownRadius = 0.8 + (4.0 * unit(gen));
+        trees.push_back(t);
+        sways.push_back({0.4 * (unit(gen) - 0.5), 0.4 * (unit(gen) - 0.5), 0.0});
+    }
+    CrownIndex index;
+    index.build(trees, sways);
+    std::vector<std::uint32_t> near;
+    std::size_t crossings = 0;
+    std::size_t listed = 0;
+    for (int b = 0; b < 20000; ++b) {
+        const std::array<double, 3> from{-40.0 + (80.0 * unit(gen)), -30.0 + (60.0 * unit(gen)),
+                                         0.5 + (20.0 * unit(gen))};
+        const double az = 6.28318 * unit(gen);
+        const double el = (b % 10 == 0) ? 1.5707 : (1.2 * (unit(gen) - 0.7));  // some straight up
+        const std::array<double, 3> dir{std::cos(el) * std::cos(az), std::cos(el) * std::sin(az),
+                                        std::sin(el)};
+        const double range = b % 3 == 0 ? 1e9 : 5.0 + (60.0 * unit(gen));
+        index.candidates(from, dir, range, near);
+        listed += near.size();
+        for (std::size_t i = 1; i < near.size(); ++i) {
+            ASSERT_LT(near[i - 1], near[i]) << "in index order, once each";
+        }
+        for (std::uint32_t k = 0; k < trees.size(); ++k) {
+            if (crownCrossed(trees[k], from, dir, range, sways[k])) {
+                ++crossings;
+                ASSERT_TRUE(std::binary_search(near.begin(), near.end(), k))
+                    << "beam " << b << " crosses crown " << k;
+            }
+        }
+    }
+    std::printf("%zu crossings, %.1f candidates a beam of 140 crowns\n", crossings,
+                static_cast<double>(listed) / 20000.0);
+    EXPECT_GT(crossings, 1000U);
+    EXPECT_LT(static_cast<double>(listed) / 20000.0, 40.0) << "the index culls";
+    // crownCrossed agrees with crownStop: a crown crownStop stops in is crossed.
+    const TreeSpec t = crown();
+    EXPECT_TRUE(crownCrossed(t, {-10.0, 0.0, 6.5}, {1.0, 0.0, 0.0}, 100.0, {}));
+    EXPECT_FALSE(crownCrossed(t, {-10.0, 0.0, 11.0}, {1.0, 0.0, 0.0}, 100.0, {}));
+    EXPECT_FALSE(crownCrossed(t, {-10.0, 0.0, 6.5}, {1.0, 0.0, 0.0}, 6.5, {}));
+}
+
+// The wood's broad phase (woodBound, CrownIndex::buildSpheres): for random beams through 140
+// swaying trees' branches, every tree whose wood a beam meets (TreeWood::ray) is a candidate.
+TEST(Crown, TheWoodIndexListsEveryTreeABeamMeets) {
+    std::mt19937 gen(11);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::vector<TreeSpec> trees;
+    std::vector<std::array<double, 3>> sways;
+    for (int k = 0; k < 140; ++k) {
+        TreeSpec t = crown();
+        t.pose.position = {-30.0 + (60.0 * unit(gen)), -20.0 + (40.0 * unit(gen)), 0.0};
+        const double yaw = 6.28 * unit(gen);
+        t.pose.orientation = {std::cos(yaw / 2), 0.0, 0.0, std::sin(yaw / 2)};
+        t.height = 3.0 + (15.0 * unit(gen));
+        t.crownBase = 0.25 * t.height;
+        t.crownRadius = 0.8 + (4.0 * unit(gen));
+        t.trunkDiameter = t.crownRadius / 8.0;
+        t.branchCount = 12;
+        trees.push_back(t);
+        sways.push_back({0.4 * (unit(gen) - 0.5), 0.4 * (unit(gen) - 0.5), 0.0});
+    }
+    TreeWood wood;
+    wood.build(trees);
+    std::vector<std::array<double, 4>> spheres;
+    for (std::size_t k = 0; k < trees.size(); ++k) {
+        spheres.push_back(woodBound(trees[k], wood.skeleton(k), sways[k]));
+    }
+    CrownIndex index;
+    index.buildSpheres(spheres);
+    std::vector<std::uint32_t> near;
+    std::size_t hits = 0;
+    for (int b = 0; b < 20000; ++b) {
+        const std::array<double, 3> from{-40.0 + (80.0 * unit(gen)), -30.0 + (60.0 * unit(gen)),
+                                         0.5 + (12.0 * unit(gen))};
+        const double az = 6.28318 * unit(gen);
+        const double el = 0.8 * (unit(gen) - 0.6);
+        const std::array<double, 3> dir{std::cos(el) * std::cos(az), std::cos(el) * std::sin(az),
+                                        std::sin(el)};
+        const double range = 5.0 + (60.0 * unit(gen));
+        index.candidates(from, dir, range, near);
+        for (std::uint32_t k = 0; k < trees.size(); ++k) {
+            WoodHit hit;
+            if (wood.ray(trees[k], k, from, dir, range, sways[k], hit)) {
+                ++hits;
+                ASSERT_TRUE(std::binary_search(near.begin(), near.end(), k))
+                    << "beam " << b << " meets tree " << k << "'s wood";
+            }
+        }
+    }
+    std::printf("%zu beams met wood\n", hits);
+    EXPECT_GT(hits, 100U);
 }
 
 // Flying leaves (ground.md "Flying leaves"): a beam passing within size/2 of a leaf's centre

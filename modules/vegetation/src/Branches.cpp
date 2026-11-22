@@ -85,6 +85,14 @@ double discMeets(const V3& a, const V3& b, double d, const V3& centre, const V3&
 
 void Branches::build(const std::vector<TreeSpec>& trees) {
     wood_.build(trees);
+    // Each tree's wood bound (its first segment's sphere) over the foot, in the world's axes.
+    woodUp_.clear();
+    for (std::size_t k = 0; k < trees.size(); ++k) {
+        const std::vector<BranchSegment>& segs = wood_.skeleton(k).segments;
+        const V3 c = segs.empty() ? V3{} : segs[0].centre;
+        woodUp_.push_back(
+            rotate(trees[k].pose.orientation, {c[0], c[1], c[2] + trees[k].centreHeight()}));
+    }
     cuts_.clear();
     std::fill(cutValues_.begin(), cutValues_.end(), 0.0);
     cutVersion_ = 0.0;
@@ -172,6 +180,15 @@ BranchHit Branches::sweep(std::size_t rotor, const std::vector<TreeSpec>& trees,
         const TreeSpec& tree = trees[k];
         const std::vector<BranchSegment>& segs = wood_.skeleton(k).segments;
         if (segs.empty()) {
+            continue;
+        }
+        // The same bound in the world first (no rotations), with a margin so that rounding never
+        // skips a tree the test below keeps (the broad phase, ground.md "The orchard").
+        const double most = ((segs[0].radius + radius + kBladeHalfThickness) * (1.0 + 1e-9)) + 1e-9;
+        const V3 off{hub.position[0] - tree.pose.position[0] - woodUp_[k][0] - sways[k][0],
+                     hub.position[1] - tree.pose.position[1] - woodUp_[k][1] - sways[k][1],
+                     hub.position[2] - tree.pose.position[2] - woodUp_[k][2] - sways[k][2]};
+        if (dot(off, off) > most * most) {
             continue;
         }
         const V3 o = inCrown(tree, hub.position, sways[k]);
@@ -499,6 +516,15 @@ BodyContact Branches::touch(const std::vector<TreeSpec>& trees, std::span<const 
             continue;
         }
         const TreeSpec& tree = trees[k];
+        // The broad phase (ground.md "The orchard"): the same bound in the world first, with a
+        // margin, before the rotations.
+        const double most = ((segs[0].radius + bound) * (1.0 + 1e-9)) + 1e-9;
+        const V3 off{pose.position[0] - tree.pose.position[0] - woodUp_[k][0] - sways[k][0],
+                     pose.position[1] - tree.pose.position[1] - woodUp_[k][1] - sways[k][1],
+                     pose.position[2] - tree.pose.position[2] - woodUp_[k][2] - sways[k][2]};
+        if (dot(off, off) > most * most) {
+            continue;
+        }
         const V3 o = inCrown(tree, pose.position, sways[k]);
         if (norm(sub(o, segs[0].centre)) > segs[0].radius + bound) {
             continue;  // far from this tree's wood
