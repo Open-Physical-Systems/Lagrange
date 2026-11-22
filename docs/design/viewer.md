@@ -148,6 +148,21 @@ flowchart LR
   2 draw it all. It writes the realistic pass's depth (so it hides what is behind it in the image),
   but a camera sensor's depth and instance ids come from its own raster pass of the scene's
   meshes, which has no vegetation: depth, ids, lidar and the CPU reference stay as they were.
+  Grass blades: on grass (lawn, tall, wet, dry grass) the same pipeline draws a tile of 48 real
+  blades in every cell of a world grid near the eye (`vsGrassBlade`; 0.12 m tiles out to 8 m for
+  a lawn, about 3300 blades per m², 0.16 m to 10 m for dry grass, 0.3 m to 24 m for tall grass),
+  over the ground's own parallax canopy: each a tapered strip of three segments and a pointed tip
+  at its own place, facing, height and curl, bent by `grassBend` (wind, gusts, rotor outwash,
+  rain), ended at the cut of `vegetation/cut`. Further off the blades thin out and sink into the
+  ground, taking the flat lawn's colour; the ground between them is drawn as the canopy's shade
+  (`frame.cutLevel.z`), and under tall grass the parallax canopy is left out. Only surfaces whose
+  bounds are thinner than 0.6 m get blades (a flat field, not a terrain tile or hill, whose top
+  face is not its ground); they are left out of the water's mirror and are not drawn on a
+  software device. At most 24 000 tiles a frame (the reach shrinks to fit): the `lawn_test`
+  field at 1600x1000 on an RTX 4060 Laptop takes about 5.6 ms a frame against 2.4 ms with the
+  parallax alone. Seen from behind, a blade's or leaf's normal is turned round its upright axis
+  (not reversed), so it stays lit from the sky. Blade counts, sizes and colours are drawing
+  choices, TODO(verify) against photographs of turf and meadow.
   Sample world `assets/worlds/reed_channel/reed_channel.usda`.
   Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
   I/d²) in a storage buffer, each adding E = I·f(θ)·cos/d² through the same GGX as the sun, its

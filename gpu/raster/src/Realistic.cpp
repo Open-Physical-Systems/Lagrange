@@ -45,8 +45,36 @@ constexpr double kReedsReach = 70.0;  // m from the eye where the clumps have fa
 constexpr double kShrubReach = 110.0;
 constexpr std::uint32_t kVegBudget = 60000;  // clumps per frame
 constexpr std::uint32_t kVegVertices = 360;  // per clump, realistic.slang kVegVertices
-constexpr float kNotMirrored = 1e9F;         // vsVeg's mirror plane when not mirrored
-constexpr std::uint32_t kWaterGrid = 256;    // kGrid in realistic.slang
+// Grass blades near the eye (realistic.slang vsGrassBlade): a tile of 48 blades of 21 vertices in
+// each cell of a world grid, out to a reach per kind. Drawing choices, not measurements.
+constexpr std::uint32_t kGrassTileVertices = 48 * 21;  // kGrassBlades * kBladeVerts
+constexpr std::uint32_t kGrassBudget = 24000;          // tiles per frame
+constexpr double kGrassFlat = 0.6;    // m: thicker surfaces (terrain, hills) keep the parallax only
+constexpr float kNotMirrored = 1e9F;  // vsVeg's mirror plane when not mirrored
+constexpr std::uint32_t kWaterGrid = 256;  // kGrid in realistic.slang
+
+// realistic.slang grassOf: lawn 6, tall grass 12, wet grass 13, dry grass 14.
+bool isGrassKind(int kind) {
+    return kind == 6 || (kind >= 12 && kind <= 14);
+}
+
+// A grass kind's blade tiles: their size (m; 48 blades each) and how far from the eye they are
+// drawn (m). Tall grass is seen further and needs fewer, larger blades per square metre.
+// A lawn's short blades stand close (about 3300 per m²) and are seen only near; the reaches match
+// realistic.slang grassReach.
+struct GrassTiles {
+    double tile = 0.12;
+    double reach = 8.0;
+};
+GrassTiles grassTiles(int kind) {
+    if (kind == 12) {
+        return {0.3, 24.0};
+    }
+    if (kind == 14) {
+        return {0.16, 10.0};
+    }
+    return {};
+}
 
 // Must match Frame and Push in realistic.slang.
 struct Frame {
@@ -406,10 +434,10 @@ RealisticRenderer::RealisticRenderer(const Device& device,
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     spray_ = createBuffer(device_, kMaxRealisticSprayCells * sizeof(float),
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-    cut_ = createBuffer(device_,
-                        static_cast<VkDeviceSize>(kMaxRealisticCutSide) * kMaxRealisticCutSide *
-                            sizeof(float),
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    cut_ = createBuffer(
+        device_,
+        static_cast<VkDeviceSize>(kMaxRealisticCutSide) * kMaxRealisticCutSide * sizeof(float),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -831,10 +859,14 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             main.cutLevel = {f(cut.level - eye[2]), static_cast<float>(cut.cells[1]), 0.0F, 0.0F};
         }
     }
+    // Grass blades are drawn near the eye (not on a software device, nor in the mirror): the
+    // ground under them shows as the canopy's shade (realistic.slang grassSurface).
+    main.cutLevel[2] = device_.info().isSoftware ? 0.0F : 1.0F;
     main.screen = {static_cast<float>(extent.width), static_cast<float>(extent.height),
                    1.0F / static_cast<float>(extent.width),
                    1.0F / static_cast<float>(extent.height)};
     Frame mirrorFrame = main;
+    mirrorFrame.cutLevel[2] = 0.0F;
     mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, season,
                         textures_->complete() ? 1.0F : 0.0F};
     mirrorFrame.sunDirection[2] = -main.sunDirection[2];
@@ -923,9 +955,13 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         const bool software = device_.info().isSoftware;
         const std::uint32_t budget = software ? kVegBudget / 16 : kVegBudget;
         std::uint32_t used = 0;
+        std::uint32_t usedGrass = 0;
         for (std::size_t i = 0; i < primCount; ++i) {
             const int kind = static_cast<int>(items[i].pattern + 0.5F);
-            if ((kind != kReedsKind && kind != kShrubKind) || !drawable(i)) {
+            const bool grass = isGrassKind(kind);
+            // A software device draws no blades: the parallax canopy alone.
+            if ((kind != kReedsKind && kind != kShrubKind && !(grass && !software)) ||
+                !drawable(i)) {
                 continue;
             }
             const std::array<float, 6>* box = meshes.bounds(items[i].mesh);
@@ -934,9 +970,16 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             }
             const RealisticDraw& at = items[i];
             const bool reeds = kind == kReedsKind;
-            const double spacing = reeds ? kReedsSpacing : kShrubSpacing;
-            const double height = reeds ? kReedsHeight : kShrubHeight;
-            double reach = (reeds ? kReedsReach : kShrubReach) * (software ? 0.5 : 1.0);
+            const GrassTiles tiles = grassTiles(kind);
+            const double spacing = grass ? tiles.tile : reeds ? kReedsSpacing : kShrubSpacing;
+            const double height = grass ? 0.0 : reeds ? kReedsHeight : kShrubHeight;
+            double reach =
+                grass ? tiles.reach : (reeds ? kReedsReach : kShrubReach) * (software ? 0.5 : 1.0);
+            const std::uint32_t limit = grass ? kGrassBudget : budget;
+            std::uint32_t& spent = grass ? usedGrass : used;
+            if (grass && std::abs(box->at(5) - box->at(2)) * at.scale[2] > kGrassFlat) {
+                continue;
+            }
             std::array<double, 2> lo{};
             std::array<double, 2> hi{};
             for (std::size_t k = 0; k < 2; ++k) {
@@ -961,13 +1004,13 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                               : 0;
                     cells *= count.at(k);
                 }
-                if (cells <= static_cast<std::int64_t>(budget - used)) {
+                if (cells <= static_cast<std::int64_t>(limit - spent)) {
                     break;
                 }
                 reach *= 0.8;
             }
             const std::int64_t cells = count[0] * count[1];
-            if (cells <= 0 || cells > static_cast<std::int64_t>(budget - used)) {
+            if (cells <= 0 || cells > static_cast<std::int64_t>(limit - spent)) {
                 continue;
             }
             Push push{};
@@ -986,10 +1029,12 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             push.baseColor = at.baseColor;
             push.surface = {f(lo[0] - eye[0]), f(lo[1] - eye[1]), f(hi[0] - eye[0]),
                             f(hi[1] - eye[1])};
-            auto& [bytes, instances] = vegPatches_.emplace_back();
-            std::memcpy(bytes.data(), &push, sizeof(push));
-            instances = static_cast<std::uint32_t>(cells);
-            used += instances;
+            VegPatch& patch = vegPatches_.emplace_back();
+            std::memcpy(patch.push.data(), &push, sizeof(push));
+            patch.instances = static_cast<std::uint32_t>(cells);
+            patch.vertices = grass ? kGrassTileVertices : kVegVertices;
+            patch.grass = grass;
+            spent += patch.instances;
         }
     }
     const auto drawVegetation = [&](float mirrorPlane) {
@@ -997,10 +1042,14 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             return;
         }
         bind(vegPipe_, mirrorPlane < kNotMirrored ? mirrorSet_ : mainSet_);
-        for (auto [bytes, instances] : vegPatches_) {
-            bytes[11] = mirrorPlane;
-            vkCmdPushConstants(commands, vegPipe_.layout, stages, 0, sizeof(bytes), bytes.data());
-            vkCmdDraw(commands, kVegVertices, instances, 0, 0);
+        for (VegPatch patch : vegPatches_) {
+            if (patch.grass && mirrorPlane < kNotMirrored) {
+                continue;  // a lawn's blades hardly show in the water: not worth their cost
+            }
+            patch.push[11] = mirrorPlane;
+            vkCmdPushConstants(commands, vegPipe_.layout, stages, 0, sizeof(patch.push),
+                               patch.push.data());
+            vkCmdDraw(commands, patch.vertices, patch.instances, 0, 0);
             ++draws;
         }
     };
