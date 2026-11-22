@@ -227,6 +227,7 @@ print(sim.read("body/base_link/pose"))
 | Heat, and a robot's own EMI | [Tutorial: heat in the parts and a robot's own interference](guide/tutorial-heat-and-emi.md) |
 | Fight a fire | [Tutorial: a robot puts out a fire](guide/tutorial-fire.md) |
 | Know how a number is computed | [Physics reference](physics/index.md): every model, its equations and its checks |
+| Train a policy | [Learning: environments and domain randomisation](guide/rl.md) |
 | Extend it | [Writing a module](guide/writing-a-module.md), [Writing a plugin](guide/writing-a-plugin.md) |
 
 ```{toctree}
@@ -256,6 +257,7 @@ guide/tutorial-heat-and-emi
 guide/tutorial-fire
 guide/autoware
 guide/run-file
+guide/rl
 guide/builder
 guide/viewer
 guide/concepts

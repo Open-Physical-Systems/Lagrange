@@ -112,12 +112,20 @@ restored runs on bit-identically (Jolt passes the same check).
 | Contact force and joint reaction | a box at rest held up by its weight within 0.5 %; a swinging pivot carries $m g + m d \omega^2$ within 1 % (11.349 N MuJoCo, 11.348 N Jolt) | `lagrange_physics_conformance`, `test_contact_forces_on_a_robot_at_rest_carry_its_weight`, `test_a_joints_reaction_is_what_it_carries` |
 | Gravity changed while falling | the speed gained follows the new value within 0.05 m/s | `Site.GravityChangesWhileFalling` |
 | Pushing a block, against 2000 measured pushes (Yu et al. 2016) | MuJoCo within 6 mm and 4–7° of the quasi-static theory, 3–41 mm and 10–17° from the measurements; **Jolt does not turn the block** (2° against about 75°) | `Conformance.APushedBlockMovesAsTheMcubeMeasurements` |
+| Domain randomisation: mass, inertia, centre of mass, friction, joint damping and friction, pushes | a body falls $g t^2/2$ whatever its mass; a box pushed on the ground slides $a T^2/2 + (aT)^2/(2\mu g)$, $a = F/m - \mu g$, within 8 %; a push gives $F T / m$ and $\tau T / I$ within 1 %; a damped slide reaches $F/c\,(1 - e^{-ct/m})$ within 2 % | `test_randomization.py` |
 | Against a real robot's odometry | **owed**: no recording yet | — |
 
 On Jolt the sample AMR's drive wheels slip while the drive ramps up (wheels and casters share the
 load indeterminately), about 0.4 m behind MuJoCo after 6 s. Jolt keeps sliding friction and
 friction about the contact normal on separate budgets, so a sliding block still resists turning
 at full strength: use MuJoCo for pushing and manipulation.
+
+Push disturbances for learning (`Simulation(pushes=...)`, `set_pushes`, `randomize={"push":
+...}`, [the learning guide](../guide/rl.md)) are constant wrenches at a body's centre of mass, in
+the world frame, written as `body/<b>/wrench/push` and summed with the others. Over each 1 ms step
+the module writes the push's mean over the step, so the impulse is $F T$ exactly whatever the
+step. Mass, inertia, friction and joint parameters drawn per episode go into the world tables, and
+the engine's model is made again from them at the reset.
 
 Not modelled: soft bodies, cloth and fluids, and PhysX (not built). Jolt's contact force on a group of bodies fixed together goes
 to the group's root body.

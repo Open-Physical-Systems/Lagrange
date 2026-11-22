@@ -46,6 +46,7 @@ import numpy as np
 
 from lagrange import sample_profile
 from lagrange._lagrange import Simulation
+from lagrange.randomization import SITE, Randomizer, check, push_bodies
 
 try:
     import gymnasium
@@ -121,8 +122,15 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
     (effort, position or velocity). Observations are each joint's position and velocity, then every
     component of each signal in `signals`, in that order.
 
-    `randomize` draws site parameters afresh at each reset, by name: {"gravity": (9.0, 10.5)}.
-    Reset goes back to the saved first state, which is what makes it cheap and repeatable.
+    `randomize` draws the run afresh at each reset (domain randomisation, lagrange.randomization):
+    site values by name ({"gravity": (9.0, 10.5)}), and body mass, centre of mass and inertia,
+    friction, joint damping and friction, motor, battery and rotor parameters, sensor noise, bias
+    and latency, the start pose and push disturbances ({"mass": {"bodies": "*", "scale": (0.8,
+    1.2)}, "friction": (0.5, 1.2), "push": {"force": (5, 20)}}). Draws come from the generator
+    reset(seed=) seeds, and info["randomization"] holds what was drawn; reset(options=
+    {"randomize": False}) starts an episode with the files' values. Reset goes back to the saved
+    first state, which is what makes it cheap and repeatable; a drawn parameter rebuilds the run
+    from its tables first (docs/guide/rl.md gives the cost).
 
     `world`, `profile` and `overlay` go to lagrange.Simulation as they are: the scenery, a
     simulation profile (a path, or an example profile's name: domains on and off with their
@@ -150,11 +158,13 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         episode_seconds: float = 10.0,
         reward: Reward | None = None,
         terminated: Terminated | None = None,
-        randomize: dict[str, tuple[float, float]] | None = None,
+        randomize: dict[str, Any] | None = None,
         cameras: bool = True,
     ) -> None:
         self.profile = profile_path(profile)
         self.overlay = os.fspath(overlay) if overlay is not None else None
+        spec = check(randomize)  # a misspelt key fails before the simulation loads
+        pushed = push_bodies(spec)
         self.sim = Simulation(
             robot,
             world=world,
@@ -162,6 +172,7 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
             overlay=self.overlay,
             joint_control=True,
             cameras=cameras,
+            pushes=pushed if pushed is not None else False,
         )
         self.joint_names = list(joints) if joints is not None else self._driven_joints()
         if not self.joint_names:
@@ -181,10 +192,14 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         self.episode_seconds = episode_seconds
         self.reward_function = reward
         self.terminated_function = terminated
-        self.randomize = dict(randomize or {})
+        self.randomize = spec
+        self._randomizer = Randomizer(spec, self.sim.parameters()) if spec else None
+        self._pushes = pushed is not None
+        self._applied = False  # parameters other than the files' are in the run
         self._first_state = self.sim.save_state()
         self._rng = np.random.default_rng()
         self._start_time = self.sim.time
+        self._first_time = self.sim.time
         size = len(self._observe())
         self.observation_space = Box(-np.inf, np.inf, (size,), np.float64)
         self.action_space = Box(-1.0, 1.0, (len(self.joint_names),), np.float32)
@@ -206,12 +221,23 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         if seed is not None:
             self._rng = np.random.default_rng(seed)
             self.action_space.seed(seed)
-        self.sim.restore_state(self._first_state)
-        drawn = {name: float(self._rng.uniform(*span)) for name, span in self.randomize.items()}
-        for name, value in drawn.items():
-            self.sim.set_site(name, value)
+        parameters: dict[str, float] = {}
+        pushes: list[tuple[Any, ...]] = []
+        drawn: dict[str, Any] = {}
+        if self._randomizer is not None and (options or {}).get("randomize", True):
+            parameters, pushes, drawn = self._randomizer.draw(
+                self._rng, self._first_time, self.episode_seconds
+            )
+        if parameters or self._applied:
+            self.sim.reset_to(self._first_state, parameters)
+        else:
+            self.sim.restore_state(self._first_state)
+        self._applied = bool(parameters)
+        if self._pushes:
+            self.sim.set_pushes(pushes)
         self._start_time = self.sim.time
-        return self._observe(), {"site": drawn}
+        site = {name: drawn[f"site/{name}"] for name in SITE if f"site/{name}" in drawn}
+        return self._observe(), {"site": site, "randomization": drawn}
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         clipped = np.clip(action, -1.0, 1.0)
@@ -705,13 +731,20 @@ def _maker(
     profile: str | os.PathLike[str] | None,
     overlay: str | os.PathLike[str] | None,
     env_options: dict[str, Any] | None,
+    randomize: dict[str, Any] | None = None,
 ) -> Callable[[], Any]:
     """What builds one environment in a worker: `make` itself, or a LagrangeEnv of the robot file
-    `make` with the world, profile, overlay and other options given (all must pickle)."""
+    `make` with the world, profile, overlay, randomize and other options given (all must
+    pickle)."""
+    if randomize is not None:
+        if env_options and "randomize" in env_options:
+            raise ValueError("randomize= is given twice: as an argument and in env_options")
+        env_options = {**(env_options or {}), "randomize": check(randomize)}
     if not isinstance(make, str):
         if world is not None or profile is not None or overlay is not None or env_options:
             raise ValueError(
-                "world, profile, overlay and env_options go with a robot file, not with make(): "
+                "world, profile, overlay, randomize and env_options go with a robot file, not "
+                "with make(): "
                 "pass them to the environment make() builds"
             )
         return make
@@ -732,7 +765,8 @@ class ParallelEnvs:
     `make` builds one environment in its process; it must be a function at a module's top level.
     Or `make` is a robot file and each environment is LagrangeEnv(make, world, profile=, overlay=,
     **env_options): env_options are LagrangeEnv's other options (mode, signals, reward, ...),
-    whose functions must be at a module's top level too.
+    whose functions must be at a module's top level too; `randomize` is LagrangeEnv's, checked
+    here before any worker starts. Environment i is seeded seed + i, so its draws repeat too.
     `envs_per_worker` puts that many in each process, stepped one after another (fewer processes
     for cheap environments), or on `worker_threads` threads at once: then one process steps several
     simulations in parallel (each lets go of Python's lock while it steps), and many environments
@@ -758,6 +792,7 @@ class ParallelEnvs:
         profile: str | os.PathLike[str] | None = None,
         overlay: str | os.PathLike[str] | None = None,
         env_options: dict[str, Any] | None = None,
+        randomize: dict[str, Any] | None = None,
         envs_per_worker: int = 1,
         worker_threads: int = 1,
         start_timeout: float | None = 300.0,
@@ -765,7 +800,7 @@ class ParallelEnvs:
         spin_seconds: float = DEFAULT_SPIN_SECONDS,
     ) -> None:
         self._pool = _Pool(
-            _maker(make, world, profile, overlay, env_options),
+            _maker(make, world, profile, overlay, env_options, randomize),
             count,
             envs_per_worker,
             start_timeout,
@@ -908,8 +943,8 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
     Per-step infos of the environments are not carried, only their numbers.
 
     `make` is a function that builds one environment, or a robot file with `world`, `profile`,
-    `overlay` and `env_options` for LagrangeEnv, as for ParallelEnvs; so are `envs_per_worker`
-    and `worker_threads`.
+    `overlay`, `randomize` and `env_options` for LagrangeEnv, as for ParallelEnvs; so are
+    `envs_per_worker` and `worker_threads`.
     """
 
     metadata: dict[str, Any] = {"autoreset_mode": _SAME_STEP}  # noqa: RUF012
@@ -923,6 +958,7 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
         profile: str | os.PathLike[str] | None = None,
         overlay: str | os.PathLike[str] | None = None,
         env_options: dict[str, Any] | None = None,
+        randomize: dict[str, Any] | None = None,
         envs_per_worker: int = 1,
         worker_threads: int = 1,
         start_timeout: float | None = 300.0,
@@ -936,6 +972,7 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
             profile=profile,
             overlay=overlay,
             env_options=env_options,
+            randomize=randomize,
             envs_per_worker=envs_per_worker,
             worker_threads=worker_threads,
             start_timeout=start_timeout,

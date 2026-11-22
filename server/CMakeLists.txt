@@ -66,6 +66,7 @@ add_library(
     src/RegionHost.cpp
     src/Plugins.cpp
     src/JointControl.cpp
+    src/Pushes.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
