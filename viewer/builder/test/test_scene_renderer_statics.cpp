@@ -75,3 +75,71 @@ TEST(SceneRenderer, AnotherScenesStaticsWithTheSameGenerationAreUploaded) {
     const std::vector<std::uint8_t> after = draw(*device, switched, *ball);
     EXPECT_EQ(after, expected) << "the ball was drawn with the plate's meshes";
 }
+
+// Trees (TreeAPI_1) in the Lit shading (gpu/TreeShapes.hpp): a scene with no meshes of its own
+// draws a tree from RenderOptions::trees as a brown trunk and a green crown where it stands.
+TEST(SceneRenderer, LitDrawsATreesCrownWhereItStands) {
+    lagrange::gpu::DeviceDesc desc;
+    desc.applicationName = "test_scene_renderer_statics";
+    const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+    desc.preferredDevice = gpu != nullptr ? gpu : "llvmpipe";
+    std::string error;
+    const std::unique_ptr<lagrange::gpu::Device> device =
+        lagrange::gpu::Device::create(desc, error);
+    if (!device) {
+        GTEST_SKIP() << "no Vulkan device: " << error;
+    }
+    auto statics = std::make_shared<lagrange::viewer::SceneStatics>();
+    statics->generation = 1;
+    SceneFrame frame;
+    frame.statics = statics;
+    lagrange::viewer::RenderOptions options;
+    options.shading = lagrange::viewer::Shading::Lit;
+    options.grid = false;
+    options.axes = false;
+    lagrange::viewer::RenderOptions::Tree& tree = options.trees.emplace_back();
+    tree.foot = {0.0, 0.0, 0.0};
+    tree.height = 6.0;
+    tree.crownRadius = 1.8;
+    tree.crownBase = 2.4;
+    tree.trunkDiameter = 0.4;
+    tree.seed = 12345;
+    SceneRenderer renderer(*device);
+    renderer.resize(kExtent);
+    const auto shoot = [&](const lagrange::viewer::RenderOptions& o) {
+        Camera camera;
+        camera.target = {0.0, 0.0, 3.0};
+        camera.distance = 14.0;
+        camera.pitch = 0.1;
+        device->submitAndWait(
+            [&](VkCommandBuffer commands) { renderer.render(commands, &frame, camera, o); });
+        return lagrange::gpu::readbackRgba8(*device, renderer.color(),
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    };
+    const std::vector<std::uint8_t> with = shoot(options);
+    // The crown's centre, 4.2 m up, a little over the view's centre (the target, 3 m up); the
+    // trunk below it.
+    const auto at = [&](std::uint32_t x, std::uint32_t y) {
+        return &with[4 * ((std::size_t{y} * kExtent.width) + x)];
+    };
+    const std::uint8_t* crown = at(kExtent.width / 2, kExtent.height / 2 - 10);
+    EXPECT_GT(crown[1], crown[0] + 10) << "the crown is green";
+    EXPECT_GT(crown[1], crown[2] + 10);
+    int green = 0;
+    for (std::uint32_t y = 0; y < kExtent.height; ++y) {
+        for (std::uint32_t x = 0; x < kExtent.width; ++x) {
+            const std::uint8_t* p = at(x, y);
+            green += p[1] > p[0] + 10 && p[1] > p[2] + 10 ? 1 : 0;
+        }
+    }
+    // The crown's outline, about 3.6 m across seen from 14 m in a 0.9 rad view, is some 1/20 of
+    // the picture; its clumps cover more than half of it.
+    EXPECT_GT(green, static_cast<int>(kExtent.width * kExtent.height / 50));
+    // Without the tree, none of it.
+    lagrange::viewer::RenderOptions bare = options;
+    bare.trees.clear();
+    const std::vector<std::uint8_t> without = shoot(bare);
+    const std::uint8_t* sky =
+        &without[4 * ((std::size_t{kExtent.height / 2 - 10} * kExtent.width) + kExtent.width / 2)];
+    EXPECT_FALSE(sky[1] > sky[0] + 10 && sky[1] > sky[2] + 10);
+}

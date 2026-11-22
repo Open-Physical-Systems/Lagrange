@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lagrange/gpu/Raster.hpp"
+#include "lagrange/gpu/Realistic.hpp"
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/RenderOptions.hpp"
@@ -87,6 +88,9 @@ private:
     VkPipeline heatPipeline_{VK_NULL_HANDLE};
 
     gpu::MeshSet meshes_;
+    std::uint32_t firstTreeMesh_{0};  // gpu::treeMeshSources() follow the scene's meshes
+    std::vector<gpu::RealisticTreeCut> treeCuts_;  // this frame's (RenderOptions::treeCuts)
+    std::vector<gpu::RasterInstance> treeParts_;   // this frame's trees as parts
     std::uint64_t meshGeneration_{0};  // SceneStatics::generation the meshes were built from
     std::weak_ptr<const SceneStatics> meshStatics_;  // and the statics themselves
     gpu::Buffer gridMinor_;

@@ -1,6 +1,7 @@
 #include "RealisticPass.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Raster.hpp"
+#include "lagrange/gpu/TreeShapes.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "shaders/kHeatFragment.hpp"
 #include "shaders/kHeatVertex.hpp"
@@ -395,6 +396,10 @@ void SceneRenderer::uploadMeshes(const SceneStatics& statics) {
     for (const MeshData& mesh : statics.meshes) {
         sources.push_back({mesh.positions, mesh.normals, mesh.indices});
     }
+    // The trees' parts (TreeShapes.hpp) after the scene's own meshes.
+    firstTreeMesh_ = static_cast<std::uint32_t>(sources.size());
+    const std::span<const gpu::MeshSource> trees = gpu::treeMeshSources();
+    sources.insert(sources.end(), trees.begin(), trees.end());
     meshes_.upload(sources);
     meshGeneration_ = statics.generation;
 }
@@ -549,6 +554,54 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             vkCmdPushConstants(commands, layout, stages, 0, sizeof(push), &push);
             if (meshes_.draw(commands, prim.mesh)) {
                 ++lastDrawCount_;
+            }
+        }
+        // Trees (TreeAPI_1): a trunk and clumps of leaves where the realistic view draws its
+        // tree, swayed and cut alike (gpu/TreeShapes.hpp, shared with the camera's simple look).
+        if (options.shading != Shading::Collision && !options.trees.empty()) {
+            treeCuts_.clear();
+            if (options.treeCuts) {
+                for (const RenderOptions::TreeCut& c : *options.treeCuts) {
+                    treeCuts_.push_back({c.tree, c.cell});
+                }
+            }
+            treeParts_.clear();
+            for (std::size_t k = 0; k < options.trees.size(); ++k) {
+                const RenderOptions::Tree& from = options.trees[k];
+                gpu::RealisticTree tree;
+                tree.foot = from.foot;
+                tree.rotation = from.rotation;
+                tree.height = from.height;
+                tree.crownRadius = from.crownRadius;
+                tree.crownBase = from.crownBase;
+                tree.trunkDiameter = from.trunkDiameter;
+                tree.sway = from.sway;
+                tree.seed = from.seed;
+                gpu::appendTreeParts(tree, static_cast<std::uint32_t>(k), treeCuts_, firstTreeMesh_,
+                                     0, treeParts_);
+            }
+            constexpr std::array<float, 6> kSphereBox{-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F};
+            constexpr std::array<float, 6> kTrunkBox{-1.0F, -1.0F, 0.0F, 1.0F, 1.0F, 1.0F};
+            for (const gpu::RasterInstance& part : treeParts_) {
+                MeshPush push{};
+                push.viewProjection = viewProjection;
+                push.model = gpu::modelRows(part.position, part.rotation, part.scale, eye);
+                if (!frustum.sees(push.model,
+                                  part.mesh == firstTreeMesh_ ? kSphereBox : kTrunkBox)) {
+                    continue;
+                }
+                push.baseColor = part.color;
+                if (options.shading == Shading::Thermal) {
+                    push.baseColor = {kNoTemperature, kNoTemperature, kNoTemperature, 1.0F};
+                } else if (options.shading == Shading::Current) {
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        push.baseColor.at(c) *= kUntintedShade;
+                    }
+                }
+                vkCmdPushConstants(commands, layout, stages, 0, sizeof(push), &push);
+                if (meshes_.draw(commands, part.mesh)) {
+                    ++lastDrawCount_;
+                }
             }
         }
     }
