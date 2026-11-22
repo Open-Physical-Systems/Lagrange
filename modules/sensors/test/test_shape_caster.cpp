@@ -761,5 +761,36 @@ TEST(Crown, CutCellsLetTheBeamThroughAndTheSwayMovesTheCrown) {
         std::isinf(crownStop(t, 0, {-10.0, -0.5, 6.5}, dir, 100.0, {0.0, 2.0, 0.0}, nullptr, 0.1)));
 }
 
+// Flying leaves (ground.md "Flying leaves"): a beam passing within size/2 of a leaf's centre
+// stops at the leaf's range along it; the nearest of several; none beyond the range or behind.
+TEST(FlyingLeaves, ABeamMeetsTheFirstLeafWithinHalfItsSize) {
+    std::vector<double> values(kLeavesLength, 0.0);
+    values[0] = 1.0;
+    values[1] = 2.0;
+    const std::array<std::array<double, 6>, 2> leaves{
+        std::array<double, 6>{5.0, 0.02, 1.0, 0.0, 1.0, 0.06},   // 2 cm off the beam
+        std::array<double, 6>{3.0, 0.04, 1.0, 0.0, 1.0, 0.06}};  // 4 cm off: missed
+    for (std::size_t k = 0; k < 2; ++k) {
+        for (std::size_t f = 0; f < 6; ++f) {
+            values[kLeavesHeader + (kLeavesFields * k) + f] = leaves.at(k).at(f);
+        }
+    }
+    FlyingLeaves flying;
+    flying.load(values);
+    ASSERT_FALSE(flying.empty());
+    const std::array<double, 3> dir{1.0, 0.0, 0.0};
+    EXPECT_DOUBLE_EQ(flying.stop({0.0, 0.0, 1.0}, dir, 100.0), 5.0);
+    EXPECT_TRUE(std::isinf(flying.stop({0.0, 0.0, 1.0}, dir, 4.9)));    // beyond the range
+    EXPECT_TRUE(std::isinf(flying.stop({6.0, 0.0, 1.0}, dir, 100.0)));  // behind the sensor
+    EXPECT_DOUBLE_EQ(flying.stop({0.0, 0.035, 1.0}, dir, 100.0), 3.0);  // the nearer one now
+    EXPECT_TRUE(std::isinf(flying.stop({0.0, 0.0, 2.0}, dir, 100.0)));  // over them
+    // No leaves, nothing.
+    values[0] = 2.0;
+    values[1] = 0.0;
+    flying.load(values);
+    EXPECT_TRUE(flying.empty());
+    EXPECT_TRUE(std::isinf(flying.stop({0.0, 0.0, 1.0}, dir, 100.0)));
+}
+
 }  // namespace
 }  // namespace lagrange::sensors

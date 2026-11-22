@@ -27,6 +27,7 @@
 // cell is cut lower, paid by the rotor as a torque against its spin.
 
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/vegetation/Leaves.hpp"
 #include "lagrange/world/CanopyCut.hpp"
 #include "lagrange/world/Trees.hpp"
 #include "lagrange/world/World.hpp"
@@ -98,10 +99,12 @@ class TreeCutMap {
 public:
     /// Sweeps a rotor's disc (centre and unit normal, world; radius) through tree `index`'s
     /// crown at its sway: every cell of leaves the disc passes through is cut away. Returns the
-    /// crown volume cut (m³).
+    /// crown volume cut (m³). With `cut`, the centres (world, at the sway) of the cells it cut are
+    /// appended to it: where the flying leaves start.
     double sweep(const TreeSpec& tree, std::uint32_t index, const std::array<double, 3>& centre,
                  const std::array<double, 3>& normal, double radius,
-                 const std::array<double, 3>& sway);
+                 const std::array<double, 3>& sway,
+                 std::vector<std::array<double, 3>>* cut = nullptr);
     [[nodiscard]] const TreeCuts& cuts() const { return reader_; }
     [[nodiscard]] const std::vector<double>& values() const { return values_; }
     bool assign(std::span<const double> values);
@@ -157,6 +160,11 @@ void stepSway(const TreeSpec& tree, Sway& sway, const std::array<double, 2>& for
 /// With rotors (RotorAPI_1 joints) and cutting on, it also writes vegetation/canopy_cut (the cut
 /// map), rotor/<j>/cutting_power (W, the power the cuts take) and body/<link>/wrench/cutting (the
 /// torque that takes it, against the spin, on the propeller's link).
+///
+/// Flying leaves (Leaves.hpp, ground.md "Flying leaves"): with trees and config "leaves" (default
+/// true), the leaves a rotor cuts off and those the air strips from a crown fly as particles in
+/// the wind and the rotors' wake (rotor/<j>/induced_velocity and thrust_axis, optional) and settle
+/// on the ground; out vegetation/leaves (lagrange/world/Leaves.hpp) and tree/<n>/leaves_flying.
 class Vegetation final : public IModule {
 public:
     [[nodiscard]] ModuleInfo info() const override;
@@ -169,6 +177,7 @@ public:
     Status restoreState(StateReader& reader) override;
 
     [[nodiscard]] const CutMap& cuts() const { return cuts_; }
+    [[nodiscard]] const LeafField& leaves() const { return leaves_; }
 
 private:
     struct Cell {
@@ -183,13 +192,14 @@ private:
     };
     struct Rotor {
         SignalId pose, velocity, wrench, power;
+        SignalId induced, thrustAxis;  // for the leaves' air; invalid without leaves
         std::array<double, 3> axis{};  // the joint axis in the link's frame
         double radius{0.0};            // m
         double inertia{0.0};           // kg·m² of the propeller's link about the axis
         double owed{0.0};              // J of cutting not yet paid by the rotor
     };
     struct Tree {
-        SignalId downwash, sway, force, cutVolume, leaves;
+        SignalId downwash, sway, force, cutVolume, leaves, flying;
         Sway state;
         double cut{0.0};  // m³
     };
@@ -205,6 +215,21 @@ private:
     double cutEnergy_{kCutEnergyPerArea};
     double density_{0.0};
     double dragCoefficient_{kStemDragCoefficient};
+    // Flying leaves.
+    /// The centres of the cells a rotor just cut from each tree, as cut cells with its blade's
+    /// velocity there.
+    void collectCut(std::size_t tree, const std::array<double, 3>& hub,
+                    const std::array<double, 3>& axis, double omega, double radius);
+    void stepLeaves(const StepContext& context, SignalBus& bus,
+                    std::span<const std::array<double, 3>> sways, std::span<const double> wind);
+    LeafField leaves_;
+    LandingSurfaces landing_;
+    SignalId leavesOut_;
+    double leafVersion_{0.0};
+    std::vector<double> leafValues_;
+    std::vector<std::vector<CutCell>> treeCells_;
+    std::vector<std::array<double, 3>> cutScratch_;
+    std::vector<RotorWake> wakes_;
 };
 
 }  // namespace lagrange::vegetation

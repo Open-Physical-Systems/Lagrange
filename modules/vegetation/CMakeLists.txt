@@ -5,7 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 
-add_library(lagrange_vegetation src/Vegetation.cpp)
+add_library(lagrange_vegetation src/Vegetation.cpp src/Leaves.cpp)
 lagrange_target_defaults(lagrange_vegetation)
 target_include_directories(
     lagrange_vegetation
@@ -29,6 +29,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_vegetation test/test_vegetation.cpp TIMEOUT 120)
     target_link_libraries(test_vegetation lagrange_vegetation)
     lagrange_target_defaults(test_vegetation)
+    ament_add_gtest(test_leaves test/test_leaves.cpp TIMEOUT 120)
+    target_link_libraries(test_leaves lagrange_vegetation)
+    lagrange_target_defaults(test_leaves)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

@@ -572,6 +572,63 @@ double crownStop(const TreeSpec& tree, std::uint32_t index, const std::array<dou
     return kNever;
 }
 
+void FlyingLeaves::load(std::span<const double> values) {
+    if (values.size() < kLeavesHeader || values[0] == version_) {
+        return;
+    }
+    version_ = values[0];
+    leaves_.clear();
+    const auto count = std::min(static_cast<std::size_t>(std::max(0.0, values[1])),
+                                (values.size() - kLeavesHeader) / kLeavesFields);
+    std::array<double, 3> lo{std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::infinity()};
+    std::array<double, 3> hi{-lo[0], -lo[1], -lo[2]};
+    double largest = 0.0;
+    for (std::size_t k = 0; k < count; ++k) {
+        const std::size_t at = kLeavesHeader + (kLeavesFields * k);
+        const double radius = 0.5 * values[at + 5];
+        if (!(radius > 0.0)) {
+            continue;
+        }
+        leaves_.push_back({values[at], values[at + 1], values[at + 2], radius});
+        largest = std::max(largest, radius);
+        for (std::size_t c = 0; c < 3; ++c) {
+            lo.at(c) = std::min(lo.at(c), values[at + c]);
+            hi.at(c) = std::max(hi.at(c), values[at + c]);
+        }
+    }
+    if (leaves_.empty()) {
+        return;
+    }
+    centre_ = {0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])};
+    radius_ = (0.5 * std::hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])) + largest;
+}
+
+double FlyingLeaves::stop(const std::array<double, 3>& origin,
+                          const std::array<double, 3>& direction, double range) const {
+    constexpr double kNever = std::numeric_limits<double>::infinity();
+    const auto meets = [&](const std::array<double, 3>& c, double r, double& along) {
+        const std::array<double, 3> d{c[0] - origin[0], c[1] - origin[1], c[2] - origin[2]};
+        along = d[0] * direction[0] + d[1] * direction[1] + d[2] * direction[2];
+        const double across = (d[0] * d[0]) + (d[1] * d[1]) + (d[2] * d[2]) - (along * along);
+        return across <= r * r;
+    };
+    double along = 0.0;
+    if (leaves_.empty() || !meets(centre_, radius_, along) || along + radius_ < 0.0 ||
+        along - radius_ > range) {
+        return kNever;
+    }
+    double best = kNever;
+    for (const std::array<double, 4>& leaf : leaves_) {
+        if (meets({leaf[0], leaf[1], leaf[2]}, leaf[3], along) && along >= 0.0 && along <= range &&
+            along < best) {
+            best = along;
+        }
+    }
+    return best;
+}
+
 double canopyVolumeStop(double enter, double leave, double canopyHeight, double leafAreaIndex,
                         double u) {
     if (!(canopyHeight > 0.0) || !(leafAreaIndex > 0.0) || !(leave > enter)) {

@@ -2,10 +2,14 @@
 // off from under the crown of the open field's tree_1 (TreeAPI_1, crown from 2.5 m to 6.1 m) and
 // hovers 2 m up, its rotors in the crown: they cut the leaves they spin through (the cut volume and
 // leaves grow, the rotors pay for it), and the rotors' air reaches the crown (tree/<n>/downwash).
-// The same run twice is bit for bit.
+// The leaves they cut off fly (vegetation/leaves), in the rotors' wake, and settle on the
+// ground. The same run twice is bit for bit.
 #include "lagrange/server/Server.hpp"
+#include "lagrange/world/Leaves.hpp"
 
 #include <cmath>
+#include <cstdio>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -61,6 +65,50 @@ TEST(TreesRun, RotorsInTheCrownCutItsLeaves) {
     EXPECT_EQ(at(server, "tree/tree_2/cut_volume"), 0.0);
 }
 
+TEST(TreesRun, TheCutLeavesFlyAndSettle) {
+    Server server(underTheTree());
+    ASSERT_TRUE(server.load().ok());
+    double most = 0.0;  // the most in the air at once
+    double version = 0.0;
+    std::size_t count = 0;
+    double highest = 0.0;
+    for (int k = 0; k < 120; ++k) {  // 12 s
+        ASSERT_TRUE(server.stepUntil(SimTime{server.simTime().ns + 100'000'000}).ok());
+        most = std::max(most, at(server, "tree/tree_1/leaves_flying"));
+        const std::vector<double> leaves = server.read(std::string(kLeavesSignal));
+        ASSERT_EQ(leaves.size(), kLeavesLength);
+        EXPECT_GE(leaves[0], version) << "the version only grows";
+        version = leaves[0];
+        count = static_cast<std::size_t>(leaves[1]);
+        for (std::size_t n = 0; n < count; ++n) {
+            highest = std::max(highest, leaves[kLeavesHeader + (kLeavesFields * n) + 2]);
+        }
+    }
+    const std::vector<double> leaves = server.read(std::string(kLeavesSignal));
+    std::size_t grounded = 0;
+    std::size_t flat = 0;
+    for (std::size_t n = 0; n < count; ++n) {
+        const std::size_t base = kLeavesHeader + (kLeavesFields * n);
+        if (leaves[base + 2] < 0.01) {
+            ++grounded;
+            flat += std::abs(leaves[base + 4] - (std::numbers::pi / 2.0)) < 1e-12 ? 1U : 0U;
+        }
+        EXPECT_GT(leaves[base + 5], 0.0) << "every leaf has a size";
+    }
+    const double shed = at(server, "tree/tree_1/leaves_shed");
+    std::printf(
+        "tree_1: %.0f leaves cut off, %zu particles (%zu on the ground, %zu flat), up to %.0f in "
+        "the air at once, highest %.2f m\n",
+        shed, count, grounded, flat, most, highest);
+    EXPECT_GT(count, 0U) << "the cut leaves fly";
+    EXPECT_NEAR(static_cast<double>(count), shed, std::max(2.0, 0.05 * shed))
+        << "one particle per leaf cut off (the air at the crown is under the stripping speed)";
+    EXPECT_GT(most, 0.0) << "some were in the air";
+    EXPECT_GT(grounded, 0U) << "and some reached the ground";
+    EXPECT_EQ(flat, grounded) << "lying flat";
+    EXPECT_GT(highest, 2.0) << "they start in the crown, over 2.5 m";
+}
+
 TEST(TreesRun, SameRunTwiceIsBitForBit) {
     std::vector<double> traces[2];
     for (auto& trace : traces) {
@@ -72,6 +120,11 @@ TEST(TreesRun, SameRunTwiceIsBitForBit) {
             for (const double v : server.read("tree/tree_1/sway")) {
                 trace.push_back(v);
             }
+            const std::vector<double> leaves = server.read(std::string(kLeavesSignal));
+            const auto used =
+                kLeavesHeader + (kLeavesFields * static_cast<std::size_t>(leaves.at(1)));
+            trace.insert(trace.end(), leaves.begin(),
+                         leaves.begin() + static_cast<std::ptrdiff_t>(used));
         }
     }
     EXPECT_EQ(traces[0], traces[1]);
