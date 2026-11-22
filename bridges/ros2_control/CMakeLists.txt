@@ -99,6 +99,13 @@ if(BUILD_TESTING)
     )
     lagrange_target_defaults(test_gpio)
     lagrange_test_ros_domain(test_gpio 75)
+    # Each starts a controller manager and runs the spawner: side by side under load the
+    # spawners time out, so ctest runs them one after the other.
+    set_tests_properties(
+        test_ros2_control
+        test_gpio
+        PROPERTIES RESOURCE_LOCK lagrange_controller_manager
+    )
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
