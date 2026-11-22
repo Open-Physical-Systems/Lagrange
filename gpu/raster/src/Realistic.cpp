@@ -52,6 +52,32 @@ constexpr std::uint32_t kGrassBudget = 24000;          // tiles per frame
 constexpr double kGrassFlat = 0.6;    // m: thicker surfaces (terrain, hills) keep the parallax only
 constexpr float kNotMirrored = 1e9F;  // vsVeg's mirror plane when not mirrored
 constexpr std::uint32_t kWaterGrid = 256;  // kGrid in realistic.slang
+// Trees (realistic.slang vsTree). Drawing choices, not measurements: TODO(verify) leaf counts and
+// sizes against photographs of broadleaf crowns.
+constexpr std::uint32_t kTreeWoodVertices = 2496;  // realistic.slang: trunk, branches and twigs
+constexpr std::uint32_t kTreeCardVertices = 18;    // realistic.slang kSprayVerts: three leaves
+constexpr std::uint32_t kTreeCutSlots = 32768;     // realistic.slang kTreeCutSlots, a power of 2
+constexpr std::uint32_t kTreeCutEmpty = 0xffffffffU;
+constexpr double kTreeLeavesPerM3 = 600.0;        // leaf cards per m³ of crown, near the eye
+constexpr std::uint32_t kTreeLeavesMost = 16000;  // cards of one tree
+constexpr std::uint32_t kTreeLeavesLeast = 400;
+constexpr double kTreeLeafCard = 0.14;             // m, a card's length near the eye
+constexpr double kTreeFullDetail = 14.0;           // m from the crown: every card drawn
+constexpr std::uint32_t kTreeLeafBudget = 240000;  // cards of every tree in a frame
+constexpr std::uint32_t kTreeLeafBudgetSoftware = 6000;
+constexpr float kTreeWood = 100.0F;  // vsTree's parts
+constexpr float kTreeLeaves = 101.0F;
+constexpr float kFlyingLeaves = 102.0F;
+
+// realistic.slang vegHash, for the cut table's slots.
+std::uint32_t vegHash(std::uint32_t x) {
+    x ^= x >> 16U;
+    x *= 0x7feb352dU;
+    x ^= x >> 15U;
+    x *= 0x846ca68bU;
+    x ^= x >> 16U;
+    return x;
+}
 
 // realistic.slang grassOf: lawn 6, tall grass 12, wet grass 13, dry grass 14.
 bool isGrassKind(int kind) {
@@ -105,8 +131,10 @@ struct Frame {
     // the cell, cells along x; then the tops' reference height relative to the eye, cells along y.
     std::array<float, 4> cutGrid;
     std::array<float, 4> cutLevel;
+    // Trees: the cut cells in the table (0: none cut), the flying leaves, unused.
+    std::array<float, 4> trees;
 };
-static_assert(sizeof(Frame) == 464 + 32 * kMaxAirJets);
+static_assert(sizeof(Frame) == 480 + 32 * kMaxAirJets);
 static_assert(sizeof(Frame) <= kFrameStride);
 
 // Must match Lamp in realistic.slang.
@@ -390,12 +418,12 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
         bindings.at(b).descriptorType = b == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                        : (b >= 7 && b <= 9) || b == 11
+                                        : (b >= 7 && b <= 9) || b >= 11
                                             ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                                             : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings.at(b).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -408,7 +436,7 @@ RealisticRenderer::RealisticRenderer(const Device& device,
     const std::array<VkDescriptorPoolSize, 3> sizes{
         {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 21},
-         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12}}};
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -438,6 +466,12 @@ RealisticRenderer::RealisticRenderer(const Device& device,
         device_,
         static_cast<VkDeviceSize>(kMaxRealisticCutSide) * kMaxRealisticCutSide * sizeof(float),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    treeCuts_ = createBuffer(device_, kTreeCutSlots * sizeof(std::uint32_t),
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    std::fill_n(static_cast<std::uint32_t*>(treeCuts_.mapped), kTreeCutSlots, kTreeCutEmpty);
+    flush(device_, treeCuts_);
+    leaves_ = createBuffer(device_, kMaxRealisticLeaves * 2 * 4 * sizeof(float),
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     shadow_ =
         createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -449,7 +483,7 @@ RealisticRenderer::~RealisticRenderer() {
     VkDevice d = device_.device();
     vkDeviceWaitIdle(d);
     for (Pipeline* p : {&shadowPipe_, &opaque_, &depthOnly_, &opaqueShade_, &transparent_, &sky_,
-                        &waterPipe_, &composite_, &vegPipe_}) {
+                        &waterPipe_, &composite_, &vegPipe_, &treeShadowPipe_}) {
         vkDestroyPipeline(d, p->pipeline, nullptr);
         vkDestroyPipelineLayout(d, p->layout, nullptr);
     }
@@ -463,6 +497,8 @@ RealisticRenderer::~RealisticRenderer() {
     destroy(device_, surface_);
     destroy(device_, spray_);
     destroy(device_, cut_);
+    destroy(device_, treeCuts_);
+    destroy(device_, leaves_);
     destroy(device_, shadow_);
     destroy(device_, hdr_);
     destroy(device_, hdrCopy_);
@@ -521,6 +557,11 @@ void RealisticRenderer::pipelines() {
     veg.fragment = kRealVegFragment;
     veg.depthWrite = true;
     buildPipeline(device_, veg, vegPipe_.layout, vegPipe_.pipeline);
+    // Trees into the sun's cascades: vsTree's geometry, depth only.
+    PipelineSpec treeShadow = veg;
+    treeShadow.fragment = kRealShadowFragment;
+    treeShadow.colorFormats = {};
+    buildPipeline(device_, treeShadow, treeShadowPipe_.layout, treeShadowPipe_.pipeline);
 
     PipelineSpec composite = sky;
     composite.fragment = kRealCompositeFragment;
@@ -559,6 +600,8 @@ void RealisticRenderer::descriptors(const Image& depth) {
         const VkDescriptorBufferInfo surfaceData{surface_.buffer, 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo sprayData{spray_.buffer, 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo cutData{cut_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo treeCutData{treeCuts_.buffer, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo leafData{leaves_.buffer, 0, VK_WHOLE_SIZE};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
         const std::array<VkDescriptorImageInfo, 6> images{{
@@ -571,7 +614,7 @@ void RealisticRenderer::descriptors(const Image& depth) {
         }};
         // How far what the water reflects stands from it (realistic.slang, mirrorDepth).
         const VkDescriptorImageInfo mirrorDepthInfo{nearest_, mirrorDepth_.view, readDepth};
-        std::array<VkWriteDescriptorSet, 12> writes{};
+        std::array<VkWriteDescriptorSet, 14> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -584,9 +627,9 @@ void RealisticRenderer::descriptors(const Image& depth) {
             } else if (b >= 7 && b <= 9) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 w.pBufferInfo = b == 7 ? &lampData : b == 8 ? &surfaceData : &sprayData;
-            } else if (b == 11) {
+            } else if (b >= 11) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                w.pBufferInfo = &cutData;
+                w.pBufferInfo = b == 11 ? &cutData : b == 12 ? &treeCutData : &leafData;
             } else if (b == 10) {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &mirrorDepthInfo;
@@ -862,6 +905,77 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     // Grass blades are drawn near the eye (not on a software device, nor in the mirror): the
     // ground under them shows as the canopy's shade (realistic.slang grassSurface).
     main.cutLevel[2] = device_.info().isSoftware ? 0.0F : 1.0F;
+    const std::size_t treeCount = std::min(settings.trees.size(), kMaxRealisticTrees);
+    {
+        // The trees' cut cells: a table of keys (realistic.slang treeCellCut), rebuilt when the
+        // cuts change. A key packs the tree (8 bits) and the cell (8 bits a side, ±12.8 m).
+        std::uint64_t sum = 1469598103934665603ULL ^ treeCount;
+        for (const RealisticTreeCut& c : settings.treeCuts) {
+            for (const std::uint32_t v :
+                 {c.tree, static_cast<std::uint32_t>(c.cell[0]),
+                  static_cast<std::uint32_t>(c.cell[1]), static_cast<std::uint32_t>(c.cell[2])}) {
+                sum = (sum ^ v) * 1099511628211ULL;
+            }
+        }
+        if (sum != treeCutsSum_) {
+            treeCutsSum_ = sum;
+            auto* table = static_cast<std::uint32_t*>(treeCuts_.mapped);
+            std::fill_n(table, kTreeCutSlots, kTreeCutEmpty);
+            treeCutsStored_ = 0;
+            const auto fits = [](std::int32_t v) { return v >= -128 && v <= 127; };
+            for (const RealisticTreeCut& c : settings.treeCuts) {
+                if (c.tree >= treeCount || c.tree > 254 || !fits(c.cell[0]) || !fits(c.cell[1]) ||
+                    !fits(c.cell[2]) || treeCutsStored_ >= kTreeCutSlots / 2) {
+                    continue;
+                }
+                const std::uint32_t key = (c.tree << 24U) |
+                                          (static_cast<std::uint32_t>(c.cell[0] + 128) << 16U) |
+                                          (static_cast<std::uint32_t>(c.cell[1] + 128) << 8U) |
+                                          static_cast<std::uint32_t>(c.cell[2] + 128);
+                std::uint32_t slot = vegHash(key) & (kTreeCutSlots - 1);
+                for (int probe = 0; probe < 32; ++probe) {  // as far as the shader looks
+                    if (table[slot] == key) {
+                        break;
+                    }
+                    if (table[slot] == kTreeCutEmpty) {
+                        table[slot] = key;
+                        ++treeCutsStored_;
+                        break;
+                    }
+                    slot = (slot + 1) & (kTreeCutSlots - 1);
+                }
+            }
+            flush(device_, treeCuts_);
+        }
+        main.trees[0] = static_cast<float>(treeCutsStored_);
+    }
+    {
+        // Flying leaves, relative to the eye.
+        const std::size_t count = std::min(settings.leaves.size(), kMaxRealisticLeaves);
+        auto* out = static_cast<float*>(leaves_.mapped);
+        for (std::size_t i = 0; i < count; ++i) {
+            const RealisticLeaf& leaf = settings.leaves[i];
+            // A tone of its own that stays with it as older leaves are dropped from the list.
+            const float tone =
+                static_cast<float>(vegHash(static_cast<std::uint32_t>(leaf.size * 1e6F)) &
+                                   0xffffU) /
+                65535.0F;
+            const std::array<float, 8> v{f(leaf.position[0] - eye[0]),
+                                         f(leaf.position[1] - eye[1]),
+                                         f(leaf.position[2] - eye[2]),
+                                         leaf.size,
+                                         leaf.yaw,
+                                         leaf.pitch,
+                                         tone,
+                                         0.0F};
+            std::memcpy(out + (8 * i), v.data(), sizeof(v));
+        }
+        if (count > 0) {
+            flush(device_, leaves_);
+        }
+        main.trees[1] = static_cast<float>(count);
+        leafCount_ = static_cast<std::uint32_t>(count);
+    }
     main.screen = {static_cast<float>(extent.width), static_cast<float>(extent.height),
                    1.0F / static_cast<float>(extent.width),
                    1.0F / static_cast<float>(extent.height)};
@@ -1132,6 +1246,132 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                at[2] >= -along && at[2] <= 1.0F + along;
     };
 
+    // --- trees: a trunk with its branches and a crown of leaf cards each (realistic.slang
+    // vsTree), the cards fewer and larger further off, every tree's together capped; a software
+    // device draws a few hundred a tree.
+    treeDraws_.clear();
+    treeOrder_.clear();
+    for (std::size_t k = 0; k < treeCount; ++k) {
+        const RealisticTree& t = settings.trees[k];
+        if (!(t.height > 0.0) || !(t.crownRadius > 0.0) || !(t.crownBase >= 0.0) ||
+            !(t.crownBase < t.height)) {
+            continue;
+        }
+        const double dx = t.foot[0] + t.sway[0] - eye[0];
+        const double dy = t.foot[1] + t.sway[1] - eye[1];
+        const double dz = t.foot[2] + t.crownBase + 0.5 * (t.height - t.crownBase) - eye[2];
+        treeOrder_.emplace_back(std::sqrt(dx * dx + dy * dy + dz * dz), k);
+    }
+    std::ranges::sort(treeOrder_);
+    {
+        const bool software = device_.info().isSoftware;
+        std::uint32_t budget = software ? kTreeLeafBudgetSoftware : kTreeLeafBudget;
+        for (const auto& [distance, k] : treeOrder_) {
+            const RealisticTree& t = settings.trees[k];
+            const double half = 0.5 * (t.height - t.crownBase);
+            const double volume =
+                4.0 / 3.0 * std::numbers::pi * t.crownRadius * t.crownRadius * half;
+            const double full =
+                std::clamp(volume * kTreeLeavesPerM3, static_cast<double>(kTreeLeavesLeast),
+                           static_cast<double>(kTreeLeavesMost));
+            double cards = full;
+            if (distance > kTreeFullDetail) {
+                cards = std::max(full * (kTreeFullDetail / distance) * (kTreeFullDetail / distance),
+                                 static_cast<double>(kTreeLeavesLeast));
+            }
+            if (software) {
+                cards = std::min(cards, 1500.0);
+            }
+            const auto leaves = std::min(static_cast<std::uint32_t>(std::min(cards, full)), budget);
+            budget -= leaves;
+            // Fewer cards, larger: the crown stays as full.
+            const double card = kTreeLeafCard * std::sqrt(full / std::max(leaves, 1U));
+            const std::array<double, 3> foot{t.foot[0] - eye[0], t.foot[1] - eye[1],
+                                             t.foot[2] - eye[2]};
+            Push push{};
+            push.model = {f(foot[0]),
+                          f(foot[1]),
+                          f(foot[2]),
+                          f(t.height),
+                          f(t.crownRadius),
+                          f(t.crownBase),
+                          f(t.trunkDiameter),
+                          static_cast<float>(leaves),
+                          kTreeWood,
+                          static_cast<float>(k),
+                          static_cast<float>(t.seed & 0xffffffU),
+                          kNotMirrored};
+            push.baseColor = {f(t.sway[0]), f(t.sway[1]), f(t.sway[2]), f(card)};
+            push.surface = {t.rotation[1], t.rotation[2], t.rotation[3], t.rotation[0]};
+            push.emissive = {0.0F, 0.0F, 0.0F, 0.0F};
+            TreeDraw& draw = treeDraws_.emplace_back();
+            std::memcpy(draw.push.data(), &push, sizeof(push));
+            draw.leaves = leaves;
+            // A ball round the whole tree, swayed; the top sways the most.
+            const double sway = std::hypot(t.sway[0], t.sway[1], t.sway[2]);
+            const double up = 0.5 * t.height;
+            draw.ball = {f(foot[0]), f(foot[1]), f(foot[2] + up),
+                         f(std::hypot(up, t.crownRadius) * 1.1 + 2.0 * sway + 0.1)};
+        }
+    }
+    const auto ballInView = [&](const std::array<float, 4>& ball) {
+        const double r = ball[3];
+        const double ahead =
+            ball[0] * view.forward[0] + ball[1] * view.forward[1] + ball[2] * view.forward[2];
+        if (ahead < view.near - r) {
+            return false;
+        }
+        for (std::size_t s = 0; s < 4; ++s) {
+            const std::array<double, 3>& n = sides.at(s);
+            if (ball[0] * n[0] + ball[1] * n[1] + ball[2] * n[2] < -r * sideNorms.at(s)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto ballInCascade = [&](const std::array<float, 4>& ball,
+                                   const std::array<float, 12>& clip) {
+        const std::array<float, 3> at{
+            clip[0] * ball[0] + clip[1] * ball[1] + clip[2] * ball[2] + clip[3],
+            clip[4] * ball[0] + clip[5] * ball[1] + clip[6] * ball[2] + clip[7],
+            clip[8] * ball[0] + clip[9] * ball[1] + clip[10] * ball[2] + clip[11]};
+        const float across = ball[3] * std::hypot(clip[0], clip[1], clip[2]);
+        const float along = ball[3] * std::hypot(clip[8], clip[9], clip[10]);
+        return std::abs(at[0]) <= 1.0F + across && std::abs(at[1]) <= 1.0F + across &&
+               at[2] >= -along && at[2] <= 1.0F + along;
+    };
+    // `cascade`: 0 for the view (or the mirror, with `mirrorPlane`), 1 and 2 for the sun's.
+    const auto drawTrees = [&](const Pipeline& pipe, VkDescriptorSet set, float cascade,
+                               float mirrorPlane, const std::array<float, 12>* clip) {
+        if (treeDraws_.empty() && leafCount_ == 0) {
+            return;
+        }
+        bind(pipe, set);
+        const auto send = [&](std::array<float, 24> push, float part, std::uint32_t vertices) {
+            push[8] = part;
+            push[11] = mirrorPlane;
+            push[23] = cascade;
+            vkCmdPushConstants(commands, pipe.layout, stages, 0, sizeof(push), push.data());
+            vkCmdDraw(commands, vertices, 1, 0, 0);
+            ++draws;
+        };
+        for (const TreeDraw& tree : treeDraws_) {
+            const bool seen = clip != nullptr              ? ballInCascade(tree.ball, *clip)
+                              : mirrorPlane < kNotMirrored ? true
+                                                           : ballInView(tree.ball);
+            if (!seen) {
+                continue;
+            }
+            send(tree.push, kTreeWood, kTreeWoodVertices);
+            if (tree.leaves > 0) {
+                send(tree.push, kTreeLeaves, kTreeCardVertices * tree.leaves);
+            }
+        }
+        if (leafCount_ > 0) {
+            send({}, kFlyingLeaves, 6 * leafCount_);
+        }
+    };
+
     // --- the sun's depth ---------------------------------------------------------------------
     transitionImage(commands, shadow_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -1148,6 +1388,10 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             Push push = pushFor(i, times(sun, rows(items[i], eye)));
             vkCmdPushConstants(commands, shadowPipe_.layout, stages, 0, sizeof(push), &push);
             meshes.draw(commands, items[i].mesh);
+        }
+        if (!treeDraws_.empty() || leafCount_ > 0) {
+            drawTrees(treeShadowPipe_, mainSet_, left ? 1.0F : 2.0F, kNotMirrored, &sun);
+            bind(shadowPipe_, mainSet_);
         }
     }
     vkCmdEndRendering(commands);
@@ -1181,6 +1425,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
             }
         }
         drawVegetation(plane);
+        drawTrees(vegPipe_, mirrorSet_, 0.0F, plane, nullptr);
     }
     vkCmdEndRendering(commands);
     transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1235,6 +1480,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         }
     }
     drawVegetation(kNotMirrored);
+    drawTrees(vegPipe_, mainSet_, 0.0F, kNotMirrored, nullptr);
     bind(sky_, mainSet_);
     vkCmdDraw(commands, 3, 1, 0, 0);
     vkCmdEndRendering(commands);

@@ -108,6 +108,37 @@ struct RealisticCutPlants {
     std::span<const float> tops;           ///< m over `level`, x fastest; NaN where not cut
 };
 
+/// Trees (TreeAPI_1; docs/physics/ground.md "Trees"), drawn as trees made in the vertex shader
+/// (realistic.slang vsTree): a trunk, main branches, twigs and a crown of leaf cards in the
+/// crown's ellipsoid, swaying with the physics. At most kMaxRealisticTrees, the first given first.
+inline constexpr std::size_t kMaxRealisticTrees = 255;
+struct RealisticTree {
+    std::array<double, 3> foot{};                           ///< region frame: the trunk's foot, m
+    std::array<float, 4> rotation{1.0F, 0.0F, 0.0F, 0.0F};  ///< w, x, y, z
+    double height{0.0};                                     ///< m
+    double crownRadius{0.0};                                ///< m
+    double crownBase{0.0};                                  ///< m over the foot
+    double trunkDiameter{0.0};                              ///< m
+    std::array<double, 3> sway{};  ///< world: the crown centre's displacement (tree/<n>/sway), m
+    std::uint32_t seed{0};         ///< its look: the same seed, the same tree
+};
+
+/// A crown cell a propeller cut (lagrange/world/Trees.hpp kTreeCutSignal): no leaves there.
+struct RealisticTreeCut {
+    std::uint32_t tree{0};               ///< index into RealisticSettings::trees
+    std::array<std::int32_t, 3> cell{};  ///< of 0.1 m (kTreeCutCell), crown frame, unswayed
+};
+
+/// A flying leaf (lagrange/world/Leaves.hpp): its blade's normal is (cos pitch cos yaw,
+/// cos pitch sin yaw, sin pitch). At most kMaxRealisticLeaves.
+inline constexpr std::size_t kMaxRealisticLeaves = 2048;
+struct RealisticLeaf {
+    std::array<double, 3> position{};  ///< region frame, m
+    float yaw{0.0F};                   ///< rad
+    float pitch{0.0F};                 ///< rad
+    float size{0.0F};                  ///< m, the blade's length
+};
+
 /// The renderer's units per lux (RFC 0021 §4): the drawn sun, kSunStrength, is the IES clear-sky
 /// direct normal illuminance of the light_sensor (sensors.md §9) at the drawn sun's elevation on
 /// the March equinox, so a Lambertian surface of albedo ρ under E lx is drawn ρ·E/π times this.
@@ -171,6 +202,10 @@ struct RealisticSettings {
     double groundHeight{std::numeric_limits<double>::quiet_NaN()};
     /// Plants cut by propellers, when the run's plants have been cut.
     RealisticCutPlants cutPlants;
+    /// Trees, their cut crown cells and the flying leaves.
+    std::span<const RealisticTree> trees;
+    std::span<const RealisticTreeCut> treeCuts;
+    std::span<const RealisticLeaf> leaves;
 };
 
 /// The photographs of surfaces, shared by the renderers on a device.
@@ -232,6 +267,8 @@ private:
     Buffer cut_;      // host-visible: the cut plants' tops per cell (m, RealisticCutPlants)
     const float* cutUploaded_{nullptr};  // what cut_ holds, to upload only a new grid
     std::size_t cutUploadedCount_{0};
+    Buffer treeCuts_;  // host-visible: the trees' cut cells, an open-addressed table of keys
+    Buffer leaves_;    // host-visible: the flying leaves (realistic.slang flyingLeaves)
     VkSampler linear_{VK_NULL_HANDLE};
     VkSampler nearest_{VK_NULL_HANDLE};
     VkSampler repeat_{VK_NULL_HANDLE};
@@ -272,6 +309,20 @@ private:
         bool grass = false;
     };
     std::vector<VegPatch> vegPatches_;
+    // Trees (realistic.slang vsTree), made in the same pipeline, and their shadows in the sun's
+    // cascades. Per frame: each tree's push constants and its leaf cards, and its bounding ball
+    // relative to the eye.
+    Pipeline treeShadowPipe_;
+    struct TreeDraw {
+        std::array<float, 24> push{};
+        std::uint32_t leaves = 0;
+        std::array<float, 4> ball{};
+    };
+    std::vector<TreeDraw> treeDraws_;
+    std::vector<std::pair<double, std::size_t>> treeOrder_;  // per frame: (distance, tree)
+    std::uint64_t treeCutsSum_{0};                           // a hash of the cuts treeCuts_ holds
+    std::uint32_t treeCutsStored_{0};                        // keys in it
+    std::uint32_t leafCount_{0};                             // flying leaves in leaves_ this frame
     Pipeline composite_;
 };
 

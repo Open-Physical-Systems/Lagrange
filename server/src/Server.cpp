@@ -60,8 +60,10 @@
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
 #include "lagrange/world/CanopyCut.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/RoadLanes.hpp"
+#include "lagrange/world/Trees.hpp"
 
 #include <algorithm>
 #include <array>
@@ -132,6 +134,14 @@ constexpr const char* kWaterSurfaceField = "water/surface";
 // the realistic view. Sent only when the cuts change.
 constexpr const char* kCutField = "vegetation/cut";
 constexpr std::uint32_t kMaxCutSide = 512;  // cells a side of the grid sent
+// Trees (ground.md "Trees") for the realistic view: the crown cells propellers cut, a FieldVolume
+// one component, ny = nz = 1, nx = 4 per cell: (the tree's scene prim, cell x, y, z) with the
+// cells of Trees.hpp (kTreeCutCell, the crown's own unswayed frame); a single NaN when none is
+// cut. Sent when the cuts change and every few seconds.
+constexpr const char* kTreeCutField = "vegetation/tree_cut";
+// The flying leaves (Leaves.hpp) likewise: nx = 6 per leaf, (x, y, z) less the volume's origin
+// (region frame, m), yaw, pitch (rad), size (m); a single NaN when none flies. Sent when they move.
+constexpr const char* kLeavesField = "vegetation/leaves";
 constexpr const char* kSprayField = "aero/spray";
 /// The air's friction velocity on the water (u* = τ/√(ρ·|τ|), m/s, x and y per cell of the
 /// moving surface's patch): what raises the ripples the realistic look draws (water.md).
@@ -511,6 +521,9 @@ struct Session {
     // from above and from the side).
     std::map<std::pair<std::string, int>, FieldWant> fields;
     double cutVersion{-1.0};      // the vegetation/canopy_cut version last sent as kCutField
+    double treeCutVersion{-1.0};  // the vegetation/tree_cut version last sent as kTreeCutField
+    Clock::time_point treeCutSent{};
+    double leavesVersion{-1.0};   // the vegetation/leaves version last sent as kLeavesField
     Clock::time_point cutSent{};  // when: sent again every few seconds (a rebuilt run restarts it)
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
@@ -6588,6 +6601,10 @@ struct Server::Impl {
               "no spray: it needs the water's moving surface and aerodynamics.downwash_spray");
         field(kCutField, "cut plants", "vegetation", units::m, 1, cutSignal().valid(),
               "nothing cuts plants: it needs a canopy (grass, reeds, shrubs) and rotors");
+        field(kTreeCutField, "cut tree crowns", "vegetation", units::one, 1,
+              treeCutSignal().valid(), "no tree is cut: it needs trees (TreeAPI_1) and rotors");
+        field(kLeavesField, "flying leaves", "vegetation", units::m, 1, leavesSignal().valid(),
+              "no leaves fly: it needs trees (TreeAPI_1) and the vegetation domain");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -7214,9 +7231,118 @@ struct Server::Impl {
         return envelope;
     }
 
+    SignalId treeCutSignal() const {
+        return scheduler != nullptr ? scheduler->bus().find(std::string(kTreeCutSignal))
+                                    : SignalId{};
+    }
+    SignalId leavesSignal() const {
+        return scheduler != nullptr ? scheduler->bus().find(std::string(kLeavesSignal))
+                                    : SignalId{};
+    }
+
+    /// A FieldVolume of one row of numbers (kTreeCutField, kLeavesField); a single NaN when
+    /// `values` is empty.
+    v1::Envelope rowVolume(const char* name, std::vector<float> values,
+                           const std::array<double, 3>& origin, double cell) const {
+        if (values.empty()) {
+            values.push_back(std::numeric_limits<float>::quiet_NaN());
+        }
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(name);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_components(1);
+        volume.set_nx(static_cast<std::uint32_t>(values.size()));
+        volume.set_ny(1);
+        volume.set_nz(1);
+        volume.set_cell_m(cell);
+        volume.set_origin_x(origin[0]);
+        volume.set_origin_y(origin[1]);
+        volume.set_origin_z(origin[2]);
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The trees' cut crown cells (kTreeCutField), each with its tree's scene prim. `version`
+    /// gets the map's version.
+    std::optional<v1::Envelope> treeCutVolume(double* version = nullptr) const {
+        const SignalId id = treeCutSignal();
+        if (!id.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> map = scheduler->bus().readN(id);
+        if (map.size() < kTreeCutHeader) {
+            return std::nullopt;
+        }
+        if (version != nullptr) {
+            *version = map[0];
+        }
+        std::string treeError;
+        const std::vector<TreeSpec> trees = treesOf(robot.world, treeError);
+        std::vector<float> values;
+        const auto count = static_cast<std::size_t>(std::max(0.0, map[1]));
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::size_t at = kTreeCutHeader + (4 * k);
+            if (at + 3 >= map.size()) {
+                break;
+            }
+            const auto tree = static_cast<std::size_t>(map[at]);
+            if (tree >= trees.size()) {
+                continue;
+            }
+            const std::uint32_t prim = scenePrimOf(trees[tree].prim);
+            if (prim == kNoIndex) {
+                continue;
+            }
+            values.insert(values.end(),
+                          {static_cast<float>(prim), static_cast<float>(map[at + 1]),
+                           static_cast<float>(map[at + 2]), static_cast<float>(map[at + 3])});
+        }
+        return rowVolume(kTreeCutField, std::move(values), {}, kTreeCutCell);
+    }
+
+    /// The flying leaves (kLeavesField), positions from the first leaf's.
+    std::optional<v1::Envelope> leavesVolume(double* version = nullptr) const {
+        const SignalId id = leavesSignal();
+        if (!id.valid()) {
+            return std::nullopt;
+        }
+        const std::span<const double> list = scheduler->bus().readN(id);
+        if (list.size() < kLeavesHeader) {
+            return std::nullopt;
+        }
+        if (version != nullptr) {
+            *version = list[0];
+        }
+        const std::size_t count = std::min(static_cast<std::size_t>(std::max(0.0, list[1])),
+                                           (list.size() - kLeavesHeader) / kLeavesFields);
+        std::array<double, 3> origin{};
+        if (count > 0) {
+            origin = {list[kLeavesHeader], list[kLeavesHeader + 1], list[kLeavesHeader + 2]};
+        }
+        std::vector<float> values;
+        values.reserve(count * kLeavesFields);
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::size_t at = kLeavesHeader + (kLeavesFields * k);
+            for (std::size_t c = 0; c < kLeavesFields; ++c) {
+                values.push_back(static_cast<float>(list[at + c] - (c < 3 ? origin.at(c) : 0.0)));
+            }
+        }
+        return rowVolume(kLeavesField, std::move(values), origin, 0.01);
+    }
+
     std::optional<v1::Envelope> fieldVolume(const std::string& name) const {
         if (name == kCutField) {
             return cutVolume();
+        }
+        if (name == kTreeCutField) {
+            return treeCutVolume();
+        }
+        if (name == kLeavesField) {
+            return leavesVolume();
         }
         if (name == kWaterSurfaceField) {
             return waterSurfaceVolume();
@@ -9415,6 +9541,35 @@ void Server::runOnce(int timeoutMs) {
                             session->send(*volume);
                             session->cutVersion = version;
                             session->cutSent = Clock::now();
+                        }
+                    }
+                } else if (want.volume && key.first == kTreeCutField) {
+                    // As the cut plants: when the cuts changed, and every few seconds.
+                    const SignalId cut = s.treeCutSignal();
+                    const double now = cut.valid() && !s.scheduler->bus().readN(cut).empty()
+                                           ? s.scheduler->bus().readN(cut)[0]
+                                           : -1.0;
+                    constexpr auto kTreeCutRefresh = std::chrono::seconds(3);
+                    if (now != session->treeCutVersion ||
+                        Clock::now() - session->treeCutSent > kTreeCutRefresh) {
+                        double version = -1.0;
+                        if (auto volume = s.treeCutVolume(&version)) {
+                            session->send(*volume);
+                            session->treeCutVersion = version;
+                            session->treeCutSent = Clock::now();
+                        }
+                    }
+                } else if (want.volume && key.first == kLeavesField) {
+                    // Whenever they moved.
+                    const SignalId leaves = s.leavesSignal();
+                    const double now = leaves.valid() && !s.scheduler->bus().readN(leaves).empty()
+                                           ? s.scheduler->bus().readN(leaves)[0]
+                                           : -1.0;
+                    if (now != session->leavesVersion) {
+                        double version = -1.0;
+                        if (auto volume = s.leavesVolume(&version)) {
+                            session->send(*volume);
+                            session->leavesVersion = version;
                         }
                     }
                 } else if (want.volume) {

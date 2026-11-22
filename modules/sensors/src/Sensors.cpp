@@ -17,6 +17,7 @@
 #include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/thermal/Materials.hpp"
+#include "lagrange/world/Leaves.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -1584,6 +1585,53 @@ public:
                 r.axis = optional(
                     spec(base + "thrust_axis", SignalType::Vec3, units::one, "world_local"));
             }
+            // The trees (ground.md "Trees"), drawn as trees by the realistic look: their sway,
+            // cut crown cells and flying leaves, last step's; without the vegetation domain,
+            // still and whole.
+            std::string treeError;
+            seenTrees_ = treesOf(raw, treeError);
+            treeSway_.clear();
+            treeCut_ = SignalId{};
+            leaves_ = SignalId{};
+            drawnTrees_.clear();
+            for (const TreeSpec& t : seenTrees_) {
+                SignalSpec sway =
+                    spec("tree/" + t.name + "/sway", SignalType::Vec3, units::m, "world_local");
+                sway.optional = true;
+                sway.feedback = true;
+                sway.defaultValue = 0.0;
+                treeSway_.push_back(d.input(sway));
+                gpu::RealisticTree& drawn = drawnTrees_.emplace_back();
+                drawn.foot = t.pose.position;
+                drawn.rotation = {static_cast<float>(t.pose.orientation[0]),
+                                  static_cast<float>(t.pose.orientation[1]),
+                                  static_cast<float>(t.pose.orientation[2]),
+                                  static_cast<float>(t.pose.orientation[3])};
+                drawn.height = t.height;
+                drawn.crownRadius = t.crownRadius;
+                drawn.crownBase = t.crownBase;
+                drawn.trunkDiameter = t.trunkDiameter;
+                // The viewer's seed (App.cpp followTrees): the same tree in both.
+                std::uint32_t seed = 2166136261U;
+                for (const char c : t.name) {
+                    seed = (seed ^ static_cast<unsigned char>(c)) * 16777619U;
+                }
+                drawn.seed = seed & 0xffffffU;
+            }
+            if (!seenTrees_.empty()) {
+                SignalSpec cut =
+                    spec(std::string(kTreeCutSignal), SignalType::ScalarArray, units::one);
+                cut.arrayLength = kTreeCutLength;
+                cut.optional = true;
+                cut.feedback = true;
+                treeCut_ = d.input(cut);
+                SignalSpec leaves =
+                    spec(std::string(kLeavesSignal), SignalType::ScalarArray, units::one);
+                leaves.arrayLength = kLeavesLength;
+                leaves.optional = true;
+                leaves.feedback = true;
+                leaves_ = d.input(leaves);
+            }
         }
         const auto image = [&](const char* what, Unit unit) {
             SignalSpec out =
@@ -2148,6 +2196,7 @@ private:
         for (const auto& face : faceRenderers_) {
             face->setAir(drawnRotors_);
         }
+        trees(bus);
         // The render is brightened as the dark asks (gpu::realisticAdaptation): the sensor
         // model takes it out again, so its electrons stay those of the scene's light.
         if (model_ && renderer_ && scene_->raster->realistic()) {
@@ -2200,10 +2249,73 @@ private:
     };
     std::vector<SeenRotor> rotors_;
     std::vector<gpu::AirRotor> drawnRotors_;  // this frame's
-    SignalId skyIlluminance_;                 // env/sky_illuminance, lx; NaN: the drawn day
-    gpu::PinholeCamera camera_;               // the output's pinhole (before the sensor model)
-    std::unique_ptr<CameraModel> model_;      // null when no part of the sensor model is on
-    std::unique_ptr<FisheyeRemap> fisheye_;   // a fisheye's cube faces and remap; else null
+    /// The trees of the run as the realistic look draws them (ground.md "Trees").
+    std::vector<TreeSpec> seenTrees_;
+    std::vector<SignalId> treeSway_;  // tree/<n>/sway
+    SignalId treeCut_, leaves_;       // kTreeCutSignal, kLeavesSignal
+    std::vector<gpu::RealisticTree> drawnTrees_;
+    std::vector<gpu::RealisticTreeCut> drawnCuts_;
+    std::vector<gpu::RealisticLeaf> drawnLeaves_;
+    double cutVersion_{-1.0};
+
+    /// This frame's trees, cut cells and flying leaves to every renderer of the camera.
+    void trees(const SignalBus& bus) {
+        if (drawnTrees_.empty()) {
+            return;
+        }
+        for (std::size_t k = 0; k < drawnTrees_.size() && k < treeSway_.size(); ++k) {
+            if (treeSway_[k].valid()) {
+                const std::span<const double> v = bus.readN(treeSway_[k]);
+                for (std::size_t c = 0; c < 3 && c < v.size(); ++c) {
+                    drawnTrees_[k].sway.at(c) = std::isfinite(v[c]) ? v[c] : 0.0;
+                }
+            }
+        }
+        if (treeCut_.valid()) {
+            const std::span<const double> map = bus.readN(treeCut_);
+            if (map.size() >= kTreeCutHeader && map[0] != cutVersion_) {
+                cutVersion_ = map[0];
+                drawnCuts_.clear();
+                const auto count = static_cast<std::size_t>(std::max(0.0, map[1]));
+                for (std::size_t k = 0; k < count; ++k) {
+                    const std::size_t at = kTreeCutHeader + (4 * k);
+                    if (at + 3 >= map.size()) {
+                        break;
+                    }
+                    drawnCuts_.push_back({static_cast<std::uint32_t>(map[at]),
+                                          {static_cast<std::int32_t>(map[at + 1]),
+                                           static_cast<std::int32_t>(map[at + 2]),
+                                           static_cast<std::int32_t>(map[at + 3])}});
+                }
+            }
+        }
+        drawnLeaves_.clear();
+        if (leaves_.valid()) {
+            const std::span<const double> list = bus.readN(leaves_);
+            const std::size_t count =
+                list.size() < kLeavesHeader
+                    ? 0
+                    : std::min(static_cast<std::size_t>(std::max(0.0, list[1])),
+                               (list.size() - kLeavesHeader) / kLeavesFields);
+            for (std::size_t k = 0; k < count; ++k) {
+                const std::size_t at = kLeavesHeader + (kLeavesFields * k);
+                drawnLeaves_.push_back({{list[at], list[at + 1], list[at + 2]},
+                                        static_cast<float>(list[at + 3]),
+                                        static_cast<float>(list[at + 4]),
+                                        static_cast<float>(list[at + 5])});
+            }
+        }
+        if (renderer_) {
+            renderer_->setTrees(drawnTrees_, drawnCuts_, drawnLeaves_);
+        }
+        for (const auto& face : faceRenderers_) {
+            face->setTrees(drawnTrees_, drawnCuts_, drawnLeaves_);
+        }
+    }
+    SignalId skyIlluminance_;                // env/sky_illuminance, lx; NaN: the drawn day
+    gpu::PinholeCamera camera_;              // the output's pinhole (before the sensor model)
+    std::unique_ptr<CameraModel> model_;     // null when no part of the sensor model is on
+    std::unique_ptr<FisheyeRemap> fisheye_;  // a fisheye's cube faces and remap; else null
     std::vector<std::unique_ptr<gpu::RasterCamera>> faceRenderers_;
     std::vector<gpu::RasterImages> faceImages_;
     gpu::RasterImages rendered_;  // the render the sensor model remaps

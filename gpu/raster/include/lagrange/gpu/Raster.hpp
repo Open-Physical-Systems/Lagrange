@@ -17,6 +17,9 @@ class Device;
 struct RealisticLamp;
 struct RealisticWaterSurface;
 struct AirRotor;
+struct RealisticTree;
+struct RealisticTreeCut;
+struct RealisticLeaf;
 
 // --- the mesh pipeline shared by the viewer's viewport and the camera sensor ----------------
 // (invariant 13: one shader, gpu/kernels/camera/mesh.slang, draws both)
@@ -249,6 +252,12 @@ public:
     /// The rotors whose outwash bends grass and vegetation in the realistic look from now on
     /// (GroundAir.hpp); the simple look draws no grass.
     void setAir(std::span<const AirRotor> rotors);
+
+    /// The trees, their cut crown cells and the flying leaves the realistic look draws from now
+    /// on (copied; RealisticSettings::trees); the simple look draws none. Depth and instance ids
+    /// do not see them.
+    void setTrees(std::span<const RealisticTree> trees, std::span<const RealisticTreeCut> cuts,
+                  std::span<const RealisticLeaf> leaves);
 
     /// Whether colour is drawn (the default). Without, render() draws only depth and instance
     /// ids, and the colour reads back as zeros: for a camera that needs no colour, as a thermal

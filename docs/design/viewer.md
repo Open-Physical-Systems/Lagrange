@@ -164,6 +164,32 @@ flowchart LR
   (not reversed), so it stays lit from the sky. Blade counts, sizes and colours are drawing
   choices, TODO(verify) against photographs of turf and meadow.
   Sample world `assets/worlds/reed_channel/reed_channel.usda`.
+  Trees (ground.md "Trees"): every `TreeAPI_1` prim is drawn as a tree by the same pipeline
+  (`vsTree`), made from its numbers and a seed from its name alone: a tapered trunk with a root
+  flare from its foot through the crown base into the crown, seven main branches out to the
+  crown's main clumps, a twig to each of 21 more clumps, and a crown of leaf cards (600 per m³ of
+  crown, at most 16 000 a tree, each a spray of three leaves of about 9 cm) in those clumps inside
+  the crown's ellipsoid, where the physics has its leaves, coloured per
+  clump and per leaf, darker deep inside and underneath, autumn colours in fall and a few dead
+  leaves in winter. The crown sways by `tree/<n>/sway` (a point at height z moves by
+  sway·(z / centre height)^1.5: the trunk bends, the top moves most) and each leaf flutters in the
+  air at it (`groundAir`). Leaves in a crown cell a propeller cut (`vegetation/tree_cut`, served
+  as the field volume of that name, a row of (tree prim, cell) per cut cell; uploaded as an
+  open-addressed table, binding 12) are not drawn and the leaves beside them are drawn torn and
+  pale, so the cut shows as a bruised hollow (the crown's inner leaves stay behind it). Flying leaves
+  (`vegetation/leaves`, Leaves.hpp, served likewise; binding 13) are drawn as single leaf cards at
+  the orientation the physics gives them. Trees and flying leaves are drawn into the sun's two
+  cascades too (a depth-only pipeline on `vsTree`), so they cast dappled shadows and shade
+  themselves; they are in the water's mirror. Beyond 14 m from the crown the cards get fewer
+  (as 1/d², at least 400) and larger, every tree's together capped at 240 000 a frame (6000 on a
+  software device, where a tree has at most 1500). The sample's four trees add about 0.1 ms to the
+  3D view's GPU time seen from 40 m, 0.36 ms with tree_1 filling the view at 8 m (0.47 to 0.83 ms)
+  and 0.67 ms at 3 m, at 1600x1000 on an RTX 4060 Laptop. The viewer takes the numbers from the prims' attributes (`GetAttributes`,
+  with Trees.hpp's fallbacks) and the sway by signal subscription; camera sensors take them
+  from the world and the bus (`RasterCamera::setTrees`). Depth and instance ids do not see them.
+  The open field's trees keep only their trunk colliders, so the procedural tree is the only one
+  drawn. Counts, sizes and colours are drawing choices, TODO(verify) against photographs of
+  broadleaf crowns.
   Lamps (RFC 0021 §4): up to 64 a frame (`gpu::kMaxRealisticLamps`, the brightest at the eye by
   I/d²) in a storage buffer, each adding E = I·f(θ)·cos/d² through the same GGX as the sun, its
   colour from its colour temperature (Planck through the CIE 1931 functions,

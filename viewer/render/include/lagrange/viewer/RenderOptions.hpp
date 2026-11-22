@@ -100,6 +100,34 @@ struct RenderOptions {
         std::vector<float> tops;               ///< m over `level`, x fastest; NaN: not cut
     };
     std::shared_ptr<const CutPlants> cutPlants;
+    /// Trees (TreeAPI_1; ground.md "Trees"), drawn by the realistic view as trees: from the
+    /// stage's tree:* attributes, the prim's pose and tree/<n>/sway.
+    struct Tree {
+        std::array<double, 3> foot{};                           ///< region frame, m
+        std::array<float, 4> rotation{1.0F, 0.0F, 0.0F, 0.0F};  ///< w, x, y, z
+        double height{0.0};                                     ///< m
+        double crownRadius{0.0};                                ///< m
+        double crownBase{0.0};                                  ///< m over the foot
+        double trunkDiameter{0.0};                              ///< m
+        std::array<double, 3> sway{};  ///< world, m: the crown centre's displacement
+        std::uint32_t seed{0};         ///< its look
+        bool operator==(const Tree&) const = default;
+    };
+    std::vector<Tree> trees;
+    /// Crown cells propellers cut (the server's vegetation/tree_cut volume): no leaves there.
+    struct TreeCut {
+        std::uint32_t tree{0};               ///< index into `trees`
+        std::array<std::int32_t, 3> cell{};  ///< Trees.hpp's crown cell (0.1 m, unswayed)
+    };
+    std::shared_ptr<const std::vector<TreeCut>> treeCuts;
+    /// Flying leaves (the server's vegetation/leaves volume; Leaves.hpp).
+    struct Leaf {
+        std::array<double, 3> position{};  ///< region frame, m
+        float yaw{0.0F};                   ///< rad
+        float pitch{0.0F};                 ///< rad
+        float size{0.0F};                  ///< m
+    };
+    std::shared_ptr<const std::vector<Leaf>> leaves;
     /// The spray's water per cell (aero/spray, kg/m³), drawn by the realistic view as mist.
     struct Spray {
         std::array<std::uint32_t, 3> cells{};  ///< nx, ny, nz
