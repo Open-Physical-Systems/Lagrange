@@ -494,6 +494,7 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
                 crown.points.at(k) = {t.pose.position[0] + w[0], t.pose.position[1] + w[1],
                                       t.pose.position[2] + w[2]};
             }
+            crown.spread = h;
             crown.downwash = d.output(spec("tree/" + t.name + "/downwash", SignalType::Vec3,
                                            units::m_per_s, "world_local"));
             crowns_.push_back(crown);
@@ -886,6 +887,14 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
     }
     for (const TreeCrown& crown : crowns_) {
         Vec3 sum{};
+        // The broad phase (kCrownWakeFar): far from every wake column, the centre alone.
+        const bool far = std::ranges::none_of(downwash_.groups(), [&](const Downwash::Group& g) {
+            return Downwash::wakeDistance(g, crown.points[0]) <= kCrownWakeFar * crown.spread;
+        });
+        if (far) {
+            bus.writeN(crown.downwash, wakeAt(crown.points[0], Downwash::kNoGroup));
+            continue;
+        }
         for (const Vec3& at : crown.points) {
             const Vec3 w = wakeAt(at, Downwash::kNoGroup);
             for (std::size_t k = 0; k < 3; ++k) {

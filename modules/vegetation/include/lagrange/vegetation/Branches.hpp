@@ -173,7 +173,8 @@ private:
     void record(const Cut& cut);
     [[nodiscard]] bool inFixed(const std::array<double, 3>& point) const;
     TreeWood wood_;
-    std::vector<Cut> cuts_;  // in order, the saved state
+    std::vector<std::array<double, 3>> woodUp_;  // per tree, m (build)
+    std::vector<Cut> cuts_;                      // in order, the saved state
     std::vector<double> cutValues_ = std::vector<double>(kBranchCutLength, 0.0);
     SignalId cutOut_;
     double cutVersion_{0.0};  // what publish last wrote

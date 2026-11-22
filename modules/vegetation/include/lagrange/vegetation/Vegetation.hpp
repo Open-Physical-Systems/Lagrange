@@ -210,6 +210,7 @@ private:
         std::vector<WoodShape> shapes;  // its colliders, for the wood
         double bound{0.0};              // m, round them about the link's origin
         double mass{0.0};               // kg
+        double reach{0.0};              // m, the farthest cell from the body's origin
     };
     struct Rotor {
         SignalId pose, velocity, wrench, power;
@@ -227,6 +228,11 @@ private:
     };
     std::vector<TreeSpec> treeSpecs_;
     std::vector<Tree> trees_;
+    // The broad phase (ground.md "The orchard"): each crown's centre this step (world, at its
+    // sway) and the trees near the rotor or body at hand, the rest skipped as their own bounds
+    // would skip them.
+    std::vector<std::array<double, 3>> crownCentres_;
+    std::vector<std::uint32_t> nearTrees_;
     TreeCutMap treeCuts_;
     Branches branches_;
     SignalId wind_, treeCutOut_;
@@ -241,6 +247,9 @@ private:
     // Flying leaves.
     /// The centres of the cells a rotor just cut from each tree, as cut cells with its blade's
     /// velocity there.
+    /// nearTrees_: the trees whose crown's bounding sphere (radius max(R, c), at its sway) comes
+    /// within `reach` of `at`, in index order.
+    void nearCrowns(const std::array<double, 3>& at, double reach);
     void collectCut(std::size_t tree, const std::array<double, 3>& hub,
                     const std::array<double, 3>& axis, double omega, double radius);
     void layLitter();

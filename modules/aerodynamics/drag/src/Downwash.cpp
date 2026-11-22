@@ -415,6 +415,17 @@ double Downwash::jetParts(const Group& g, const Vec3& x, double& s, double widen
     return beta;
 }
 
+double Downwash::wakeDistance(const Group& g, const Vec3& x) {
+    const Vec3 d = sub(x, g.centre);
+    double along = std::max(0.0, dot(d, g.wakeAxis));
+    if (g.hits) {
+        along = std::min(along, norm(sub(g.hitPoint, g.centre)));
+    }
+    const Vec3 off{d[0] - along * g.wakeAxis[0], d[1] - along * g.wakeAxis[1],
+                   d[2] - along * g.wakeAxis[2]};
+    return std::max(0.0, norm(off) - 0.5 * g.length);
+}
+
 Vec3 Downwash::velocityAt(const Vec3& x, std::size_t exclude) const {
     Vec3 out{};
     if (hasGround_ && dot(sub(x, groundPoint_), groundNormal_) < 0.0) {

@@ -736,6 +736,18 @@ public:
             sways_[k] =
                 w.size() == 3 ? std::array<double, 3>{w[0], w[1], w[2]} : std::array<double, 3>{};
         }
+        crownIndex_.build(trees_, sways_);
+        if (!wood_.empty()) {
+            // The wood's broad phase: a sphere round each tree's skeleton (its top-level
+            // subtrees' spheres together), at the tree's sway.
+            woodSpheres_.resize(trees_.size());
+            for (std::size_t k = 0; k < trees_.size(); ++k) {
+                woodSpheres_[k] = k < wood_.trees()
+                                      ? woodBound(trees_[k], wood_.skeleton(k), sways_[k])
+                                      : std::array<double, 4>{};
+            }
+            woodIndex_.buildSpheres(woodSpheres_);
+        }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
         sweep(sensor);
         // Place every shape once per scan, not once per beam.
@@ -807,19 +819,31 @@ public:
                         stopShape = k;
                     }
                 }
-                // Crowns (ShapeCaster.hpp crownStop): one draw per tree, in order.
-                for (std::size_t k = 0; k < trees_.size(); ++k) {
+                // Crowns (ShapeCaster.hpp crownStop): one draw per crown the beam crosses, in
+                // tree order, among the broad phase's candidates (CrownIndex).
+                thread_local std::vector<std::uint32_t> near;
+                crownIndex_.candidates(from.position, dir, std::min(reach, stop), near);
+                for (const std::uint32_t k : near) {
+                    const double range = std::min(reach, stop);
+                    if (!crownCrossed(trees_[k], from.position, dir, range, sways_[k])) {
+                        continue;
+                    }
                     const double at =
-                        crownStop(trees_[k], static_cast<std::uint32_t>(k), from.position, dir,
-                                  std::min(reach, stop), sways_[k],
+                        crownStop(trees_[k], k, from.position, dir, range, sways_[k],
                                   treeCuts_.empty() ? nullptr : &treeCuts_, rng.uniform());
                     if (at < stop) {
                         stop = at;
                         leaves = true;
                     }
                 }
-                // The wood in the crowns (TreeWood::ray): bark, nearer than the leaves.
-                for (std::size_t k = 0; k < trees_.size(); ++k) {
+                // The wood in the crowns (TreeWood::ray): bark, nearer than the leaves; only the
+                // trees whose wood's sphere the beam passes over (woodIndex_), in tree order.
+                if (!wood_.empty()) {
+                    woodIndex_.candidates(from.position, dir, std::min(reach, stop), near);
+                } else {
+                    near.clear();
+                }
+                for (const std::uint32_t k : near) {
                     WoodHit w;
                     if (wood_.ray(trees_[k], k, from.position, dir, std::min(reach, stop),
                                   sways_[k], w) &&
@@ -1263,7 +1287,10 @@ private:
     std::vector<std::uint32_t> canopyVolumes_;  // shapes_ with a canopy volume (boxes, planes)
     SignalId canopyCut_;                        // the vegetation domain's cut map, when it runs
     CanopyCuts cuts_;
-    std::vector<TreeSpec> trees_;               // crowns the beams cross (ground.md "Trees")
+    std::vector<TreeSpec> trees_;  // crowns the beams cross (ground.md "Trees")
+    CrownIndex crownIndex_;        // their broad phase, per scan
+    CrownIndex woodIndex_;         // the wood's, per scan
+    std::vector<std::array<double, 4>> woodSpheres_;
     std::vector<SignalId> treeSway_;            // tree/<n>/sway, the vegetation domain's
     std::vector<std::array<double, 3>> sways_;  // this scan's
     SignalId treeCut_;                          // vegetation/tree_cut
@@ -2326,9 +2353,9 @@ private:
 
     /// The crowns in the depth and instance images, as the lidar sees them (ShapeCaster.hpp
     /// crownStop): each pixel's ray, up to what the render met, stops in a crown it crosses at
-    /// an optical depth drawn from its own stream, one draw per tree in order, at the tree's
-    /// sway and without its cut cells; where it stops, the depth is there and the instance is
-    /// the tree's prim. The colour is the look's (realistic: its trees; simple: TreeShapes.hpp).
+    /// an optical depth drawn from its own stream, one draw per crossed crown in order, at the
+    /// tree's sway and without its cut cells; where it stops, the depth is there and the instance
+    /// is the tree's prim. The colour is the look's (realistic: its trees; simple: TreeShapes.hpp).
     void crownDepth() {
         const std::uint32_t w = camera_.width;
         const std::uint32_t h = camera_.height;
@@ -2336,24 +2363,14 @@ private:
         if (images_.depth.size() != pixels || images_.instance.size() != pixels) {
             return;
         }
-        // Each crown's bounding ball, to leave the rays that miss them all at once.
-        struct Ball {
-            std::array<double, 3> centre;
-            double radius;
-        };
-        std::vector<Ball> balls;
-        std::vector<std::array<double, 3>> sways;  // tree/<n>/sway, as trees() read it
+        // The crowns' broad phase (ShapeCaster.hpp CrownIndex), at their sway as trees() read
+        // it: each ray tests only the crowns over whose cells it passes.
+        std::vector<std::array<double, 3>> sways;
         for (std::size_t k = 0; k < seenTrees_.size(); ++k) {
-            const TreeSpec& t = seenTrees_[k];
-            const std::array<double, 3> up =
-                rotate(t.pose.orientation, {0.0, 0.0, t.centreHeight()});
-            const std::array<double, 3>& sway = sways.emplace_back(
-                k < drawnTrees_.size() ? drawnTrees_[k].sway : std::array<double, 3>{});
-            balls.push_back(
-                {{t.pose.position[0] + up[0] + sway[0], t.pose.position[1] + up[1] + sway[1],
-                  t.pose.position[2] + up[2] + sway[2]},
-                 std::max(t.crownRadius, t.halfHeight())});
+            sways.push_back(k < drawnTrees_.size() ? drawnTrees_[k].sway : std::array<double, 3>{});
         }
+        CrownIndex index;
+        index.build(seenTrees_, sways);
         const Vec3 eye = camera_.position;
         const StepContext& context = frameContext_;
         const std::uint32_t stream = kCrownStream + ((sensor_ & 0x1ffU) << 22U);
@@ -2369,26 +2386,20 @@ private:
                 const Vec3 dir{ray[0] / length, ray[1] / length, ray[2] / length};
                 const float depth = images_.depth[i];
                 double reach = (std::isfinite(depth) ? static_cast<double>(depth) : far_) * length;
-                bool crosses = false;
-                for (const Ball& b : balls) {
-                    const Vec3 c{b.centre[0] - eye[0], b.centre[1] - eye[1], b.centre[2] - eye[2]};
-                    const double along = (c[0] * dir[0]) + (c[1] * dir[1]) + (c[2] * dir[2]);
-                    const double off =
-                        (c[0] * c[0]) + (c[1] * c[1]) + (c[2] * c[2]) - (along * along);
-                    if (off <= b.radius * b.radius && along + b.radius > 0.0) {
-                        crosses = true;
-                        break;
-                    }
-                }
-                if (!crosses) {
+                thread_local std::vector<std::uint32_t> near;
+                index.candidates(eye, dir, reach, near);
+                if (near.empty()) {
                     continue;
                 }
                 random::Stream rng(context.seed, context.stepIndex,
                                    stream + static_cast<std::uint32_t>(i & 0x3fffffU));
                 std::uint32_t hit = kNoIndex;
-                for (std::size_t k = 0; k < seenTrees_.size(); ++k) {
-                    const double at = crownStop(seenTrees_[k], static_cast<std::uint32_t>(k), eye,
-                                                dir, reach, sways[k], cuts, rng.uniform());
+                for (const std::uint32_t k : near) {
+                    if (!crownCrossed(seenTrees_[k], eye, dir, reach, sways[k])) {
+                        continue;  // a draw only for the crowns it crosses, as the lidar's
+                    }
+                    const double at =
+                        crownStop(seenTrees_[k], k, eye, dir, reach, sways[k], cuts, rng.uniform());
                     if (at < reach) {
                         reach = at;
                         hit = static_cast<std::uint32_t>(k);

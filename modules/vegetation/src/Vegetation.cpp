@@ -537,6 +537,9 @@ Status Vegetation::declare(const WorldView& world, const ModuleConfig& config, S
         if (body.cells.empty()) {
             continue;
         }
+        for (const Cell& cell : body.cells) {
+            body.reach = std::max(body.reach, std::hypot(cell.at[0], cell.at[1], cell.at[2]));
+        }
         const std::string base = "body/" + raw.bodies.names[b] + "/";
         SignalSpec pose = spec(base + "pose", SignalType::Pose, units::m, "world_local");
         SignalSpec twist = spec(base + "twist", SignalType::Wrench, units::m_per_s, "world_local");
@@ -703,6 +706,7 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
     const std::span<const double> wind =
         wind_.valid() ? bus.readN(wind_) : std::span<const double>{};
     std::vector<std::array<double, 3>> sways(trees_.size());
+    crownCentres_.resize(trees_.size());
     for (std::size_t k = 0; k < trees_.size(); ++k) {
         Tree& tree = trees_[k];
         const std::span<const double> w = bus.readN(tree.downwash);
@@ -715,6 +719,11 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
         // The bodies pushing on its wood push the crown too.
         stepSway(treeSpecs_[k], tree.state, {force[0] + tree.push[0], force[1] + tree.push[1]}, dt);
         sways[k] = {tree.state.position[0], tree.state.position[1], 0.0};
+        const TreeSpec& t = treeSpecs_[k];
+        const std::array<double, 3> up = rotate(t.pose.orientation, {0.0, 0.0, t.centreHeight()});
+        crownCentres_[k] = {t.pose.position[0] + up[0] + sways[k][0],
+                            t.pose.position[1] + up[1] + sways[k][1],
+                            t.pose.position[2] + up[2] + sways[k][2]};
         bus.writeN(tree.sway, sways[k]);
         bus.writeN(tree.force, std::array<double, 3>{force[0], force[1], 0.0});
     }
@@ -731,7 +740,9 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
                 area += cuts_.sweep(canopy, hub.position, axis, r.radius);
             }
             r.owed += area * cutEnergy_;
-            for (std::size_t k = 0; k < trees_.size(); ++k) {
+            // TreeCutMap::sweep's own bound, with a margin, before its work.
+            nearCrowns(hub.position, r.radius);
+            for (const std::uint32_t k : nearTrees_) {
                 cutScratch_.clear();
                 const double cut =
                     treeCuts_.sweep(treeSpecs_[k], static_cast<std::uint32_t>(k), hub.position,
@@ -815,6 +826,8 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
             const Pose pose{{p[0], p[1], p[2]}, {p[3], p[4], p[5], p[6]}};
             const std::array<double, 3> com = compose(pose, Pose{body.com, {1, 0, 0, 0}}).position;
             const std::array<double, 3> spin{v[3], v[4], v[5]};
+            // inLeaves is false farther than the largest semi-axis from a crown's centre.
+            nearCrowns(pose.position, body.reach);
             for (const Cell& cell : body.cells) {
                 const std::array<double, 3> at =
                     compose(pose, Pose{cell.at, {1, 0, 0, 0}}).position;
@@ -837,10 +850,9 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
                     }
                     break;  // one canopy per cell: overlapping canopies do not add up
                 }
-                for (std::size_t k = 0; k < treeSpecs_.size(); ++k) {
+                for (const std::uint32_t k : nearTrees_) {
                     const TreeSpec& t = treeSpecs_[k];
-                    if (!inLeaves(t, static_cast<std::uint32_t>(k), at, sways[k],
-                                  &treeCuts_.cuts())) {
+                    if (!inLeaves(t, k, at, sways[k], &treeCuts_.cuts())) {
                         continue;
                     }
                     inside += cell.volume;
@@ -870,6 +882,23 @@ Status Vegetation::step(const StepContext& context, SignalBus& bus) {
     }
     branches_.publish(bus);
     return {};
+}
+
+void Vegetation::nearCrowns(const std::array<double, 3>& at, double reach) {
+    nearTrees_.clear();
+    for (std::size_t k = 0; k < treeSpecs_.size(); ++k) {
+        const TreeSpec& t = treeSpecs_[k];
+        const std::array<double, 3>& c = crownCentres_[k];
+        // A relative margin so that rounding never skips a tree its own test would keep.
+        const double most =
+            ((std::max(t.crownRadius, t.halfHeight()) + reach) * (1.0 + 1e-9)) + 1e-9;
+        const double dx = at[0] - c[0];
+        const double dy = at[1] - c[1];
+        const double dz = at[2] - c[2];
+        if ((dx * dx) + (dy * dy) + (dz * dz) <= most * most) {
+            nearTrees_.push_back(static_cast<std::uint32_t>(k));
+        }
+    }
 }
 
 void Vegetation::collectCut(std::size_t tree, const std::array<double, 3>& hub,
