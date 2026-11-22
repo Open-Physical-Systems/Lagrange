@@ -1693,10 +1693,11 @@ public:
         renderOptions_.cutPlants = std::move(cut);
     }
 
-    /// Trees for the realistic view (ground.md "Trees"), only through the protocol (invariant
-    /// 14): the TreeAPI_1 prims of the scene, their tree:* attributes (asked for with the lamps',
-    /// with Trees.hpp's fallbacks), their poses, tree/<n>/sway (watched while the realistic view
-    /// draws), and the server's vegetation/tree_cut and vegetation/leaves volumes.
+    /// Trees for the 3D view (ground.md "Trees"), only through the protocol (invariant 14): the
+    /// TreeAPI_1 prims of the scene, their tree:* attributes (asked for with the lamps', with
+    /// Trees.hpp's fallbacks), their poses, tree/<n>/sway and the server's vegetation/tree_cut
+    /// volume (watched while a shading draws them: all but Collision), and vegetation/leaves
+    /// (the realistic view's flying leaves).
     void followTrees() {
         renderOptions_.trees.clear();
         const auto frame = scene_;
@@ -1753,7 +1754,9 @@ public:
             }
             return available;
         };
-        const bool drawn = realistic && !trees_.empty();
+        // Every shading draws the trees but Collision (realistic.slang vsTree in the realistic
+        // view, gpu/TreeShapes.hpp's trunk and clumps in the others), swayed and cut alike.
+        const bool drawn = renderOptions_.shading != Shading::Collision && !trees_.empty();
         if (!drawn) {
             stopSway();
         }

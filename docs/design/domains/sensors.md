@@ -42,6 +42,30 @@ colour response are not those of any real camera, and rain and snow are in the p
 season says so, separately from the `--weather` fog veil. With the sedan and the full town on an Iris
 Xe the run went at about 1.3× real time, against 1.4× with the simple look.
 
+**Trees in the camera** (`TreeAPI_1`, ground.md "Trees"). Colour: the realistic look draws each
+tree as the realistic view does (`realistic.slang` `vsTree`); the simple look, and a software
+device, draw it as a trunk and the crown's 28 clumps of leaves at the same places
+(`gpu/TreeShapes.hpp`, the function the viewer's Lit and other raster shadings use, invariant 13),
+swayed by `tree/<n>/sway`, a clump shrunk by the share of it the propellers cut. Depth and instance
+id are not those meshes: the camera adds the crowns to them as its lidar sees them, so the two
+sensors agree. Each pixel's ray, up to what the render met (or the far clip), stops in a crown it
+crosses at a free path drawn from `P(s > x) = exp(−G·LAD·x)` through the cells not cut away, the
+crown at its sway (`sensors::crownStop`, the lidar's function), one draw per tree in order from the
+pixel's own Philox stream (the camera's step, entity `0x8000'0000 + (sensor << 22) + pixel`); where
+it stops the depth is that point's and the instance is the tree prim's scene index. The crown is a
+turbid volume, not leaves at fixed places, so a depth image of a crown is speckled and changes from
+frame to frame by as much as a lidar's returns do; that is the choice that keeps camera and lidar
+consistent and the CPU reference exact. The trunk, solid wood, is drawn into depth and instance id
+in either look as the simple look draws it (its prim's id); the lidar sees the stage's trunk
+collider instead, which for the open field is a 3 m cylinder of the drawn foot's radius, so the two differ
+a little (the drawn trunk tapers) and above 3 m, inside the crown. Not yet: through a fisheye's faces, in a thermal
+camera's image, and the branches and flying leaves (the lidar sees flying leaves; the camera's
+depth does not). Checked in `test_camera` (`Camera.SeesATreesCrownAsTheLidarDoes`: a round crown of
+LAD 4 at 8.6 m, 95 % of the pixels around its centre on the tree, their mean distance the entry
+plus the truncated exponential's mean within 0.2 m, the trunk's face within 3 cm, the simple look
+green there) and
+`test_raster` (`TreeShapes.ClumpsFillTheCrownSwayAndCut`).
+
 Status of `sensor_model` in v0.6 (`modules/sensors/include/lagrange/sensors/CameraModel.hpp`, CPU
 after the raster render, every tier with a Vulkan device): each part runs when
 `CameraSensorAPI_1` asks for it. Lens distortion (plumb_bob, equidistant) by remapping a wider

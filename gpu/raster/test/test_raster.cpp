@@ -3,6 +3,7 @@
 // calibration from the images recovers the intrinsics. Reprojection error < 0.1 px.
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Realistic.hpp"
+#include "lagrange/gpu/TreeShapes.hpp"
 #include "lagrange/gpu/WaterOptics.hpp"
 
 #include <algorithm>
@@ -321,6 +322,66 @@ TEST(RasterLook, RealisticChangesColourOnly) {
     const std::uint8_t* ground = pixel(160, 220);
     EXPECT_GT(sky[2], sky[0]);                          // blue overhead
     EXPECT_GT(sky[2] - sky[0], ground[2] - ground[0]);  // and bluer than the grey floor
+}
+
+// --- trees in the simple look (TreeShapes.hpp) ------------------------------------------------
+
+// The clumps lie in the crown's ellipsoid, as the realistic view's leaves do; a sway moves the
+// crown's centre by the sway and the foot not at all; cut cells take a bite out of a clump.
+TEST(TreeShapes, ClumpsFillTheCrownSwayAndCut) {
+    RealisticTree tree;
+    tree.foot = {10.0, -4.0, 0.0};
+    tree.height = 6.1;
+    tree.crownRadius = 1.8;
+    tree.crownBase = 2.5;
+    tree.trunkDiameter = 0.5;
+    tree.seed = 0x4d2a17;
+    const double half = 0.5 * (tree.height - tree.crownBase);
+    for (std::uint32_t k = 0; k < kTreeClumpCount; ++k) {
+        const std::array<float, 4> c = treeClump(tree, k);
+        const double e = (c[0] * c[0] + c[1] * c[1]) / (tree.crownRadius * tree.crownRadius) +
+                         (c[2] * c[2]) / (half * half);
+        EXPECT_LT(e, 1.0) << k;
+        EXPECT_GT(c[3], 0.2F) << k;
+    }
+    std::vector<RasterInstance> still;
+    appendTreeParts(tree, 0, {}, 100, 7, still);
+    ASSERT_EQ(still.size(), 1U + kTreeClumpCount);
+    EXPECT_EQ(still[0].mesh, 101U);  // the trunk first
+    EXPECT_EQ(still[0].position, tree.foot);
+    EXPECT_EQ(still[1].mesh, 100U);
+    EXPECT_EQ(still[1].id, 7U);
+    // Swayed: a clump at the crown centre's height moves by the whole sway.
+    RealisticTree swayed = tree;
+    swayed.sway = {0.3, 0.0, 0.0};
+    std::vector<RasterInstance> moved;
+    appendTreeParts(swayed, 0, {}, 100, 7, moved);
+    EXPECT_EQ(moved[0].position, tree.foot);
+    for (std::size_t k = 1; k < moved.size(); ++k) {
+        const double z = moved[k].position[2];
+        const double bend = std::pow(z / (tree.crownBase + half), 1.5);
+        EXPECT_NEAR(moved[k].position[0] - still[k].position[0], 0.3 * bend, 1e-6) << k;
+    }
+    // Cut every cell of the first clump: it is gone, the others stay.
+    const std::array<float, 4> first = treeClump(tree, 0);
+    std::vector<RealisticTreeCut> cuts;
+    for (int x = -10; x <= 10; ++x) {
+        for (int y = -10; y <= 10; ++y) {
+            for (int z = -10; z <= 10; ++z) {
+                cuts.push_back({0,
+                                {static_cast<std::int32_t>(std::floor(first[0] / 0.1)) + x,
+                                 static_cast<std::int32_t>(std::floor(first[1] / 0.1)) + y,
+                                 static_cast<std::int32_t>(std::floor(first[2] / 0.1)) + z}});
+            }
+        }
+    }
+    std::vector<RasterInstance> cut;
+    appendTreeParts(tree, 0, cuts, 100, 7, cut);
+    EXPECT_LT(cut.size(), still.size());
+    // Another tree's cuts take nothing.
+    std::vector<RasterInstance> other;
+    appendTreeParts(tree, 1, cuts, 100, 7, other);
+    EXPECT_EQ(other.size(), still.size());
 }
 
 // --- lamps (RFC 0021 §4) ----------------------------------------------------------------------

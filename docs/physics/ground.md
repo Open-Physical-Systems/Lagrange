@@ -379,7 +379,10 @@ drags there, and the lidars see through them.
 
 **Drawing.** The realistic view and camera sensors draw each tree as a trunk, branches and a
 crown of leaf cards in its ellipsoid, swaying by `tree/<n>/sway`, with holes where cells were cut,
-and the flying leaves of `vegetation/leaves` (docs/design/viewer.md §4).
+and the flying leaves of `vegetation/leaves` (docs/design/viewer.md §4). The viewer's Lit and other
+shadings, and the cameras' simple look, draw it as a trunk and the crown's clumps of leaves at the
+same places, swayed and bitten where cut (`gpu/TreeShapes.hpp`). A camera's depth and instance
+images see the crown as the lidar does, below (sensors.md "Trees in the camera").
 
 **Lidars.** A beam crossing a crown stops in it with the gap probability: its free path through
 the leaves has `P(s > x) = exp(−G·LAD·x)`, counted only through cells not cut away, the crown at

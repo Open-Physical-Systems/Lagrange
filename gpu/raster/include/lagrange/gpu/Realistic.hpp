@@ -121,6 +121,9 @@ struct RealisticTree {
     double trunkDiameter{0.0};                              ///< m
     std::array<double, 3> sway{};  ///< world: the crown centre's displacement (tree/<n>/sway), m
     std::uint32_t seed{0};         ///< its look: the same seed, the same tree
+    /// The instance id its trunk writes in a camera's instance image (RasterInstance::id; the
+    /// tree prim's scene index), kNoInstance: none.
+    std::uint32_t id{0xFFFF'FFFFU};
 };
 
 /// A crown cell a propeller cut (lagrange/world/Trees.hpp kTreeCutSignal): no leaves there.

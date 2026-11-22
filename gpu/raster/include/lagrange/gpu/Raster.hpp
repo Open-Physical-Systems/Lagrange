@@ -254,8 +254,10 @@ public:
     void setAir(std::span<const AirRotor> rotors);
 
     /// The trees, their cut crown cells and the flying leaves the realistic look draws from now
-    /// on (copied; RealisticSettings::trees); the simple look draws none. Depth and instance ids
-    /// do not see them.
+    /// on (copied; RealisticSettings::trees); the simple look draws the trees as a trunk and
+    /// clumps (TreeShapes.hpp) and no flying leaves. Depth and instance ids see the trunks
+    /// (RealisticTree::id) in either look, not the crowns: the camera sensor adds those as its
+    /// lidar sees them (sensors.md "Trees in the camera").
     void setTrees(std::span<const RealisticTree> trees, std::span<const RealisticTreeCut> cuts,
                   std::span<const RealisticLeaf> leaves);
 

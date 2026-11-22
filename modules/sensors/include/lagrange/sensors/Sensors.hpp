@@ -54,6 +54,9 @@ struct CameraScene {
     };
     std::shared_ptr<gpu::RasterScene> raster;
     std::vector<Drawable> drawables;
+    /// Every scene prim's path, by scene prim index: the instance id of what has no mesh of its
+    /// own, as a tree's crown (sensors.md "Trees in the camera").
+    std::vector<std::string> primPaths;
 };
 
 /// Uploads `model`'s meshes to the device named by `preferredDevice` (DeviceDesc semantics).

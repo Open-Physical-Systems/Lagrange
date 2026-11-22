@@ -1641,7 +1641,17 @@ public:
             treeCut_ = SignalId{};
             leaves_ = SignalId{};
             drawnTrees_.clear();
+            treeIds_.clear();
             for (const TreeSpec& t : seenTrees_) {
+                // Its crown's instance id: the tree prim's scene index.
+                const std::string& path = t.prim.index < raw.prims.paths.size()
+                                              ? raw.prims.paths[t.prim.index]
+                                              : std::string();
+                const auto at = std::ranges::find(scene_->primPaths, path);
+                treeIds_.push_back(
+                    at == scene_->primPaths.end() || path.empty()
+                        ? gpu::kNoInstance
+                        : static_cast<std::uint32_t>(at - scene_->primPaths.begin()));
                 SignalSpec sway =
                     spec("tree/" + t.name + "/sway", SignalType::Vec3, units::m, "world_local");
                 sway.optional = true;
@@ -1664,6 +1674,7 @@ public:
                     seed = (seed ^ static_cast<unsigned char>(c)) * 16777619U;
                 }
                 drawn.seed = seed & 0xffffffU;
+                drawn.id = treeIds_.back();
             }
             if (!seenTrees_.empty()) {
                 SignalSpec cut =
@@ -1916,6 +1927,11 @@ private:
     Status finishFrame(SignalBus& bus) {
         if (!fisheye_ && movingWater_.read(bus)) {
             waterDepth();
+        }
+        // The crowns, as the lidar sees them (not yet through a fisheye's faces, nor in a
+        // thermal camera's image).
+        if (!fisheye_ && !thermal_ && !seenTrees_.empty()) {
+            crownDepth();
         }
         for (float& depth : images_.depth) {
             if (depth > far_) {
@@ -2304,6 +2320,87 @@ private:
     std::vector<gpu::RealisticTreeCut> drawnCuts_;
     std::vector<gpu::RealisticLeaf> drawnLeaves_;
     double cutVersion_{-1.0};
+    std::vector<std::uint32_t> treeIds_;  // per tree: its crown's instance id (scene prim)
+    TreeCuts crownCuts_;                  // the cut cells, for the crowns in depth
+    static constexpr std::uint32_t kCrownStream = 0x8000'0000U;  // + (sensor << 22) + pixel
+
+    /// The crowns in the depth and instance images, as the lidar sees them (ShapeCaster.hpp
+    /// crownStop): each pixel's ray, up to what the render met, stops in a crown it crosses at
+    /// an optical depth drawn from its own stream, one draw per tree in order, at the tree's
+    /// sway and without its cut cells; where it stops, the depth is there and the instance is
+    /// the tree's prim. The colour is the look's (realistic: its trees; simple: TreeShapes.hpp).
+    void crownDepth() {
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        const std::size_t pixels = static_cast<std::size_t>(w) * h;
+        if (images_.depth.size() != pixels || images_.instance.size() != pixels) {
+            return;
+        }
+        // Each crown's bounding ball, to leave the rays that miss them all at once.
+        struct Ball {
+            std::array<double, 3> centre;
+            double radius;
+        };
+        std::vector<Ball> balls;
+        std::vector<std::array<double, 3>> sways;  // tree/<n>/sway, as trees() read it
+        for (std::size_t k = 0; k < seenTrees_.size(); ++k) {
+            const TreeSpec& t = seenTrees_[k];
+            const std::array<double, 3> up =
+                rotate(t.pose.orientation, {0.0, 0.0, t.centreHeight()});
+            const std::array<double, 3>& sway = sways.emplace_back(
+                k < drawnTrees_.size() ? drawnTrees_[k].sway : std::array<double, 3>{});
+            balls.push_back(
+                {{t.pose.position[0] + up[0] + sway[0], t.pose.position[1] + up[1] + sway[1],
+                  t.pose.position[2] + up[2] + sway[2]},
+                 std::max(t.crownRadius, t.halfHeight())});
+        }
+        const Vec3 eye = camera_.position;
+        const StepContext& context = frameContext_;
+        const std::uint32_t stream = kCrownStream + ((sensor_ & 0x1ffU) << 22U);
+        const TreeCuts* cuts = crownCuts_.empty() ? nullptr : &crownCuts_;
+        tbb::parallel_for(std::uint32_t{0}, h, [&](std::uint32_t v) {
+            for (std::uint32_t u = 0; u < w; ++u) {
+                const std::size_t i = (static_cast<std::size_t>(v) * w) + u;
+                // The ray in the world, z 1 in the optical frame, and its length per unit depth.
+                const Vec3 ray = rotate(camera_.orientation, {(u - camera_.cx) / camera_.fx,
+                                                              (v - camera_.cy) / camera_.fy, 1.0});
+                const double length =
+                    std::sqrt((ray[0] * ray[0]) + (ray[1] * ray[1]) + (ray[2] * ray[2]));
+                const Vec3 dir{ray[0] / length, ray[1] / length, ray[2] / length};
+                const float depth = images_.depth[i];
+                double reach = (std::isfinite(depth) ? static_cast<double>(depth) : far_) * length;
+                bool crosses = false;
+                for (const Ball& b : balls) {
+                    const Vec3 c{b.centre[0] - eye[0], b.centre[1] - eye[1], b.centre[2] - eye[2]};
+                    const double along = (c[0] * dir[0]) + (c[1] * dir[1]) + (c[2] * dir[2]);
+                    const double off =
+                        (c[0] * c[0]) + (c[1] * c[1]) + (c[2] * c[2]) - (along * along);
+                    if (off <= b.radius * b.radius && along + b.radius > 0.0) {
+                        crosses = true;
+                        break;
+                    }
+                }
+                if (!crosses) {
+                    continue;
+                }
+                random::Stream rng(context.seed, context.stepIndex,
+                                   stream + static_cast<std::uint32_t>(i & 0x3fffffU));
+                std::uint32_t hit = kNoIndex;
+                for (std::size_t k = 0; k < seenTrees_.size(); ++k) {
+                    const double at = crownStop(seenTrees_[k], static_cast<std::uint32_t>(k), eye,
+                                                dir, reach, sways[k], cuts, rng.uniform());
+                    if (at < reach) {
+                        reach = at;
+                        hit = static_cast<std::uint32_t>(k);
+                    }
+                }
+                if (hit != kNoIndex) {
+                    images_.depth[i] = static_cast<float>(reach / length);
+                    images_.instance[i] = treeIds_[hit];
+                }
+            }
+        });
+    }
 
     /// This frame's trees, cut cells and flying leaves to every renderer of the camera.
     void trees(const SignalBus& bus) {
@@ -2320,6 +2417,7 @@ private:
         }
         if (treeCut_.valid()) {
             const std::span<const double> map = bus.readN(treeCut_);
+            crownCuts_.load(map);
             if (map.size() >= kTreeCutHeader && map[0] != cutVersion_) {
                 cutVersion_ = map[0];
                 drawnCuts_.clear();
@@ -2611,6 +2709,10 @@ std::shared_ptr<CameraScene> createCameraScene(const Model& model,
             }
         }
         scene->drawables.push_back(drawable);
+    }
+    scene->primPaths.reserve(model.scene.prims.size());
+    for (const ScenePrim& prim : model.scene.prims) {
+        scene->primPaths.push_back(prim.path);
     }
     scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error, look,
                                              reuse ? reuse->raster : nullptr);

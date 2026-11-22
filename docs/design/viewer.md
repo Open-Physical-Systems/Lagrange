@@ -186,7 +186,15 @@ flowchart LR
   3D view's GPU time seen from 40 m, 0.36 ms with tree_1 filling the view at 8 m (0.47 to 0.83 ms)
   and 0.67 ms at 3 m, at 1600x1000 on an RTX 4060 Laptop. The viewer takes the numbers from the prims' attributes (`GetAttributes`,
   with Trees.hpp's fallbacks) and the sway by signal subscription; camera sensors take them
-  from the world and the bus (`RasterCamera::setTrees`). Depth and instance ids do not see them.
+  from the world and the bus (`RasterCamera::setTrees`). Depth and instance ids see the trunks of
+  the simple look, not the realistic tree (the camera adds the crowns to them as its lidar sees
+  them, sensors.md "Trees in the camera").
+  The other shadings (Lit, Unlit, Wireframe, Thermal, Current; not Collision) and the cameras'
+  simple look draw each tree with the plain mesh pipeline as a tapered trunk and the crown's 28
+  clumps of leaves, ellipsoids at the places and sizes `vsTree` gives them (`gpu/TreeShapes.hpp`,
+  its hash ported bit for bit), swayed the same way and each shrunk by the share of its volume in
+  cut cells (gone under 30 %), so a cut shows as a bite; the viewer watches the sway and the cut
+  volume in those shadings too.
   The open field's trees keep only their trunk colliders, so the procedural tree is the only one
   drawn. Counts, sizes and colours are drawing choices, TODO(verify) against photographs of
   broadleaf crowns.
