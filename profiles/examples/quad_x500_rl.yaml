@@ -1,0 +1,24 @@
+# profiles/examples/quad_x500_rl.yaml — the sample quadcopter for reinforcement learning
+# (lagrange.tasks QuadHover and QuadWaypoint): as quad_x500_hover.yaml (MuJoCo, the electrical
+# network at 50 µs with the 4S battery and four motor drives, the rotors' coefficient model with
+# ground effect) but without sensor rendering (ground truth), about 700 steps of 20 ms a second
+# in one process. The motors stay simulated: with the ideal torque source instead (three times
+# faster) the built-in controller's rate loop, which the tasks' thrust-and-rates actions go
+# through, rings once a kick has set it rolling. The air density is this scenario's site
+# parameter (ISA sea level). Run:
+#   python3 -c "from lagrange.tasks import QuadHover; print(QuadHover().reset(seed=1))"
+schema_version: 1
+stage: robots/quad_x500/quad_x500.usda
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }  # 50 µs: small fast motors
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, ground_effect: true, air_density: 1.225 }
+
+time: { real_time_factor: 1.0 }
