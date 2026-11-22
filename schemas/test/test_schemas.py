@@ -206,6 +206,19 @@ def test_servo_and_position_mode_are_additions():
         assert "ServoAPI_1" not in json.load(f)
 
 
+def test_open_water_chart_is_an_addition():
+    # Marine thrusters: RotorAPI_1's chart attributes are new, with no fallback, so a rotor
+    # without them keeps its static coefficients.
+    rotor = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("RotorAPI_1")
+    for name in ("advanceRatios", "thrustCoeffs", "torqueCoeffs"):
+        attribute = rotor.GetAttributeDefinition("aero:rotor:" + name)
+        assert attribute
+        assert attribute.GetFallbackValue() is None
+    with FROZEN.open() as f:
+        frozen = json.load(f)
+    assert "aero:rotor:advanceRatios" not in json.dumps(frozen)
+
+
 def test_brake_is_an_addition():
     # RFC 0020 "Also worth adding": BrakeAPI_1 is a new class of the actuator library.
     brake = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("BrakeAPI_1")

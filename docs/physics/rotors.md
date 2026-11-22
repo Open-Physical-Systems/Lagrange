@@ -109,6 +109,47 @@ $$
 That's +11 % at half a radius, +3 % at one and under 1 % beyond two. It is left out beyond
 6 R. $\alpha_0$ was fitted for a 23 mm propeller, so it is unchecked for larger ones.
 
+## In water: marine thrusters
+
+A rotor whose hub is in a body of water (`WaterAPI_1`) is a thruster. Its thrust and torque take
+the water's density (`water:density`, a site parameter) over the share of its disc under the
+surface. That share is the circular segment below the surface. The disc reaches `R·sin(tilt)` up
+and down from the hub, so a level disc (a vertical axis) is in or out whole. A disc half out of
+the water gets the mean of the two densities over its halves. Its ground effect is left out while
+any of it is wet.
+
+Marine propellers are described by their open-water chart: `K_T(J)` and `K_Q(J)` at the advance
+ratio `J = V_a/(n·D)`, with `V_a` the hub's speed through the fluid along the thrust:
+
+```
+T = K_T(J)·ρ·n²·D⁴      Q = K_Q(J)·ρ·n²·D⁵
+```
+
+`aero:rotor:advanceRatios`, `thrustCoeffs` and `torqueCoeffs` give that chart, linear between
+points and held at its ends. It replaces the static `CT` and `CP` (at `J = 0`, `K_T = CT` and
+`K_Q = CP/2π`). It works in air too, for a propeller's own `CT(J)`. A rotor with a chart writes
+`rotor/<j>/advance_ratio`, and every rotor in a world with water writes `rotor/<j>/immersion`
+(0 to 1). The `bem` fidelity takes the water's density too, but its section polars are for air
+Reynolds numbers.
+
+Checked in `test_rotor_aero`:
+
+| Check | Reference | Result |
+|---|---|---|
+| Thrust and torque on a chart at J = 0, 0.2, 0.6, 1.2 | `K_T(J)·ρ·n²·D⁴`, `K_Q(J)·ρ·n²·D⁵` | within 1e-9 |
+| The wetted share at depths of −R, −R/2 … R | the circular segment `½ + (asin s + s√(1 − s²))/π` | within 1e-12 (0.8045 at R/2) |
+| A level disc 1.5 m under sea water (1025 kg/m³) | the air thrust times 1025/1.225 | within 1e-9 |
+| An upright disc with its hub at the surface | half the disc in water | immersion 0.5, the mean density |
+| Moving at J = 0.6 through fresh water | the chart's `K_T`, `K_Q` there | within 1e-9 |
+
+What it leaves out: ventilation and air drawn down into a thruster near the surface (a real one
+loses much more than its dry share), the duct of a ducted thruster and the hull's wake (`V_a` is
+the hub's own speed, with no wake fraction or water current), four-quadrant charts (turned
+backwards the same chart stands in, mirrored), cavitation, and the propeller's drag when it is
+stopped. A thruster's motor has to turn it against water: the electrical domain's motor takes the
+torque, as in air. The charts in the tests are illustrative, of a Wageningen B-series' shape;
+TODO(verify): a published open-water chart of a real thruster for a sample.
+
 ## How far to trust it
 
 | Check | Result | Test |
