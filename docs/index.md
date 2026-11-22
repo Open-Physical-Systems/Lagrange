@@ -291,6 +291,7 @@ physics/lights
 physics/heat-conduction
 physics/fire
 physics/actuators
+physics/ground
 ```
 
 ```{toctree}
